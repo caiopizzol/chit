@@ -74,6 +74,7 @@ export function Home() {
 					href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
 					rel="stylesheet"
 				/>
+				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: Hono SSR inspector pattern, scheduled for deletion in slice 1 sub-unit 1.4 */}
 				<style dangerouslySetInnerHTML={{ __html: STYLES }} />
 			</head>
 			<body>
@@ -99,6 +100,7 @@ export function Home() {
 					<h2>Canonical examples</h2>
 					<div class="examples">
 						{EXAMPLES.map((ex) => (
+							// biome-ignore lint/correctness/useJsxKeyInIterable: Hono SSR doesn't require React keys, scheduled for deletion in slice 1 sub-unit 1.4
 							<a href={`/inspect?path=${encodeURIComponent(ex.path)}`}>
 								<span class="name">{ex.name}</span>
 								<span class="path">{ex.path}</span>

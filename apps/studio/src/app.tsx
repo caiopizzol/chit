@@ -81,6 +81,7 @@ function ErrorPage(props: { title: string; path: string; message: string }) {
 			<head>
 				<meta charset="utf-8" />
 				<title>chit studio · error</title>
+				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: Hono SSR inspector pattern, scheduled for deletion in slice 1 sub-unit 1.4 */}
 				<style dangerouslySetInnerHTML={{ __html: ERROR_STYLES }} />
 			</head>
 			<body>

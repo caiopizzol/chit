@@ -3,7 +3,8 @@
 	"compilerOptions": {
 		"jsx": "react-jsx",
 		"jsxImportSource": "hono/jsx",
+		"lib": ["ESNext", "DOM"],
 		"types": ["bun"]
 	},
-	"include": ["src/**/*"]
+	"include": ["src/**/*", "scripts/**/*"]
 }

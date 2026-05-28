@@ -1,0 +1,77 @@
+/** @jsxImportSource react */
+
+// Three custom React Flow node types: input, call, format. Hierarchy and
+// state markers match docs/studio-node-sketches.md. Per-file pragma sets
+// the React JSX runtime since the workspace tsconfig still defaults to
+// Hono JSX for the old SSR inspector until sub-unit 1.4 deletes it.
+
+import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
+
+export type InputData = { name: string; type: string; required: boolean };
+export type CallData = {
+	id: string;
+	agent: string;
+	session: string;
+	filesystem: string;
+	warn?: { tag: string };
+};
+export type FormatData = { id: string; refsCount: number; isOutput: boolean };
+
+export function InputNode({ data, selected }: NodeProps<Node<InputData>>) {
+	return (
+		<div className={`chit-node input${selected ? " selected" : ""}`}>
+			<header>
+				<span>INPUT</span>
+			</header>
+			<div className="body">
+				<div className="id">{data.name}</div>
+				<div className="meta">
+					{data.type} · {data.required ? "required" : "optional"}
+				</div>
+			</div>
+			<Handle type="source" position={Position.Right} />
+		</div>
+	);
+}
+
+export function CallNode({ data, selected }: NodeProps<Node<CallData>>) {
+	return (
+		<div className={`chit-node call${selected ? " selected" : ""}`}>
+			<header>
+				<span>CALL</span>
+				{data.warn && <span className="right">○ {data.warn.tag}</span>}
+			</header>
+			<div className="body">
+				<div className="id">{data.id}</div>
+				<div className="meta">
+					{data.agent} · {data.session}
+				</div>
+				<div className="meta">filesystem: {data.filesystem}</div>
+			</div>
+			<Handle type="target" position={Position.Left} />
+			<Handle type="source" position={Position.Right} />
+		</div>
+	);
+}
+
+export function FormatNode({ data, selected }: NodeProps<Node<FormatData>>) {
+	return (
+		<div className={`chit-node format${selected ? " selected" : ""}`}>
+			<header className={data.isOutput ? "is-output" : ""}>
+				<span>FORMAT</span>
+				{data.isOutput && <span className="right">output</span>}
+			</header>
+			<div className="body">
+				<div className="id">{data.id}</div>
+				<div className="meta">refs: {data.refsCount}</div>
+			</div>
+			<Handle type="target" position={Position.Left} />
+		</div>
+	);
+}
+
+export const nodeTypes = {
+	input: InputNode,
+	call: CallNode,
+	format: FormatNode,
+};

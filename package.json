@@ -17,7 +17,9 @@
 		"web:dev": "bun --filter chit-web dev",
 		"web:deploy": "bun --filter chit-web deploy",
 		"studio:dev": "bun --filter chit-studio dev",
-		"studio:start": "bun --filter chit-studio start"
+		"studio:start": "bun --filter chit-studio start",
+		"studio:build": "bun --filter chit-studio build:client",
+		"studio:preview": "bun run studio:build && bun --cwd apps/cli src/cli/run.ts studio examples/consult.json"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",

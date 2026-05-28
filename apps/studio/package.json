@@ -2,7 +2,7 @@
 	"name": "chit-studio",
 	"version": "0.0.0",
 	"private": true,
-	"description": "chit Studio. Local design-time viewer/editor for chits. Bun + Hono server using @chit/core.",
+	"description": "chit Studio. Local visual editor for chits. The shipped surface is src/server/ (Bun+Hono) + src/client/ (React+React Flow+ELK), launched by `chit studio`. Legacy SSR inspector at src/{app,index,pages}.tsx is scheduled for deletion in slice 1 sub-unit 1.4.",
 	"type": "module",
 	"exports": {
 		"./server": "./src/server/index.ts"
@@ -10,12 +10,21 @@
 	"scripts": {
 		"dev": "bun --hot src/index.tsx",
 		"start": "bun src/index.tsx",
+		"build:client": "bun scripts/build-client.ts",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
 		"check": "biome check ."
 	},
 	"dependencies": {
 		"@chit/core": "workspace:*",
-		"hono": "^4.6.0"
+		"@xyflow/react": "^12.3.5",
+		"elkjs": "^0.9.3",
+		"hono": "^4.6.0",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1"
+	},
+	"devDependencies": {
+		"@types/react": "^18.3.12",
+		"@types/react-dom": "^18.3.1"
 	}
 }

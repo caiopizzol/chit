@@ -38,7 +38,7 @@ interface Setup {
 	app: ReturnType<typeof buildApp>;
 }
 
-function setup(): Setup {
+function setup(opts: { clientDistDir?: string } = {}): Setup {
 	const cwd = tempCwd();
 	const path = join(cwd, "consult.json");
 	writeFileSync(path, chit("consult"));
@@ -48,7 +48,13 @@ function setup(): Setup {
 		store,
 	);
 	const token = generateToken();
-	const app = buildApp({ token, bootstrap, store, allowedHosts: ALLOWED });
+	const app = buildApp({
+		token,
+		bootstrap,
+		store,
+		allowedHosts: ALLOWED,
+		clientDistDir: opts.clientDistDir ?? "/this/path/does/not/exist",
+	});
 	return { cwd, token, app };
 }
 
@@ -188,6 +194,46 @@ describe("Bearer auth on /api/*", () => {
 	});
 });
 
+describe("/client/:asset", () => {
+	test("rejects unknown asset names with 404 before any file lookup", async () => {
+		const s = setup();
+		try {
+			const res = await req(s.app, "/client/secret.env");
+			expect(res.status).toBe(404);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("returns 503 with a helpful message when the bundle is missing", async () => {
+		// setup() defaults clientDistDir to a non-existent path.
+		const s = setup();
+		try {
+			const res = await req(s.app, "/client/index.js");
+			expect(res.status).toBe(503);
+			const body = await res.text();
+			expect(body).toContain("studio:build");
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("returns 200 with the file when the bundle is present", async () => {
+		const dist = mkdtempSync(join(tmpdir(), "chit-studio-dist-"));
+		writeFileSync(join(dist, "index.js"), 'console.log("hi");');
+		const s = setup({ clientDistDir: dist });
+		try {
+			const res = await req(s.app, "/client/index.js");
+			expect(res.status).toBe(200);
+			const body = await res.text();
+			expect(body).toContain("console.log");
+		} finally {
+			teardown(s);
+			rmSync(dist, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("SSR shell payload escaping", () => {
 	test("</script> sequence in payload is escaped so the inline script cannot break out", async () => {
 		// Build a payload whose document's description contains "</script>".
@@ -213,7 +259,13 @@ describe("SSR shell payload escaping", () => {
 				store,
 			);
 			const token = generateToken();
-			const app = buildApp({ token, bootstrap, store, allowedHosts: ALLOWED });
+			const app = buildApp({
+				token,
+				bootstrap,
+				store,
+				allowedHosts: ALLOWED,
+				clientDistDir: "/this/path/does/not/exist",
+			});
 			const res = await req(app, "/");
 			const html = await res.text();
 			// Raw </script> must NOT appear inside the JSON payload.

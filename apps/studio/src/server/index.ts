@@ -2,6 +2,8 @@
 // at boot. The CLI loads the registry (node-side) and passes it in; this
 // module knows nothing about CLI internals.
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { NormalizedRegistry } from "@chit/core";
 import { Hono } from "hono";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
@@ -9,6 +11,12 @@ import { discover } from "./discovery.ts";
 import { buildBootstrap, DocStore } from "./docs.ts";
 import { renderShell } from "./shell.ts";
 import { generateToken } from "./token.ts";
+
+// Client bundle output, relative to this file. Resolved against import.meta
+// so the path is correct regardless of the caller's cwd. Built by
+// `bun --filter chit-studio build:client`.
+const CLIENT_DIST = join(import.meta.dir, "..", "..", "dist", "client");
+const CLIENT_ASSETS = new Set(["index.js", "index.css"]);
 
 export { PathError } from "./paths.ts";
 export type { Bootstrap, DocumentDetail, StudioDocument } from "./types.ts";
@@ -19,6 +27,10 @@ export interface StartStudioOptions {
 	registry: NormalizedRegistry;
 	hostname?: string;
 	port?: number;
+	// Where the React client bundle (index.js, index.css) lives. Defaults to
+	// the production location relative to this module. Tests override it to
+	// point at a temp dir with controlled contents.
+	clientDistDir?: string;
 }
 
 export interface StudioHandle {
@@ -40,7 +52,8 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 	// port is known. The middleware closes over the Set so adding entries
 	// after `app.use` registration is fine.
 	const allowedHosts = new Set<string>();
-	const app = buildApp({ token, bootstrap, store, allowedHosts });
+	const clientDistDir = opts.clientDistDir ?? CLIENT_DIST;
+	const app = buildApp({ token, bootstrap, store, allowedHosts, clientDistDir });
 
 	const server = Bun.serve({
 		port: requestedPort,
@@ -72,6 +85,7 @@ interface BuildAppOptions {
 	bootstrap: import("./types.ts").Bootstrap;
 	store: DocStore;
 	allowedHosts: Set<string>;
+	clientDistDir: string;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -83,6 +97,18 @@ export function buildApp(opts: BuildAppOptions) {
 
 	app.get("/", (c) => {
 		return c.html(renderShell({ token: opts.token, bootstrap: opts.bootstrap }));
+	});
+
+	// Static client assets. The set is small and explicit: refusing other
+	// names keeps the route from becoming a generic file server.
+	app.get("/client/:asset", async (c) => {
+		const asset = c.req.param("asset");
+		if (!CLIENT_ASSETS.has(asset)) return c.text("not found", 404);
+		const path = join(opts.clientDistDir, asset);
+		if (!existsSync(path)) {
+			return c.text(`client bundle missing at ${path}. Run: bun run studio:build`, 503);
+		}
+		return new Response(Bun.file(path));
 	});
 
 	app.use("/api/*", bearerAuth(opts.token));

@@ -21,17 +21,15 @@ export function renderShell(payload: ShellPayload): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>chit studio</title>
-<style>
-body { margin: 0; font-family: 'Inter', system-ui, sans-serif; background: #F4F2EA; color: #0A0A0A; padding: 32px; }
-h1 { font-family: 'Bricolage Grotesque', serif; font-weight: 700; font-size: 28px; margin: 0 0 12px; letter-spacing: -0.02em; }
-p { line-height: 1.5; max-width: 620px; }
-code { font-family: 'JetBrains Mono', monospace; background: #E0DBC6; padding: 1px 6px; font-size: 13px; }
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/client/index.css" />
 </head>
 <body>
-<h1>chit studio</h1>
-<p>Studio is loading. The React client lands in sub-unit 1.1. The SSR boot payload is already wired: open dev tools and inspect <code>window.__chit</code> to see the token + bootstrap object the client will consume.</p>
+<div id="root"></div>
 <script>window.__chit = ${safeJson(payload)};</script>
+<script type="module" src="/client/index.js"></script>
 </body>
 </html>`;
 }
