@@ -1,8 +1,9 @@
 /** @jsxImportSource react */
 
-// Top-level App. Sub-unit 1.1: hardcoded graph (mirror of the slice 0 spike)
-// rendered with React Flow + ELK against the brand palette. The hardcoded
-// data is replaced by window.__chit.bootstrap in sub-unit 1.2.
+// Top-level App. Sub-unit 1.2: renders from window.__chit.bootstrap, not
+// hardcoded data. Reads the bootstrap, derives ClientState, picks a mode
+// component. The OpenMode renders the React Flow canvas + inspector; other
+// modes render a small UI for empty/picker/error states.
 
 import {
 	Background,
@@ -14,49 +15,15 @@ import {
 	useReactFlow,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { type EdgeSpec, layoutNodes } from "./elk.ts";
-import type { CallData, FormatData, InputData } from "./nodes.tsx";
+import { layoutNodes } from "./elk.ts";
+import { adaptGraphModel } from "./graphAdapter.ts";
 import { nodeTypes } from "./nodes.tsx";
-
-// Hardcoded shape: mirrors apps/cli/examples/consult.json's single-advisor
-// variant. Replaced by window.__chit.bootstrap.graphModel in sub-unit 1.2.
-const baseNodes: Node[] = [
-	{
-		id: "question",
-		type: "input",
-		position: { x: 0, y: 0 },
-		data: { name: "question", type: "string", required: true } satisfies InputData,
-	},
-	{
-		id: "ask_codex",
-		type: "call",
-		position: { x: 0, y: 0 },
-		data: {
-			id: "ask_codex",
-			agent: "codex",
-			session: "per_scope",
-			filesystem: "read_only",
-			warn: { tag: "needs check" },
-		} satisfies CallData,
-	},
-	{
-		id: "out",
-		type: "format",
-		position: { x: 0, y: 0 },
-		data: { id: "out", refsCount: 1, isOutput: true } satisfies FormatData,
-	},
-];
-
-const baseEdges: EdgeSpec[] = [
-	{ id: "e1", source: "question", target: "ask_codex" },
-	{ id: "e2", source: "ask_codex", target: "out" },
-];
-
-const NODE_SIZE = {
-	question: { width: 240, height: 84 },
-	ask_codex: { width: 280, height: 116 },
-	out: { width: 240, height: 84 },
-};
+import type {
+	ClientState,
+	OpenClientState,
+	OpenErrorClientState,
+	PickerClientState,
+} from "./state.ts";
 
 // React Flow's fitView prop only fires on initial mount. ELK is async, so
 // the initial fit lands on an empty graph and never refits. Wait for
@@ -95,14 +62,14 @@ function Inspector({ selected }: { selected: Node | null }) {
 	);
 }
 
-export function App() {
+function OpenMode({ state }: { state: OpenClientState }) {
+	const adapted = useMemo(() => adaptGraphModel(state.graphModel), [state.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const edges = useMemo(() => baseEdges, []);
 
 	useEffect(() => {
-		layoutNodes(baseNodes, baseEdges, NODE_SIZE).then(setNodes);
-	}, []);
+		layoutNodes(adapted.nodes, adapted.edges, adapted.sizes).then(setNodes);
+	}, [adapted]);
 
 	const onSelectionChange = useCallback(
 		({ nodes: sel }: { nodes: Node[] }) => setSelectedId(sel[0]?.id ?? null),
@@ -117,13 +84,13 @@ export function App() {
 				<span className="wordmark">
 					chit <span className="light">studio</span>
 				</span>
-				<span className="tag">Slice 1 · 1.1 · hardcoded data</span>
+				<span className="tag">{state.relPath}</span>
 			</header>
 			<div className="split">
 				<div className="canvas-wrap">
 					<ReactFlow
 						nodes={nodes}
-						edges={edges}
+						edges={adapted.edges}
 						nodeTypes={nodeTypes}
 						onSelectionChange={onSelectionChange}
 						proOptions={{ hideAttribution: true }}
@@ -142,4 +109,78 @@ export function App() {
 			</div>
 		</>
 	);
+}
+
+function PickerMode({ state }: { state: PickerClientState }) {
+	return (
+		<>
+			<header className="app">
+				<span className="wordmark">
+					chit <span className="light">studio</span>
+				</span>
+				<span className="tag">picker</span>
+			</header>
+			<div className="message">
+				<h2>Multiple chits in this directory.</h2>
+				<p>
+					Pick one to open. Click-to-open lands in a later sub-unit; for now, relaunch with an
+					explicit path: <code>chit studio &lt;path&gt;</code>.
+				</p>
+				<ul className="picker-list">
+					{state.candidates.map((c) => (
+						<li key={c.docId} className={`picker-item picker-item--${c.status}`}>
+							<code>{c.relPath}</code>
+							<span className="picker-status">{c.status}</span>
+						</li>
+					))}
+				</ul>
+			</div>
+		</>
+	);
+}
+
+function ErrorMode({ state }: { state: OpenErrorClientState }) {
+	return (
+		<>
+			<header className="app">
+				<span className="wordmark">
+					chit <span className="light">studio</span>
+				</span>
+				<span className="tag">parse error</span>
+			</header>
+			<div className="message">
+				<h2>
+					Could not parse <code>{state.relPath}</code>.
+				</h2>
+				<pre className="parse-error">{state.parseError}</pre>
+			</div>
+		</>
+	);
+}
+
+function EmptyMode() {
+	return (
+		<>
+			<header className="app">
+				<span className="wordmark">
+					chit <span className="light">studio</span>
+				</span>
+				<span className="tag">no chit</span>
+			</header>
+			<div className="message">
+				<h2>No chit in this directory.</h2>
+				<p>
+					Launch with an explicit path: <code>chit studio &lt;path&gt;</code>, or run from a
+					directory containing exactly one chit-shaped JSON file.
+				</p>
+			</div>
+		</>
+	);
+}
+
+export function App({ state }: { state: ClientState }) {
+	if (state.mode === "open") return <OpenMode state={state} />;
+	if (state.mode === "open-error") return <ErrorMode state={state} />;
+	if (state.mode === "picker") return <PickerMode state={state} />;
+	return <EmptyMode />;
 }
