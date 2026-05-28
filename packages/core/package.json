@@ -1,0 +1,24 @@
+{
+	"name": "@chit/core",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Browser-safe core for chit: manifest parser, agent registry, graph model, install marker, show renderer.",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./manifest": "./src/manifest/parse.ts",
+		"./manifest/types": "./src/manifest/types.ts",
+		"./agents": "./src/agents/registry.ts",
+		"./agents/types": "./src/agents/types.ts",
+		"./graph-model": "./src/graph-model.ts",
+		"./install-marker": "./src/install-marker.ts",
+		"./shared": "./src/shared.ts",
+		"./show": "./src/show.ts"
+	},
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"check": "biome check .",
+		"check:browser": "bash scripts/browser-build-check.sh"
+	}
+}

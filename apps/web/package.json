@@ -1,0 +1,20 @@
+{
+	"name": "chit-web",
+	"version": "0.0.0",
+	"private": true,
+	"description": "chit landing site. Hono on Cloudflare Workers with Static Assets.",
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"typecheck": "tsc --noEmit",
+		"check": "biome check ."
+	},
+	"dependencies": {
+		"hono": "^4.6.0"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20251128.0",
+		"wrangler": "^4.0.0"
+	}
+}

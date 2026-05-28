@@ -1,0 +1,276 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CodexExecAdapter } from "./codex-exec.ts";
+
+// Fake codex shell script. Behavior gates via env vars:
+//   HANDOFF_TEST_FAKE_EXIT       - exit with this code, write "boom" to stderr
+//   HANDOFF_TEST_LAST_INPUT      - capture stdin to this path
+//   HANDOFF_TEST_NO_AGENT_MSG    - emit thread.started but no agent_message
+//   HANDOFF_TEST_RESUME_NO_THREAD_STARTED - on resume, omit thread.started
+// Resume mode is detected by the presence of "resume" in argv.
+const FAKE_CODEX = `#!/bin/sh
+IS_RESUME=0
+for arg in "$@"; do
+  if [ "$arg" = "resume" ]; then IS_RESUME=1; fi
+done
+
+if [ -n "$HANDOFF_TEST_FAKE_EXIT" ] && [ "$HANDOFF_TEST_FAKE_EXIT" != "0" ]; then
+  cat > /dev/null
+  echo "boom: codex error" >&2
+  exit "$HANDOFF_TEST_FAKE_EXIT"
+fi
+if [ -n "$HANDOFF_TEST_LAST_INPUT" ]; then
+  cat > "$HANDOFF_TEST_LAST_INPUT"
+else
+  cat > /dev/null
+fi
+if [ -n "$HANDOFF_TEST_NO_AGENT_MSG" ]; then
+  echo '{"type":"thread.started","thread_id":"fake-1"}'
+  exit 0
+fi
+
+if [ "$IS_RESUME" = "1" ]; then
+  if [ -z "$HANDOFF_TEST_RESUME_NO_THREAD_STARTED" ]; then
+    echo '{"type":"thread.started","thread_id":"fake-1"}'
+  fi
+  echo '{"type":"item.completed","item":{"type":"agent_message","text":"RESUMED: prompt received"}}'
+else
+  echo '{"type":"thread.started","thread_id":"fake-1"}'
+  echo '{"type":"item.completed","item":{"type":"agent_message","text":"OK: prompt received"}}'
+fi
+`;
+
+// Fake codex variant that records its argv to $HANDOFF_TEST_ARGS_FILE for
+// asserting flag construction. Same JSONL output as above.
+const FAKE_CODEX_ARGS_RECORDER = `#!/bin/sh
+if [ -n "$HANDOFF_TEST_ARGS_FILE" ]; then
+  for arg in "$@"; do
+    printf '%s\\n' "$arg" >> "$HANDOFF_TEST_ARGS_FILE"
+  done
+fi
+cat > /dev/null
+echo '{"type":"thread.started","thread_id":"fake-1"}'
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}'
+`;
+
+let TMPDIR: string;
+let FAKE_BIN_DIR: string;
+let savedPath: string | undefined;
+
+beforeAll(() => {
+	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-codex-"));
+	FAKE_BIN_DIR = join(TMPDIR, "bin");
+	mkdirSyncSafe(FAKE_BIN_DIR);
+	writeFakeBin("codex", FAKE_CODEX);
+	savedPath = process.env.PATH;
+	process.env.PATH = `${FAKE_BIN_DIR}:${savedPath}`;
+});
+
+afterAll(() => {
+	if (savedPath !== undefined) process.env.PATH = savedPath;
+	rmSync(TMPDIR, { recursive: true, force: true });
+});
+
+function mkdirSyncSafe(p: string): void {
+	try {
+		require("node:fs").mkdirSync(p, { recursive: true });
+	} catch {
+		// ignore
+	}
+}
+
+function writeFakeBin(name: string, body: string): void {
+	const path = join(FAKE_BIN_DIR, name);
+	writeFileSync(path, body);
+	chmodSync(path, 0o755);
+}
+
+describe("CodexExecAdapter: stdin and parsing", () => {
+	test("sends adapter input to codex stdin and returns agent_message text", async () => {
+		const promptFile = join(TMPDIR, "last-input-1.txt");
+		process.env.HANDOFF_TEST_LAST_INPUT = promptFile;
+		try {
+			const adapter = new CodexExecAdapter({});
+			const result = await adapter.call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "Role:\nyou are an advisor\n\nTask:\nhello world",
+				cwd: TMPDIR,
+			});
+			expect(result.output).toBe("OK: prompt received");
+			const received = readFileSync(promptFile, "utf-8");
+			expect(received).toBe("Role:\nyou are an advisor\n\nTask:\nhello world");
+		} finally {
+			delete process.env.HANDOFF_TEST_LAST_INPUT;
+		}
+	});
+
+	test("throws when codex exits non-zero, with stderr tail in message", async () => {
+		process.env.HANDOFF_TEST_FAKE_EXIT = "3";
+		try {
+			const adapter = new CodexExecAdapter({});
+			await expect(
+				adapter.call({
+					participantId: "codex",
+					agentId: "codex",
+					stepId: "ask",
+					input: "x",
+					cwd: TMPDIR,
+				}),
+			).rejects.toThrow(/codex exec exited 3/);
+		} finally {
+			delete process.env.HANDOFF_TEST_FAKE_EXIT;
+		}
+	});
+
+	test("throws when codex emits no agent_message", async () => {
+		process.env.HANDOFF_TEST_NO_AGENT_MSG = "1";
+		try {
+			const adapter = new CodexExecAdapter({});
+			await expect(
+				adapter.call({
+					participantId: "codex",
+					agentId: "codex",
+					stepId: "ask",
+					input: "x",
+					cwd: TMPDIR,
+				}),
+			).rejects.toThrow(/no agent_message/);
+		} finally {
+			delete process.env.HANDOFF_TEST_NO_AGENT_MSG;
+		}
+	});
+});
+
+describe("CodexExecAdapter: command construction", () => {
+	test("passes -m, -c, and the read-only sandbox flags on fresh calls", async () => {
+		writeFakeBin("codex", FAKE_CODEX_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-1.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new CodexExecAdapter({
+				model: "gpt-5.3-codex",
+				reasoningEffort: "xhigh",
+			});
+			await adapter.call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("exec");
+			expect(argv).toContain("--json");
+			expect(argv).toContain("-m");
+			expect(argv).toContain("gpt-5.3-codex");
+			expect(argv).toContain("-c");
+			expect(argv).toContain('model_reasoning_effort="xhigh"');
+			expect(argv).toContain("--sandbox");
+			expect(argv).toContain("read-only");
+			expect(argv).toContain("--skip-git-repo-check");
+			expect(argv[argv.length - 1]).toBe("-");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("codex", FAKE_CODEX);
+		}
+	});
+});
+
+describe("CodexExecAdapter: session resume", () => {
+	test("fresh call returns session with threadId from thread.started", async () => {
+		const adapter = new CodexExecAdapter({});
+		const result = await adapter.call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+		});
+		expect(result.session).toEqual({ threadId: "fake-1" });
+	});
+
+	test("resume uses 'exec resume <threadId>' with --skip-git-repo-check, drops other flags", async () => {
+		writeFakeBin("codex", FAKE_CODEX_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-resume.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new CodexExecAdapter({
+				model: "gpt-5.3-codex",
+				reasoningEffort: "xhigh",
+			});
+			await adapter.call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				session: { threadId: "prior-thread-id" },
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("exec");
+			expect(argv).toContain("resume");
+			expect(argv).toContain("prior-thread-id");
+			expect(argv[argv.length - 1]).toBe("-");
+			// Resume DOES carry --skip-git-repo-check (without it, resume fails
+			// outside a trusted git directory)
+			expect(argv).toContain("--skip-git-repo-check");
+			// Resume drops the other fresh-only flags
+			expect(argv).not.toContain("--sandbox");
+			expect(argv).not.toContain("-m");
+			expect(argv).not.toContain("-c");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("codex", FAKE_CODEX);
+		}
+	});
+
+	test("resume call produces RESUMED output and returns the captured threadId", async () => {
+		const adapter = new CodexExecAdapter({});
+		const result = await adapter.call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+			session: { threadId: "any-thread" },
+		});
+		expect(result.output).toBe("RESUMED: prompt received");
+		expect(result.session).toEqual({ threadId: "fake-1" });
+	});
+
+	test("preserves prior threadId when resume output emits no thread.started", async () => {
+		process.env.HANDOFF_TEST_RESUME_NO_THREAD_STARTED = "1";
+		try {
+			const adapter = new CodexExecAdapter({});
+			const result = await adapter.call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				session: { threadId: "preserved-thread" },
+			});
+			expect(result.session).toEqual({ threadId: "preserved-thread" });
+		} finally {
+			delete process.env.HANDOFF_TEST_RESUME_NO_THREAD_STARTED;
+		}
+	});
+
+	test("corrupt session payload is treated as fresh start (no error)", async () => {
+		const adapter = new CodexExecAdapter({});
+		const result = await adapter.call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+			session: "this-is-a-string-not-an-object",
+		});
+		expect(result.output).toBe("OK: prompt received");
+		expect(result.session).toEqual({ threadId: "fake-1" });
+	});
+});

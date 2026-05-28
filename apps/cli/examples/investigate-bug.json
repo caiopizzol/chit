@@ -1,0 +1,43 @@
+{
+	"schema": 1,
+	"id": "investigate-bug",
+	"description": "Diagnose an issue, then ask a second agent to verify the diagnosis against the code.",
+
+	"inputs": {
+		"issue": { "type": "string" },
+		"files": { "type": "file[]", "optional": true }
+	},
+
+	"requires": {
+		"can_show_markdown": true
+	},
+
+	"participants": {
+		"diagnostician": {
+			"agent": "codex",
+			"role": "Find the likely root cause of the reported issue. Cite file:line locations for any claim you make about the code.",
+			"session": "per_scope"
+		},
+		"verifier": {
+			"agent": "claude",
+			"role": "Verify each claim in a diagnosis against the actual code. For each claim, either mark it verified with the file:line you checked, or mark it unverified. Do not introduce new claims.",
+			"session": "per_scope"
+		}
+	},
+
+	"steps": {
+		"diagnose": {
+			"call": "diagnostician",
+			"prompt": "Investigate this issue:\n{{ inputs.issue }}\n\nRelevant files:\n{{ inputs.files }}"
+		},
+		"verify": {
+			"call": "verifier",
+			"prompt": "Verify the diagnosis below against the current code.\n\nOriginal issue:\n{{ inputs.issue }}\n\nRelevant files:\n{{ inputs.files }}\n\nDiagnosis:\n{{ steps.diagnose.output }}\n\nFor each claim in the diagnosis, mark it verified with the file:line you checked, or mark it unverified."
+		},
+		"out": {
+			"format": "## Diagnosis\n\n{{ steps.diagnose.output }}\n\n## Verification\n\n{{ steps.verify.output }}"
+		}
+	},
+
+	"output": "out"
+}

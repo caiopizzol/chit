@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.log
+mockups/
+
+# Cloudflare Wrangler local state
+.wrangler/

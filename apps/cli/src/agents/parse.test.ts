@@ -1,0 +1,269 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getAdapterDescriptor, isBuiltInAgent, parseRegistry, RegistryError } from "@chit/core";
+import { loadRegistry } from "./parse.ts";
+
+function expectRegistryError(
+	raw: unknown,
+	pathFragment: string,
+	msgFragment?: string,
+	configPath = "<inline>",
+): void {
+	let caught: unknown;
+	try {
+		parseRegistry(raw, configPath);
+	} catch (e) {
+		caught = e;
+	}
+	if (!(caught instanceof RegistryError)) {
+		throw new Error(
+			`expected RegistryError; got ${caught === undefined ? "no error" : String(caught)}`,
+		);
+	}
+	expect(caught.path).toContain(pathFragment);
+	if (msgFragment) expect(caught.message).toContain(msgFragment);
+}
+
+describe("built-in agents and adapter descriptors", () => {
+	test("codex is a built-in agent backed by codex-exec", () => {
+		const reg = parseRegistry(undefined);
+		expect(reg.agents.codex).toBeDefined();
+		expect(reg.agents.codex?.adapter).toBe("codex-exec");
+		expect(reg.agents.codex?.builtIn).toBe(true);
+	});
+
+	test("claude is a built-in agent backed by claude-cli", () => {
+		const reg = parseRegistry(undefined);
+		expect(reg.agents.claude).toBeDefined();
+		expect(reg.agents.claude?.adapter).toBe("claude-cli");
+		expect(reg.agents.claude?.builtIn).toBe(true);
+	});
+
+	test("getAdapterDescriptor returns capabilities", () => {
+		const codexExec = getAdapterDescriptor("codex-exec");
+		expect(codexExec).toBeDefined();
+		expect(codexExec?.capabilities.enforces_filesystem_read_only).toBe(true);
+
+		const claudeCli = getAdapterDescriptor("claude-cli");
+		expect(claudeCli).toBeDefined();
+		expect(claudeCli?.capabilities.enforces_filesystem_read_only).toBe(false);
+	});
+
+	test("getAdapterDescriptor returns undefined for unknown kinds", () => {
+		expect(getAdapterDescriptor("subprocess")).toBeUndefined();
+		expect(getAdapterDescriptor("openai-responses")).toBeUndefined();
+	});
+
+	test("isBuiltInAgent identifies the built-in pair", () => {
+		expect(isBuiltInAgent("codex")).toBe(true);
+		expect(isBuiltInAgent("claude")).toBe(true);
+		expect(isBuiltInAgent("kimi")).toBe(false);
+	});
+});
+
+describe("parseRegistry", () => {
+	test("undefined raw yields only built-ins", () => {
+		const reg = parseRegistry(undefined);
+		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex"]);
+	});
+
+	test("empty object yields only built-ins", () => {
+		const reg = parseRegistry({});
+		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex"]);
+	});
+
+	test("empty agents object yields only built-ins", () => {
+		const reg = parseRegistry({ agents: {} });
+		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex"]);
+	});
+
+	test("user agent is merged with built-ins", () => {
+		const reg = parseRegistry({
+			agents: {
+				kimi: {
+					adapter: "claude-cli",
+					model: "kimi-k2.6:cloud",
+					passModelOnResume: true,
+					env: {
+						ANTHROPIC_BASE_URL: "http://localhost:11434",
+						ANTHROPIC_AUTH_TOKEN: "ollama",
+					},
+				},
+			},
+		});
+
+		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex", "kimi"]);
+		const kimi = reg.agents.kimi;
+		expect(kimi).toBeDefined();
+		expect(kimi?.adapter).toBe("claude-cli");
+		expect(kimi?.model).toBe("kimi-k2.6:cloud");
+		expect(kimi?.passModelOnResume).toBe(true);
+		expect(kimi?.env).toEqual({
+			ANTHROPIC_BASE_URL: "http://localhost:11434",
+			ANTHROPIC_AUTH_TOKEN: "ollama",
+		});
+		expect(kimi?.builtIn).toBe(false);
+	});
+
+	test("passModelOnResume defaults to false when omitted", () => {
+		const reg = parseRegistry({
+			agents: { fast: { adapter: "codex-exec" } },
+		});
+		expect(reg.agents.fast?.passModelOnResume).toBe(false);
+	});
+});
+
+describe("parseRegistry: invalid configs", () => {
+	test("non-object top-level", () => {
+		expectRegistryError([], "<inline>", "must be a JSON object");
+	});
+
+	test("unknown top-level field", () => {
+		expectRegistryError({ defaultAdvisors: ["codex"] }, "<inline>", "unknown top-level field");
+	});
+
+	test("agents not an object", () => {
+		expectRegistryError({ agents: ["codex"] }, "agents", "must be a JSON object");
+	});
+
+	test("built-in id cannot be redefined", () => {
+		expectRegistryError(
+			{ agents: { codex: { adapter: "codex-exec" } } },
+			"agents.codex",
+			"built-in agent id cannot be redefined",
+		);
+	});
+
+	test("agent id must be kebab-case", () => {
+		expectRegistryError(
+			{ agents: { Bad_Name: { adapter: "codex-exec" } } },
+			"agents.Bad_Name",
+			"kebab-case",
+		);
+	});
+
+	test("missing adapter", () => {
+		expectRegistryError(
+			{ agents: { x: { model: "gpt-5" } } },
+			"agents.x.adapter",
+			"must be one of",
+		);
+	});
+
+	test("unknown adapter kind", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "subprocess" } } },
+			"agents.x.adapter",
+			"must be one of",
+		);
+	});
+
+	test("unknown field on agent entry", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "codex-exec", provider: "codex-exec" } } },
+			"agents.x",
+			'unknown field "provider"',
+		);
+	});
+
+	test("model must be string", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "codex-exec", model: 5 } } },
+			"agents.x.model",
+			"non-empty string",
+		);
+	});
+
+	test("passModelOnResume must be boolean", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "claude-cli", passModelOnResume: "yes" } } },
+			"agents.x.passModelOnResume",
+			"must be a boolean",
+		);
+	});
+
+	test("env must be object", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "claude-cli", env: "FOO=bar" } } },
+			"agents.x.env",
+			"must be a JSON object",
+		);
+	});
+
+	test("env value must be string", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "claude-cli", env: { FOO: 1 } } } },
+			"agents.x.env.FOO",
+			"must be a string",
+		);
+	});
+});
+
+describe("loadRegistry", () => {
+	let TMPDIR: string;
+	let CONFIG: string;
+
+	beforeEach(() => {
+		TMPDIR = mkdtempSync(join(tmpdir(), "handoff-registry-"));
+		CONFIG = join(TMPDIR, "agents.json");
+	});
+
+	afterEach(() => {
+		rmSync(TMPDIR, { recursive: true, force: true });
+	});
+
+	test("returns built-ins only when file does not exist", () => {
+		const reg = loadRegistry(join(TMPDIR, "missing.json"));
+		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex"]);
+		expect(reg.configPath).toBeUndefined();
+	});
+
+	test("loads user agents from a file and records configPath", () => {
+		writeFileSync(
+			CONFIG,
+			JSON.stringify({
+				agents: {
+					"kimi-cloud": {
+						adapter: "claude-cli",
+						model: "kimi-k2.6:cloud",
+						passModelOnResume: true,
+					},
+				},
+			}),
+		);
+		const reg = loadRegistry(CONFIG);
+		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex", "kimi-cloud"]);
+		expect(reg.configPath).toBe(CONFIG);
+	});
+
+	test("rejects invalid JSON with the file path in the error", () => {
+		writeFileSync(CONFIG, "{ not: json");
+		expect(() => loadRegistry(CONFIG)).toThrow(RegistryError);
+		try {
+			loadRegistry(CONFIG);
+		} catch (e) {
+			if (e instanceof RegistryError) {
+				expect(e.path).toBe(CONFIG);
+				expect(e.message).toContain("invalid JSON");
+			}
+		}
+	});
+
+	test("validation errors include the file path", () => {
+		writeFileSync(CONFIG, JSON.stringify({ agents: { codex: { adapter: "codex-exec" } } }));
+		try {
+			loadRegistry(CONFIG);
+			throw new Error("expected error");
+		} catch (e) {
+			if (e instanceof RegistryError) {
+				expect(e.path).toContain(CONFIG);
+				expect(e.path).toContain("agents.codex");
+				expect(e.message).toContain("built-in agent id cannot be redefined");
+			} else {
+				throw e;
+			}
+		}
+	});
+});

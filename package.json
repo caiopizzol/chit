@@ -1,0 +1,25 @@
+{
+	"name": "chit-workspace",
+	"version": "0.0.0",
+	"private": true,
+	"description": "chit — a thin runtime for multi-agent workflows. Monorepo root.",
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"scripts": {
+		"test": "bun --filter '*' test",
+		"typecheck": "bun --filter '*' typecheck",
+		"check": "biome check .",
+		"check:fix": "biome check --write .",
+		"check:browser": "bun --filter '@chit/core' check:browser",
+		"cli": "bun --cwd apps/cli src/cli/run.ts",
+		"web:dev": "bun --filter chit-web dev",
+		"web:deploy": "bun --filter chit-web deploy"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.15",
+		"@types/bun": "^1.3.14",
+		"typescript": "^6.0.3"
+	}
+}

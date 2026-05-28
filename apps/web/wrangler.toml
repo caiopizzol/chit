@@ -1,0 +1,25 @@
+name = "chit-web"
+main = "src/index.tsx"
+compatibility_date = "2026-05-28"
+
+# Default *.workers.dev subdomain. Once the brand domain is secured,
+# add a [[routes]] block below and flip workers_dev to false if you
+# want to retire the *.workers.dev subdomain.
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Production custom domain (add when chitgraph.com or equivalent is owned):
+# [[routes]]
+# pattern = "chitgraph.com"
+# custom_domain = true
+#
+# [[routes]]
+# pattern = "www.chitgraph.com"
+# custom_domain = true
