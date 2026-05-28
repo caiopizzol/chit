@@ -98,102 +98,13 @@ Improvements to the existing static-output inspector. Separate from the Studio w
 
 ## Studio / Web UI
 
-The static HTML from `chit show --format html` proves visualization. The Studio is the dynamic version: load a manifest, render the graph, edit configs through structured forms, export a canonical manifest. Built on the same browser-safe core the CLI uses so the surfaces don't drift.
+Spec'd in [docs/studio-v0.md](studio-v0.md).
 
-### Prerequisite — DONE (Browser-core unbundling)
+Net direction: `chit studio` is a CLI subcommand that boots a local server in the invocation cwd, serves a React + React Flow + ELK client, and edits the same manifests the CLI runs. The manifest is the source of truth. Edges are derived from template references, so drag-to-connect inserts `{{ inputs.X }}` or `{{ steps.X.output }}` into the target template via `parseManifest`-validated candidate edits. The server is launch-token gated with a Host allowlist; no `?path=` queries from the browser; absolute paths never cross the wire.
 
-The browser-core boundary now exists. See "Browser-core unbundling" under "Recently completed" for what landed. The Studio can import from these modules without pulling node:
+Slice 0 is a paper-and-ink visual + bundler spike (three node sketches first, then React Flow styling + `bun build --target=browser`). Slice 1 ships the subcommand with the read-only inspector view. Editing arrives in Slice 2 (safe fields, explicit save, diff preview). Drag-to-connect arrives in Slice 3. Install/registry/run-from-Studio land later in order.
 
-- `src/manifest/parse.ts` — parseManifest, types
-- `src/agents/registry.ts` — parseRegistry, getAdapterDescriptor, isBuiltInAgent, RegistryError
-- `src/surfaces/graph-model.ts` — buildGraphModel, validationSeverity
-- `src/surfaces/shared.ts` — findEnforcementGaps, findMissingCapabilities, findUnknownAgents
-- `src/surfaces/show.ts` — renderShow (for HTML/Mermaid/ASCII parity with `chit show`)
-
-What the Studio gets from a server (Slice B) but NOT from core:
-
-```
-loadRegistry, installSurface, runManifest, listInstalled, uninstallSurface
-```
-
-Runtime-only modules (deliberately kept node-side, do not bundle for browser):
-
-- `src/sessions/*` — uses `node:crypto` and `node:fs`. Browser doesn't need fingerprint computation or session persistence at design time.
-- `src/surfaces/claude-skill.ts` — uses `node:crypto` (random delimiter) and `node:fs`. Install is a server concern.
-- `src/adapters/*`, `src/runtime/*`, `src/cli/*` — execution surfaces, not design-time surfaces.
-
-`scripts/browser-build-check.sh` enforces this boundary (run via `bun run check:browser`). Add new entry points to the script as the browser-core surface grows.
-
-Browser-safe API (`@chit/core`):
-
-```
-parseManifestSource(source, "yaml" | "json")
-buildGraphModel(manifest, registry, surfaceKind?)
-validateManifest(manifest, registry, surfaceKind?)
-serializeManifest(draft, "yaml" | "json")
-```
-
-Node-only API (`@chit/runtime` / current `src/`):
-
-```
-loadRegistry()
-runManifest(...)
-installSurface(...)
-listInstalled(...)
-uninstallSurface(...)
-```
-
-### Slice A — Static editor SPA (no server)
-
-Drag-drop or paste a manifest, render the graph, edit through structured forms, export new canonical manifest. No `loadRegistry`, no `runManifest`, no install.
-
-- **Render**: same `buildGraphModel` the CLI uses; level-column layout from `chit show --format html`.
-- **Inspector**: structured forms for participants, steps, inputs, requires.
-- **Validation overlay**: red for capability/agent gaps, yellow for permission needs override (matching `validationSeverity`).
-- **Surface selector**: claude-skill | cli, with capabilities + applicable notes visible.
-- **Export**: canonical JSON. YAML iff the platform commits to YAML (separate decision, tracked below).
-- **Editing direction**: forms → graph → export. v1 does NOT support live text editing with round-trip — YAML comment preservation is real work, defer to v2.
-- **Distribution**: single HTML file, or `chit studio --static` opens browser to a local file. No server, no port, no auth.
-
-Slice A's value: proves the editor concept against real users without committing to the server/lifecycle/auth stack. Ships in weeks. Forces the `@chit/core` prerequisite, which improves the CLI's imports as a side effect.
-
-### Slice B — Studio server (registry + run + install from the UI)
-
-Only after Slice A is in real users' hands and we know what's actually load-bearing.
-
-- Local Bun/Node server exposing node-only APIs.
-- Lifecycle decision: one process per session (server exits when browser disconnects) vs. always-on.
-- Auth decision: trust localhost vs. require token. CORS / origin policy.
-- Registry editor: add/edit `~/.config/handoff/agents.json` entries.
-- Install/uninstall flow: drives the existing install path; surface chooser + name override + collision handling.
-- Run-from-UI: cost visibility, streaming output, cancellation, concurrency control. Own product, large.
-
-### Product question to answer before deep UI investment
-
-**Are manifests authored often, or written once and run many times?**
-
-- If "once": the inspector is the product. `chit show` is 80% of the value; Slice A is polish.
-- If "often": the editor is the product. Slice A is the wedge; Slice B is the platform.
-
-Today's answer is "once" — the recipes (consult, investigate, etc.) are stable. If chit grows into a place where teams encode their own internal handoffs, "often" wins.
-
-### YAML as primary format — explicit decision needed
-
-The platform is JSON-only today. The Studio proposal mentions YAML. Introducing YAML in the UI is a platform-wide decision (parser deps, conventions, examples, install behavior). Not a UI choice.
-
-Two paths:
-- **JSON-only**: Studio renders/edits JSON, matching everything else. Simplest. Tooling already works.
-- **YAML primary**: commit to YAML across the platform; update `examples/`, parser, schema doc. Real change.
-
-Defer until Slice A planning forces the choice.
-
-### Avoid in v1
-
-- Drag-to-anywhere canvas (creates invalid manifests fast; structured forms + validation are safer)
-- Browser-side schema reimplementation (drift; use `@chit/core`)
-- Browser-side IO or agent execution (security; let the server handle it)
-- Bidirectional YAML/form live editing (comment-preservation cost; pick a direction in v1)
-- Run-from-UI before cost telemetry exists in the runtime
+Earlier "Slice A / Slice B" framing in this backlog is superseded by the spec.
 
 ## Surface gaps
 
@@ -211,7 +122,6 @@ These have explicit answers — we know what we'd do — but don't ship until a 
 - **Cost caps, retries, fallbacks.** Require runtime telemetry the platform doesn't have yet.
 - **Human-in-the-loop participants.** Adds async/notification machinery (pause execution, wait for input, resume). Out of scope until there's a concrete recipe.
 - **Output schemas beyond plain text.** `format` step output is `string`. JSON Schema / typed outputs would expand the manifest contract significantly.
-- **Drag-to-anywhere canvas editing.** Free-form node placement with arbitrary connections creates invalid manifests faster than the validator can catch them. Studio Slice A uses structured forms + live validation instead; canvas-style remains deferred until there's evidence forms aren't expressive enough.
 
 ## Open schema questions
 
