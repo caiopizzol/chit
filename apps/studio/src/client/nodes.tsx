@@ -66,6 +66,10 @@ export function FormatNode({ data, selected }: NodeProps<Node<FormatData>>) {
 				<div className="meta">refs: {data.refsCount}</div>
 			</div>
 			<Handle type="target" position={Position.Left} />
+			{/* A format step's output can be referenced by a later step, so it
+			    is also a connectable source (uncommon, but the manifest model
+			    allows it and referenceToken supports it). */}
+			<Handle type="source" position={Position.Right} />
 		</div>
 	);
 }

@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { buildGraphModel, parseManifest, parseRegistry } from "@chit/core";
 import {
+	appendReference,
 	canonicalize,
 	canSave,
 	deepEqual,
+	insertReference,
 	isDirty,
+	referenceToken,
 	updateParticipantField,
 	updateStepField,
 } from "./editor.ts";
@@ -163,6 +166,75 @@ describe("updateStepField", () => {
 		const before = JSON.stringify(d);
 		updateStepField(d, "ask_codex", "prompt", "changed");
 		expect(JSON.stringify(d)).toBe(before);
+	});
+});
+
+describe("referenceToken", () => {
+	test("input source", () => {
+		expect(referenceToken("input", "question")).toBe("{{ inputs.question }}");
+	});
+	test("call source", () => {
+		expect(referenceToken("call", "ask_codex")).toBe("{{ steps.ask_codex.output }}");
+	});
+	test("format source", () => {
+		expect(referenceToken("format", "out")).toBe("{{ steps.out.output }}");
+	});
+});
+
+describe("appendReference", () => {
+	test("empty template becomes just the token", () => {
+		expect(appendReference("", "{{ inputs.q }}")).toBe("{{ inputs.q }}");
+	});
+	test("non-empty template gets the token on its own line", () => {
+		expect(appendReference("Verify this:", "{{ steps.x.output }}")).toBe(
+			"Verify this:\n\n{{ steps.x.output }}",
+		);
+	});
+});
+
+describe("insertReference", () => {
+	const draft = () => ({
+		schema: 1,
+		steps: {
+			ask_codex: { call: "codex", prompt: "Answer:" },
+			out: { format: "## codex" },
+		},
+	});
+
+	test("appends an input ref into a call step's prompt", () => {
+		const next = insertReference(draft(), "ask_codex", "{{ inputs.question }}");
+		const steps = next.steps as Record<string, Record<string, unknown>>;
+		expect(steps.ask_codex?.prompt).toBe("Answer:\n\n{{ inputs.question }}");
+	});
+
+	test("appends a step ref into a format step's format", () => {
+		const next = insertReference(draft(), "out", "{{ steps.ask_codex.output }}");
+		const steps = next.steps as Record<string, Record<string, unknown>>;
+		expect(steps.out?.format).toBe("## codex\n\n{{ steps.ask_codex.output }}");
+	});
+
+	test("is idempotent: re-inserting an existing token returns the draft unchanged", () => {
+		const once = insertReference(draft(), "ask_codex", "{{ inputs.question }}");
+		const twice = insertReference(once, "ask_codex", "{{ inputs.question }}");
+		expect(twice).toBe(once); // same reference, no second append
+	});
+
+	test("does not mutate the input draft", () => {
+		const d = draft();
+		const before = JSON.stringify(d);
+		insertReference(d, "ask_codex", "{{ inputs.question }}");
+		expect(JSON.stringify(d)).toBe(before);
+	});
+
+	test("throws on an unknown step", () => {
+		expect(() => insertReference(draft(), "nope", "{{ inputs.q }}")).toThrow(/unknown step/);
+	});
+
+	test("throws on a step that is neither call nor format", () => {
+		const d = { schema: 1, steps: { weird: { something: true } } };
+		expect(() => insertReference(d, "weird", "{{ inputs.q }}")).toThrow(
+			/neither a call nor a format/,
+		);
 	});
 });
 

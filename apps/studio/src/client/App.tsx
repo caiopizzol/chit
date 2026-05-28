@@ -15,6 +15,7 @@ import type { SurfaceKind, ValidationReport } from "@chit/core";
 import {
 	Background,
 	BackgroundVariant,
+	type Connection,
 	Controls,
 	type Node,
 	ReactFlow,
@@ -23,10 +24,10 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type DiffRow, lineDiff } from "./diff.ts";
-import { canonicalize } from "./editor.ts";
+import { canonicalize, referenceToken } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
-import type { CallData, FormatData } from "./nodes.tsx";
+import type { CallData, FormatData, InputData } from "./nodes.tsx";
 import { nodeTypes } from "./nodes.tsx";
 import type {
 	ClientState,
@@ -451,9 +452,15 @@ function ConflictBanner({ onReload }: { onReload: () => void }) {
 	);
 }
 
+// A target node can receive a reference (it has a template). Inputs cannot.
+function isTargetable(type: string | undefined): boolean {
+	return type === "call" || type === "format";
+}
+
 function OpenMode({ initial }: { initial: OpenClientState }) {
 	const editor = useDocumentEditor(initial);
 	const [diffOpen, setDiffOpen] = useState(false);
+	const [connectError, setConnectError] = useState<string | null>(null);
 
 	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
@@ -475,6 +482,53 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	const onNodeClick = useCallback((_e: React.MouseEvent, node: Node) => {
 		setSelectedId(node.id);
 	}, []);
+
+	// Whether an edge source -> target already exists, by parsed-graph
+	// semantics (adapted.edges derives from graphModel.edges, the parsed
+	// refs). This catches a hand-written `{{steps.x.output}}` that differs
+	// from the canonical token only in spacing — string inclusion in
+	// insertReference would not.
+	const edgeExists = useCallback(
+		(source: string, target: string) =>
+			adapted.edges.some((e) => e.source === source && e.target === target),
+		[adapted.edges],
+	);
+
+	// Advisory pre-check before onConnect runs. Cheap rejections only; the
+	// authority is parseManifest on the candidate draft (inside editor.connect).
+	const isValidConnection = useCallback(
+		(conn: Connection | { source: string | null; target: string | null }) => {
+			if (!conn.source || !conn.target) return false;
+			if (conn.source === conn.target) return false; // a step cannot ref its own output
+			const target = nodes.find((n) => n.id === conn.target);
+			if (!isTargetable(target?.type)) return false;
+			return !edgeExists(conn.source, conn.target); // no duplicate edges
+		},
+		[nodes, edgeExists],
+	);
+
+	// Drag-to-connect. Derive the reference token from the source node (input
+	// ref vs step-output ref) and hand off to editor.connect, which validates
+	// the candidate via parseManifest and commits on accept. The graph re-
+	// renders the new edge once the immediate preview returns.
+	const onConnect = useCallback(
+		(conn: Connection) => {
+			const source = nodes.find((n) => n.id === conn.source);
+			const target = nodes.find((n) => n.id === conn.target);
+			if (!source || !target || !isTargetable(target.type)) return;
+			if (edgeExists(source.id, target.id)) {
+				setConnectError("already connected");
+				return;
+			}
+			const token =
+				source.type === "input"
+					? referenceToken("input", (source.data as InputData).name)
+					: referenceToken(source.type as "call" | "format", source.id);
+			const result = editor.connect(target.id, token);
+			setConnectError(result.ok ? null : (result.error ?? "invalid connection"));
+		},
+		[nodes, edgeExists, editor],
+	);
 
 	const openDiff = useCallback(() => {
 		if (editor.canSave) setDiffOpen(true);
@@ -558,9 +612,11 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 						nodeTypes={nodeTypes}
 						onSelectionChange={onSelectionChange}
 						onNodeClick={onNodeClick}
+						onConnect={onConnect}
+						isValidConnection={isValidConnection}
 						proOptions={{ hideAttribution: true }}
 						nodesDraggable={false}
-						nodesConnectable={false}
+						nodesConnectable={true}
 						elementsSelectable
 						minZoom={0.4}
 						maxZoom={2}
@@ -577,6 +633,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				</div>
 				<aside className="right-rail">
 					{editor.conflict && <ConflictBanner onReload={() => window.location.reload()} />}
+					{connectError && <div className="refetch-error">connect: {connectError}</div>}
 					{editor.previewError && <div className="refetch-error">{editor.previewError}</div>}
 					<ValidationPanel validation={editor.graphModel.validation} />
 					<ManifestPanel description={description} onDescriptionChange={editor.setDescription} />

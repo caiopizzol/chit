@@ -4,10 +4,12 @@
 // editor.ts; this hook is the React glue.
 
 import type { GraphModel, SurfaceKind } from "@chit/core";
+import { parseManifest } from "@chit/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { previewDocument, StudioApiError, saveDocument } from "./api.ts";
 import {
 	canSave as canSaveGate,
+	insertReference,
 	isDirty,
 	updateParticipantField,
 	updateStepField,
@@ -34,6 +36,7 @@ export interface DocumentEditor {
 		value: string,
 	) => void;
 	setStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
+	connect: (targetStepId: string, token: string) => { ok: boolean; error?: string };
 	changeSurface: (next: SurfaceKind) => Promise<void>;
 	save: () => Promise<{ ok: boolean }>;
 }
@@ -121,14 +124,20 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 	// setters funnel through here so the edit lifecycle is identical
 	// regardless of which field changed.
 	const applyDraft = useCallback(
-		(next: Record<string, unknown>) => {
+		(next: Record<string, unknown>, opts?: { immediate?: boolean }) => {
 			setDraftSource(next);
 			setPreviewPending(true);
 			setPreviewError(null);
 			invalidatePreview();
-			debounceTimer.current = setTimeout(() => {
+			if (opts?.immediate) {
+				// Direct-manipulation edits (drag-to-connect) want the validated
+				// graph back without the typing debounce.
 				void runPreview(next, surface);
-			}, PREVIEW_DEBOUNCE_MS);
+			} else {
+				debounceTimer.current = setTimeout(() => {
+					void runPreview(next, surface);
+				}, PREVIEW_DEBOUNCE_MS);
+			}
 		},
 		[runPreview, surface, invalidatePreview],
 	);
@@ -156,6 +165,32 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 			applyDraft(updateStepField(draftSource, stepId, field, value));
 		},
 		[applyDraft, draftSource],
+	);
+
+	// Drag-to-connect: append the reference token to the target step's
+	// template and commit if valid. parseManifest runs locally (browser-safe,
+	// no registry needed) as the accept/reject gate so a rejected connection
+	// (unknown ref, cycle) leaves the draft unchanged — unlike field edits,
+	// which commit optimistically. On accept, applyDraft commits and previews
+	// immediately so the new edge renders without the typing debounce.
+	const connect = useCallback(
+		(targetStepId: string, token: string): { ok: boolean; error?: string } => {
+			let candidate: Record<string, unknown>;
+			try {
+				candidate = insertReference(draftSource, targetStepId, token);
+			} catch (e) {
+				return { ok: false, error: (e as Error).message };
+			}
+			if (candidate === draftSource) return { ok: false, error: "already connected" };
+			try {
+				parseManifest(candidate);
+			} catch (e) {
+				return { ok: false, error: (e as Error).message };
+			}
+			applyDraft(candidate, { immediate: true });
+			return { ok: true };
+		},
+		[draftSource, applyDraft],
 	);
 
 	const changeSurface = useCallback(
@@ -221,6 +256,7 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		setDescription,
 		setParticipantField,
 		setStepField,
+		connect,
 		changeSurface,
 		save,
 	};

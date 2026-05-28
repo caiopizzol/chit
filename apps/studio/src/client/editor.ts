@@ -87,6 +87,48 @@ export function updateStepField(
 	return { ...draft, steps: { ...steps, [stepId]: { ...current, [field]: value } } };
 }
 
+// The reference token a source node contributes when wired into a target
+// template. Input sources contribute an input ref keyed by input name; call
+// and format sources contribute a step-output ref keyed by step id.
+export function referenceToken(
+	sourceKind: "input" | "call" | "format",
+	sourceName: string,
+): string {
+	if (sourceKind === "input") return `{{ inputs.${sourceName} }}`;
+	return `{{ steps.${sourceName}.output }}`;
+}
+
+// Append a reference token to a template on its own line. Deterministic and
+// always a valid placement; the user repositions via the template editor. An
+// empty template becomes just the token (no leading blank lines).
+export function appendReference(template: string, token: string): string {
+	return template === "" ? token : `${template}\n\n${token}`;
+}
+
+// Insert a reference into the target step's template. The field is chosen
+// explicitly by the target step's kind: call steps carry `prompt`, format
+// steps carry `format`. Returns a new draft. Throws on an unknown step or a
+// step that is neither call nor format (a malformed draft). Returns the draft
+// unchanged if the token is already present (idempotent; avoids a duplicate
+// token from a repeated connect).
+export function insertReference(
+	draft: Record<string, unknown>,
+	targetStepId: string,
+	token: string,
+): Record<string, unknown> {
+	const steps = (draft.steps ?? {}) as Record<string, Record<string, unknown>>;
+	const step = steps[targetStepId];
+	if (!step) throw new Error(`insertReference: unknown step "${targetStepId}"`);
+	let field: "prompt" | "format";
+	if ("call" in step) field = "prompt";
+	else if ("format" in step) field = "format";
+	else
+		throw new Error(`insertReference: step "${targetStepId}" is neither a call nor a format step`);
+	const current = String(step[field] ?? "");
+	if (current.includes(token)) return draft;
+	return updateStepField(draft, targetStepId, field, appendReference(current, token));
+}
+
 export interface SaveGate {
 	dirty: boolean;
 	previewPending: boolean;
