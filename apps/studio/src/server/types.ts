@@ -81,6 +81,63 @@ export interface ConflictResponse {
 	currentHash: string;
 }
 
+// Install / list / uninstall surface. The actual node-side lifecycle code
+// lives in apps/cli (installClaudeSkill, listInstalled, uninstall) and cannot
+// be imported here without a workspace cycle, so the CLI injects an
+// implementation of StudioLifecycle into startStudio (dependency injection,
+// the same way it already injects the registry). Wire shapes below omit
+// absolute paths; the client sees names/surfaces/timestamps only.
+
+export interface InstalledSummary {
+	name: string; // install folder + SKILL.md name (marker.installName)
+	surface: string;
+	manifestId: string;
+	installedAt: string; // ISO-8601
+}
+
+export interface InstallSummary {
+	name: string;
+	surface: string;
+	// Permission gaps that required an override (warnings, not failures).
+	enforcementGaps: Array<{ participantId: string; agentId: string; permission: string }>;
+}
+
+export interface UninstallSummary {
+	name: string;
+}
+
+// What the studio server asks the host to install. The host (CLI) fills in
+// outputDir / runtimePath defaults; the server passes the resolved manifest
+// path (from the docId table) plus the surface and user options.
+export interface StudioInstallParams {
+	manifestPath: string;
+	surface: string;
+	force?: boolean;
+	overrideName?: string;
+	allowUnenforcedPermissions?: boolean;
+}
+
+export interface StudioLifecycle {
+	list(): InstalledSummary[];
+	install(params: StudioInstallParams): InstallSummary;
+	uninstall(name: string): UninstallSummary;
+}
+
+// POST /api/install request body. docId resolves to the manifest path
+// server-side; the manifest must be saved to disk first (install reads the
+// file, not the in-memory draft). baseHash is the hash the client last saw;
+// the server rejects with 409 if disk has drifted, so a stale tab or an
+// external change cannot install a different chit than the user is looking at
+// (same conflict philosophy as PUT).
+export interface InstallRequest {
+	docId: string;
+	surface: string;
+	baseHash: string;
+	force?: boolean;
+	overrideName?: string;
+	allowUnenforcedPermissions?: boolean;
+}
+
 export type Bootstrap =
 	| {
 			mode: "open";

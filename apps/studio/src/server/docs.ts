@@ -62,6 +62,26 @@ export class DocStore {
 		return this.entries.has(docId);
 	}
 
+	// The absolute path behind a docId, or null if unknown. Server-side only
+	// (never crosses the wire); used by the install route to hand the
+	// lifecycle the on-disk manifest path.
+	pathOf(docId: string): string | null {
+		return this.entries.get(docId)?.absolutePath ?? null;
+	}
+
+	// sha256 of the current on-disk bytes for a docId, or null if the docId is
+	// unknown or the file cannot be read. The install route compares this to
+	// the client's baseHash to refuse installing a drifted file.
+	currentHash(docId: string): string | null {
+		const entry = this.entries.get(docId);
+		if (!entry) return null;
+		try {
+			return hashRaw(readFileSync(entry.absolutePath, "utf-8"));
+		} catch {
+			return null;
+		}
+	}
+
 	// Validate a client-supplied draft (file-shape JSON, not NormalizedManifest)
 	// against the same parseManifest + buildGraphModel pipeline the server uses
 	// for disk reads. Returns null only if the docId is unknown. Parse failures

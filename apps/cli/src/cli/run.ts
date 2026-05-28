@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { NormalizedManifest } from "@chit/core";
 import {
 	buildGraphModel,
@@ -630,6 +630,46 @@ function runUninstall(args: ParsedArgs): number {
 	}
 }
 
+// Lifecycle adapter injected into Studio so its install/list/uninstall
+// endpoints reuse the exact CLI surface code paths (no workspace cycle: the
+// CLI implements the interface chit-studio defines). CHIT_SKILLS_DIR overrides
+// the install location, so e2e tests install into a temp dir instead of the
+// real ~/.claude/skills.
+function buildStudioLifecycle(): import("chit-studio/server").StudioLifecycle {
+	const skillsDir = process.env.CHIT_SKILLS_DIR ?? defaultSkillsDir();
+	return {
+		list: () =>
+			listInstalled(skillsDir).map((r) => ({
+				name: r.marker.installName,
+				surface: r.marker.surface,
+				manifestId: r.marker.manifestId,
+				installedAt: r.marker.installedAt,
+			})),
+		install: (params) => {
+			if (params.surface !== "claude-skill") {
+				throw new Error(`surface "${params.surface}" is not installable (today: claude-skill)`);
+			}
+			const result = installClaudeSkill({
+				manifestPath: params.manifestPath,
+				outputDir: skillsDir,
+				runtimePath: defaultRuntimePath(),
+				overrideName: params.overrideName,
+				force: params.force,
+				allowUnenforcedPermissions: params.allowUnenforcedPermissions,
+			});
+			return {
+				name: basename(result.skillDir),
+				surface: "claude-skill",
+				enforcementGaps: [...result.enforcementGaps],
+			};
+		},
+		uninstall: (name) => {
+			const removed = uninstall(skillsDir, name);
+			return { name: removed.marker.installName };
+		},
+	};
+}
+
 async function runStudio(args: ParsedArgs): Promise<number> {
 	const { PathError, startStudio } = await import("chit-studio/server");
 	let handle: { url: string; stop(): void };
@@ -639,6 +679,7 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			cwd: process.cwd(),
 			explicitPath: args.manifestPath,
 			registry,
+			lifecycle: buildStudioLifecycle(),
 		});
 	} catch (e) {
 		if (e instanceof PathError) {

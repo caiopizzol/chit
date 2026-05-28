@@ -6,9 +6,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseRegistry } from "@chit/core";
-import { buildBootstrap, DocStore } from "./docs.ts";
+import { buildBootstrap, DocStore, hashRaw } from "./docs.ts";
 import { buildApp } from "./index.ts";
 import { generateToken } from "./token.ts";
+import type { StudioLifecycle } from "./types.ts";
 
 const REGISTRY = parseRegistry(undefined);
 const PORT = 4040;
@@ -39,7 +40,7 @@ interface Setup {
 	app: ReturnType<typeof buildApp>;
 }
 
-function setup(opts: { clientDistDir?: string } = {}): Setup {
+function setup(opts: { clientDistDir?: string; lifecycle?: StudioLifecycle } = {}): Setup {
 	const cwd = tempCwd();
 	const path = join(cwd, "consult.json");
 	writeFileSync(path, chit("consult"));
@@ -55,8 +56,42 @@ function setup(opts: { clientDistDir?: string } = {}): Setup {
 		store,
 		allowedHosts: ALLOWED,
 		clientDistDir: opts.clientDistDir ?? "/this/path/does/not/exist",
+		lifecycle: opts.lifecycle,
 	});
 	return { cwd, path, token, app };
+}
+
+// Stub lifecycle that records calls; the real install/list/uninstall code is
+// covered by chit-cli's own tests, so here we only verify route wiring.
+interface StubLifecycle extends StudioLifecycle {
+	calls: { list: number; install: unknown[]; uninstall: string[] };
+}
+function stubLifecycle(opts: { throwOn?: "install" | "uninstall" } = {}): StubLifecycle {
+	const calls = { list: 0, install: [] as unknown[], uninstall: [] as string[] };
+	return {
+		calls,
+		list: () => {
+			calls.list++;
+			return [
+				{
+					name: "consult",
+					surface: "claude-skill",
+					manifestId: "consult",
+					installedAt: "2026-01-01T00:00:00Z",
+				},
+			];
+		},
+		install: (p) => {
+			calls.install.push(p);
+			if (opts.throwOn === "install") throw new Error("dir exists; pass force");
+			return { name: p.overrideName ?? "consult", surface: p.surface, enforcementGaps: [] };
+		},
+		uninstall: (name) => {
+			calls.uninstall.push(name);
+			if (opts.throwOn === "uninstall") throw new Error(`no marked install named ${name}`);
+			return { name };
+		},
+	};
 }
 
 function teardown(s: Setup) {
@@ -581,6 +616,181 @@ describe("POST /api/documents/:docId/preview", () => {
 				s.token,
 			);
 			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+});
+
+describe("lifecycle endpoints", () => {
+	async function send(
+		app: ReturnType<typeof buildApp>,
+		method: string,
+		path: string,
+		token: string,
+		body?: unknown,
+	): Promise<Response> {
+		const headers: Record<string, string> = { host: HOST, authorization: `Bearer ${token}` };
+		if (body !== undefined) headers["content-type"] = "application/json";
+		return app.fetch(
+			new Request(`http://${HOST}${path}`, {
+				method,
+				headers,
+				body: body === undefined ? undefined : JSON.stringify(body),
+			}),
+		);
+	}
+
+	test("GET /api/installed returns the lifecycle list", async () => {
+		const s = setup({ lifecycle: stubLifecycle() });
+		try {
+			const res = await send(s.app, "GET", "/api/installed", s.token);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as Array<{ name: string }>;
+			expect(body[0]?.name).toBe("consult");
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("GET /api/installed requires a token", async () => {
+		const s = setup({ lifecycle: stubLifecycle() });
+		try {
+			const res = await s.app.fetch(
+				new Request(`http://${HOST}/api/installed`, { headers: { host: HOST } }),
+			);
+			expect(res.status).toBe(401);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("GET /api/installed returns 501 when no lifecycle is injected", async () => {
+		const s = setup(); // no lifecycle
+		try {
+			const res = await send(s.app, "GET", "/api/installed", s.token);
+			expect(res.status).toBe(501);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	// The setup() file on disk is exactly chit("consult"), so this is the
+	// baseHash the client would have seen.
+	const goodHash = () => hashRaw(chit("consult"));
+
+	test("POST /api/install resolves docId to the manifest path and calls install", async () => {
+		const life = stubLifecycle();
+		const s = setup({ lifecycle: life });
+		try {
+			const res = await send(s.app, "POST", "/api/install", s.token, {
+				docId: "current",
+				surface: "claude-skill",
+				baseHash: goodHash(),
+			});
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { name: string; surface: string };
+			expect(body.surface).toBe("claude-skill");
+			expect(life.calls.install).toHaveLength(1);
+			const params = life.calls.install[0] as { manifestPath: string; surface: string };
+			expect(params.manifestPath.endsWith("consult.json")).toBe(true);
+			expect(params.surface).toBe("claude-skill");
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("POST /api/install with a stale baseHash returns 409 and does not install", async () => {
+		const life = stubLifecycle();
+		const s = setup({ lifecycle: life });
+		try {
+			const res = await send(s.app, "POST", "/api/install", s.token, {
+				docId: "current",
+				surface: "claude-skill",
+				baseHash: "deadbeef".repeat(8),
+			});
+			expect(res.status).toBe(409);
+			const body = (await res.json()) as { kind: string; currentHash: string };
+			expect(body.kind).toBe("conflict");
+			expect(body.currentHash).toBe(goodHash());
+			expect(life.calls.install).toHaveLength(0); // never reached the lifecycle
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("POST /api/install unknown docId returns 404", async () => {
+		const s = setup({ lifecycle: stubLifecycle() });
+		try {
+			const res = await send(s.app, "POST", "/api/install", s.token, {
+				docId: "nope",
+				surface: "claude-skill",
+				baseHash: goodHash(),
+			});
+			expect(res.status).toBe(404);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("POST /api/install missing surface returns 400", async () => {
+		const s = setup({ lifecycle: stubLifecycle() });
+		try {
+			const res = await send(s.app, "POST", "/api/install", s.token, {
+				docId: "current",
+				baseHash: goodHash(),
+			});
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("POST /api/install missing baseHash returns 400", async () => {
+		const s = setup({ lifecycle: stubLifecycle() });
+		try {
+			const res = await send(s.app, "POST", "/api/install", s.token, {
+				docId: "current",
+				surface: "claude-skill",
+			});
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("POST /api/install surfaces a lifecycle failure as 422", async () => {
+		const s = setup({ lifecycle: stubLifecycle({ throwOn: "install" }) });
+		try {
+			const res = await send(s.app, "POST", "/api/install", s.token, {
+				docId: "current",
+				surface: "claude-skill",
+				baseHash: goodHash(),
+			});
+			expect(res.status).toBe(422);
+			expect(await res.text()).toContain("force");
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("DELETE /api/installed/:name calls uninstall", async () => {
+		const life = stubLifecycle();
+		const s = setup({ lifecycle: life });
+		try {
+			const res = await send(s.app, "DELETE", "/api/installed/consult", s.token);
+			expect(res.status).toBe(200);
+			expect(life.calls.uninstall).toEqual(["consult"]);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("DELETE /api/installed/:name surfaces a lifecycle failure as 422", async () => {
+		const s = setup({ lifecycle: stubLifecycle({ throwOn: "uninstall" }) });
+		try {
+			const res = await send(s.app, "DELETE", "/api/installed/ghost", s.token);
+			expect(res.status).toBe(422);
 		} finally {
 			teardown(s);
 		}

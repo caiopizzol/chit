@@ -12,6 +12,7 @@ import { discover } from "./discovery.ts";
 import { buildBootstrap, DocStore } from "./docs.ts";
 import { renderShell } from "./shell.ts";
 import { generateToken } from "./token.ts";
+import type { StudioLifecycle } from "./types.ts";
 
 // Client bundle output, relative to this file. Resolved against import.meta
 // so the path is correct regardless of the caller's cwd. Built by
@@ -20,7 +21,16 @@ const CLIENT_DIST = join(import.meta.dir, "..", "..", "dist", "client");
 const CLIENT_ASSETS = new Set(["index.js", "index.css"]);
 
 export { PathError } from "./paths.ts";
-export type { Bootstrap, DocumentDetail, StudioDocument } from "./types.ts";
+export type {
+	Bootstrap,
+	DocumentDetail,
+	InstalledSummary,
+	InstallSummary,
+	StudioDocument,
+	StudioInstallParams,
+	StudioLifecycle,
+	UninstallSummary,
+} from "./types.ts";
 
 export interface StartStudioOptions {
 	cwd: string;
@@ -37,6 +47,9 @@ export interface StartStudioOptions {
 	// most likely to surface real warnings. The client can re-fetch with a
 	// different surface via ?surface=<kind>.
 	defaultSurface?: SurfaceKind;
+	// Install / list / uninstall, injected by the host (the CLI). Absent means
+	// the lifecycle endpoints return 501 (read-only Studio).
+	lifecycle?: StudioLifecycle;
 }
 
 export interface StudioHandle {
@@ -76,7 +89,14 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 	// after `app.use` registration is fine.
 	const allowedHosts = new Set<string>();
 	const clientDistDir = opts.clientDistDir ?? CLIENT_DIST;
-	const app = buildApp({ token, makeBootstrap, store, allowedHosts, clientDistDir });
+	const app = buildApp({
+		token,
+		makeBootstrap,
+		store,
+		allowedHosts,
+		clientDistDir,
+		lifecycle: opts.lifecycle,
+	});
 
 	const server = Bun.serve({
 		port: requestedPort,
@@ -109,6 +129,7 @@ interface BuildAppOptions {
 	store: DocStore;
 	allowedHosts: Set<string>;
 	clientDistDir: string;
+	lifecycle?: StudioLifecycle;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -217,6 +238,80 @@ export function buildApp(opts: BuildAppOptions) {
 		const result = opts.store.preview(docId, draft, surface);
 		if (!result) return c.text("not found", 404);
 		return c.json(result);
+	});
+
+	// Lifecycle endpoints. Absent lifecycle (read-only Studio) -> 501. The
+	// real install/list/uninstall code is injected by the CLI; failures from
+	// it (install conflict, unknown install) surface as 422 with the message.
+
+	app.get("/api/installed", (c) => {
+		if (!opts.lifecycle) return new Response("lifecycle not available", { status: 501 });
+		return c.json(opts.lifecycle.list());
+	});
+
+	app.post("/api/install", async (c) => {
+		if (!opts.lifecycle) return new Response("lifecycle not available", { status: 501 });
+		let body: unknown;
+		try {
+			body = await c.req.json();
+		} catch {
+			return new Response("invalid JSON body", { status: 400 });
+		}
+		if (
+			typeof body !== "object" ||
+			body === null ||
+			!("docId" in body) ||
+			!("surface" in body) ||
+			!("baseHash" in body)
+		) {
+			return new Response("body must be { docId, surface, baseHash, force?, overrideName? }", {
+				status: 400,
+			});
+		}
+		const { docId, surface, baseHash, force, overrideName, allowUnenforcedPermissions } = body as {
+			docId: unknown;
+			surface: unknown;
+			baseHash: unknown;
+			force?: unknown;
+			overrideName?: unknown;
+			allowUnenforcedPermissions?: unknown;
+		};
+		if (typeof surface !== "string")
+			return new Response("surface must be a string", { status: 400 });
+		if (typeof baseHash !== "string" || baseHash.length === 0) {
+			return new Response("baseHash must be a non-empty string", { status: 400 });
+		}
+		const manifestPath = opts.store.pathOf(String(docId));
+		if (!manifestPath) return c.text("not found", 404);
+		// Refuse to install a file that drifted since the client loaded it
+		// (external change / stale tab). Same conflict contract as PUT.
+		const currentHash = opts.store.currentHash(String(docId));
+		if (currentHash === null) return c.text("not found", 404);
+		if (currentHash !== baseHash) {
+			return c.json({ kind: "conflict", currentHash }, 409);
+		}
+		try {
+			const summary = opts.lifecycle.install({
+				manifestPath,
+				surface,
+				force: Boolean(force),
+				overrideName: typeof overrideName === "string" ? overrideName : undefined,
+				allowUnenforcedPermissions: Boolean(allowUnenforcedPermissions),
+			});
+			return c.json(summary);
+		} catch (e) {
+			return new Response(`install failed: ${(e as Error).message}`, { status: 422 });
+		}
+	});
+
+	app.delete("/api/installed/:name", (c) => {
+		if (!opts.lifecycle) return new Response("lifecycle not available", { status: 501 });
+		const name = c.req.param("name");
+		try {
+			return c.json(opts.lifecycle.uninstall(name));
+		} catch (e) {
+			return new Response(`uninstall failed: ${(e as Error).message}`, { status: 422 });
+		}
 	});
 
 	return app;
