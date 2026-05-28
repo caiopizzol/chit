@@ -24,6 +24,8 @@ export interface DocumentEditor {
 	graphModel: GraphModel;
 	draftSource: Record<string, unknown>;
 	raw: string;
+	// Current on-disk hash; sent as baseHash on save and install.
+	hash: string;
 	dirty: boolean;
 	previewPending: boolean;
 	previewError: string | null;
@@ -285,6 +287,7 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		graphModel,
 		draftSource,
 		raw,
+		hash,
 		dirty,
 		previewPending,
 		previewError,

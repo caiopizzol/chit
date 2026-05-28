@@ -7,8 +7,11 @@ import type {
 	ConflictResponse,
 	DocumentDetail,
 	ErrorSaveResponse,
+	InstalledSummary,
+	InstallSummary,
 	PreviewResponse,
 	SavedSaveResponse,
+	UninstallSummary,
 } from "../server/types.ts";
 import { getToken } from "./boot.ts";
 
@@ -100,4 +103,60 @@ export async function saveDocument(
 		return { kind: "saved", response: body as SavedSaveResponse };
 	}
 	return { kind: "parse-error", response: body as ErrorSaveResponse };
+}
+
+// --- Lifecycle (install / list / uninstall) ---
+
+const authHeaders = () => ({ Authorization: `Bearer ${getToken()}` });
+
+export async function listInstalled(): Promise<InstalledSummary[]> {
+	const res = await fetch("/api/installed", { headers: authHeaders() });
+	if (!res.ok) {
+		throw new StudioApiError(res.status, `GET /api/installed: ${res.status} ${await res.text()}`);
+	}
+	return (await res.json()) as InstalledSummary[];
+}
+
+// Outcome of an install attempt. 409 (the file drifted from baseHash) and the
+// 422 install failure are expected control flow, not exceptions; only
+// transport/auth failures throw.
+export type InstallOutcome =
+	| { kind: "installed"; summary: InstallSummary }
+	| { kind: "conflict"; currentHash: string }
+	| { kind: "error"; error: string };
+
+// Install is always into the Claude Code skill surface for now (the only
+// installable target); the validation-surface picker does not drive this.
+export async function installDocument(
+	docId: string,
+	baseHash: string,
+	opts: { force?: boolean; overrideName?: string; allowUnenforcedPermissions?: boolean } = {},
+): Promise<InstallOutcome> {
+	const res = await fetch("/api/install", {
+		method: "POST",
+		headers: { ...authHeaders(), "Content-Type": "application/json" },
+		body: JSON.stringify({ docId, surface: "claude-skill", baseHash, ...opts }),
+	});
+	if (res.status === 409) {
+		const body = (await res.json()) as ConflictResponse;
+		return { kind: "conflict", currentHash: body.currentHash };
+	}
+	if (!res.ok) {
+		return { kind: "error", error: await res.text() };
+	}
+	return { kind: "installed", summary: (await res.json()) as InstallSummary };
+}
+
+export async function uninstallDocument(name: string): Promise<UninstallSummary> {
+	const res = await fetch(`/api/installed/${encodeURIComponent(name)}`, {
+		method: "DELETE",
+		headers: authHeaders(),
+	});
+	if (!res.ok) {
+		throw new StudioApiError(
+			res.status,
+			`DELETE /api/installed: ${res.status} ${await res.text()}`,
+		);
+	}
+	return (await res.json()) as UninstallSummary;
 }

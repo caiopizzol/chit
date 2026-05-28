@@ -39,6 +39,7 @@ import type {
 	PickerClientState,
 } from "./state.ts";
 import { useDocumentEditor } from "./useDocumentEditor.ts";
+import { useInstalled } from "./useInstalled.ts";
 
 const SURFACES: SurfaceKind[] = ["claude-skill", "cli"];
 
@@ -441,6 +442,107 @@ function DiffModal({
 	);
 }
 
+// Installed-surfaces panel: install the current chit into Claude Code, list
+// installed chits, uninstall (two-step confirm). Install is Claude-Code-
+// specific (not the validation-surface picker) and reads the saved file, so
+// it is gated on a clean, conflict-free, parseable document.
+function InstalledPanel({
+	list,
+	busy,
+	error,
+	canInstall,
+	disabledReason,
+	gaps,
+	allowUnenforced,
+	onToggleAllow,
+	onInstall,
+	onUninstall,
+}: {
+	list: Array<{ name: string; surface: string; manifestId: string; installedAt: string }>;
+	busy: boolean;
+	error: string | null;
+	canInstall: boolean;
+	disabledReason: string | null;
+	gaps: Array<{ participantId: string; agentId: string; permission: string }>;
+	allowUnenforced: boolean;
+	onToggleAllow: (next: boolean) => void;
+	onInstall: () => void;
+	onUninstall: (name: string) => void;
+}) {
+	const [confirming, setConfirming] = useState<string | null>(null);
+	return (
+		<section className="installed-panel">
+			<h2>Installed</h2>
+			{error && <div className="refetch-error">{error}</div>}
+			{/* Consent is shown only when the chit actually has enforcement gaps,
+			    tied to the specific warning rather than a vague global toggle.
+			    Mirrors the CLI's --allow-unenforced-permissions. */}
+			{gaps.length > 0 && (
+				<div className="consent">
+					<label className="allow-unenforced">
+						<input
+							type="checkbox"
+							checked={allowUnenforced}
+							onChange={(e) => onToggleAllow(e.currentTarget.checked)}
+						/>
+						Install with permission warning
+					</label>
+					{gaps.map((g) => (
+						<p key={`${g.participantId}:${g.permission}`} className="consent-gap">
+							Claude Code cannot enforce {g.permission} for {g.participantId}.
+						</p>
+					))}
+				</div>
+			)}
+			<button
+				type="button"
+				className="btn-primary"
+				onClick={onInstall}
+				disabled={!canInstall || busy}
+				title={canInstall ? undefined : (disabledReason ?? undefined)}
+			>
+				Install into Claude Code
+			</button>
+			{!canInstall && disabledReason && <p className="install-hint">{disabledReason}</p>}
+			<ul className="installed-list">
+				{list.length === 0 && <li className="empty">No chits installed.</li>}
+				{list.map((i) => (
+					<li key={i.name} className="installed-item">
+						<code>{i.name}</code>
+						<span className="installed-surface">{i.surface}</span>
+						{confirming === i.name ? (
+							<span className="confirm-row">
+								<button
+									type="button"
+									className="btn-secondary"
+									onClick={() => {
+										onUninstall(i.name);
+										setConfirming(null);
+									}}
+								>
+									Confirm
+								</button>
+								<button type="button" className="btn-secondary" onClick={() => setConfirming(null)}>
+									Cancel
+								</button>
+							</span>
+						) : (
+							<button
+								type="button"
+								className="btn-secondary"
+								onClick={() => setConfirming(i.name)}
+								disabled={busy}
+							>
+								Uninstall
+							</button>
+						)}
+					</li>
+				))}
+			</ul>
+		</section>
+	);
+}
+
 function ConflictBanner({ onReload }: { onReload: () => void }) {
 	return (
 		<div className="conflict-banner">
@@ -462,8 +564,11 @@ function isTargetable(type: string | undefined): boolean {
 
 function OpenMode({ initial }: { initial: OpenClientState }) {
 	const editor = useDocumentEditor(initial);
+	const installed = useInstalled(initial.docId);
 	const [diffOpen, setDiffOpen] = useState(false);
 	const [edgeError, setEdgeError] = useState<string | null>(null);
+	const [allowUnenforced, setAllowUnenforced] = useState(false);
+	const [installConflict, setInstallConflict] = useState(false);
 
 	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
@@ -606,6 +711,27 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 		else setDiffOpen(false);
 	}, [editor]);
 
+	// Install reads the saved file, so it is gated on a clean, conflict-free,
+	// parseable document. The reason is shown when the button is disabled.
+	let installDisabledReason: string | null = null;
+	if (editor.dirty) installDisabledReason = "Save your changes before installing.";
+	else if (editor.previewPending) installDisabledReason = "Validating…";
+	else if (editor.saving) installDisabledReason = "Saving…";
+	else if (editor.conflict) installDisabledReason = "Resolve the file conflict first.";
+	else if (editor.previewError) installDisabledReason = "Fix the validation error first.";
+	const canInstall = installDisabledReason === null;
+
+	// Enforcement gaps are agent-adapter-based (surface-independent), so this
+	// reflects what install-into-claude-skill will hit regardless of the
+	// selected validation surface.
+	const permissionGaps = editor.graphModel.validation?.permissions.gaps ?? [];
+
+	const onInstall = useCallback(async () => {
+		setInstallConflict(false);
+		const outcome = await installed.install(editor.hash, allowUnenforced);
+		if (outcome.kind === "conflict") setInstallConflict(true);
+	}, [installed, editor.hash, allowUnenforced]);
+
 	const selected = nodes.find((n) => n.id === selectedId) ?? null;
 	const description = String(editor.draftSource.description ?? "");
 
@@ -693,10 +819,24 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					</ReactFlow>
 				</div>
 				<aside className="right-rail">
-					{editor.conflict && <ConflictBanner onReload={() => window.location.reload()} />}
+					{(editor.conflict || installConflict) && (
+						<ConflictBanner onReload={() => window.location.reload()} />
+					)}
 					{edgeError && <div className="refetch-error">{edgeError}</div>}
 					{editor.previewError && <div className="refetch-error">{editor.previewError}</div>}
 					<ValidationPanel validation={editor.graphModel.validation} />
+					<InstalledPanel
+						list={installed.list}
+						busy={installed.busy}
+						error={installed.error}
+						canInstall={canInstall}
+						disabledReason={installDisabledReason}
+						gaps={permissionGaps}
+						allowUnenforced={allowUnenforced}
+						onToggleAllow={setAllowUnenforced}
+						onInstall={onInstall}
+						onUninstall={installed.uninstall}
+					/>
 					<ManifestPanel description={description} onDescriptionChange={editor.setDescription} />
 					<Inspector
 						selected={selected}
