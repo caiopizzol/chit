@@ -15,7 +15,9 @@
 		"check:browser": "bun --filter '@chit/core' check:browser",
 		"cli": "bun --cwd apps/cli src/cli/run.ts",
 		"web:dev": "bun --filter chit-web dev",
-		"web:deploy": "bun --filter chit-web deploy"
+		"web:deploy": "bun --filter chit-web deploy",
+		"studio:dev": "bun --filter chit-studio dev",
+		"studio:start": "bun --filter chit-studio start"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",

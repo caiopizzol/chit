@@ -1,0 +1,17 @@
+{
+	"name": "chit-studio",
+	"version": "0.0.0",
+	"private": true,
+	"description": "chit Studio. Local design-time viewer/editor for chits. Bun + Hono server using @chit/core.",
+	"type": "module",
+	"scripts": {
+		"dev": "bun --hot src/index.tsx",
+		"start": "bun src/index.tsx",
+		"typecheck": "tsc --noEmit",
+		"check": "biome check ."
+	},
+	"dependencies": {
+		"@chit/core": "workspace:*",
+		"hono": "^4.6.0"
+	}
+}

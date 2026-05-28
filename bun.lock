@@ -20,6 +20,14 @@
         "@chit/core": "workspace:*",
       },
     },
+    "apps/studio": {
+      "name": "chit-studio",
+      "version": "0.0.0",
+      "dependencies": {
+        "@chit/core": "workspace:*",
+        "hono": "^4.6.0",
+      },
+    },
     "apps/web": {
       "name": "chit-web",
       "version": "0.0.0",
@@ -204,6 +212,8 @@
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 
     "chit-cli": ["chit-cli@workspace:apps/cli"],
+
+    "chit-studio": ["chit-studio@workspace:apps/studio"],
 
     "chit-web": ["chit-web@workspace:apps/web"],
 
