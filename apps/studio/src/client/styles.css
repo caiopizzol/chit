@@ -177,6 +177,28 @@ header.app .save-btn {
 	outline-offset: -1px;
 }
 
+/* Inspector editable controls (call node: role / session / filesystem). */
+.inspector-input,
+.inspector-select {
+	width: 100%;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12.5px;
+	color: var(--ink);
+	background: var(--sheet);
+	border: 1px solid var(--hairline);
+	padding: 6px 8px;
+	margin-top: 4px;
+}
+.inspector-input {
+	resize: vertical;
+	line-height: 1.5;
+}
+.inspector-input:focus,
+.inspector-select:focus {
+	outline: 1px solid var(--ink);
+	outline-offset: -1px;
+}
+
 /* Conflict banner: shown when the file changed on disk under us. */
 .conflict-banner {
 	display: flex;

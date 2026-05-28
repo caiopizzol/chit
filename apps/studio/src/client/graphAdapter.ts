@@ -66,6 +66,7 @@ export function adaptGraphModel(model: GraphModel): AdaptedGraph {
 			}
 			const data: CallData = {
 				id: gnode.id,
+				participantId: gnode.participantId,
 				agent: participant.agentId,
 				session: participant.session,
 				filesystem: participant.permissions.filesystem,

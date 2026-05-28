@@ -6,6 +6,10 @@ import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 export type InputData = { name: string; type: string; required: boolean };
 export type CallData = {
 	id: string;
+	// The participant this step calls. Needed by the inspector to edit the
+	// participant's role/session/filesystem (a participant can back several
+	// call steps; editing here edits the shared participant).
+	participantId: string;
 	agent: string;
 	session: string;
 	filesystem: string;

@@ -6,7 +6,7 @@
 import type { GraphModel, SurfaceKind } from "@chit/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { previewDocument, StudioApiError, saveDocument } from "./api.ts";
-import { canSave as canSaveGate, isDirty } from "./editor.ts";
+import { canSave as canSaveGate, isDirty, updateParticipantField } from "./editor.ts";
 import type { OpenClientState } from "./state.ts";
 
 const PREVIEW_DEBOUNCE_MS = 400;
@@ -23,6 +23,11 @@ export interface DocumentEditor {
 	conflict: { currentHash: string } | null;
 	canSave: boolean;
 	setDescription: (value: string) => void;
+	setParticipantField: (
+		participantId: string,
+		field: "role" | "session" | "filesystem",
+		value: string,
+	) => void;
 	changeSurface: (next: SurfaceKind) => Promise<void>;
 	save: () => Promise<{ ok: boolean }>;
 }
@@ -103,19 +108,15 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		[initial.docId],
 	);
 
-	const setDescription = useCallback(
-		(value: string) => {
-			// Compute next outside the state updater so the debounce schedule
-			// uses the exact value, not a closure read that React StrictMode
-			// might double-invoke.
-			const next = { ...draftSource, description: value };
+	// Apply a fully-computed next draft: set it, mark pending immediately
+	// (not after the debounce — otherwise canSave is briefly true against
+	// stale validation), clear the prior error, invalidate any in-flight or
+	// queued preview, and schedule a fresh debounced preview. All field
+	// setters funnel through here so the edit lifecycle is identical
+	// regardless of which field changed.
+	const applyDraft = useCallback(
+		(next: Record<string, unknown>) => {
 			setDraftSource(next);
-			// Mark pending immediately, not after the debounce fires: otherwise
-			// canSave can be true for ~400ms against stale validation (e.g. an
-			// edit that introduces a parse error would let the save modal open
-			// before preview catches it). Clear any prior error optimistically;
-			// it referred to the previous draft. invalidatePreview advances the
-			// sequence so any in-flight preview can no longer clear pending.
 			setPreviewPending(true);
 			setPreviewError(null);
 			invalidatePreview();
@@ -123,7 +124,25 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 				void runPreview(next, surface);
 			}, PREVIEW_DEBOUNCE_MS);
 		},
-		[draftSource, runPreview, surface, invalidatePreview],
+		[runPreview, surface, invalidatePreview],
+	);
+
+	const setDescription = useCallback(
+		(value: string) => {
+			applyDraft({ ...draftSource, description: value });
+		},
+		[applyDraft, draftSource],
+	);
+
+	// Edit a participant's role / session / permissions.filesystem. filesystem
+	// is nested under permissions; role and session are top-level on the
+	// participant. Editing here edits the shared participant (a participant can
+	// back several call steps).
+	const setParticipantField = useCallback(
+		(participantId: string, field: "role" | "session" | "filesystem", value: string) => {
+			applyDraft(updateParticipantField(draftSource, participantId, field, value));
+		},
+		[applyDraft, draftSource],
 	);
 
 	const changeSurface = useCallback(
@@ -187,6 +206,7 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		conflict,
 		canSave,
 		setDescription,
+		setParticipantField,
 		changeSurface,
 		save,
 	};

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildGraphModel, parseManifest, parseRegistry } from "@chit/core";
-import { canonicalize, canSave, deepEqual, isDirty } from "./editor.ts";
+import { canonicalize, canSave, deepEqual, isDirty, updateParticipantField } from "./editor.ts";
 
 const REGISTRY = parseRegistry(undefined);
 
@@ -77,6 +77,54 @@ describe("isDirty", () => {
 
 	test("unparseable raw makes any draft dirty", () => {
 		expect(isDirty({ anything: true }, "not json")).toBe(true);
+	});
+});
+
+describe("updateParticipantField", () => {
+	const draft = () => ({
+		schema: 1,
+		participants: {
+			codex: { agent: "codex", role: "old role", session: "per_scope" },
+			claude: { agent: "claude", role: "r", session: "stateless" },
+		},
+	});
+
+	test("sets a top-level field (role) without touching other participants", () => {
+		const next = updateParticipantField(draft(), "codex", "role", "new role");
+		const ps = next.participants as Record<string, Record<string, unknown>>;
+		expect(ps.codex?.role).toBe("new role");
+		expect(ps.codex?.agent).toBe("codex");
+		expect(ps.claude).toEqual({ agent: "claude", role: "r", session: "stateless" });
+	});
+
+	test("sets session", () => {
+		const next = updateParticipantField(draft(), "codex", "session", "stateless");
+		const ps = next.participants as Record<string, Record<string, unknown>>;
+		expect(ps.codex?.session).toBe("stateless");
+	});
+
+	test("filesystem creates the permissions object when absent", () => {
+		const next = updateParticipantField(draft(), "codex", "filesystem", "write");
+		const ps = next.participants as Record<string, Record<string, unknown>>;
+		expect(ps.codex?.permissions).toEqual({ filesystem: "write" });
+	});
+
+	test("filesystem merges into an existing permissions object", () => {
+		const d = draft();
+		(d.participants as Record<string, Record<string, unknown>>).codex.permissions = {
+			filesystem: "read_only",
+			other: "keep",
+		};
+		const next = updateParticipantField(d, "codex", "filesystem", "write");
+		const ps = next.participants as Record<string, Record<string, unknown>>;
+		expect(ps.codex?.permissions).toEqual({ filesystem: "write", other: "keep" });
+	});
+
+	test("does not mutate the input draft", () => {
+		const d = draft();
+		const before = JSON.stringify(d);
+		updateParticipantField(d, "codex", "role", "changed");
+		expect(JSON.stringify(d)).toBe(before);
 	});
 });
 

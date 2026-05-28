@@ -26,6 +26,7 @@ import { type DiffRow, lineDiff } from "./diff.ts";
 import { canonicalize } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
+import type { CallData } from "./nodes.tsx";
 import { nodeTypes } from "./nodes.tsx";
 import type {
 	ClientState,
@@ -102,7 +103,110 @@ function VRow({ label, state, detail }: { label: string; state: RowState; detail
 	);
 }
 
-function Inspector({ selected }: { selected: Node | null }) {
+const SESSIONS = ["stateless", "per_topology", "per_scope"];
+const FILESYSTEMS = ["read_only", "write"];
+
+// Editable inspector for a selected call node. Values are read from
+// draftSource (the in-progress edit), NOT from the node's graphModel data,
+// which lags by the debounce. Edits funnel through setParticipantField, the
+// same lifecycle as the description edit.
+function CallInspector({
+	data,
+	draftSource,
+	onField,
+}: {
+	data: CallData;
+	draftSource: Record<string, unknown>;
+	onField: (participantId: string, field: "role" | "session" | "filesystem", value: string) => void;
+}) {
+	const pid = data.participantId;
+	const participants = (draftSource.participants ?? {}) as Record<string, Record<string, unknown>>;
+	const p = participants[pid] ?? {};
+	const role = String(p.role ?? "");
+	const session = String(p.session ?? "stateless");
+	const filesystem = String(
+		((p.permissions as Record<string, unknown> | undefined)?.filesystem ?? "read_only") as string,
+	);
+	const agent = String(p.agent ?? data.agent);
+	return (
+		<section className="inspector">
+			<h2>Inspector · call</h2>
+			<div className="field">
+				<div className="field-label">step</div>
+				<div className="field-value">{data.id}</div>
+			</div>
+			<div className="field">
+				<div className="field-label">participant</div>
+				<div className="field-value">{pid}</div>
+			</div>
+			<div className="field">
+				<div className="field-label">agent (read-only)</div>
+				<div className="field-value">{agent}</div>
+			</div>
+			<div className="field">
+				<label className="field-label" htmlFor="call-role">
+					role
+				</label>
+				<textarea
+					id="call-role"
+					className="inspector-input"
+					value={role}
+					rows={3}
+					spellCheck={false}
+					onChange={(e) => onField(pid, "role", e.currentTarget.value)}
+				/>
+			</div>
+			<div className="field">
+				<label className="field-label" htmlFor="call-session">
+					session
+				</label>
+				<select
+					id="call-session"
+					className="inspector-select"
+					value={session}
+					onChange={(e) => onField(pid, "session", e.currentTarget.value)}
+				>
+					{SESSIONS.map((s) => (
+						<option key={s} value={s}>
+							{s}
+						</option>
+					))}
+				</select>
+			</div>
+			<div className="field">
+				<label className="field-label" htmlFor="call-filesystem">
+					filesystem
+				</label>
+				<select
+					id="call-filesystem"
+					className="inspector-select"
+					value={filesystem}
+					onChange={(e) => onField(pid, "filesystem", e.currentTarget.value)}
+				>
+					{FILESYSTEMS.map((f) => (
+						<option key={f} value={f}>
+							{f}
+						</option>
+					))}
+				</select>
+			</div>
+		</section>
+	);
+}
+
+function Inspector({
+	selected,
+	draftSource,
+	onParticipantField,
+}: {
+	selected: Node | null;
+	draftSource: Record<string, unknown>;
+	onParticipantField: (
+		participantId: string,
+		field: "role" | "session" | "filesystem",
+		value: string,
+	) => void;
+}) {
 	if (!selected) {
 		return (
 			<section className="inspector">
@@ -111,6 +215,16 @@ function Inspector({ selected }: { selected: Node | null }) {
 			</section>
 		);
 	}
+	if (selected.type === "call") {
+		return (
+			<CallInspector
+				data={selected.data as CallData}
+				draftSource={draftSource}
+				onField={onParticipantField}
+			/>
+		);
+	}
+	// input / format: read-only field dump (no editable fields in 2.3).
 	const fields = Object.entries(selected.data as Record<string, unknown>);
 	return (
 		<section className="inspector">
@@ -389,7 +503,11 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					{editor.previewError && <div className="refetch-error">{editor.previewError}</div>}
 					<ValidationPanel validation={editor.graphModel.validation} />
 					<ManifestPanel description={description} onDescriptionChange={editor.setDescription} />
-					<Inspector selected={selected} />
+					<Inspector
+						selected={selected}
+						draftSource={editor.draftSource}
+						onParticipantField={editor.setParticipantField}
+					/>
 				</aside>
 			</div>
 			{diffOpen && (

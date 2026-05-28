@@ -50,6 +50,29 @@ export function isDirty(draftSource: unknown, raw: string): boolean {
 	return !deepEqual(draftSource, parsed);
 }
 
+// Immutably set a participant field on a file-shape draft. role and session
+// are top-level on the participant; filesystem is nested under permissions
+// (created if absent). Returns a new draft; does not mutate the input. Pure
+// so the nested-permissions shape is unit-tested rather than buried in the
+// hook.
+export function updateParticipantField(
+	draft: Record<string, unknown>,
+	participantId: string,
+	field: "role" | "session" | "filesystem",
+	value: string,
+): Record<string, unknown> {
+	const participants = (draft.participants ?? {}) as Record<string, Record<string, unknown>>;
+	const current = participants[participantId] ?? {};
+	let nextParticipant: Record<string, unknown>;
+	if (field === "filesystem") {
+		const perms = (current.permissions ?? {}) as Record<string, unknown>;
+		nextParticipant = { ...current, permissions: { ...perms, filesystem: value } };
+	} else {
+		nextParticipant = { ...current, [field]: value };
+	}
+	return { ...draft, participants: { ...participants, [participantId]: nextParticipant } };
+}
+
 export interface SaveGate {
 	dirty: boolean;
 	previewPending: boolean;
