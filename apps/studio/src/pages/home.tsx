@@ -108,8 +108,8 @@ export function Home() {
 
 					<p class="note">
 						Track A is read-only. Editing, registry browsing, run-from-Studio, and the
-						human-checkpoint step type come later. Paths are resolved from the directory you started{" "}
-						<code>chit-studio</code> in.
+						human-checkpoint step type come later. Relative paths resolve from the workspace root,
+						so the quick links above work regardless of how <code>chit-studio</code> was started.
 					</p>
 				</div>
 			</body>
