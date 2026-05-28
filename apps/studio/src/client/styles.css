@@ -101,7 +101,9 @@ header.app .dirty-dot {
 	font-size: 9px;
 	line-height: 1;
 }
-header.app .save-btn {
+header.app .save-btn,
+header.app .install-btn,
+header.app .installed-btn {
 	font-size: 10px;
 	padding: 4px 12px;
 	letter-spacing: 0.1em;
@@ -199,44 +201,88 @@ header.app .save-btn {
 	outline-offset: -1px;
 }
 
-/* Installed-surfaces panel. */
-.installed-panel {
-	padding: 18px 20px 16px;
-	border-bottom: 1px solid var(--hairline);
-}
-.installed-panel h2 {
-	font-family: "JetBrains Mono", monospace;
-	font-weight: 700;
-	font-size: 11px;
-	letter-spacing: 0.16em;
-	text-transform: uppercase;
-	margin: 0 0 12px;
+/* Install-review modal: explanatory note + permission consent (shown only when
+   the chit has enforcement gaps). */
+.modal-note {
+	font-size: 12.5px;
 	color: var(--faded);
+	line-height: 1.5;
+	margin: 0 0 16px;
 }
-.installed-panel .consent {
-	margin-bottom: 10px;
+.consent {
+	margin: 0 0 16px;
+	padding: 12px 14px;
+	background: var(--receipt);
+	border-left: 3px solid var(--ink);
 }
-.installed-panel .allow-unenforced {
+.allow-unenforced {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	font-family: "JetBrains Mono", monospace;
-	font-size: 11px;
+	font-size: 12px;
 	color: var(--ink);
 }
-.installed-panel .consent-gap {
-	font-size: 10.5px;
-	color: var(--faded);
-	margin: 4px 0 0 20px;
-	line-height: 1.4;
-}
-.installed-panel .btn-primary {
-	width: 100%;
-}
-.install-hint {
+.consent-gap {
 	font-size: 11px;
 	color: var(--faded);
-	margin: 6px 0 0;
+	margin: 6px 0 0 20px;
+	line-height: 1.4;
+}
+
+/* Installed registry: the right-side drawer listing what this machine has
+   published, opened from the header. */
+.drawer-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+}
+.drawer-backdrop {
+	position: absolute;
+	inset: 0;
+	border: none;
+	margin: 0;
+	padding: 0;
+	background: rgba(10, 10, 10, 0.4);
+	cursor: default;
+}
+.drawer {
+	position: absolute;
+	top: 0;
+	right: 0;
+	height: 100%;
+	width: 380px;
+	max-width: 90vw;
+	background: var(--paper);
+	border-left: 1px solid var(--ink);
+	padding: 20px 22px;
+	overflow-y: auto;
+}
+.drawer-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin: 0 0 14px;
+}
+.drawer-head h2 {
+	font-family: "Bricolage Grotesque", serif;
+	font-weight: 700;
+	font-size: 20px;
+	letter-spacing: -0.02em;
+	margin: 0;
+}
+.drawer-close {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 18px;
+	line-height: 1;
+	background: none;
+	border: none;
+	color: var(--faded);
+	cursor: pointer;
+	padding: 0 4px;
+}
+.drawer-close:hover {
+	color: var(--ink);
 }
 .installed-list {
 	list-style: none;

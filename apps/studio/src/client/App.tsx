@@ -442,104 +442,165 @@ function DiffModal({
 	);
 }
 
-// Installed-surfaces panel: install the current chit into Claude Code, list
-// installed chits, uninstall (two-step confirm). Install is Claude-Code-
-// specific (not the validation-surface picker) and reads the saved file, so
-// it is gated on a clean, conflict-free, parseable document.
-function InstalledPanel({
+// Install-review modal: confirm publishing the current chit into Claude Code.
+// The target is fixed (the Claude Code skill surface, not the validation-
+// surface picker). The modal opens only when install is allowed (clean, saved,
+// conflict-free, parseable) — that gate lives on the header button. Permission
+// consent appears only when the chit has enforcement gaps, tied to the specific
+// warning rather than a vague global toggle. Mirrors --allow-unenforced-permissions.
+function InstallModal({
+	relPath,
+	gaps,
+	busy,
+	error,
+	onConfirm,
+	onCancel,
+}: {
+	relPath: string;
+	gaps: Array<{ participantId: string; agentId: string; permission: string }>;
+	busy: boolean;
+	error: string | null;
+	onConfirm: (allowUnenforcedPermissions: boolean) => void;
+	onCancel: () => void;
+}) {
+	const [consent, setConsent] = useState(false);
+	useEffect(() => {
+		function onKey(e: KeyboardEvent) {
+			if (e.key === "Escape") onCancel();
+		}
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onCancel]);
+	const needsConsent = gaps.length > 0;
+	const canConfirm = (!needsConsent || consent) && !busy;
+	return (
+		<div className="modal-overlay">
+			<button type="button" className="modal-backdrop" aria-label="Cancel" onClick={onCancel} />
+			<div
+				className="modal"
+				role="dialog"
+				aria-modal="true"
+				aria-label={`Install ${relPath} into Claude Code`}
+			>
+				<h2>
+					Install <code className="modal-path">{relPath}</code> into Claude Code?
+				</h2>
+				<p className="modal-note">
+					Publishes this chit as a Claude Code skill on this machine. The saved file is the source.
+				</p>
+				{error && <div className="refetch-error">{error}</div>}
+				{needsConsent && (
+					<div className="consent">
+						<label className="allow-unenforced">
+							<input
+								type="checkbox"
+								checked={consent}
+								onChange={(e) => setConsent(e.currentTarget.checked)}
+							/>
+							Install with permission warning
+						</label>
+						{gaps.map((g) => (
+							<p key={`${g.participantId}:${g.permission}`} className="consent-gap">
+								Claude Code cannot enforce {g.permission} for {g.participantId}.
+							</p>
+						))}
+					</div>
+				)}
+				<div className="modal-actions">
+					<button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						className="btn-primary"
+						onClick={() => onConfirm(needsConsent && consent)}
+						disabled={!canConfirm}
+					>
+						{busy ? "Installing…" : "Install"}
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+// Installed registry: what this machine has published, independent of the open
+// chit. A right-side drawer (not a rail panel) — it answers "what has this
+// machine published?", a different altitude from the per-chit inspector. Per-
+// row uninstall is a two-step confirm; empty state when nothing is installed.
+function InstalledDrawer({
 	list,
 	busy,
 	error,
-	canInstall,
-	disabledReason,
-	gaps,
-	allowUnenforced,
-	onToggleAllow,
-	onInstall,
 	onUninstall,
+	onClose,
 }: {
 	list: Array<{ name: string; surface: string; manifestId: string; installedAt: string }>;
 	busy: boolean;
 	error: string | null;
-	canInstall: boolean;
-	disabledReason: string | null;
-	gaps: Array<{ participantId: string; agentId: string; permission: string }>;
-	allowUnenforced: boolean;
-	onToggleAllow: (next: boolean) => void;
-	onInstall: () => void;
 	onUninstall: (name: string) => void;
+	onClose: () => void;
 }) {
 	const [confirming, setConfirming] = useState<string | null>(null);
+	useEffect(() => {
+		function onKey(e: KeyboardEvent) {
+			if (e.key === "Escape") onClose();
+		}
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
 	return (
-		<section className="installed-panel">
-			<h2>Installed</h2>
-			{error && <div className="refetch-error">{error}</div>}
-			{/* Consent is shown only when the chit actually has enforcement gaps,
-			    tied to the specific warning rather than a vague global toggle.
-			    Mirrors the CLI's --allow-unenforced-permissions. */}
-			{gaps.length > 0 && (
-				<div className="consent">
-					<label className="allow-unenforced">
-						<input
-							type="checkbox"
-							checked={allowUnenforced}
-							onChange={(e) => onToggleAllow(e.currentTarget.checked)}
-						/>
-						Install with permission warning
-					</label>
-					{gaps.map((g) => (
-						<p key={`${g.participantId}:${g.permission}`} className="consent-gap">
-							Claude Code cannot enforce {g.permission} for {g.participantId}.
-						</p>
-					))}
-				</div>
-			)}
-			<button
-				type="button"
-				className="btn-primary"
-				onClick={onInstall}
-				disabled={!canInstall || busy}
-				title={canInstall ? undefined : (disabledReason ?? undefined)}
-			>
-				Install into Claude Code
-			</button>
-			{!canInstall && disabledReason && <p className="install-hint">{disabledReason}</p>}
-			<ul className="installed-list">
-				{list.length === 0 && <li className="empty">No chits installed.</li>}
-				{list.map((i) => (
-					<li key={i.name} className="installed-item">
-						<code>{i.name}</code>
-						<span className="installed-surface">{i.surface}</span>
-						{confirming === i.name ? (
-							<span className="confirm-row">
+		<div className="drawer-overlay">
+			<button type="button" className="drawer-backdrop" aria-label="Close" onClick={onClose} />
+			<aside className="drawer" role="dialog" aria-modal="true" aria-label="Installed chits">
+				<header className="drawer-head">
+					<h2>Installed</h2>
+					<button type="button" className="drawer-close" aria-label="Close" onClick={onClose}>
+						×
+					</button>
+				</header>
+				{error && <div className="refetch-error">{error}</div>}
+				<ul className="installed-list">
+					{list.length === 0 && <li className="empty">No chits installed on this machine.</li>}
+					{list.map((i) => (
+						<li key={i.name} className="installed-item">
+							<code>{i.name}</code>
+							<span className="installed-surface">{i.surface}</span>
+							{confirming === i.name ? (
+								<span className="confirm-row">
+									<button
+										type="button"
+										className="btn-secondary"
+										onClick={() => {
+											onUninstall(i.name);
+											setConfirming(null);
+										}}
+									>
+										Confirm
+									</button>
+									<button
+										type="button"
+										className="btn-secondary"
+										onClick={() => setConfirming(null)}
+									>
+										Cancel
+									</button>
+								</span>
+							) : (
 								<button
 									type="button"
 									className="btn-secondary"
-									onClick={() => {
-										onUninstall(i.name);
-										setConfirming(null);
-									}}
+									onClick={() => setConfirming(i.name)}
+									disabled={busy}
 								>
-									Confirm
+									Uninstall
 								</button>
-								<button type="button" className="btn-secondary" onClick={() => setConfirming(null)}>
-									Cancel
-								</button>
-							</span>
-						) : (
-							<button
-								type="button"
-								className="btn-secondary"
-								onClick={() => setConfirming(i.name)}
-								disabled={busy}
-							>
-								Uninstall
-							</button>
-						)}
-					</li>
-				))}
-			</ul>
-		</section>
+							)}
+						</li>
+					))}
+				</ul>
+			</aside>
+		</div>
 	);
 }
 
@@ -567,7 +628,9 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	const installed = useInstalled(initial.docId);
 	const [diffOpen, setDiffOpen] = useState(false);
 	const [edgeError, setEdgeError] = useState<string | null>(null);
-	const [allowUnenforced, setAllowUnenforced] = useState(false);
+	const [installOpen, setInstallOpen] = useState(false);
+	const [drawerOpen, setDrawerOpen] = useState(false);
+	const [installError, setInstallError] = useState<string | null>(null);
 	const [installConflict, setInstallConflict] = useState(false);
 
 	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
@@ -726,11 +789,31 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	// selected validation surface.
 	const permissionGaps = editor.graphModel.validation?.permissions.gaps ?? [];
 
-	const onInstall = useCallback(async () => {
+	// Opening the modal clears any prior install error/conflict so a fresh
+	// attempt starts clean (the gate above already blocks opening while dirty).
+	const openInstall = useCallback(() => {
+		setInstallError(null);
 		setInstallConflict(false);
-		const outcome = await installed.install(editor.hash, allowUnenforced);
-		if (outcome.kind === "conflict") setInstallConflict(true);
-	}, [installed, editor.hash, allowUnenforced]);
+		setInstallOpen(true);
+	}, []);
+
+	// Confirm from the modal. On success the modal closes; a 409 closes it and
+	// raises the conflict banner (the file drifted under us); a 422 keeps the
+	// modal open with the error shown so the user can read and retry.
+	const onInstallConfirm = useCallback(
+		async (allowUnenforcedPermissions: boolean) => {
+			const outcome = await installed.install(editor.hash, allowUnenforcedPermissions);
+			if (outcome.kind === "installed") {
+				setInstallOpen(false);
+			} else if (outcome.kind === "conflict") {
+				setInstallOpen(false);
+				setInstallConflict(true);
+			} else {
+				setInstallError(outcome.error);
+			}
+		},
+		[installed, editor.hash],
+	);
 
 	const selected = nodes.find((n) => n.id === selectedId) ?? null;
 	const description = String(editor.draftSource.description ?? "");
@@ -772,6 +855,22 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 						disabled={!editor.canSave}
 					>
 						Save
+					</button>
+					<button
+						type="button"
+						className="btn-secondary install-btn"
+						onClick={openInstall}
+						disabled={!canInstall}
+						title={canInstall ? undefined : (installDisabledReason ?? undefined)}
+					>
+						Install
+					</button>
+					<button
+						type="button"
+						className="btn-secondary installed-btn"
+						onClick={() => setDrawerOpen(true)}
+					>
+						Installed{installed.list.length > 0 ? ` (${installed.list.length})` : ""}
 					</button>
 					<span className="header-divider">·</span>
 					<SurfaceSelector
@@ -825,18 +924,6 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					{edgeError && <div className="refetch-error">{edgeError}</div>}
 					{editor.previewError && <div className="refetch-error">{editor.previewError}</div>}
 					<ValidationPanel validation={editor.graphModel.validation} />
-					<InstalledPanel
-						list={installed.list}
-						busy={installed.busy}
-						error={installed.error}
-						canInstall={canInstall}
-						disabledReason={installDisabledReason}
-						gaps={permissionGaps}
-						allowUnenforced={allowUnenforced}
-						onToggleAllow={setAllowUnenforced}
-						onInstall={onInstall}
-						onUninstall={installed.uninstall}
-					/>
 					<ManifestPanel description={description} onDescriptionChange={editor.setDescription} />
 					<Inspector
 						selected={selected}
@@ -854,6 +941,25 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					saving={editor.saving}
 					onConfirm={confirmSave}
 					onCancel={() => setDiffOpen(false)}
+				/>
+			)}
+			{installOpen && (
+				<InstallModal
+					relPath={initial.relPath}
+					gaps={permissionGaps}
+					busy={installed.busy}
+					error={installError}
+					onConfirm={onInstallConfirm}
+					onCancel={() => setInstallOpen(false)}
+				/>
+			)}
+			{drawerOpen && (
+				<InstalledDrawer
+					list={installed.list}
+					busy={installed.busy}
+					error={installed.error}
+					onUninstall={installed.uninstall}
+					onClose={() => setDrawerOpen(false)}
 				/>
 			)}
 		</>

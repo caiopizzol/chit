@@ -43,23 +43,18 @@ export function useInstalled(docId: string): InstalledState {
 		void refresh();
 	}, [refresh]);
 
+	// Install returns the outcome and does NOT set the shared `error` — the
+	// install modal owns install-error display via the returned outcome.
+	// `error` stays for the drawer's list/uninstall failures.
 	const install = useCallback(
 		async (baseHash: string, allowUnenforcedPermissions: boolean): Promise<InstallOutcome> => {
 			setBusy(true);
-			setError(null);
 			try {
 				const outcome = await installDocument(docId, baseHash, { allowUnenforcedPermissions });
-				if (outcome.kind === "installed") {
-					await refresh();
-				} else if (outcome.kind === "error") {
-					setError(outcome.error);
-				}
-				// conflict is returned to the caller to drive the reload path.
+				if (outcome.kind === "installed") await refresh();
 				return outcome;
 			} catch (e) {
-				const msg = errMessage(e);
-				setError(msg);
-				return { kind: "error", error: msg };
+				return { kind: "error", error: errMessage(e) };
 			} finally {
 				setBusy(false);
 			}
