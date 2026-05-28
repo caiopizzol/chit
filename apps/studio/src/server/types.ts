@@ -24,8 +24,8 @@ export type ErrorStudioDocument = {
 export type StudioDocument = ParsedStudioDocument | ErrorStudioDocument;
 
 export type DocumentDetail =
-	| { document: ParsedStudioDocument; graphModel: GraphModel }
-	| { document: ErrorStudioDocument };
+	| { document: ParsedStudioDocument; graphModel: GraphModel; hash: string }
+	| { document: ErrorStudioDocument; hash: string };
 
 // POST /api/documents/:docId/preview. The client sends an editable
 // draft (file-shape JSON, not NormalizedManifest); the server validates
@@ -47,17 +47,53 @@ export type PreviewResponse =
 	| { document: ParsedStudioDocument; graphModel: GraphModel; canonicalRaw: string }
 	| { document: ErrorStudioDocument };
 
+// PUT /api/documents/:docId. The client sends an editable draft plus
+// the baseHash it had at load time. The server reads the current
+// on-disk hash; if it matches baseHash, the server validates and
+// writes canonicalRaw to disk, returning the new hash. If the disk
+// hash has drifted (another editor / git checkout / external change),
+// the server returns 409 with the current hash so the client can
+// resolve. Parse failures on the draft return the error variant with
+// no write.
+
+export interface SaveRequest {
+	draft: unknown;
+	surface?: string;
+	baseHash: string;
+}
+
+export interface SavedSaveResponse {
+	document: ParsedStudioDocument;
+	graphModel: GraphModel;
+	canonicalRaw: string;
+	hash: string;
+}
+
+export interface ErrorSaveResponse {
+	document: ErrorStudioDocument;
+}
+
+export type SaveResponse = SavedSaveResponse | ErrorSaveResponse;
+
+// Sent with HTTP 409 status.
+export interface ConflictResponse {
+	kind: "conflict";
+	currentHash: string;
+}
+
 export type Bootstrap =
 	| {
 			mode: "open";
 			docId: string;
 			document: ParsedStudioDocument;
 			graphModel: GraphModel;
+			hash: string;
 	  }
 	| {
 			mode: "open";
 			docId: string;
 			document: ErrorStudioDocument;
+			hash: string;
 	  }
 	| {
 			mode: "picker";

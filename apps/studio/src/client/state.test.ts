@@ -51,12 +51,16 @@ describe("initClientState", () => {
 			docId: "current",
 			document: { id: "current", relPath: "consult.json", raw, status: "parsed", manifest },
 			graphModel,
+			hash: "a".repeat(64),
 		});
 		expect(state.mode).toBe("open");
 		if (state.mode === "open") {
 			expect(state.docId).toBe("current");
 			expect(state.relPath).toBe("consult.json");
 			expect(state.raw).toBe(raw);
+			// hash flows through from bootstrap so the client has a baseHash
+			// available for the first PUT without an extra round trip.
+			expect(state.hash).toBe("a".repeat(64));
 			// draftSource is the file-shape JSON, not the NormalizedManifest.
 			expect(state.draftSource.id).toBe("consult");
 			expect(state.draftSource.schema).toBe(1);
@@ -81,6 +85,7 @@ describe("initClientState", () => {
 				status: "error",
 				parseError: "not valid JSON: Unexpected token o in JSON at position 1",
 			},
+			hash: "b".repeat(64),
 		});
 		expect(state.mode).toBe("open-error");
 		if (state.mode === "open-error") {

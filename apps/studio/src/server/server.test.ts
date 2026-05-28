@@ -250,6 +250,170 @@ describe("Bearer auth on /api/*", () => {
 	});
 });
 
+describe("PUT /api/documents/:docId", () => {
+	async function putReq(
+		app: ReturnType<typeof buildApp>,
+		path: string,
+		body: unknown,
+		token: string,
+	): Promise<Response> {
+		return app.fetch(
+			new Request(`http://${HOST}${path}`, {
+				method: "PUT",
+				headers: {
+					host: HOST,
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(body),
+			}),
+		);
+	}
+
+	test("happy path: writes + returns new hash + canonicalRaw + graphModel", async () => {
+		const s = setup();
+		try {
+			// Read the initial disk hash via GET.
+			const getRes = await req(s.app, "/api/documents/current?surface=claude-skill", {
+				token: s.token,
+			});
+			const getBody = (await getRes.json()) as { hash: string };
+			const baseHash = getBody.hash;
+			// Edit + PUT.
+			const draft = JSON.parse(chit("consult"));
+			draft.description = "edited via PUT";
+			const res = await putReq(
+				s.app,
+				"/api/documents/current",
+				{ draft, surface: "claude-skill", baseHash },
+				s.token,
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				document: { status: string };
+				graphModel?: unknown;
+				canonicalRaw?: string;
+				hash?: string;
+			};
+			expect(body.document.status).toBe("parsed");
+			expect(body.graphModel).toBeDefined();
+			expect(body.canonicalRaw).toContain("edited via PUT");
+			expect(body.hash).toBeDefined();
+			expect(body.hash).not.toBe(baseHash);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("conflict: 409 with currentHash when baseHash does not match disk", async () => {
+		const s = setup();
+		try {
+			const res = await putReq(
+				s.app,
+				"/api/documents/current",
+				{
+					draft: JSON.parse(chit("consult")),
+					surface: "claude-skill",
+					baseHash: "deadbeef".repeat(8),
+				},
+				s.token,
+			);
+			expect(res.status).toBe(409);
+			const body = (await res.json()) as { kind: string; currentHash: string };
+			expect(body.kind).toBe("conflict");
+			expect(body.currentHash).toMatch(/^[a-f0-9]{64}$/);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("parse error: 200 with error document, no write", async () => {
+		const s = setup();
+		try {
+			const getRes = await req(s.app, "/api/documents/current", { token: s.token });
+			const getBody = (await getRes.json()) as { hash: string };
+			const baseHash = getBody.hash;
+			const res = await putReq(
+				s.app,
+				"/api/documents/current",
+				{ draft: { schema: 1, id: "x" }, surface: "claude-skill", baseHash },
+				s.token,
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { document: { status: string }; hash?: string };
+			expect(body.document.status).toBe("error");
+			expect(body.hash).toBeUndefined();
+			// Verify disk hash unchanged by re-fetching.
+			const after = await req(s.app, "/api/documents/current", { token: s.token });
+			const afterBody = (await after.json()) as { hash: string };
+			expect(afterBody.hash).toBe(baseHash);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("unknown surface: 400 before any save work", async () => {
+		const s = setup();
+		try {
+			const res = await putReq(
+				s.app,
+				"/api/documents/current",
+				{ draft: {}, surface: "mcp", baseHash: "x".repeat(64) },
+				s.token,
+			);
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("missing baseHash: 400", async () => {
+		const s = setup();
+		try {
+			const res = await putReq(
+				s.app,
+				"/api/documents/current",
+				{ draft: {}, surface: "claude-skill" },
+				s.token,
+			);
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("unknown docId: 404", async () => {
+		const s = setup();
+		try {
+			const res = await putReq(
+				s.app,
+				"/api/documents/nope",
+				{ draft: {}, surface: "claude-skill", baseHash: "x".repeat(64) },
+				s.token,
+			);
+			expect(res.status).toBe(404);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("missing token: 401", async () => {
+		const s = setup();
+		try {
+			const res = await s.app.fetch(
+				new Request(`http://${HOST}/api/documents/current`, {
+					method: "PUT",
+					headers: { host: HOST, "content-type": "application/json" },
+					body: JSON.stringify({ draft: {}, baseHash: "x".repeat(64) }),
+				}),
+			);
+			expect(res.status).toBe(401);
+		} finally {
+			teardown(s);
+		}
+	});
+});
+
 describe("POST /api/documents/:docId/preview", () => {
 	async function jsonReq(
 		app: ReturnType<typeof buildApp>,

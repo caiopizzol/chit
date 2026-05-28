@@ -103,11 +103,13 @@ type Bootstrap =
 			docId: string;
 			document: ParsedStudioDocument;
 			graphModel: GraphModel;
+			hash: string;
 	  }
 	| {
 			mode: "open";
 			docId: string;
 			document: ErrorStudioDocument;
+			hash: string;
 	  }
 	| {
 			mode: "picker";
@@ -122,9 +124,45 @@ type Bootstrap =
 	  };
 
 type DocumentDetail =
-	| { document: ParsedStudioDocument; graphModel: GraphModel }
+	| { document: ParsedStudioDocument; graphModel: GraphModel; hash: string }
+	| { document: ErrorStudioDocument; hash: string };
+
+// Preview + Save wire shapes (Slice 2). The preview path validates a
+// draft without writing; the save path validates, writes, and returns
+// the new hash. ConflictResponse is sent with HTTP 409 when baseHash
+// no longer matches the on-disk hash.
+
+interface PreviewRequest {
+	draft: unknown;
+	surface?: "claude-skill" | "cli";
+}
+
+type PreviewResponse =
+	| { document: ParsedStudioDocument; graphModel: GraphModel; canonicalRaw: string }
 	| { document: ErrorStudioDocument };
+
+interface SaveRequest {
+	draft: unknown;
+	surface?: "claude-skill" | "cli";
+	baseHash: string;
+}
+
+type SaveResponse =
+	| {
+			document: ParsedStudioDocument;
+			graphModel: GraphModel;
+			canonicalRaw: string;
+			hash: string;
+	  }
+	| { document: ErrorStudioDocument };
+
+interface ConflictResponse {
+	kind: "conflict";
+	currentHash: string;
+}
 ```
+
+`hash` is the sha256 hex (64 ASCII chars) of the on-disk bytes the server last read. It flows through bootstrap and `GET`/`PUT` responses; the client carries it through edits and sends it back as `baseHash` on `PUT`. `PreviewResponse` does not carry `hash` because no disk read is involved.
 
 `absolutePath` is intentionally absent from every browser-visible payload. The server holds the absolute path in its `docId -> absolutePath` map; the wire format carries `relPath` for display only.
 
@@ -152,11 +190,15 @@ Negative requirement:
 ## Routes
 
 ```
-GET  /                          serves the React app shell with the SSR boot payload
-GET  /api/documents/:docId      token required; returns DocumentDetail
-PUT  /api/documents/:docId      token required; validates + writes (Slice 2+)
-POST /api/install               token required; { docId, surface } (Slice 4+)
+GET  /                                       serves the React app shell with the SSR boot payload
+GET  /client/:asset                          token-less; serves index.js / index.css from the built React bundle
+GET  /api/documents/:docId                   token required; ?surface=<kind>; returns DocumentDetail (incl. hash)
+POST /api/documents/:docId/preview           token required; body PreviewRequest; returns PreviewResponse (no disk write)
+PUT  /api/documents/:docId                   token required; body SaveRequest; 200 SaveResponse, 409 ConflictResponse, 404 if unknown/missing, 400 on bad surface or baseHash
+POST /api/install                            token required; { docId, surface } (Slice 4+)
 ```
+
+`PUT` semantics: the server reads current disk bytes and hashes them; if the hash differs from `baseHash` it returns `409` with `currentHash` so the client can resolve. Parse failures on the draft return `200` with the error variant (no write). Saves write `canonicalRaw` (tab-indented JSON in key-of-input order); the file on disk is always canonical after a successful save, so subsequent loads hash consistently.
 
 `GET /api/bootstrap` is reserved for a future file-watching re-sync flow. Not in v0. Slice 1 boot data lives in the SSR payload.
 

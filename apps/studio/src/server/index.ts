@@ -138,6 +138,47 @@ export function buildApp(opts: BuildAppOptions) {
 		return c.json(detail);
 	});
 
+	app.put("/api/documents/:docId", async (c) => {
+		const docId = c.req.param("docId");
+		let body: unknown;
+		try {
+			body = await c.req.json();
+		} catch {
+			return new Response("invalid JSON body", { status: 400 });
+		}
+		if (typeof body !== "object" || body === null || !("draft" in body) || !("baseHash" in body)) {
+			return new Response("body must be { draft, surface?, baseHash }", { status: 400 });
+		}
+		const {
+			draft,
+			surface: surfaceInput,
+			baseHash,
+		} = body as {
+			draft: unknown;
+			surface?: unknown;
+			baseHash: unknown;
+		};
+		if (typeof baseHash !== "string" || baseHash.length === 0) {
+			return new Response("baseHash must be a non-empty string", { status: 400 });
+		}
+		let surface: SurfaceKind | undefined;
+		if (surfaceInput !== undefined && surfaceInput !== "") {
+			if (typeof surfaceInput !== "string" || !isKnownSurface(surfaceInput)) {
+				return new Response(`unknown surface "${String(surfaceInput)}"`, { status: 400 });
+			}
+			surface = surfaceInput;
+		}
+		const result = opts.store.save(docId, draft, surface, baseHash);
+		if (result.kind === "not-found") return c.text("not found", 404);
+		if (result.kind === "conflict") {
+			return c.json({ kind: "conflict", currentHash: result.currentHash }, 409);
+		}
+		// Both "saved" and "parse-error" return a 200 with a SaveResponse-shaped
+		// body. The error variant has no graphModel/hash; the client checks
+		// document.status to discriminate.
+		return c.json(result.response);
+	});
+
 	app.post("/api/documents/:docId/preview", async (c) => {
 		const docId = c.req.param("docId");
 		let body: unknown;

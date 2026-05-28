@@ -14,9 +14,14 @@ export interface OpenClientState {
 	mode: "open";
 	docId: string;
 	relPath: string;
-	// `raw` is the last server-known file text (boot value at this point;
-	// in sub-unit 2.1 it updates after a successful PUT).
+	// `raw` is the last server-known file text. At boot, the SSR value;
+	// after a successful PUT it updates to canonicalRaw from the response.
 	raw: string;
+	// `hash` is the sha256 hex of the on-disk bytes the server last
+	// confirmed. Carried through edits; sent back as baseHash on PUT for
+	// conflict detection. Updates to the new hash returned by a successful
+	// save.
+	hash: string;
 	// `draftSource` is the editable manifest JSON object. At boot it equals
 	// JSON.parse(raw). Edits mutate this; preview/save POST it to the server.
 	draftSource: Record<string, unknown>;
@@ -80,6 +85,7 @@ export function initClientState(bootstrap: Bootstrap): ClientState {
 			docId: bootstrap.docId,
 			relPath: bootstrap.document.relPath,
 			raw: bootstrap.document.raw,
+			hash: bootstrap.hash,
 			draftSource,
 			graphModel: bootstrap.graphModel,
 			dirty: false,

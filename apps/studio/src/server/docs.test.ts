@@ -2,11 +2,11 @@
 // and produces DocumentDetail / Bootstrap shapes for the wire.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseRegistry } from "@chit/core";
-import { buildBootstrap, DocStore } from "./docs.ts";
+import { buildBootstrap, DocStore, hashRaw } from "./docs.ts";
 
 const REGISTRY = parseRegistry(undefined);
 
@@ -105,6 +105,139 @@ describe("DocStore.get", () => {
 			expect(
 				(detail?.document as unknown as { absolutePath?: string }).absolutePath,
 			).toBeUndefined();
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("DocStore.get hash", () => {
+	test("returns sha256 hex of the on-disk bytes", () => {
+		const cwd = tempCwd();
+		try {
+			const raw = chit("consult");
+			const path = join(cwd, "consult.json");
+			writeFileSync(path, raw);
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const detail = store.get("current");
+			expect(detail?.hash).toBeDefined();
+			expect(detail?.hash).toBe(hashRaw(raw));
+			// 64 hex chars = 256 bits
+			expect(detail?.hash).toMatch(/^[a-f0-9]{64}$/);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("DocStore.save", () => {
+	test("happy path: writes canonicalRaw + returns new hash + DocumentDetail-like response", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			const original = chit("consult");
+			writeFileSync(path, original);
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const baseHash = hashRaw(original);
+			// Edit the description in-memory and save.
+			const draft = JSON.parse(original);
+			draft.description = "updated description";
+			const result = store.save("current", draft, "claude-skill", baseHash);
+			expect(result.kind).toBe("saved");
+			if (result.kind === "saved") {
+				expect(result.response.document.status).toBe("parsed");
+				expect(result.response.hash).not.toBe(baseHash);
+				expect(result.response.hash).toMatch(/^[a-f0-9]{64}$/);
+				expect(result.response.canonicalRaw).toContain("updated description");
+				// Disk now matches canonicalRaw and new hash.
+				expect(readFileSync(path, "utf-8")).toBe(result.response.canonicalRaw);
+				expect(hashRaw(readFileSync(path, "utf-8"))).toBe(result.response.hash);
+			}
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("conflict: returns currentHash when baseHash does not match disk", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			writeFileSync(path, chit("consult"));
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const result = store.save(
+				"current",
+				JSON.parse(chit("consult")),
+				"claude-skill",
+				"deadbeef".repeat(8), // not the real hash
+			);
+			expect(result.kind).toBe("conflict");
+			if (result.kind === "conflict") {
+				expect(result.currentHash).toBe(hashRaw(chit("consult")));
+			}
+			// Disk unchanged.
+			expect(readFileSync(path, "utf-8")).toBe(chit("consult"));
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("parse error: returns error variant, no write to disk", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			const original = chit("consult");
+			writeFileSync(path, original);
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const baseHash = hashRaw(original);
+			// Break the draft.
+			const result = store.save(
+				"current",
+				{ schema: 1, id: "x" }, // missing required fields
+				"claude-skill",
+				baseHash,
+			);
+			expect(result.kind).toBe("parse-error");
+			if (result.kind === "parse-error") {
+				expect(result.response.document.status).toBe("error");
+				expect("graphModel" in result.response).toBe(false);
+			}
+			// Disk unchanged.
+			expect(readFileSync(path, "utf-8")).toBe(original);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("unknown docId: returns not-found, no disk read", () => {
+		const cwd = tempCwd();
+		try {
+			const store = new DocStore(cwd, REGISTRY);
+			const result = store.save("nope", {}, "claude-skill", "x".repeat(64));
+			expect(result.kind).toBe("not-found");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("file deleted under us: returns not-found, no write", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			writeFileSync(path, chit("consult"));
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			rmSync(path);
+			const result = store.save(
+				"current",
+				JSON.parse(chit("consult")),
+				"claude-skill",
+				hashRaw(chit("consult")),
+			);
+			expect(result.kind).toBe("not-found");
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}

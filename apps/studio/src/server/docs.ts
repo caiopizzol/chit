@@ -1,12 +1,20 @@
 // Server-side document table. The browser only ever names docIds; absolute
 // paths live here, behind the docId map.
 
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { basename, relative } from "node:path";
 import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
 import { buildGraphModel, parseManifest } from "@chit/core";
 import type { DiscoveryResult } from "./discovery.ts";
-import type { Bootstrap, DocumentDetail, PreviewResponse, StudioDocument } from "./types.ts";
+import type {
+	Bootstrap,
+	DocumentDetail,
+	ErrorSaveResponse,
+	PreviewResponse,
+	SavedSaveResponse,
+	StudioDocument,
+} from "./types.ts";
 
 // Match the existing apps/cli/examples/*.json formatting: tab-indented,
 // key order preserved from the input. Deterministic for the same draft,
@@ -14,6 +22,22 @@ import type { Bootstrap, DocumentDetail, PreviewResponse, StudioDocument } from 
 function canonicalize(draft: unknown): string {
 	return JSON.stringify(draft, null, "\t");
 }
+
+// SHA-256 hex of the raw file bytes. Used both as the base-hash the
+// client sends back on PUT and as the new hash returned after a write.
+// Deterministic for the same content.
+export function hashRaw(raw: string): string {
+	return createHash("sha256").update(raw, "utf-8").digest("hex");
+}
+
+// Result variants for DocStore.save. The 200 path returns a SaveResponse;
+// "conflict" maps to HTTP 409; "not-found" maps to HTTP 404 when the
+// docId is unknown or the file was deleted from under us.
+export type SaveResult =
+	| { kind: "saved"; response: SavedSaveResponse }
+	| { kind: "parse-error"; response: ErrorSaveResponse }
+	| { kind: "conflict"; currentHash: string }
+	| { kind: "not-found" };
 
 interface DocEntry {
 	absolutePath: string;
@@ -86,6 +110,10 @@ export class DocStore {
 	// passed, `graphModel.validation` is populated and `graphModel.surface`
 	// names the kind. When omitted, `graphModel.validation` is null and the
 	// client will get an empty validation panel until a surface is picked.
+	//
+	// `hash` is always the sha256 of the on-disk bytes at the moment of read;
+	// the client carries it through edits and sends it back as baseHash on
+	// PUT to detect external changes to the file.
 	get(docId: string, surface?: SurfaceKind): DocumentDetail | null {
 		const entry = this.entries.get(docId);
 		if (!entry) return null;
@@ -101,8 +129,10 @@ export class DocStore {
 				status: "error",
 				parseError: `could not read file: ${(e as Error).message}`,
 			};
-			return { document: errorDoc };
+			return { document: errorDoc, hash: hashRaw("") };
 		}
+
+		const hash = hashRaw(raw);
 
 		let parsedJson: unknown;
 		try {
@@ -115,7 +145,7 @@ export class DocStore {
 				status: "error",
 				parseError: `not valid JSON: ${(e as Error).message}`,
 			};
-			return { document: errorDoc };
+			return { document: errorDoc, hash };
 		}
 
 		try {
@@ -130,6 +160,7 @@ export class DocStore {
 					manifest,
 				},
 				graphModel,
+				hash,
 			};
 		} catch (e) {
 			const errorDoc: StudioDocument = {
@@ -139,7 +170,81 @@ export class DocStore {
 				status: "error",
 				parseError: (e as Error).message,
 			};
-			return { document: errorDoc };
+			return { document: errorDoc, hash };
+		}
+	}
+
+	// Validate a draft, check disk hash against baseHash, and write
+	// canonicalRaw to disk if everything matches. Does NOT auto-create
+	// files: the entry must already exist in the docId table (i.e., the
+	// chit was discovered or opened at boot). External changes since the
+	// client's last load surface as conflict.
+	save(
+		docId: string,
+		draft: unknown,
+		surface: SurfaceKind | undefined,
+		baseHash: string,
+	): SaveResult {
+		const entry = this.entries.get(docId);
+		if (!entry) return { kind: "not-found" };
+
+		// 1. Read current disk state. If the file was deleted out from under
+		//    us we treat that as not-found too; the client should re-launch.
+		let currentRaw: string;
+		try {
+			currentRaw = readFileSync(entry.absolutePath, "utf-8");
+		} catch {
+			return { kind: "not-found" };
+		}
+		const currentHash = hashRaw(currentRaw);
+
+		// 2. Conflict: someone else (text editor, git checkout, sibling Studio
+		//    tab) changed the file since the client loaded it.
+		if (currentHash !== baseHash) {
+			return { kind: "conflict", currentHash };
+		}
+
+		// 3. Validate the draft. Parse failures: return error variant, no write.
+		try {
+			const manifest = parseManifest(draft);
+			const graphModel = buildGraphModel(manifest, this.registry, surface);
+			const canonicalRaw = canonicalize(draft);
+
+			// 4. Write. We write the canonical form, not the literal draft
+			//    JSON the client sent, so the on-disk file is always
+			//    deterministic for a given parsed structure.
+			writeFileSync(entry.absolutePath, canonicalRaw, "utf-8");
+			const newHash = hashRaw(canonicalRaw);
+
+			return {
+				kind: "saved",
+				response: {
+					document: {
+						id: docId,
+						relPath: entry.relPath,
+						raw: canonicalRaw,
+						status: "parsed",
+						manifest,
+					},
+					graphModel,
+					canonicalRaw,
+					hash: newHash,
+				},
+			};
+		} catch (e) {
+			const raw = canonicalize(draft);
+			return {
+				kind: "parse-error",
+				response: {
+					document: {
+						id: docId,
+						relPath: entry.relPath,
+						raw,
+						status: "error",
+						parseError: (e as Error).message,
+					},
+				},
+			};
 		}
 	}
 }
@@ -172,9 +277,10 @@ export function buildBootstrap(
 				docId,
 				document: detail.document,
 				graphModel: detail.graphModel,
+				hash: detail.hash,
 			};
 		}
-		return { mode: "open", docId, document: detail.document };
+		return { mode: "open", docId, document: detail.document, hash: detail.hash };
 	}
 	// picker
 	const candidates = discovery.candidates.map((c, i) => {
