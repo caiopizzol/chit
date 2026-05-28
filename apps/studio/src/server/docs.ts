@@ -3,7 +3,7 @@
 
 import { readFileSync } from "node:fs";
 import { basename, relative } from "node:path";
-import type { NormalizedRegistry } from "@chit/core";
+import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
 import { buildGraphModel, parseManifest } from "@chit/core";
 import type { DiscoveryResult } from "./discovery.ts";
 import type { Bootstrap, DocumentDetail, StudioDocument } from "./types.ts";
@@ -34,7 +34,12 @@ export class DocStore {
 	// Reads the file, parses, and builds the graph model. Returns null only if
 	// the docId is unknown to this store. Parse failures are returned as the
 	// `error` variant of StudioDocument so the client can render a useful UI.
-	get(docId: string): DocumentDetail | null {
+	//
+	// `surface` controls which surface the GraphModel validates against. When
+	// passed, `graphModel.validation` is populated and `graphModel.surface`
+	// names the kind. When omitted, `graphModel.validation` is null and the
+	// client will get an empty validation panel until a surface is picked.
+	get(docId: string, surface?: SurfaceKind): DocumentDetail | null {
 		const entry = this.entries.get(docId);
 		if (!entry) return null;
 
@@ -68,7 +73,7 @@ export class DocStore {
 
 		try {
 			const manifest = parseManifest(parsedJson);
-			const graphModel = buildGraphModel(manifest, this.registry);
+			const graphModel = buildGraphModel(manifest, this.registry, surface);
 			return {
 				document: {
 					id: docId,
@@ -95,14 +100,22 @@ export class DocStore {
 // Build the SSR bootstrap payload from the discovery result. Populates the
 // store as a side effect (every doc the bootstrap references must be in the
 // store so subsequent /api/documents/:docId requests can find it).
-export function buildBootstrap(discovery: DiscoveryResult, store: DocStore): Bootstrap {
+//
+// `defaultSurface` is the surface the initial GraphModel validates against.
+// When omitted, validation is null at boot and the client picks a surface
+// before any validation is populated.
+export function buildBootstrap(
+	discovery: DiscoveryResult,
+	store: DocStore,
+	defaultSurface?: SurfaceKind,
+): Bootstrap {
 	if (discovery.kind === "empty") {
 		return { mode: "empty" };
 	}
 	if (discovery.kind === "open") {
 		const docId = "current";
 		store.add(docId, discovery.absolutePath);
-		const detail = store.get(docId);
+		const detail = store.get(docId, defaultSurface);
 		if (!detail) return { mode: "empty" }; // unreachable: just added it
 		// "graphModel" in detail discriminates the DocumentDetail union: the
 		// parsed variant carries graphModel, the error variant does not.
@@ -120,7 +133,7 @@ export function buildBootstrap(discovery: DiscoveryResult, store: DocStore): Boo
 	const candidates = discovery.candidates.map((c, i) => {
 		const docId = `c${i}`;
 		store.add(docId, c.absolutePath);
-		const detail = store.get(docId);
+		const detail = store.get(docId, defaultSurface);
 		const status: "parsed" | "error" = detail?.document.status === "parsed" ? "parsed" : "error";
 		return { docId, relPath: c.relPath, status };
 	});

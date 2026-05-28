@@ -4,10 +4,10 @@
 // GraphModel produced by buildGraphModel, it yields the right React Flow
 // nodes typed for the three custom node components.
 //
-// Sub-unit 1.2 does not derive the per-node `warn` indicator. That belongs
-// to the validation surfacing slice (1.3 + the surface picker). Until then
-// the node `data.warn` field is left undefined and the visual omits the
-// indicator.
+// Per-call `warn` indicators derive from `model.validation?.permissions.gaps`
+// directly. The adapter takes only the GraphModel because GraphModel already
+// carries both the surface and the validation; passing validation as a
+// separate argument would create drift potential.
 
 import type { GraphModel } from "@chit/core";
 import type { Node } from "@xyflow/react";
@@ -30,6 +30,15 @@ const DEFAULT_SIZE = {
 export function adaptGraphModel(model: GraphModel): AdaptedGraph {
 	const nodes: Node[] = [];
 	const sizes: Record<string, { width: number; height: number }> = {};
+
+	// Participants with an enforcement gap under the selected surface. Any
+	// call node whose participant is in this set gets a warn indicator.
+	const gappedParticipants = new Set<string>();
+	if (model.validation) {
+		for (const gap of model.validation.permissions.gaps) {
+			gappedParticipants.add(gap.participantId);
+		}
+	}
 
 	for (const gnode of model.nodes) {
 		sizes[gnode.id] = DEFAULT_SIZE[gnode.kind];
@@ -60,8 +69,10 @@ export function adaptGraphModel(model: GraphModel): AdaptedGraph {
 				agent: participant.agentId,
 				session: participant.session,
 				filesystem: participant.permissions.filesystem,
-				// data.warn lands in sub-unit 1.3 (validation surfacing).
 			};
+			if (gappedParticipants.has(gnode.participantId)) {
+				data.warn = { tag: "needs check" };
+			}
 			nodes.push({ id: gnode.id, type: "call", position: { x: 0, y: 0 }, data });
 			continue;
 		}

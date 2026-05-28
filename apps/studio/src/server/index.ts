@@ -4,7 +4,8 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { NormalizedRegistry } from "@chit/core";
+import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
+import { isKnownSurface } from "@chit/core";
 import { Hono } from "hono";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
 import { discover } from "./discovery.ts";
@@ -31,6 +32,11 @@ export interface StartStudioOptions {
 	// the production location relative to this module. Tests override it to
 	// point at a temp dir with controlled contents.
 	clientDistDir?: string;
+	// Surface the initial GraphModel validates against. Defaults to
+	// "claude-skill" because that is the shipped install target and the one
+	// most likely to surface real warnings. The client can re-fetch with a
+	// different surface via ?surface=<kind>.
+	defaultSurface?: SurfaceKind;
 }
 
 export interface StudioHandle {
@@ -45,7 +51,8 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 
 	const discovery = discover({ cwd: opts.cwd, explicitPath: opts.explicitPath });
 	const store = new DocStore(opts.cwd, opts.registry);
-	const bootstrap = buildBootstrap(discovery, store);
+	const defaultSurface: SurfaceKind = opts.defaultSurface ?? "claude-skill";
+	const bootstrap = buildBootstrap(discovery, store, defaultSurface);
 	const token = generateToken();
 
 	// The Host allowlist is populated after the server starts and the actual
@@ -115,7 +122,18 @@ export function buildApp(opts: BuildAppOptions) {
 
 	app.get("/api/documents/:docId", (c) => {
 		const docId = c.req.param("docId");
-		const detail = opts.store.get(docId);
+		const surfaceQuery = c.req.query("surface");
+		let surface: SurfaceKind | undefined;
+		if (surfaceQuery !== undefined && surfaceQuery !== "") {
+			if (!isKnownSurface(surfaceQuery)) {
+				// new Response instead of c.text because Hono's c.text generics
+				// resolve narrowly in chit-cli's typecheck context with a
+				// templated message + numeric literal status.
+				return new Response(`unknown surface "${surfaceQuery}"`, { status: 400 });
+			}
+			surface = surfaceQuery;
+		}
+		const detail = opts.store.get(docId, surface);
 		if (!detail) return c.text("not found", 404);
 		return c.json(detail);
 	});

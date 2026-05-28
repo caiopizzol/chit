@@ -58,6 +58,44 @@ header.app .tag {
 	text-transform: uppercase;
 	letter-spacing: 0.14em;
 }
+header.app .header-right {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: var(--faded);
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+}
+header.app .path-label {
+	color: var(--ink);
+}
+header.app .header-divider {
+	color: var(--hairline);
+}
+header.app .surface-control {
+	display: inline-flex;
+	align-items: center;
+	color: var(--faded);
+}
+header.app .surface-control select {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: var(--ink);
+	background: var(--paper);
+	border: 1px solid var(--hairline);
+	padding: 3px 6px;
+	letter-spacing: 0.08em;
+	text-transform: none;
+}
+header.app .surface-control select:focus {
+	outline: 1px solid var(--ink);
+	outline-offset: -1px;
+}
+header.app .surface-control select:disabled {
+	opacity: 0.5;
+}
 
 .split {
 	flex: 1 1 auto;
@@ -70,12 +108,72 @@ header.app .tag {
 	min-height: 0;
 }
 
-.inspector {
+.right-rail {
 	border-left: 1px solid var(--hairline);
 	background: var(--paper);
-	padding: 18px 20px;
-	overflow: auto;
+	display: flex;
+	flex-direction: column;
 	min-height: 0;
+	overflow: auto;
+}
+.vpanel {
+	padding: 18px 20px 16px;
+	border-bottom: 1px solid var(--hairline);
+}
+.vpanel h2 {
+	font-family: "JetBrains Mono", monospace;
+	font-weight: 700;
+	font-size: 11px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	margin: 0 0 12px;
+	color: var(--faded);
+}
+.vpanel .empty {
+	font-size: 13px;
+	color: var(--faded);
+	margin: 0;
+}
+.vrow {
+	display: grid;
+	grid-template-columns: 16px 100px 1fr;
+	gap: 8px;
+	align-items: baseline;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12px;
+	color: var(--ink);
+	padding: 4px 0;
+}
+.vrow + .vrow {
+	border-top: 1px solid var(--hairline);
+}
+.vrow-symbol {
+	font-size: 13px;
+	line-height: 1;
+	color: var(--ink);
+	text-align: center;
+}
+.vrow-label {
+	font-size: 10px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--faded);
+}
+.vrow-detail {
+	color: var(--carbon);
+}
+.refetch-error {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: var(--ink);
+	background: var(--receipt);
+	border-left: 3px solid var(--ink);
+	padding: 8px 12px;
+	margin: 14px 20px 0;
+}
+.inspector {
+	padding: 18px 20px;
+	flex: 1 1 auto;
 }
 .inspector h2 {
 	font-family: "JetBrains Mono", monospace;

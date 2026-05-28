@@ -111,6 +111,65 @@ describe("DocStore.get", () => {
 	});
 });
 
+describe("DocStore.get with surface", () => {
+	test("default (no surface) yields graphModel with validation null", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			writeFileSync(path, chit("consult"));
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const detail = store.get("current");
+			if (detail && "graphModel" in detail) {
+				expect(detail.graphModel.validation).toBeNull();
+				expect(detail.graphModel.surface).toBeNull();
+			} else {
+				throw new Error("expected parsed detail");
+			}
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("surface=claude-skill yields graphModel with validation populated", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			writeFileSync(path, chit("consult"));
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const detail = store.get("current", "claude-skill");
+			if (detail && "graphModel" in detail) {
+				expect(detail.graphModel.validation).not.toBeNull();
+				expect(detail.graphModel.surface?.kind).toBe("claude-skill");
+			} else {
+				throw new Error("expected parsed detail");
+			}
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("surface=cli also yields populated validation", () => {
+		const cwd = tempCwd();
+		try {
+			const path = join(cwd, "consult.json");
+			writeFileSync(path, chit("consult"));
+			const store = new DocStore(cwd, REGISTRY);
+			store.add("current", path);
+			const detail = store.get("current", "cli");
+			if (detail && "graphModel" in detail) {
+				expect(detail.graphModel.validation).not.toBeNull();
+				expect(detail.graphModel.surface?.kind).toBe("cli");
+			} else {
+				throw new Error("expected parsed detail");
+			}
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("buildBootstrap", () => {
 	test("empty discovery yields { mode: empty }", () => {
 		const cwd = tempCwd();

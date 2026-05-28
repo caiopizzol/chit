@@ -93,4 +93,33 @@ describe("adaptGraphModel", () => {
 		expect(adapted.nodes.length).toBeGreaterThan(0);
 		expect(adapted.edges.length).toBeGreaterThan(0);
 	});
+
+	test("validation=null leaves every call node without warn", () => {
+		const model = loadGraphModel("consult.json");
+		// no surface passed → validation is null
+		expect(model.validation).toBeNull();
+		const adapted = adaptGraphModel(model);
+		for (const n of adapted.nodes.filter((x) => x.type === "call")) {
+			expect((n.data as { warn?: unknown }).warn).toBeUndefined();
+		}
+	});
+
+	test("consult + claude-skill: ask_claude gets warn (gap), ask_codex does not", () => {
+		const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, "consult.json"), "utf-8"));
+		const manifest = parseManifest(raw);
+		const model = buildGraphModel(manifest, REGISTRY, "claude-skill");
+		expect(model.validation).not.toBeNull();
+		// Sanity: at least one gap exists on the claude participant.
+		const gappedParticipants = new Set(
+			model.validation?.permissions.gaps.map((g) => g.participantId),
+		);
+		expect(gappedParticipants.has("claude")).toBe(true);
+		expect(gappedParticipants.has("codex")).toBe(false);
+
+		const adapted = adaptGraphModel(model);
+		const askClaude = adapted.nodes.find((n) => n.id === "ask_claude");
+		const askCodex = adapted.nodes.find((n) => n.id === "ask_codex");
+		expect((askClaude?.data as { warn?: { tag: string } }).warn?.tag).toBe("needs check");
+		expect((askCodex?.data as { warn?: unknown }).warn).toBeUndefined();
+	});
 });

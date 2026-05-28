@@ -180,6 +180,62 @@ describe("Bearer auth on /api/*", () => {
 		}
 	});
 
+	test("GET ?surface=claude-skill returns DocumentDetail with validation populated", async () => {
+		const s = setup();
+		try {
+			const res = await req(s.app, "/api/documents/current?surface=claude-skill", {
+				token: s.token,
+			});
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				graphModel?: { surface?: { kind: string } | null; validation: unknown };
+			};
+			expect(body.graphModel?.surface?.kind).toBe("claude-skill");
+			expect(body.graphModel?.validation).not.toBeNull();
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("GET ?surface=cli also returns validation populated", async () => {
+		const s = setup();
+		try {
+			const res = await req(s.app, "/api/documents/current?surface=cli", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				graphModel?: { surface?: { kind: string } | null; validation: unknown };
+			};
+			expect(body.graphModel?.surface?.kind).toBe("cli");
+			expect(body.graphModel?.validation).not.toBeNull();
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("GET with unknown ?surface returns 400 before any document work", async () => {
+		const s = setup();
+		try {
+			const res = await req(s.app, "/api/documents/current?surface=mcp", { token: s.token });
+			expect(res.status).toBe(400);
+			const body = await res.text();
+			expect(body).toContain("mcp");
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("GET without ?surface returns validation null (matches setup default)", async () => {
+		const s = setup();
+		try {
+			const res = await req(s.app, "/api/documents/current", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { graphModel?: { validation: unknown } };
+			expect(body.graphModel?.validation).toBeNull();
+		} finally {
+			teardown(s);
+		}
+	});
+
 	test("GET / does NOT require token (token is in the SSR payload)", async () => {
 		const s = setup();
 		try {
