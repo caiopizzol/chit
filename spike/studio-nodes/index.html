@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chit studio · slice 0 spike</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./index.css" />
+<style>
+:root {
+	--paper: #F4F2EA;
+	--sheet: #EAE5D5;
+	--receipt: #E0DBC6;
+	--ink: #0A0A0A;
+	--carbon: #2A2A2A;
+	--faded: #807766;
+	--hairline: #C7BFAB;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; background: var(--paper); color: var(--ink); }
+body { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; }
+#root { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+header.app {
+	display: flex; justify-content: space-between; align-items: center;
+	padding: 14px 24px; border-bottom: 1px solid var(--ink); background: var(--paper);
+	flex: 0 0 auto;
+}
+header.app .wordmark { font-family: 'Bricolage Grotesque', serif; font-weight: 700; font-size: 18px; }
+header.app .wordmark .light { color: var(--faded); font-weight: 500; }
+header.app .tag {
+	font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--faded);
+	text-transform: uppercase; letter-spacing: 0.14em;
+}
+.split { flex: 1 1 auto; display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+.canvas-wrap { position: relative; min-height: 0; }
+.inspector {
+	border-left: 1px solid var(--hairline); background: var(--paper);
+	padding: 18px 20px; overflow: auto; min-height: 0;
+}
+.inspector h2 {
+	font-family: 'JetBrains Mono', monospace; font-weight: 700;
+	font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+	margin: 0 0 12px; color: var(--faded);
+}
+.inspector .field { margin: 0 0 12px; }
+.inspector .field-label {
+	font-family: 'JetBrains Mono', monospace; font-size: 10px;
+	letter-spacing: 0.12em; text-transform: uppercase; color: var(--faded);
+}
+.inspector .field-value { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink); }
+.inspector .empty { font-size: 13px; color: var(--faded); }
+
+/* React Flow overrides: square, ink, no shadows, no rounding. */
+.react-flow { background: var(--paper); }
+.react-flow__node {
+	padding: 0; border-radius: 0; background: var(--paper); box-shadow: none;
+	border: 1px solid var(--ink); color: var(--ink); font-family: 'JetBrains Mono', monospace;
+	width: auto; min-width: 220px;
+}
+.react-flow__node.selected, .react-flow__node:focus { outline: 2px solid var(--ink); outline-offset: -2px; }
+.react-flow__handle {
+	background: var(--ink); border: none; width: 8px; height: 8px; border-radius: 0;
+}
+.react-flow__edge-path { stroke: var(--ink); stroke-width: 1; }
+.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
+.react-flow__attribution { display: none; }
+.react-flow__controls { box-shadow: none; border: 1px solid var(--ink); }
+.react-flow__controls-button {
+	background: var(--paper); border-bottom: 1px solid var(--hairline);
+	color: var(--ink); width: 26px; height: 26px;
+}
+.react-flow__controls-button:hover { background: var(--sheet); }
+
+/* Custom node interior */
+.chit-node header {
+	display: flex; justify-content: space-between; align-items: baseline;
+	padding: 6px 10px; border-bottom: 1px solid var(--hairline);
+	font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.chit-node header .right {
+	font-weight: 500; color: var(--carbon);
+	text-transform: none; letter-spacing: 0.02em;
+}
+.chit-node .body { padding: 10px; }
+.chit-node .id {
+	font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600;
+	margin-bottom: 6px; color: var(--ink);
+}
+.chit-node .meta {
+	font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--carbon); line-height: 1.4;
+}
+.chit-node .meta + .meta { margin-top: 2px; }
+.chit-node.format header.is-output { background: var(--receipt); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="./index.js"></script>
+</body>
+</html>

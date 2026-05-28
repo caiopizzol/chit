@@ -5,3 +5,6 @@ mockups/
 
 # Cloudflare Wrangler local state
 .wrangler/
+
+# Slice 0 spike build output (the spike itself is committed; its dist is not)
+spike/**/dist/

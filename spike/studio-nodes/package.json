@@ -1,0 +1,22 @@
+{
+	"name": "chit-spike-studio-nodes",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Slice 0 spike. React Flow + ELK + paper-and-ink against the three node sketches. Throwaway: delete once Slice 1 starts.",
+	"type": "module",
+	"scripts": {
+		"build": "bun build index.tsx --outdir=dist --target=browser --minify",
+		"serve": "bun serve.ts",
+		"dev": "bun build index.tsx --outdir=dist --target=browser && bun serve.ts"
+	},
+	"dependencies": {
+		"@xyflow/react": "^12.3.5",
+		"elkjs": "^0.9.3",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1"
+	},
+	"devDependencies": {
+		"@types/react": "^18.3.12",
+		"@types/react-dom": "^18.3.1"
+	}
+}
