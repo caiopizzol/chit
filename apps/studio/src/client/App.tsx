@@ -1,12 +1,14 @@
-/** @jsxImportSource react */
-
-// Top-level App. Sub-unit 1.3: header surface selector + always-visible
-// right-rail validation panel + read-only JSON inspector. Surface changes
-// trigger an authenticated GET /api/documents/:docId?surface=<kind> that
-// returns a fresh GraphModel with validation populated; the client replaces
-// the document in ClientState and re-renders. The graph adapter derives
-// per-call warn indicators from validation.permissions.gaps so node badges
-// and the panel stay in sync.
+// Top-level App. Switches on ClientState.mode and renders the right
+// surface: OpenMode (canvas + always-visible right rail with validation
+// panel above a read-only JSON inspector), PickerMode, ErrorMode, or
+// EmptyMode. Header carries the file label and a surface selector that
+// triggers an authenticated GET /api/documents/:docId?surface=<kind> on
+// change; the returned GraphModel replaces the in-memory model and the
+// graph adapter derives per-call warn indicators from
+// validation.permissions.gaps so node badges and the validation panel
+// stay in sync. Nodes are click-to-inspect, not drag-to-arrange:
+// selection is sticky, the cursor is pointer, and selected nodes get an
+// inverted header strip plus an outer ink outline.
 
 import type { GraphModel, SurfaceKind, ValidationReport } from "@chit/core";
 import {
@@ -168,6 +170,14 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 		[],
 	);
 
+	// Explicit click handler because React Flow's click→select handler does
+	// not always fire when nodesDraggable=false (the drag+select gesture
+	// path is the one that updates the internal selection on click).
+	// Keyboard Enter still works through React Flow's a11y handler.
+	const onNodeClick = useCallback((_e: React.MouseEvent, node: Node) => {
+		setSelectedId(node.id);
+	}, []);
+
 	const onSurfaceChange = useCallback(
 		async (next: SurfaceKind) => {
 			if (next === surface) return;
@@ -194,6 +204,15 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 
 	const selected = nodes.find((n) => n.id === selectedId) ?? null;
 
+	// Feed `selected: true` back into the nodes React Flow renders so the
+	// .react-flow__node.selected class is applied. Without this, our
+	// onSelectionChange only updates inspector state; the DOM never gets the
+	// CSS hook for the inverted header + outer outline.
+	const reactFlowNodes = useMemo(
+		() => nodes.map((n) => ({ ...n, selected: n.id === selectedId })),
+		[nodes, selectedId],
+	);
+
 	return (
 		<>
 			<header className="app">
@@ -209,16 +228,22 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 			<div className="split">
 				<div className="canvas-wrap">
 					<ReactFlow
-						nodes={nodes}
+						nodes={reactFlowNodes}
 						edges={adapted.edges}
 						nodeTypes={nodeTypes}
 						onSelectionChange={onSelectionChange}
+						onNodeClick={onNodeClick}
 						proOptions={{ hideAttribution: true }}
-						nodesDraggable
+						nodesDraggable={false}
 						nodesConnectable={false}
 						elementsSelectable
 						minZoom={0.4}
 						maxZoom={2}
+						// onPaneClick noop keeps selection sticky: clicking blank
+						// canvas does not clear the inspector. Users build a mental
+						// model around "the inspector reflects what I last looked
+						// at"; default-clearing is friction.
+						onPaneClick={() => {}}
 					>
 						<FitOnReady />
 						<Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#C7BFAB" />

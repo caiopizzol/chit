@@ -188,7 +188,7 @@ Validation panel renders shape-coded indicators per the brand iconography sectio
 
 Client state shape is `{ raw, draft, graphModel }` from day one, even though Slice 1 is read-only. `raw` is the original JSON string (kept for Slice 2's diff preview), `draft` is the parsed `NormalizedManifest`, and `graphModel` is derived from `draft`. In Slice 1 `draft` is immutable; in Slice 2 `draft` becomes the edit target and `graphModel` recomputes on draft changes. Setting up this shape now avoids a state rewrite at Slice 2.
 
-The old `apps/studio` Hono inspector route deletes at the end of this slice. The `paths.ts` resolver moves to the new subcommand under `apps/cli/src/cli/studio/`. About three of the existing twelve route tests survive as unit tests against the moved module; the rest delete with the routes.
+The old `apps/studio` Hono inspector deletes in sub-unit 1.4 (`src/app.tsx`, `src/index.tsx`, `src/pages/`, `src/app.test.ts`, `src/paths.ts`). The path-resolution logic lives at `apps/studio/src/server/paths.ts` with its own unit tests; the original twelve route tests delete with the routes.
 
 ### Slice 2: safe-field editing + explicit save
 

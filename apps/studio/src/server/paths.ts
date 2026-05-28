@@ -1,8 +1,8 @@
 // Boot-time path resolution for explicit `chit studio <path>` arguments.
-// Different from the old apps/studio/src/paths.ts: there is no workspace-root
-// boundary because the user is the authority for explicit paths. The "browser
-// never names a filesystem path" rule still holds; this function is only
-// called by the CLI at boot, never from an HTTP route handler.
+// There is no workspace-root boundary because the user is the authority
+// for explicit paths. The "browser never names a filesystem path" rule
+// still holds; this function is only called by the CLI at boot, never
+// from an HTTP route handler.
 
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";

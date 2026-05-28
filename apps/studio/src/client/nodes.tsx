@@ -1,9 +1,5 @@
-/** @jsxImportSource react */
-
 // Three custom React Flow node types: input, call, format. Hierarchy and
-// state markers match docs/studio-node-sketches.md. Per-file pragma sets
-// the React JSX runtime since the workspace tsconfig still defaults to
-// Hono JSX for the old SSR inspector until sub-unit 1.4 deletes it.
+// state markers match docs/studio-node-sketches.md.
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 

@@ -218,11 +218,40 @@ header.app .surface-control select:disabled {
 	font-family: "JetBrains Mono", monospace;
 	width: auto;
 	min-width: 220px;
+	cursor: pointer;
+	transition: background 80ms linear;
 }
-.react-flow__node.selected,
-.react-flow__node:focus {
+/* Pannable canvas: grab on idle, grabbing while panning. React Flow
+   doesn't draw nodes when these cursors are set, only the pane. */
+.react-flow__pane {
+	cursor: grab;
+}
+.react-flow__pane:active {
+	cursor: grabbing;
+}
+/* Hover: sheet background, brand-aligned (sheet is already in the
+   palette as "paper but slightly more present"). Selected wins via
+   cascade order below. */
+.react-flow__node:hover {
+	background: var(--sheet);
+}
+/* Focus (keyboard): dashed outline, distinct from selected. Class
+   .selectable is added to match React Flow's own selector specificity
+   (its default .react-flow__node.selectable:focus { outline: none }
+   would otherwise win the cascade). */
+.react-flow__node.selectable:focus,
+.react-flow__node.selectable:focus-visible {
+	outline: 1px dashed var(--ink);
+	outline-offset: 2px;
+}
+/* Selected: outer ink outline. The header strip inversion is below,
+   after the base .chit-node header rules, so the descending-specificity
+   linter stays happy. Two signals total: outer outline + inverted
+   header strip. Both ink-only; no new color semantics introduced. */
+.react-flow__node.selectable.selected {
+	background: var(--paper);
 	outline: 2px solid var(--ink);
-	outline-offset: -2px;
+	outline-offset: 4px;
 }
 .react-flow__handle {
 	background: var(--ink);
@@ -295,6 +324,17 @@ header.app .surface-control select:disabled {
 }
 .chit-node.format header.is-output {
 	background: var(--receipt);
+}
+/* Selected node: invert the header strip. Lives down here so its
+   descendant selector for .chit-node header comes AFTER the base
+   .chit-node header rule above. Selected wins via cascade order. */
+.react-flow__node.selected .chit-node header {
+	background: var(--ink);
+	color: var(--paper);
+	border-bottom-color: var(--ink);
+}
+.react-flow__node.selected .chit-node header .right {
+	color: var(--paper);
 }
 
 /* Empty / picker / parse-error modes. Same chrome as OpenMode for the

@@ -1,5 +1,3 @@
-/** @jsxImportSource react */
-
 // React client entry. Reads the SSR boot payload, derives the initial
 // ClientState, and mounts <App> under <ReactFlowProvider> so React Flow
 // hooks work in nested components.
