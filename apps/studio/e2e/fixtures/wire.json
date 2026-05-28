@@ -1,0 +1,17 @@
+{
+	"schema": 1,
+	"id": "wire-test",
+	"description": "connect test: out references only ask_claude, so ask_codex -> out is a new edge",
+	"inputs": { "question": { "type": "string" } },
+	"requires": {},
+	"participants": {
+		"codex": { "agent": "codex", "role": "advisor", "session": "stateless" },
+		"claude": { "agent": "claude", "role": "advisor", "session": "stateless" }
+	},
+	"steps": {
+		"ask_codex": { "call": "codex", "prompt": "{{ inputs.question }}" },
+		"ask_claude": { "call": "claude", "prompt": "{{ inputs.question }}" },
+		"out": { "format": "## claude\n\n{{ steps.ask_claude.output }}" }
+	},
+	"output": "out"
+}

@@ -676,6 +676,9 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 						// time (disconnectMany still handles N defensively).
 						multiSelectionKeyCode={null}
 						selectionKeyCode={null}
+						// Both keys delete a selected edge (v12's default is
+						// Backspace only). Nodes are deletable:false, so only edges go.
+						deleteKeyCode={["Backspace", "Delete"]}
 						minZoom={0.4}
 						maxZoom={2}
 						// onPaneClick noop keeps selection sticky: clicking blank
