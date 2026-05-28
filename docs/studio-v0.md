@@ -186,6 +186,8 @@ Two-pane layout: canvas + right rail. Right rail has the always-visible validati
 
 Validation panel renders shape-coded indicators per the brand iconography section (`●` `○` `◆` for ok / warn / fail). Rows for capabilities, agents, permissions. The save button is absent in Slice 1 but the disabled-on-`error` rule is designed here so it lands cleanly in Slice 2.
 
+Client state shape is `{ raw, draft, graphModel }` from day one, even though Slice 1 is read-only. `raw` is the original JSON string (kept for Slice 2's diff preview), `draft` is the parsed `NormalizedManifest`, and `graphModel` is derived from `draft`. In Slice 1 `draft` is immutable; in Slice 2 `draft` becomes the edit target and `graphModel` recomputes on draft changes. Setting up this shape now avoids a state rewrite at Slice 2.
+
 The old `apps/studio` Hono inspector route deletes at the end of this slice. The `paths.ts` resolver moves to the new subcommand under `apps/cli/src/cli/studio/`. About three of the existing twelve route tests survive as unit tests against the moved module; the rest delete with the routes.
 
 ### Slice 2: safe-field editing + explicit save
@@ -197,13 +199,21 @@ Editable inspector fields, picked for safety (no ref impact):
 - Participant `session`.
 - Participant `permissions.filesystem`.
 
+Block creation through explicit actions (right-rail Add buttons; optionally a contextual canvas affordance):
+
+- Add input, participant, call step, format step. Forms tight to the schema in `packages/core/src/manifest/types.ts`.
+- New blocks are created in the in-memory draft, not written to disk.
+- Auto-suggested ids the user can edit.
+- Connection-driven creation (drag from a handle to empty canvas creates a new block with a pre-inserted ref) is a separate, later slice. Slice 2 ships explicit Add only.
+
 Save behavior:
 
-- Dirty state with a visible indicator.
+- Dirty state with a visible indicator. Covers field edits and new blocks.
 - Diff preview before write.
 - `Cmd+S` / Save button.
 - Save is disabled when validation severity is `error`.
-- No graph mutation.
+
+Drag-to-connect (ref insertion) stays in Slice 3. Slice 2's new blocks land orphaned; the validation panel surfaces orphans as warnings so users see what is unwired.
 
 `PUT /api/documents/:docId` lands here.
 
