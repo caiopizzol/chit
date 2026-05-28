@@ -96,6 +96,184 @@ header.app .surface-control select:focus {
 header.app .surface-control select:disabled {
 	opacity: 0.5;
 }
+header.app .dirty-dot {
+	color: var(--ink);
+	font-size: 9px;
+	line-height: 1;
+}
+header.app .save-btn {
+	font-size: 10px;
+	padding: 4px 12px;
+	letter-spacing: 0.1em;
+}
+
+/* Shared buttons. Primary is ink-on-paper inverted; secondary is outline. */
+.btn-primary {
+	font-family: "JetBrains Mono", monospace;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	font-size: 11px;
+	background: var(--ink);
+	color: var(--paper);
+	border: 1px solid var(--ink);
+	padding: 6px 14px;
+	cursor: pointer;
+}
+.btn-primary:hover:not(:disabled) {
+	background: var(--carbon);
+}
+.btn-primary:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+.btn-secondary {
+	font-family: "JetBrains Mono", monospace;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	font-size: 11px;
+	background: var(--paper);
+	color: var(--ink);
+	border: 1px solid var(--ink);
+	padding: 6px 14px;
+	cursor: pointer;
+}
+.btn-secondary:hover:not(:disabled) {
+	background: var(--sheet);
+}
+.btn-secondary:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+/* Manifest panel: editable manifest-level fields, between validation and
+   the node inspector. */
+.manifest-panel {
+	padding: 18px 20px 16px;
+	border-bottom: 1px solid var(--hairline);
+}
+.manifest-panel h2 {
+	font-family: "JetBrains Mono", monospace;
+	font-weight: 700;
+	font-size: 11px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	margin: 0 0 12px;
+	color: var(--faded);
+}
+.manifest-description {
+	width: 100%;
+	resize: vertical;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--ink);
+	background: var(--sheet);
+	border: 1px solid var(--hairline);
+	padding: 8px 10px;
+	margin-top: 4px;
+}
+.manifest-description:focus {
+	outline: 1px solid var(--ink);
+	outline-offset: -1px;
+}
+
+/* Conflict banner: shown when the file changed on disk under us. */
+.conflict-banner {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 14px 20px 0;
+	padding: 12px 14px;
+	background: var(--receipt);
+	border-left: 3px solid var(--ink);
+	font-size: 12.5px;
+	line-height: 1.4;
+}
+.conflict-banner .btn-primary {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+/* Diff modal: review-before-write. */
+.modal-overlay {
+	position: fixed;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+}
+.modal-backdrop {
+	position: absolute;
+	inset: 0;
+	border: none;
+	margin: 0;
+	padding: 0;
+	background: rgba(10, 10, 10, 0.4);
+	cursor: default;
+}
+.modal {
+	position: relative;
+	background: var(--paper);
+	border: 1px solid var(--ink);
+	max-width: 760px;
+	width: 90vw;
+	max-height: 80vh;
+	display: flex;
+	flex-direction: column;
+	padding: 24px;
+}
+.modal h2 {
+	font-family: "Bricolage Grotesque", serif;
+	font-weight: 700;
+	font-size: 22px;
+	letter-spacing: -0.02em;
+	margin: 0 0 16px;
+}
+.modal-path {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 16px;
+	background: var(--receipt);
+	padding: 1px 6px;
+}
+.diff {
+	flex: 1 1 auto;
+	overflow: auto;
+	margin: 0 0 16px;
+	border: 1px solid var(--hairline);
+	background: var(--sheet);
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.diff-row {
+	display: flex;
+	gap: 8px;
+	padding: 0 8px;
+	white-space: pre-wrap;
+}
+.diff-gutter {
+	flex: 0 0 12px;
+	color: var(--faded);
+	user-select: none;
+}
+.diff-row--add {
+	background: var(--receipt);
+}
+.diff-row--add .diff-gutter {
+	color: var(--ink);
+	font-weight: 700;
+}
+.diff-row--del {
+	color: var(--faded);
+	text-decoration: line-through;
+}
+.modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	flex: 0 0 auto;
+}
 
 .split {
 	flex: 1 1 auto;

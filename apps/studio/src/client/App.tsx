@@ -11,7 +11,7 @@
 // selection is sticky, the cursor is pointer, and selected nodes get an
 // inverted header strip plus an outer ink outline.
 
-import type { GraphModel, SurfaceKind, ValidationReport } from "@chit/core";
+import type { SurfaceKind, ValidationReport } from "@chit/core";
 import {
 	Background,
 	BackgroundVariant,
@@ -22,7 +22,8 @@ import {
 	useReactFlow,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { previewDocument, StudioApiError } from "./api.ts";
+import { type DiffRow, lineDiff } from "./diff.ts";
+import { canonicalize } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
 import { nodeTypes } from "./nodes.tsx";
@@ -32,6 +33,7 @@ import type {
 	OpenErrorClientState,
 	PickerClientState,
 } from "./state.ts";
+import { useDocumentEditor } from "./useDocumentEditor.ts";
 
 const SURFACES: SurfaceKind[] = ["claude-skill", "cli"];
 
@@ -150,19 +152,119 @@ function SurfaceSelector({
 	);
 }
 
-function OpenMode({ initial }: { initial: OpenClientState }) {
-	const [graphModel, setGraphModel] = useState<GraphModel>(initial.graphModel);
-	const [surface, setSurface] = useState<SurfaceKind>(
-		(graphModel.surface?.kind as SurfaceKind) ?? "claude-skill",
+// Editable manifest-level fields. 2.2 ships only `description`; role,
+// session, filesystem land in 2.3. Always visible (independent of node
+// selection) so editing never requires deselecting a node.
+function ManifestPanel({
+	description,
+	onDescriptionChange,
+}: {
+	description: string;
+	onDescriptionChange: (value: string) => void;
+}) {
+	return (
+		<section className="manifest-panel">
+			<h2>Manifest</h2>
+			<label className="field-label" htmlFor="manifest-description">
+				description
+			</label>
+			<textarea
+				id="manifest-description"
+				className="manifest-description"
+				value={description}
+				onChange={(e) => onDescriptionChange(e.currentTarget.value)}
+				rows={3}
+				spellCheck={false}
+			/>
+		</section>
 	);
-	// Slice 2.0 state. draftSource is the editable JSON; preview round-trips
-	// it through the server. dirty/previewError will drive UI signals once
-	// real edits land in 2.1.
-	const [draftSource] = useState<Record<string, unknown>>(initial.draftSource);
-	const [previewPending, setPreviewPending] = useState(false);
-	const [previewError, setPreviewError] = useState<string | null>(null);
+}
 
-	const adapted = useMemo(() => adaptGraphModel(graphModel), [graphModel]);
+function DiffModal({
+	relPath,
+	before,
+	after,
+	saving,
+	onConfirm,
+	onCancel,
+}: {
+	relPath: string;
+	before: string;
+	after: string;
+	saving: boolean;
+	onConfirm: () => void;
+	onCancel: () => void;
+}) {
+	const rows: DiffRow[] = useMemo(() => lineDiff(before, after), [before, after]);
+	// Escape closes the modal. A document-level listener (not an onKeyDown on
+	// the overlay div, which never receives focus) is the reliable path.
+	useEffect(() => {
+		function onKey(e: KeyboardEvent) {
+			if (e.key === "Escape") onCancel();
+		}
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onCancel]);
+	const sym = { same: " ", add: "+", del: "-" };
+	return (
+		<div className="modal-overlay">
+			{/* Backdrop is a real button: click-to-dismiss is keyboard-accessible
+			    for free, and being a sibling (not an ancestor) of the dialog means
+			    no stopPropagation is needed on the dialog itself. */}
+			<button type="button" className="modal-backdrop" aria-label="Cancel" onClick={onCancel} />
+			<div
+				className="modal"
+				role="dialog"
+				aria-modal="true"
+				aria-label={`Review changes to ${relPath}`}
+			>
+				<h2>
+					Write changes to <code className="modal-path">{relPath}</code>?
+				</h2>
+				<pre className="diff">
+					{rows.map((r, i) => (
+						<div
+							// biome-ignore lint/suspicious/noArrayIndexKey: diff rows are positional and the list is static while the modal is open
+							key={i}
+							className={`diff-row diff-row--${r.type}`}
+						>
+							<span className="diff-gutter">{sym[r.type]}</span>
+							<span className="diff-text">{r.text}</span>
+						</div>
+					))}
+				</pre>
+				<div className="modal-actions">
+					<button type="button" className="btn-secondary" onClick={onCancel} disabled={saving}>
+						Cancel
+					</button>
+					<button type="button" className="btn-primary" onClick={onConfirm} disabled={saving}>
+						{saving ? "Writing…" : "Write to disk"}
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function ConflictBanner({ onReload }: { onReload: () => void }) {
+	return (
+		<div className="conflict-banner">
+			<span>
+				This file changed on disk since it was opened. Save is blocked to avoid clobbering the other
+				change.
+			</span>
+			<button type="button" className="btn-primary" onClick={onReload}>
+				Reload from disk
+			</button>
+		</div>
+	);
+}
+
+function OpenMode({ initial }: { initial: OpenClientState }) {
+	const editor = useDocumentEditor(initial);
+	const [diffOpen, setDiffOpen] = useState(false);
+
+	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -183,31 +285,36 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 		setSelectedId(node.id);
 	}, []);
 
-	const onSurfaceChange = useCallback(
-		async (next: SurfaceKind) => {
-			if (next === surface) return;
-			setPreviewPending(true);
-			setPreviewError(null);
-			try {
-				const result = await previewDocument(initial.docId, draftSource, next);
-				if ("graphModel" in result) {
-					setGraphModel(result.graphModel);
-					setSurface(next);
-				} else {
-					setPreviewError(`draft no longer parseable: ${result.document.parseError}`);
-				}
-			} catch (e) {
-				const msg =
-					e instanceof StudioApiError ? `${e.status}: ${e.message}` : (e as Error).message;
-				setPreviewError(msg);
-			} finally {
-				setPreviewPending(false);
+	const openDiff = useCallback(() => {
+		if (editor.canSave) setDiffOpen(true);
+	}, [editor.canSave]);
+
+	// Cmd/Ctrl+S opens the diff modal (the explicit-save-with-review flow),
+	// not a direct write. Bound at the document level; re-binds when openDiff
+	// changes so it always sees the current canSave gate.
+	useEffect(() => {
+		function onKeyDown(e: KeyboardEvent) {
+			if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+				e.preventDefault();
+				openDiff();
 			}
-		},
-		[initial.docId, draftSource, surface],
-	);
+		}
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [openDiff]);
+
+	const confirmSave = useCallback(async () => {
+		const { ok } = await editor.save();
+		if (ok) setDiffOpen(false);
+		// On conflict/parse-error the modal closes too (the banner / error
+		// surfaces the reason in the rail); only a transport error keeps it
+		// open implicitly via saving=false + no state change. Close either way
+		// to avoid a stuck modal; the rail carries the message.
+		else setDiffOpen(false);
+	}, [editor]);
 
 	const selected = nodes.find((n) => n.id === selectedId) ?? null;
+	const description = String(editor.draftSource.description ?? "");
 
 	// Feed `selected: true` back into the nodes React Flow renders so the
 	// .react-flow__node.selected class is applied. Without this, our
@@ -226,8 +333,30 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				</span>
 				<span className="header-right">
 					<span className="path-label">{initial.relPath}</span>
+					{editor.dirty && (
+						<span
+							className="dirty-dot"
+							role="img"
+							title="unsaved changes"
+							aria-label="unsaved changes"
+						>
+							●
+						</span>
+					)}
+					<button
+						type="button"
+						className="btn-primary save-btn"
+						onClick={openDiff}
+						disabled={!editor.canSave}
+					>
+						Save
+					</button>
 					<span className="header-divider">·</span>
-					<SurfaceSelector value={surface} onChange={onSurfaceChange} disabled={previewPending} />
+					<SurfaceSelector
+						value={editor.surface}
+						onChange={editor.changeSurface}
+						disabled={editor.previewPending || editor.saving}
+					/>
 				</span>
 			</header>
 			<div className="split">
@@ -256,11 +385,23 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					</ReactFlow>
 				</div>
 				<aside className="right-rail">
-					{previewError && <div className="refetch-error">{previewError}</div>}
-					<ValidationPanel validation={graphModel.validation} />
+					{editor.conflict && <ConflictBanner onReload={() => window.location.reload()} />}
+					{editor.previewError && <div className="refetch-error">{editor.previewError}</div>}
+					<ValidationPanel validation={editor.graphModel.validation} />
+					<ManifestPanel description={description} onDescriptionChange={editor.setDescription} />
 					<Inspector selected={selected} />
 				</aside>
 			</div>
+			{diffOpen && (
+				<DiffModal
+					relPath={initial.relPath}
+					before={editor.raw}
+					after={canonicalize(editor.draftSource)}
+					saving={editor.saving}
+					onConfirm={confirmSave}
+					onCancel={() => setDiffOpen(false)}
+				/>
+			)}
 		</>
 	);
 }

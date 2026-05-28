@@ -3,7 +3,13 @@
 // the client bundle and the API on one port), so no CORS configuration is
 // involved.
 
-import type { DocumentDetail, PreviewResponse } from "../server/types.ts";
+import type {
+	ConflictResponse,
+	DocumentDetail,
+	ErrorSaveResponse,
+	PreviewResponse,
+	SavedSaveResponse,
+} from "../server/types.ts";
 import { getToken } from "./boot.ts";
 
 export class StudioApiError extends Error {
@@ -54,4 +60,44 @@ export async function previewDocument(
 		throw new StudioApiError(res.status, `POST ${url}: ${res.status} ${body}`);
 	}
 	return (await res.json()) as PreviewResponse;
+}
+
+// Outcome of a save attempt. 409 (conflict) and the parse-error variant are
+// expected control-flow, not exceptions; only transport/auth failures throw.
+export type SaveOutcome =
+	| { kind: "saved"; response: SavedSaveResponse }
+	| { kind: "parse-error"; response: ErrorSaveResponse }
+	| { kind: "conflict"; currentHash: string };
+
+// PUT the draft with the baseHash the client last saw. The server writes
+// canonicalRaw if baseHash still matches disk; otherwise it returns 409 with
+// the current disk hash so the client can prompt a reload.
+export async function saveDocument(
+	docId: string,
+	draft: unknown,
+	surface: string,
+	baseHash: string,
+): Promise<SaveOutcome> {
+	const url = `/api/documents/${encodeURIComponent(docId)}`;
+	const res = await fetch(url, {
+		method: "PUT",
+		headers: {
+			Authorization: `Bearer ${getToken()}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ draft, surface, baseHash }),
+	});
+	if (res.status === 409) {
+		const body = (await res.json()) as ConflictResponse;
+		return { kind: "conflict", currentHash: body.currentHash };
+	}
+	if (!res.ok) {
+		const body = await res.text();
+		throw new StudioApiError(res.status, `PUT ${url}: ${res.status} ${body}`);
+	}
+	const body = (await res.json()) as SavedSaveResponse | ErrorSaveResponse;
+	if (body.document.status === "parsed") {
+		return { kind: "saved", response: body as SavedSaveResponse };
+	}
+	return { kind: "parse-error", response: body as ErrorSaveResponse };
 }

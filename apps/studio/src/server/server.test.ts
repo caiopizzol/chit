@@ -34,6 +34,7 @@ function chit(id: string): string {
 
 interface Setup {
 	cwd: string;
+	path: string;
 	token: string;
 	app: ReturnType<typeof buildApp>;
 }
@@ -43,19 +44,19 @@ function setup(opts: { clientDistDir?: string } = {}): Setup {
 	const path = join(cwd, "consult.json");
 	writeFileSync(path, chit("consult"));
 	const store = new DocStore(cwd, REGISTRY);
-	const bootstrap = buildBootstrap(
-		{ kind: "open", absolutePath: path, relPath: "consult.json" },
-		store,
-	);
+	// Regenerate per call so GET / reflects current disk (matches startStudio).
+	const makeBootstrap = () =>
+		buildBootstrap({ kind: "open", absolutePath: path, relPath: "consult.json" }, store);
+	makeBootstrap(); // seed the docId table, as startStudio does at boot
 	const token = generateToken();
 	const app = buildApp({
 		token,
-		bootstrap,
+		makeBootstrap,
 		store,
 		allowedHosts: ALLOWED,
 		clientDistDir: opts.clientDistDir ?? "/this/path/does/not/exist",
 	});
-	return { cwd, token, app };
+	return { cwd, path, token, app };
 }
 
 function teardown(s: Setup) {
@@ -244,6 +245,22 @@ describe("Bearer auth on /api/*", () => {
 			const html = await res.text();
 			expect(html).toContain("window.__chit");
 			expect(html).toContain(s.token);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("GET / regenerates the bootstrap from disk (reload reflects external changes)", async () => {
+		const s = setup();
+		try {
+			const first = await (await req(s.app, "/")).text();
+			expect(first).toContain("consult");
+			// Change the file on disk, then reload: the SSR payload must reflect
+			// the new content, not a boot-time snapshot. The token must not change.
+			writeFileSync(s.path, chit("consult-changed-on-disk"));
+			const second = await (await req(s.app, "/")).text();
+			expect(second).toContain("consult-changed-on-disk");
+			expect(second).toContain(s.token);
 		} finally {
 			teardown(s);
 		}
@@ -630,14 +647,12 @@ describe("SSR shell payload escaping", () => {
 			});
 			writeFileSync(path, raw);
 			const store = new DocStore(cwd, REGISTRY);
-			const bootstrap = buildBootstrap(
-				{ kind: "open", absolutePath: path, relPath: "x.json" },
-				store,
-			);
+			const makeBootstrap = () =>
+				buildBootstrap({ kind: "open", absolutePath: path, relPath: "x.json" }, store);
 			const token = generateToken();
 			const app = buildApp({
 				token,
-				bootstrap,
+				makeBootstrap,
 				store,
 				allowedHosts: ALLOWED,
 				clientDistDir: "/this/path/does/not/exist",

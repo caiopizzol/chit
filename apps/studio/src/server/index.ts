@@ -49,18 +49,34 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 	const hostname = opts.hostname ?? "127.0.0.1";
 	const requestedPort = opts.port ?? 0;
 
-	const discovery = discover({ cwd: opts.cwd, explicitPath: opts.explicitPath });
 	const store = new DocStore(opts.cwd, opts.registry);
 	const defaultSurface: SurfaceKind = opts.defaultSurface ?? "claude-skill";
-	const bootstrap = buildBootstrap(discovery, store, defaultSurface);
 	const token = generateToken();
+
+	// Bootstrap is regenerated per GET / (not captured once at boot), so a
+	// full page reload reflects the current disk state. This is what makes
+	// the conflict-recovery "Reload from disk" action honest: after an
+	// external change, reloading re-reads the file rather than re-rendering a
+	// stale boot snapshot. The token stays stable across reloads.
+	const makeBootstrap = () =>
+		buildBootstrap(
+			discover({ cwd: opts.cwd, explicitPath: opts.explicitPath }),
+			store,
+			defaultSurface,
+		);
+
+	// Seed the docId table once at boot so /api/* routes resolve even if a
+	// request arrives before the first GET / (buildBootstrap's store.add is
+	// the only thing that registers docId -> absolutePath). GET / calls
+	// makeBootstrap again for a fresh disk read.
+	makeBootstrap();
 
 	// The Host allowlist is populated after the server starts and the actual
 	// port is known. The middleware closes over the Set so adding entries
 	// after `app.use` registration is fine.
 	const allowedHosts = new Set<string>();
 	const clientDistDir = opts.clientDistDir ?? CLIENT_DIST;
-	const app = buildApp({ token, bootstrap, store, allowedHosts, clientDistDir });
+	const app = buildApp({ token, makeBootstrap, store, allowedHosts, clientDistDir });
 
 	const server = Bun.serve({
 		port: requestedPort,
@@ -89,7 +105,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 
 interface BuildAppOptions {
 	token: string;
-	bootstrap: import("./types.ts").Bootstrap;
+	makeBootstrap: () => import("./types.ts").Bootstrap;
 	store: DocStore;
 	allowedHosts: Set<string>;
 	clientDistDir: string;
@@ -103,7 +119,7 @@ export function buildApp(opts: BuildAppOptions) {
 	app.use("*", hostAllowlist(opts.allowedHosts));
 
 	app.get("/", (c) => {
-		return c.html(renderShell({ token: opts.token, bootstrap: opts.bootstrap }));
+		return c.html(renderShell({ token: opts.token, bootstrap: opts.makeBootstrap() }));
 	});
 
 	// Static client assets. The set is small and explicit: refusing other
