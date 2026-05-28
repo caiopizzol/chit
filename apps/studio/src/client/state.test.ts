@@ -42,7 +42,7 @@ describe("initClientState", () => {
 		}
 	});
 
-	test("open + parsed bootstrap → open mode with raw, draft, graphModel", () => {
+	test("open + parsed bootstrap → open mode with raw, draftSource, graphModel", () => {
 		const raw = chit("consult");
 		const manifest = parseManifest(JSON.parse(raw));
 		const graphModel = buildGraphModel(manifest, REGISTRY);
@@ -57,8 +57,16 @@ describe("initClientState", () => {
 			expect(state.docId).toBe("current");
 			expect(state.relPath).toBe("consult.json");
 			expect(state.raw).toBe(raw);
-			expect(state.draft.id).toBe("consult");
+			// draftSource is the file-shape JSON, not the NormalizedManifest.
+			expect(state.draftSource.id).toBe("consult");
+			expect(state.draftSource.schema).toBe(1);
+			// derived fields from NormalizedManifest must NOT be on draftSource
+			expect("dependencies" in state.draftSource).toBe(false);
+			expect("executionOrder" in state.draftSource).toBe(false);
 			expect(state.graphModel.manifest.id).toBe("consult");
+			expect(state.dirty).toBe(false);
+			expect(state.previewPending).toBe(false);
+			expect(state.previewError).toBeNull();
 		}
 	});
 

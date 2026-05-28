@@ -1,20 +1,37 @@
-// Client state shape locked by docs/studio-v0.md: `{ raw, draft, graphModel }`
-// from day one. In sub-unit 1.2 the draft is immutable (read-only inspector)
-// and graphModel is the snapshot from the bootstrap. In sub-unit 2 (slice 2)
-// draft becomes the edit target and graphModel is recomputed by re-running
-// buildGraphModel(draft, registry) on the client. Setting up the shape now
-// means slice 2 only adds setters; no rewrite.
+// Client state shape. The slice 2 reshape (per docs/studio-v0.md and
+// the slice 2 design discussion) replaces `draft: NormalizedManifest`
+// with `draftSource: Record<string, unknown>`: the editable file-shape
+// JSON, not the derived shape parseManifest produces. NormalizedManifest
+// carries derived fields (dependencies, executionOrder, declared/inferred
+// requires, step refs) that the user does not edit. The registry stays
+// server-side, so the client cannot recompute buildGraphModel locally;
+// the server's preview/save endpoints are the validation source.
 
-import type { GraphModel, NormalizedManifest } from "@chit/core";
+import type { GraphModel } from "@chit/core";
 import type { Bootstrap } from "../server/types.ts";
 
 export interface OpenClientState {
 	mode: "open";
 	docId: string;
 	relPath: string;
+	// `raw` is the last server-known file text (boot value at this point;
+	// in sub-unit 2.1 it updates after a successful PUT).
 	raw: string;
-	draft: NormalizedManifest;
+	// `draftSource` is the editable manifest JSON object. At boot it equals
+	// JSON.parse(raw). Edits mutate this; preview/save POST it to the server.
+	draftSource: Record<string, unknown>;
+	// `graphModel` is whatever the server last produced for the current
+	// draft + surface combination. At boot it comes from the SSR payload.
 	graphModel: GraphModel;
+	// `dirty` true when draftSource diverges from `raw`. Slice 2.1 wires
+	// real edits; for now it stays false.
+	dirty: boolean;
+	// `previewPending` true while a preview POST is in flight. Used by the
+	// surface selector and (later) edit handlers to disable controls.
+	previewPending: boolean;
+	// `previewError` carries the last preview failure if any (HTTP or
+	// parser error); null on success or when no preview has run yet.
+	previewError: string | null;
 }
 
 export interface OpenErrorClientState {
@@ -47,13 +64,27 @@ export function initClientState(bootstrap: Bootstrap): ClientState {
 	}
 	// bootstrap.mode === "open"; two sub-variants distinguished by document.status
 	if (bootstrap.document.status === "parsed" && "graphModel" in bootstrap) {
+		// draftSource is the file-shape JSON the user will edit. Parsing the
+		// boot raw is safe: it just came from the server which already
+		// JSON.parsed it for the manifest field.
+		let draftSource: Record<string, unknown>;
+		try {
+			const parsed = JSON.parse(bootstrap.document.raw);
+			draftSource =
+				typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+		} catch {
+			draftSource = {};
+		}
 		return {
 			mode: "open",
 			docId: bootstrap.docId,
 			relPath: bootstrap.document.relPath,
 			raw: bootstrap.document.raw,
-			draft: bootstrap.document.manifest,
+			draftSource,
 			graphModel: bootstrap.graphModel,
+			dirty: false,
+			previewPending: false,
+			previewError: null,
 		};
 	}
 	// open + error

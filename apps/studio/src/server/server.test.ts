@@ -250,6 +250,162 @@ describe("Bearer auth on /api/*", () => {
 	});
 });
 
+describe("POST /api/documents/:docId/preview", () => {
+	async function jsonReq(
+		app: ReturnType<typeof buildApp>,
+		path: string,
+		body: unknown,
+		token: string,
+	): Promise<Response> {
+		return app.fetch(
+			new Request(`http://${HOST}${path}`, {
+				method: "POST",
+				headers: {
+					host: HOST,
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(body),
+			}),
+		);
+	}
+
+	test("valid draft returns parsed + graphModel + canonicalRaw", async () => {
+		const s = setup();
+		try {
+			const draft = JSON.parse(chit("consult"));
+			const res = await jsonReq(
+				s.app,
+				"/api/documents/current/preview",
+				{ draft, surface: "claude-skill" },
+				s.token,
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				document: { status: string; relPath: string };
+				graphModel?: { surface?: { kind: string } | null; validation: unknown };
+				canonicalRaw?: string;
+			};
+			expect(body.document.status).toBe("parsed");
+			expect(body.document.relPath).toBe("consult.json");
+			expect(body.graphModel?.surface?.kind).toBe("claude-skill");
+			expect(body.graphModel?.validation).not.toBeNull();
+			expect(body.canonicalRaw).toBeDefined();
+			// Tab-indented and roundtrippable.
+			expect(body.canonicalRaw).toContain("\t");
+			expect(JSON.parse(body.canonicalRaw as string)).toEqual(draft);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("invalid draft returns error document, no graphModel, no canonicalRaw", async () => {
+		const s = setup();
+		try {
+			const draft = { schema: 1, id: "x" }; // missing required fields
+			const res = await jsonReq(
+				s.app,
+				"/api/documents/current/preview",
+				{ draft, surface: "claude-skill" },
+				s.token,
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				document: { status: string; parseError?: string };
+				graphModel?: unknown;
+				canonicalRaw?: string;
+			};
+			expect(body.document.status).toBe("error");
+			expect(body.document.parseError).toBeDefined();
+			expect(body.graphModel).toBeUndefined();
+			expect(body.canonicalRaw).toBeUndefined();
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("unknown docId returns 404", async () => {
+		const s = setup();
+		try {
+			const res = await jsonReq(
+				s.app,
+				"/api/documents/nope/preview",
+				{ draft: {}, surface: "claude-skill" },
+				s.token,
+			);
+			expect(res.status).toBe(404);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("unknown surface returns 400 before any preview work", async () => {
+		const s = setup();
+		try {
+			const res = await jsonReq(
+				s.app,
+				"/api/documents/current/preview",
+				{ draft: JSON.parse(chit("consult")), surface: "mcp" },
+				s.token,
+			);
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("missing token returns 401", async () => {
+		const s = setup();
+		try {
+			const res = await s.app.fetch(
+				new Request(`http://${HOST}/api/documents/current/preview`, {
+					method: "POST",
+					headers: { host: HOST, "content-type": "application/json" },
+					body: JSON.stringify({ draft: {} }),
+				}),
+			);
+			expect(res.status).toBe(401);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("malformed JSON body returns 400", async () => {
+		const s = setup();
+		try {
+			const res = await s.app.fetch(
+				new Request(`http://${HOST}/api/documents/current/preview`, {
+					method: "POST",
+					headers: {
+						host: HOST,
+						authorization: `Bearer ${s.token}`,
+						"content-type": "application/json",
+					},
+					body: "{not valid",
+				}),
+			);
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("missing draft key in body returns 400", async () => {
+		const s = setup();
+		try {
+			const res = await jsonReq(
+				s.app,
+				"/api/documents/current/preview",
+				{ surface: "claude-skill" },
+				s.token,
+			);
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+});
+
 describe("/client/:asset", () => {
 	test("rejects unknown asset names with 404 before any file lookup", async () => {
 		const s = setup();

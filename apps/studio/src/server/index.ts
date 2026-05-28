@@ -138,5 +138,29 @@ export function buildApp(opts: BuildAppOptions) {
 		return c.json(detail);
 	});
 
+	app.post("/api/documents/:docId/preview", async (c) => {
+		const docId = c.req.param("docId");
+		let body: unknown;
+		try {
+			body = await c.req.json();
+		} catch {
+			return new Response("invalid JSON body", { status: 400 });
+		}
+		if (typeof body !== "object" || body === null || !("draft" in body)) {
+			return new Response("body must be { draft, surface? }", { status: 400 });
+		}
+		const { draft, surface: surfaceInput } = body as { draft: unknown; surface?: unknown };
+		let surface: SurfaceKind | undefined;
+		if (surfaceInput !== undefined && surfaceInput !== "") {
+			if (typeof surfaceInput !== "string" || !isKnownSurface(surfaceInput)) {
+				return new Response(`unknown surface "${String(surfaceInput)}"`, { status: 400 });
+			}
+			surface = surfaceInput;
+		}
+		const result = opts.store.preview(docId, draft, surface);
+		if (!result) return c.text("not found", 404);
+		return c.json(result);
+	});
+
 	return app;
 }

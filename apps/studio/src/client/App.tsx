@@ -2,9 +2,10 @@
 // surface: OpenMode (canvas + always-visible right rail with validation
 // panel above a read-only JSON inspector), PickerMode, ErrorMode, or
 // EmptyMode. Header carries the file label and a surface selector that
-// triggers an authenticated GET /api/documents/:docId?surface=<kind> on
-// change; the returned GraphModel replaces the in-memory model and the
-// graph adapter derives per-call warn indicators from
+// triggers an authenticated POST /api/documents/:docId/preview on
+// change; the server runs parseManifest + buildGraphModel against the
+// in-memory draftSource and returns a fresh GraphModel. The graph
+// adapter derives per-call warn indicators from
 // validation.permissions.gaps so node badges and the validation panel
 // stay in sync. Nodes are click-to-inspect, not drag-to-arrange:
 // selection is sticky, the cursor is pointer, and selected nodes get an
@@ -21,7 +22,7 @@ import {
 	useReactFlow,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchDocument, StudioApiError } from "./api.ts";
+import { previewDocument, StudioApiError } from "./api.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
 import { nodeTypes } from "./nodes.tsx";
@@ -154,8 +155,12 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	const [surface, setSurface] = useState<SurfaceKind>(
 		(graphModel.surface?.kind as SurfaceKind) ?? "claude-skill",
 	);
-	const [refetching, setRefetching] = useState(false);
-	const [refetchError, setRefetchError] = useState<string | null>(null);
+	// Slice 2.0 state. draftSource is the editable JSON; preview round-trips
+	// it through the server. dirty/previewError will drive UI signals once
+	// real edits land in 2.1.
+	const [draftSource] = useState<Record<string, unknown>>(initial.draftSource);
+	const [previewPending, setPreviewPending] = useState(false);
+	const [previewError, setPreviewError] = useState<string | null>(null);
 
 	const adapted = useMemo(() => adaptGraphModel(graphModel), [graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
@@ -181,25 +186,25 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	const onSurfaceChange = useCallback(
 		async (next: SurfaceKind) => {
 			if (next === surface) return;
-			setRefetching(true);
-			setRefetchError(null);
+			setPreviewPending(true);
+			setPreviewError(null);
 			try {
-				const detail = await fetchDocument(initial.docId, next);
-				if ("graphModel" in detail) {
-					setGraphModel(detail.graphModel);
+				const result = await previewDocument(initial.docId, draftSource, next);
+				if ("graphModel" in result) {
+					setGraphModel(result.graphModel);
 					setSurface(next);
 				} else {
-					setRefetchError(`document is no longer parseable: ${detail.document.parseError}`);
+					setPreviewError(`draft no longer parseable: ${result.document.parseError}`);
 				}
 			} catch (e) {
 				const msg =
 					e instanceof StudioApiError ? `${e.status}: ${e.message}` : (e as Error).message;
-				setRefetchError(msg);
+				setPreviewError(msg);
 			} finally {
-				setRefetching(false);
+				setPreviewPending(false);
 			}
 		},
-		[initial.docId, surface],
+		[initial.docId, draftSource, surface],
 	);
 
 	const selected = nodes.find((n) => n.id === selectedId) ?? null;
@@ -222,7 +227,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				<span className="header-right">
 					<span className="path-label">{initial.relPath}</span>
 					<span className="header-divider">·</span>
-					<SurfaceSelector value={surface} onChange={onSurfaceChange} disabled={refetching} />
+					<SurfaceSelector value={surface} onChange={onSurfaceChange} disabled={previewPending} />
 				</span>
 			</header>
 			<div className="split">
@@ -251,7 +256,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					</ReactFlow>
 				</div>
 				<aside className="right-rail">
-					{refetchError && <div className="refetch-error">{refetchError}</div>}
+					{previewError && <div className="refetch-error">{previewError}</div>}
 					<ValidationPanel validation={graphModel.validation} />
 					<Inspector selected={selected} />
 				</aside>

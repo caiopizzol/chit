@@ -6,7 +6,14 @@ import { basename, relative } from "node:path";
 import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
 import { buildGraphModel, parseManifest } from "@chit/core";
 import type { DiscoveryResult } from "./discovery.ts";
-import type { Bootstrap, DocumentDetail, StudioDocument } from "./types.ts";
+import type { Bootstrap, DocumentDetail, PreviewResponse, StudioDocument } from "./types.ts";
+
+// Match the existing apps/cli/examples/*.json formatting: tab-indented,
+// key order preserved from the input. Deterministic for the same draft,
+// which is what the diff view needs in a later sub-unit.
+function canonicalize(draft: unknown): string {
+	return JSON.stringify(draft, null, "\t");
+}
 
 interface DocEntry {
 	absolutePath: string;
@@ -29,6 +36,46 @@ export class DocStore {
 
 	has(docId: string): boolean {
 		return this.entries.has(docId);
+	}
+
+	// Validate a client-supplied draft (file-shape JSON, not NormalizedManifest)
+	// against the same parseManifest + buildGraphModel pipeline the server uses
+	// for disk reads. Returns null only if the docId is unknown. Parse failures
+	// are returned as the `error` variant so the client can render a useful UI.
+	// Does NOT write to disk; the caller is previewing what a save would do.
+	preview(docId: string, draft: unknown, surface?: SurfaceKind): PreviewResponse | null {
+		const entry = this.entries.get(docId);
+		if (!entry) return null;
+
+		try {
+			const manifest = parseManifest(draft);
+			const graphModel = buildGraphModel(manifest, this.registry, surface);
+			const canonicalRaw = canonicalize(draft);
+			return {
+				document: {
+					id: docId,
+					relPath: entry.relPath,
+					raw: canonicalRaw,
+					status: "parsed",
+					manifest,
+				},
+				graphModel,
+				canonicalRaw,
+			};
+		} catch (e) {
+			// The error variant's `raw` is what the client sent, serialized in
+			// the same canonical style so the UI can show it alongside the
+			// parser error.
+			const raw = canonicalize(draft);
+			const errorDoc: StudioDocument = {
+				id: docId,
+				relPath: entry.relPath,
+				raw,
+				status: "error",
+				parseError: (e as Error).message,
+			};
+			return { document: errorDoc };
+		}
 	}
 
 	// Reads the file, parses, and builds the graph model. Returns null only if

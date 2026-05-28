@@ -27,6 +27,26 @@ export type DocumentDetail =
 	| { document: ParsedStudioDocument; graphModel: GraphModel }
 	| { document: ErrorStudioDocument };
 
+// POST /api/documents/:docId/preview. The client sends an editable
+// draft (file-shape JSON, not NormalizedManifest); the server validates
+// via parseManifest, builds the graph model, and returns what would
+// land on disk if the draft were saved. No disk write happens here.
+// `canonicalRaw` is the exact bytes the server would write on save:
+// JSON.stringify(draft, null, "\t") preserves the example file style.
+//
+// Same response shape as DocumentDetail for the union variants, plus
+// `canonicalRaw` on the parsed variant so a later sub-unit can render
+// the diff against the on-disk raw.
+
+export interface PreviewRequest {
+	draft: unknown;
+	surface?: string;
+}
+
+export type PreviewResponse =
+	| { document: ParsedStudioDocument; graphModel: GraphModel; canonicalRaw: string }
+	| { document: ErrorStudioDocument };
+
 export type Bootstrap =
 	| {
 			mode: "open";
