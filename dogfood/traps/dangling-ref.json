@@ -1,0 +1,9 @@
+{
+	"schema": 1,
+	"id": "trap-dangling-ref",
+	"description": "Template references a step that does not exist.",
+	"inputs": { "q": { "type": "string" } },
+	"participants": { "advisor": { "agent": "claude", "role": "Advisor.", "session": "stateless" } },
+	"steps": { "ask": { "call": "advisor", "prompt": "{{ steps.ghost.output }}" } },
+	"output": "ask"
+}

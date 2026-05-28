@@ -1,0 +1,9 @@
+{
+	"schema": 1,
+	"id": "trap-missing-output",
+	"description": "output names a step that does not exist.",
+	"inputs": { "q": { "type": "string" } },
+	"participants": { "advisor": { "agent": "claude", "role": "Advisor.", "session": "stateless" } },
+	"steps": { "ask": { "call": "advisor", "prompt": "{{ inputs.q }}" } },
+	"output": "ghost"
+}
