@@ -212,6 +212,30 @@ describe("parseArgs", () => {
 	test("uninstall without a name is rejected", () => {
 		expect(() => parseArgs(["uninstall"])).toThrow(/install name/);
 	});
+
+	test("studio with no args parses with empty manifestPath (discovery mode)", () => {
+		const args = parseArgs(["studio"]);
+		expect(args.command).toBe("studio");
+		expect(args.manifestPath).toBeUndefined();
+	});
+
+	test("studio captures an explicit path", () => {
+		const args = parseArgs(["studio", "consult.json"]);
+		expect(args.command).toBe("studio");
+		expect(args.manifestPath).toBe("consult.json");
+	});
+
+	test("studio rejects an unknown flag", () => {
+		expect(() => parseArgs(["studio", "--port", "3000"])).toThrow(/unknown flag/);
+	});
+
+	test("studio rejects extra positional args", () => {
+		expect(() => parseArgs(["studio", "foo.json", "bar.json"])).toThrow(/unexpected argument/);
+	});
+
+	test("studio --help yields help", () => {
+		expect(parseArgs(["studio", "--help"]).command).toBe("help");
+	});
 });
 
 describe("handoff run (subprocess)", () => {

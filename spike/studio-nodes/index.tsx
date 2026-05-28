@@ -5,9 +5,6 @@
 
 import "@xyflow/react/dist/style.css";
 
-import ELK from "elkjs/lib/elk.bundled.js";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createRoot } from "react-dom/client";
 import {
 	Background,
 	BackgroundVariant,
@@ -21,6 +18,9 @@ import {
 	useNodesInitialized,
 	useReactFlow,
 } from "@xyflow/react";
+import ELK from "elkjs/lib/elk.bundled.js";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
 
 type InputData = { name: string; type: string; required: boolean };
 type CallData = {

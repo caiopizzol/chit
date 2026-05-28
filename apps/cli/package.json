@@ -15,6 +15,7 @@
 		"start": "bun src/cli/run.ts"
 	},
 	"dependencies": {
-		"@chit/core": "workspace:*"
+		"@chit/core": "workspace:*",
+		"chit-studio": "workspace:*"
 	}
 }

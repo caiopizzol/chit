@@ -36,7 +36,7 @@ function cliCapabilities(scope: string | undefined): Set<string> {
 }
 
 interface ParsedArgs {
-	command: "run" | "install" | "show" | "list" | "uninstall" | "help";
+	command: "run" | "install" | "show" | "list" | "uninstall" | "studio" | "help";
 	manifestPath?: string;
 	// `run`-specific fields.
 	inputs: Record<string, string>;
@@ -81,7 +81,32 @@ export function parseArgs(argv: string[]): ParsedArgs {
 	if (argv[0] === "show") return parseShowArgs(argv);
 	if (argv[0] === "list") return parseListArgs(argv);
 	if (argv[0] === "uninstall") return parseUninstallArgs(argv);
+	if (argv[0] === "studio") return parseStudioArgs(argv);
 	throw new Error(`unknown command: ${argv[0]}`);
+}
+
+function parseStudioArgs(argv: string[]): ParsedArgs {
+	// `chit studio [path]` — path is optional. If present, it is the explicit
+	// manifest path (one positional, no flags in sub-unit 1.0). Unknown flags
+	// and extra positionals throw, following the same pattern as the other
+	// parseXxxArgs in this file. `--help` / `-h` yield the top-level help so
+	// behavior is consistent with the rest of the CLI.
+	const out: ParsedArgs = emptyArgs("studio");
+	for (let i = 1; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === undefined) continue;
+		if (a === "-h" || a === "--help") {
+			return emptyArgs("help");
+		}
+		if (a.startsWith("-")) {
+			throw new Error(`unknown flag: ${a}`);
+		}
+		if (out.manifestPath !== undefined) {
+			throw new Error(`studio: unexpected argument "${a}"`);
+		}
+		out.manifestPath = a;
+	}
+	return out;
 }
 
 function parseListArgs(argv: string[]): ParsedArgs {
@@ -220,6 +245,7 @@ const HELP = `Usage:
   chit show <manifest.json> [--surface <kind>] [--format <fmt>]
   chit list [--to <dir>] [--json]
   chit uninstall <name> [--to <dir>]
+  chit studio [path]
   chit -h | --help
 
 run options:
@@ -308,6 +334,9 @@ export async function runMain(argv: string[]): Promise<number> {
 	}
 	if (args.command === "uninstall") {
 		return runUninstall(args);
+	}
+	if (args.command === "studio") {
+		return runStudio(args);
 	}
 	if (!args.manifestPath) {
 		process.stderr.write(`chit: run requires a manifest path\n\n${HELP}`);
@@ -599,6 +628,36 @@ function runUninstall(args: ParsedArgs): number {
 		}
 		throw e;
 	}
+}
+
+async function runStudio(args: ParsedArgs): Promise<number> {
+	const { PathError, startStudio } = await import("chit-studio/server");
+	let handle: { url: string; stop(): void };
+	try {
+		const registry = loadRegistry();
+		handle = await startStudio({
+			cwd: process.cwd(),
+			explicitPath: args.manifestPath,
+			registry,
+		});
+	} catch (e) {
+		if (e instanceof PathError) {
+			process.stderr.write(`chit: ${e.message}\n`);
+			return 2;
+		}
+		throw e;
+	}
+
+	process.stdout.write(`chit studio: ${handle.url}\n`);
+	process.stdout.write("Press Ctrl-C to stop.\n");
+	await new Promise<void>((resolve) => {
+		process.on("SIGINT", () => {
+			process.stdout.write("\nchit studio: stopped\n");
+			handle.stop();
+			resolve();
+		});
+	});
+	return 0;
 }
 
 if (import.meta.main) {

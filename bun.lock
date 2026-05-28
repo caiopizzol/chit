@@ -18,6 +18,7 @@
       },
       "dependencies": {
         "@chit/core": "workspace:*",
+        "chit-studio": "workspace:*",
       },
     },
     "apps/studio": {
