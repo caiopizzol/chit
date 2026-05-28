@@ -16,7 +16,7 @@ The key constraint is that **edges are not first-class in the manifest**. Connec
 
 - **Server.** Hono on Bun, bound to `127.0.0.1`, lifetime tied to the CLI process.
 - **Client.** React + React Flow + ELK, bundled via `bun build --target=browser`. Vite as fallback.
-- **Source of truth.** The manifest file on disk. The server reads it once at boot and the client renders. Edits go through the server, are validated by `@chit/core`'s `parseManifest`, and write canonical JSON back to disk.
+- **Source of truth.** The manifest file on disk. The server reads it from disk for the SSR bootstrap (regenerated per `GET /`, so a reload reflects current disk) and on each document API call. Edits go through the server, are validated by `@chit/core`'s `parseManifest`, and write canonical JSON back to disk. A per-file content hash is carried through bootstrap/read responses and sent back on save for conflict detection.
 - **No layout in the manifest.** Layout is computed deterministically by ELK at render time. Layout persistence, if ever, goes in a sidecar at `.chit/layouts/<id>.json`, not `_layout` in the chit.
 
 The `apps/studio` workspace stays. Internals change from SSR-only Hono to server + client React. The old Hono inspector route deletes at the end of Slice 1 once the React graph renders the same information.
@@ -44,33 +44,54 @@ The graph has three node types. Participants are not graph nodes by default; the
 
 Layout defaults to execution levels from `buildGraphModel`'s `executionOrder`. Inputs sit in a left rail (level -1); call/format nodes go in columns for levels 0..N, left to right.
 
-## Drag-to-connect
+## Edges and references (Slice 3 micro-spec)
 
-When the user drags from a source handle to a target handle:
+An edge is not a first-class manifest object. Edge A → B exists exactly because B's template contains a reference back to A:
 
-1. The candidate connection is interpreted as a template reference:
-	- Input → Step: `{{ inputs.X }}`
-	- Step → Step: `{{ steps.X.output }}`
-	- Step → Format: `{{ steps.X.output }}` inserted into the format template.
-2. Studio prompts the user for the insertion site in the target template:
-	- At cursor (default if focus is inside the prompt editor).
-	- Append as a new section.
-	- Replace selected text.
-3. The user picks a site. Studio constructs the candidate manifest with the reference inserted at that site.
-4. The candidate is parsed through `parseManifest`. The parser rejects unknown refs (ref-extraction in parse.ts) and cycles (parse.ts:343 topological sort, throws `cyclic dependency among: ...`).
-5. If `parseManifest` accepts, Studio updates the in-memory draft, marks the document dirty, and re-renders the graph from the candidate. The candidate is written to disk only through the explicit save flow. If `parseManifest` rejects, the drag fails with the parser's error message and no draft mutation occurs.
+- A call step's `prompt` is a template with `{{ inputs.X }}` and `{{ steps.Y.output }}` tokens.
+- A format step's `format` is the same kind of template.
+- An input node has no template (source only). A call/format node has a template (can be a target; a format can also be a source if a later step references its output).
 
-Site choice is upstream of validation because the choice determines what the candidate manifest actually contains. A reference inserted "at cursor" inside an existing paragraph produces a different template (and therefore a different candidate) than the same reference appended as a new section.
+So "the edge from A to B" lives in **B's template** as a token pointing at A. Creating an edge inserts that token; deleting an edge removes it. There is no separate edge store.
 
-Delete-edge inverts the flow: find all `{{ source.* }}` reference sites in the target template, show the list with line context, let the user choose which to remove.
+### Prerequisite: editable templates
 
-React Flow's `isValidConnection` is a UI convenience for fast feedback (refuse drags between disconnected components, refuse obvious cycles cheaply). It is not the source of truth. `parseManifest` is.
+Ref insertion needs somewhere honest to land, so Slice 3 first makes templates visible and editable in the inspector, on the same `applyDraft` → debounced-preview → save loop as the 2.x fields:
 
-## Drag-to-arrange
+- Call node selected: an editable `prompt` textarea.
+- Format node selected: an editable `format` textarea.
 
-Block positions are transient. Users can drag blocks within a session. Position changes do not mark the manifest dirty. A "Re-layout" button re-applies ELK. Layout persistence is deferred.
+Editing a template by hand is the escape hatch for any placement the drag flow does not handle, and it is what makes "reposition the inserted token" just a text edit.
 
-If user demand for persistent manual layout materializes, the persistence layer is a sidecar file at `.chit/layouts/<id>.json`, not `_layout` in the manifest.
+### Create an edge (drag-to-connect)
+
+When the user completes a drag from a source handle to a target handle:
+
+1. **UI-level validity (cheap, advisory):** React Flow's `isValidConnection` rejects the obvious cases before any work — target is not a call/format node (inputs have no template), target === source (a step cannot reference its own output; `parse.ts` forbids it), or the edge already exists. This is feedback only, not the source of truth.
+2. **Token:** the reference is determined by the source kind. Input source → `{{ inputs.<name> }}`. Step source (call or format) → `{{ steps.<id>.output }}`.
+3. **Insertion (v1: append):** the token is appended to the target template on its own line — `template === "" ? token : template + "\n\n" + token`. Append is deterministic and always produces a valid, readable placement. The user repositions or rewords it afterward in the template textarea; moving a token within a prompt is an ordinary text edit. (A cursor-aware "insert at cursor / replace selection" chooser is explicitly deferred — append + manual reposition is the v1 contract.)
+4. **Validate:** Studio builds the candidate draft with the appended token and runs it through `parseManifest` + `buildGraphModel`, exactly like a field edit. The parser is the authority: it rejects unknown refs (ref extraction) and cycles (`topologicalSort`, throws `cyclic dependency among: ...`).
+5. **Apply:** on accept, the candidate becomes the in-memory draft (dirty; written only via the explicit save flow). On reject, the drag fails with the parser's message and the draft is unchanged.
+
+### Delete an edge
+
+Deleting edge A → B removes the reference to A from B's template:
+
+1. Scan B's template for tokens matching the source: `{{ steps.A.output }}` for a step source, `{{ inputs.A }}` for an input source.
+2. If exactly one occurrence, remove it (and collapse the blank line it leaves). If more than one, show the occurrences with line context and let the user confirm removing all (v1 removes all matching tokens; per-occurrence selection is deferred).
+3. Build the candidate draft, validate through `parseManifest`, apply on accept. Removing a reference cannot introduce a cycle or an unknown ref, but it can orphan a step (no longer referenced); that surfaces as a validation warning, not a block.
+
+### Sub-units
+
+- 3.0 — editable `prompt` / `format` templates in the inspector.
+- 3.1 — drag-to-connect (append token + validate + apply), with `isValidConnection` advisory checks.
+- 3.2 — delete-edge (remove matching tokens + validate + apply).
+
+## Node placement (shipped: no drag-to-arrange)
+
+Node positions are computed by ELK and fixed. Nodes are click-to-inspect, not drag-to-move: `nodesDraggable={false}`, the cursor is a pointer over nodes (grab over the pannable canvas), and selection is sticky (clicking blank canvas does not clear it). This is deliberate for a read/edit inspector whose layout is deterministic and not persisted — transient dragging would imply a persistence that does not exist.
+
+An explicit "Arrange" mode (drag handles via React Flow's `dragHandle`, transient positions, a "Re-layout" button) is deferred until a user actually asks for it. If persistent manual layout is ever needed, it goes in a sidecar at `.chit/layouts/<id>.json`, never `_layout` in the manifest.
 
 ## Wire types
 
@@ -228,7 +249,7 @@ Two-pane layout: canvas + right rail. Right rail has the always-visible validati
 
 Validation panel renders shape-coded indicators per the brand iconography section (`●` `○` `◆` for ok / warn / fail). Rows for capabilities, agents, permissions. The save button is absent in Slice 1 but the disabled-on-`error` rule is designed here so it lands cleanly in Slice 2.
 
-Client state shape is `{ raw, draftSource, graphModel, dirty, previewPending, previewError }`. `raw` is the last server-known file text (boot value in Slice 1; updates after a successful save in Slice 2). `draftSource` is the editable file-shape JSON (`Record<string, unknown>`), NOT the parsed `NormalizedManifest` — NormalizedManifest carries derived fields (`dependencies`, `executionOrder`, declared/inferred requires, step refs) that the user does not edit. `graphModel` is whatever the server last produced for the current `(draftSource, surface)` combination; the client never recomputes it locally because the registry stays server-side. Validation happens via `POST /api/documents/:docId/preview` (read-only validation) and, in Slice 2, `PUT /api/documents/:docId` (validate + write to disk). In Slice 1 `draftSource` is effectively immutable; in Slice 2 it becomes the edit target and each edit triggers a debounced preview.
+Client state shape is `{ raw, hash, draftSource, graphModel, dirty, previewPending, previewError }`. `raw` is the last server-known file text (boot value in Slice 1; updates after a successful save in Slice 2). `hash` is the sha256 of the on-disk bytes the server last confirmed; the client carries it through edits and sends it back as `baseHash` on `PUT` for conflict detection, and updates it from the save response. `draftSource` is the editable file-shape JSON (`Record<string, unknown>`), NOT the parsed `NormalizedManifest` — NormalizedManifest carries derived fields (`dependencies`, `executionOrder`, declared/inferred requires, step refs) that the user does not edit. `graphModel` is whatever the server last produced for the current `(draftSource, surface)` combination; the client never recomputes it locally because the registry stays server-side. Validation happens via `POST /api/documents/:docId/preview` (read-only validation) and, in Slice 2, `PUT /api/documents/:docId` (validate + write to disk). In Slice 1 `draftSource` is effectively immutable; in Slice 2 it becomes the edit target and each edit triggers a debounced preview.
 
 The old `apps/studio` Hono inspector deletes in sub-unit 1.4 (`src/app.tsx`, `src/index.tsx`, `src/pages/`, `src/app.test.ts`, `src/paths.ts`). The path-resolution logic lives at `apps/studio/src/server/paths.ts` with its own unit tests; the original twelve route tests delete with the routes.
 
@@ -259,9 +280,9 @@ Drag-to-connect (ref insertion) stays in Slice 3. Slice 2's new blocks land orph
 
 `PUT /api/documents/:docId` lands here.
 
-### Slice 3: drag-to-connect + delete-edge
+### Slice 3: editable templates + edge create/delete
 
-Insert-reference flow per the drag-to-connect spec above. Multi-site removal on delete. Every connection or deletion is reified as a candidate manifest, parsed through `parseManifest`, and only accepted if the parser accepts.
+Per the "Edges and references" micro-spec above. 3.0 makes the call `prompt` and format `format` templates editable in the inspector (same edit loop). 3.1 is drag-to-connect: append the reference token to the target template, then validate the candidate through `parseManifest`. 3.2 is delete-edge: remove the matching token(s), then validate. Every connection or deletion is reified as a candidate draft and accepted only if `parseManifest` accepts; `isValidConnection` is advisory UI feedback, not the authority.
 
 ### Slice 4: install / list / uninstall from the UI
 
