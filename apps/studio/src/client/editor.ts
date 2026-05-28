@@ -73,6 +73,20 @@ export function updateParticipantField(
 	return { ...draft, participants: { ...participants, [participantId]: nextParticipant } };
 }
 
+// Immutably set a top-level step field on a file-shape draft: `prompt` for
+// call steps, `format` for format steps. Returns a new draft; does not mutate
+// the input. Pure so it is unit-tested independently of the hook.
+export function updateStepField(
+	draft: Record<string, unknown>,
+	stepId: string,
+	field: "prompt" | "format",
+	value: string,
+): Record<string, unknown> {
+	const steps = (draft.steps ?? {}) as Record<string, Record<string, unknown>>;
+	const current = steps[stepId] ?? {};
+	return { ...draft, steps: { ...steps, [stepId]: { ...current, [field]: value } } };
+}
+
 export interface SaveGate {
 	dirty: boolean;
 	previewPending: boolean;

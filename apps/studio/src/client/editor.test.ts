@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { buildGraphModel, parseManifest, parseRegistry } from "@chit/core";
-import { canonicalize, canSave, deepEqual, isDirty, updateParticipantField } from "./editor.ts";
+import {
+	canonicalize,
+	canSave,
+	deepEqual,
+	isDirty,
+	updateParticipantField,
+	updateStepField,
+} from "./editor.ts";
 
 const REGISTRY = parseRegistry(undefined);
 
@@ -124,6 +131,37 @@ describe("updateParticipantField", () => {
 		const d = draft();
 		const before = JSON.stringify(d);
 		updateParticipantField(d, "codex", "role", "changed");
+		expect(JSON.stringify(d)).toBe(before);
+	});
+});
+
+describe("updateStepField", () => {
+	const draft = () => ({
+		schema: 1,
+		steps: {
+			ask_codex: { call: "codex", prompt: "old prompt" },
+			out: { format: "## codex\n{{ steps.ask_codex.output }}" },
+		},
+	});
+
+	test("sets a call step's prompt without touching other steps", () => {
+		const next = updateStepField(draft(), "ask_codex", "prompt", "new prompt");
+		const steps = next.steps as Record<string, Record<string, unknown>>;
+		expect(steps.ask_codex?.prompt).toBe("new prompt");
+		expect(steps.ask_codex?.call).toBe("codex");
+		expect(steps.out).toEqual({ format: "## codex\n{{ steps.ask_codex.output }}" });
+	});
+
+	test("sets a format step's format", () => {
+		const next = updateStepField(draft(), "out", "format", "## only codex");
+		const steps = next.steps as Record<string, Record<string, unknown>>;
+		expect(steps.out?.format).toBe("## only codex");
+	});
+
+	test("does not mutate the input draft", () => {
+		const d = draft();
+		const before = JSON.stringify(d);
+		updateStepField(d, "ask_codex", "prompt", "changed");
 		expect(JSON.stringify(d)).toBe(before);
 	});
 });

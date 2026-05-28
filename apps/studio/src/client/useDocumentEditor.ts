@@ -6,7 +6,12 @@
 import type { GraphModel, SurfaceKind } from "@chit/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { previewDocument, StudioApiError, saveDocument } from "./api.ts";
-import { canSave as canSaveGate, isDirty, updateParticipantField } from "./editor.ts";
+import {
+	canSave as canSaveGate,
+	isDirty,
+	updateParticipantField,
+	updateStepField,
+} from "./editor.ts";
 import type { OpenClientState } from "./state.ts";
 
 const PREVIEW_DEBOUNCE_MS = 400;
@@ -28,6 +33,7 @@ export interface DocumentEditor {
 		field: "role" | "session" | "filesystem",
 		value: string,
 	) => void;
+	setStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
 	changeSurface: (next: SurfaceKind) => Promise<void>;
 	save: () => Promise<{ ok: boolean }>;
 }
@@ -145,6 +151,13 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		[applyDraft, draftSource],
 	);
 
+	const setStepField = useCallback(
+		(stepId: string, field: "prompt" | "format", value: string) => {
+			applyDraft(updateStepField(draftSource, stepId, field, value));
+		},
+		[applyDraft, draftSource],
+	);
+
 	const changeSurface = useCallback(
 		async (next: SurfaceKind) => {
 			if (next === surface) return;
@@ -207,6 +220,7 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		canSave,
 		setDescription,
 		setParticipantField,
+		setStepField,
 		changeSurface,
 		save,
 	};

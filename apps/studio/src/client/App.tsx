@@ -26,7 +26,7 @@ import { type DiffRow, lineDiff } from "./diff.ts";
 import { canonicalize } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
-import type { CallData } from "./nodes.tsx";
+import type { CallData, FormatData } from "./nodes.tsx";
 import { nodeTypes } from "./nodes.tsx";
 import type {
 	ClientState,
@@ -108,18 +108,27 @@ const FILESYSTEMS = ["read_only", "write"];
 
 // Editable inspector for a selected call node. Values are read from
 // draftSource (the in-progress edit), NOT from the node's graphModel data,
-// which lags by the debounce. Edits funnel through setParticipantField, the
-// same lifecycle as the description edit.
+// which lags by the debounce. Edits funnel through setStepField /
+// setParticipantField, the same lifecycle as the description edit. `prompt`
+// is a step field; role/session/filesystem are participant fields.
 function CallInspector({
 	data,
 	draftSource,
-	onField,
+	onParticipantField,
+	onStepField,
 }: {
 	data: CallData;
 	draftSource: Record<string, unknown>;
-	onField: (participantId: string, field: "role" | "session" | "filesystem", value: string) => void;
+	onParticipantField: (
+		participantId: string,
+		field: "role" | "session" | "filesystem",
+		value: string,
+	) => void;
+	onStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
 }) {
 	const pid = data.participantId;
+	const steps = (draftSource.steps ?? {}) as Record<string, Record<string, unknown>>;
+	const prompt = String(steps[data.id]?.prompt ?? "");
 	const participants = (draftSource.participants ?? {}) as Record<string, Record<string, unknown>>;
 	const p = participants[pid] ?? {};
 	const role = String(p.role ?? "");
@@ -144,6 +153,19 @@ function CallInspector({
 				<div className="field-value">{agent}</div>
 			</div>
 			<div className="field">
+				<label className="field-label" htmlFor="call-prompt">
+					prompt
+				</label>
+				<textarea
+					id="call-prompt"
+					className="inspector-input"
+					value={prompt}
+					rows={5}
+					spellCheck={false}
+					onChange={(e) => onStepField(data.id, "prompt", e.currentTarget.value)}
+				/>
+			</div>
+			<div className="field">
 				<label className="field-label" htmlFor="call-role">
 					role
 				</label>
@@ -153,7 +175,7 @@ function CallInspector({
 					value={role}
 					rows={3}
 					spellCheck={false}
-					onChange={(e) => onField(pid, "role", e.currentTarget.value)}
+					onChange={(e) => onParticipantField(pid, "role", e.currentTarget.value)}
 				/>
 			</div>
 			<div className="field">
@@ -164,7 +186,7 @@ function CallInspector({
 					id="call-session"
 					className="inspector-select"
 					value={session}
-					onChange={(e) => onField(pid, "session", e.currentTarget.value)}
+					onChange={(e) => onParticipantField(pid, "session", e.currentTarget.value)}
 				>
 					{SESSIONS.map((s) => (
 						<option key={s} value={s}>
@@ -181,7 +203,7 @@ function CallInspector({
 					id="call-filesystem"
 					className="inspector-select"
 					value={filesystem}
-					onChange={(e) => onField(pid, "filesystem", e.currentTarget.value)}
+					onChange={(e) => onParticipantField(pid, "filesystem", e.currentTarget.value)}
 				>
 					{FILESYSTEMS.map((f) => (
 						<option key={f} value={f}>
@@ -194,10 +216,53 @@ function CallInspector({
 	);
 }
 
+// Editable inspector for a selected format node: the `format` template, plus
+// read-only step id / output marker / ref count. Output designation (the
+// manifest `output` field) is a later concern; 3.0 edits the template text.
+function FormatInspector({
+	data,
+	draftSource,
+	onStepField,
+}: {
+	data: FormatData;
+	draftSource: Record<string, unknown>;
+	onStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
+}) {
+	const steps = (draftSource.steps ?? {}) as Record<string, Record<string, unknown>>;
+	const format = String(steps[data.id]?.format ?? "");
+	return (
+		<section className="inspector">
+			<h2>Inspector · format</h2>
+			<div className="field">
+				<div className="field-label">step</div>
+				<div className="field-value">{data.id}</div>
+			</div>
+			<div className="field">
+				<div className="field-label">output (read-only)</div>
+				<div className="field-value">{data.isOutput ? "yes" : "no"}</div>
+			</div>
+			<div className="field">
+				<label className="field-label" htmlFor="format-template">
+					format
+				</label>
+				<textarea
+					id="format-template"
+					className="inspector-input"
+					value={format}
+					rows={6}
+					spellCheck={false}
+					onChange={(e) => onStepField(data.id, "format", e.currentTarget.value)}
+				/>
+			</div>
+		</section>
+	);
+}
+
 function Inspector({
 	selected,
 	draftSource,
 	onParticipantField,
+	onStepField,
 }: {
 	selected: Node | null;
 	draftSource: Record<string, unknown>;
@@ -206,6 +271,7 @@ function Inspector({
 		field: "role" | "session" | "filesystem",
 		value: string,
 	) => void;
+	onStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
 }) {
 	if (!selected) {
 		return (
@@ -220,11 +286,22 @@ function Inspector({
 			<CallInspector
 				data={selected.data as CallData}
 				draftSource={draftSource}
-				onField={onParticipantField}
+				onParticipantField={onParticipantField}
+				onStepField={onStepField}
 			/>
 		);
 	}
-	// input / format: read-only field dump (no editable fields in 2.3).
+	if (selected.type === "format") {
+		return (
+			<FormatInspector
+				data={selected.data as FormatData}
+				draftSource={draftSource}
+				onStepField={onStepField}
+			/>
+		);
+	}
+	// input: read-only field dump (input name/type/required editing is a later
+	// slice).
 	const fields = Object.entries(selected.data as Record<string, unknown>);
 	return (
 		<section className="inspector">
@@ -507,6 +584,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 						selected={selected}
 						draftSource={editor.draftSource}
 						onParticipantField={editor.setParticipantField}
+						onStepField={editor.setStepField}
 					/>
 				</aside>
 			</div>
