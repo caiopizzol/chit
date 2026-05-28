@@ -13,10 +13,13 @@
 
 import type { SurfaceKind, ValidationReport } from "@chit/core";
 import {
+	applyEdgeChanges,
 	Background,
 	BackgroundVariant,
 	type Connection,
 	Controls,
+	type Edge,
+	type EdgeChange,
 	type Node,
 	ReactFlow,
 	useNodesInitialized,
@@ -460,15 +463,24 @@ function isTargetable(type: string | undefined): boolean {
 function OpenMode({ initial }: { initial: OpenClientState }) {
 	const editor = useDocumentEditor(initial);
 	const [diffOpen, setDiffOpen] = useState(false);
-	const [connectError, setConnectError] = useState<string | null>(null);
+	const [edgeError, setEdgeError] = useState<string | null>(null);
 
 	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
+	// Edges are local state (not the adapted array directly) so React Flow can
+	// apply edge selection — selection is the Delete/Backspace target for
+	// delete-edge. Re-seeded from the parsed graph whenever it changes; on a
+	// successful disconnect the graph re-derivation removes the edge here.
+	const [edges, setEdges] = useState<Edge[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 
 	useEffect(() => {
 		layoutNodes(adapted.nodes, adapted.edges, adapted.sizes).then(setNodes);
 	}, [adapted]);
+
+	useEffect(() => {
+		setEdges(adapted.edges as Edge[]);
+	}, [adapted.edges]);
 
 	const onSelectionChange = useCallback(
 		({ nodes: sel }: { nodes: Node[] }) => setSelectedId(sel[0]?.id ?? null),
@@ -517,7 +529,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 			const target = nodes.find((n) => n.id === conn.target);
 			if (!source || !target || !isTargetable(target.type)) return;
 			if (edgeExists(source.id, target.id)) {
-				setConnectError("already connected");
+				setEdgeError("connect: already connected");
 				return;
 			}
 			const token =
@@ -525,9 +537,45 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					? referenceToken("input", (source.data as InputData).name)
 					: referenceToken(source.type as "call" | "format", source.id);
 			const result = editor.connect(target.id, token);
-			setConnectError(result.ok ? null : (result.error ?? "invalid connection"));
+			setEdgeError(result.ok ? null : `connect: ${result.error ?? "invalid connection"}`);
 		},
 		[nodes, edgeExists, editor],
+	);
+
+	// Edge selection changes apply locally so an edge can be selected as the
+	// Delete target. `remove` changes are dropped here: the real removal goes
+	// through onEdgesDelete + editor.disconnect (validated). Not applying the
+	// optimistic remove avoids a flash when a disconnect is rejected.
+	const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+		const keep = changes.filter((c) => c.type !== "remove");
+		if (keep.length > 0) setEdges((es) => applyEdgeChanges(keep, es));
+	}, []);
+
+	// Delete-edge: derive the source ref (input name vs step id) and target
+	// step for every deleted edge, then editor.disconnectMany removes them all
+	// against one candidate draft and validates once. Reducing in one call
+	// avoids the stale-closure bug of calling a single-edge disconnect in a
+	// loop (each would read the same render's draft, keeping only the last).
+	// On success the graph re-derivation drops the edges; on failure they stay
+	// (we never applied the optimistic remove).
+	const onEdgesDelete = useCallback(
+		(deleted: Edge[]) => {
+			const refs = deleted.flatMap((e) => {
+				const source = nodes.find((n) => n.id === e.source);
+				const target = nodes.find((n) => n.id === e.target);
+				if (!source || !target) return [];
+				const refKind: "input" | "call" | "format" =
+					source.type === "input" ? "input" : (source.type as "call" | "format");
+				const refName = source.type === "input" ? (source.data as InputData).name : source.id;
+				return [{ targetStepId: target.id, refKind, refName }];
+			});
+			if (refs.length === 0) return;
+			const result = editor.disconnectMany(refs);
+			if (!result.ok) setEdgeError(`disconnect: ${result.error ?? "failed"}`);
+			else if ((result.removed ?? 0) > 1) setEdgeError(`removed ${result.removed} references`);
+			else setEdgeError(null);
+		},
+		[nodes, editor],
 	);
 
 	const openDiff = useCallback(() => {
@@ -565,8 +613,11 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	// .react-flow__node.selected class is applied. Without this, our
 	// onSelectionChange only updates inspector state; the DOM never gets the
 	// CSS hook for the inverted header + outer outline.
+	// deletable: false so a node selected when Delete is pressed never enters
+	// React Flow's element-delete path — only edges are deletable. selected is
+	// fed back so the .selected CSS hook applies.
 	const reactFlowNodes = useMemo(
-		() => nodes.map((n) => ({ ...n, selected: n.id === selectedId })),
+		() => nodes.map((n) => ({ ...n, selected: n.id === selectedId, deletable: false })),
 		[nodes, selectedId],
 	);
 
@@ -608,16 +659,23 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				<div className="canvas-wrap">
 					<ReactFlow
 						nodes={reactFlowNodes}
-						edges={adapted.edges}
+						edges={edges}
 						nodeTypes={nodeTypes}
 						onSelectionChange={onSelectionChange}
 						onNodeClick={onNodeClick}
 						onConnect={onConnect}
+						onEdgesChange={onEdgesChange}
+						onEdgesDelete={onEdgesDelete}
 						isValidConnection={isValidConnection}
 						proOptions={{ hideAttribution: true }}
 						nodesDraggable={false}
 						nodesConnectable={true}
 						elementsSelectable
+						// Single-element selection only: no shift-multi-select, no
+						// drag-selection box. Keeps the delete path to one edge at a
+						// time (disconnectMany still handles N defensively).
+						multiSelectionKeyCode={null}
+						selectionKeyCode={null}
 						minZoom={0.4}
 						maxZoom={2}
 						// onPaneClick noop keeps selection sticky: clicking blank
@@ -633,7 +691,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				</div>
 				<aside className="right-rail">
 					{editor.conflict && <ConflictBanner onReload={() => window.location.reload()} />}
-					{connectError && <div className="refetch-error">connect: {connectError}</div>}
+					{edgeError && <div className="refetch-error">{edgeError}</div>}
 					{editor.previewError && <div className="refetch-error">{editor.previewError}</div>}
 					<ValidationPanel validation={editor.graphModel.validation} />
 					<ManifestPanel description={description} onDescriptionChange={editor.setDescription} />

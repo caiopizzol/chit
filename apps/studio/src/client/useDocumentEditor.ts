@@ -11,6 +11,7 @@ import {
 	canSave as canSaveGate,
 	insertReference,
 	isDirty,
+	removeReference,
 	updateParticipantField,
 	updateStepField,
 } from "./editor.ts";
@@ -37,6 +38,9 @@ export interface DocumentEditor {
 	) => void;
 	setStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
 	connect: (targetStepId: string, token: string) => { ok: boolean; error?: string };
+	disconnectMany: (
+		refs: Array<{ targetStepId: string; refKind: "input" | "call" | "format"; refName: string }>,
+	) => { ok: boolean; removed?: number; error?: string };
 	changeSurface: (next: SurfaceKind) => Promise<void>;
 	save: () => Promise<{ ok: boolean }>;
 }
@@ -193,6 +197,40 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		[draftSource, applyDraft],
 	);
 
+	// Delete one or more edges in a single event. React Flow's onEdgesDelete
+	// hands back an Edge[]; all removals must reduce against ONE candidate
+	// draft (not each against the same render's draftSource — that would keep
+	// only the last). parseManifest gates once; applyDraft commits once with
+	// an immediate preview. A removal that empties a required template makes
+	// the candidate invalid, so the gate rejects the whole batch and the draft
+	// is unchanged.
+	const disconnectMany = useCallback(
+		(
+			refs: Array<{ targetStepId: string; refKind: "input" | "call" | "format"; refName: string }>,
+		): { ok: boolean; removed?: number; error?: string } => {
+			let candidate = draftSource;
+			let total = 0;
+			try {
+				for (const r of refs) {
+					const res = removeReference(candidate, r.targetStepId, r.refKind, r.refName);
+					candidate = res.draft;
+					total += res.removed;
+				}
+			} catch (e) {
+				return { ok: false, error: (e as Error).message };
+			}
+			if (total === 0) return { ok: false, error: "no matching reference found" };
+			try {
+				parseManifest(candidate);
+			} catch (e) {
+				return { ok: false, error: (e as Error).message };
+			}
+			applyDraft(candidate, { immediate: true });
+			return { ok: true, removed: total };
+		},
+		[draftSource, applyDraft],
+	);
+
 	const changeSurface = useCallback(
 		async (next: SurfaceKind) => {
 			if (next === surface) return;
@@ -257,6 +295,7 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		setParticipantField,
 		setStepField,
 		connect,
+		disconnectMany,
 		changeSurface,
 		save,
 	};

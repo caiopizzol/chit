@@ -8,6 +8,7 @@ import {
 	insertReference,
 	isDirty,
 	referenceToken,
+	removeReference,
 	updateParticipantField,
 	updateStepField,
 } from "./editor.ts";
@@ -234,6 +235,70 @@ describe("insertReference", () => {
 		const d = { schema: 1, steps: { weird: { something: true } } };
 		expect(() => insertReference(d, "weird", "{{ inputs.q }}")).toThrow(
 			/neither a call nor a format/,
+		);
+	});
+});
+
+describe("removeReference", () => {
+	test("removes the canonical token and trims the trailing blank line", () => {
+		const draft = {
+			schema: 1,
+			steps: { out: { format: "## claude\n\n{{ steps.ask_claude.output }}" } },
+		};
+		const { draft: next, removed } = removeReference(draft, "out", "call", "ask_claude");
+		expect(removed).toBe(1);
+		expect((next.steps as Record<string, Record<string, unknown>>).out?.format).toBe("## claude");
+	});
+
+	test("removes whitespace variants (no spaces, extra spaces)", () => {
+		const draft = {
+			schema: 1,
+			steps: { s: { call: "a", prompt: "{{steps.x.output}}\n{{  steps.x.output  }}" } },
+		};
+		const { removed } = removeReference(draft, "s", "call", "x");
+		expect(removed).toBe(2);
+	});
+
+	test("removes an input ref", () => {
+		const draft = { schema: 1, steps: { s: { call: "a", prompt: "Q: {{ inputs.question }}" } } };
+		const { draft: next, removed } = removeReference(draft, "s", "input", "question");
+		expect(removed).toBe(1);
+		expect((next.steps as Record<string, Record<string, unknown>>).s?.prompt).toBe("Q:");
+	});
+
+	test("no match returns the draft unchanged with removed 0", () => {
+		const draft = { schema: 1, steps: { s: { call: "a", prompt: "no refs here" } } };
+		const result = removeReference(draft, "s", "call", "x");
+		expect(result.removed).toBe(0);
+		expect(result.draft).toBe(draft);
+	});
+
+	test("similar-but-distinct step names are not matched (ask_codex vs ask_codex2)", () => {
+		const draft = {
+			schema: 1,
+			steps: { s: { call: "a", prompt: "{{ steps.ask_codex2.output }}" } },
+		};
+		const { removed } = removeReference(draft, "s", "call", "ask_codex");
+		expect(removed).toBe(0);
+	});
+
+	test("collapses to empty when the ref was the whole template (caller's gate rejects)", () => {
+		const draft = { schema: 1, steps: { out: { format: "{{ steps.x.output }}" } } };
+		const { draft: next, removed } = removeReference(draft, "out", "call", "x");
+		expect(removed).toBe(1);
+		expect((next.steps as Record<string, Record<string, unknown>>).out?.format).toBe("");
+	});
+
+	test("does not mutate the input draft", () => {
+		const draft = { schema: 1, steps: { s: { call: "a", prompt: "{{ inputs.q }}" } } };
+		const before = JSON.stringify(draft);
+		removeReference(draft, "s", "input", "q");
+		expect(JSON.stringify(draft)).toBe(before);
+	});
+
+	test("throws on an unknown step", () => {
+		expect(() => removeReference({ schema: 1, steps: {} }, "nope", "input", "q")).toThrow(
+			/unknown step/,
 		);
 	});
 });

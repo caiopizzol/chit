@@ -129,6 +129,55 @@ export function insertReference(
 	return updateStepField(draft, targetStepId, field, appendReference(current, token));
 }
 
+function escapeRegExp(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// A regex matching every whitespace variant of a source reference token:
+// `{{ inputs.X }}`, `{{inputs.X}}`, `{{  steps.X.output  }}`, etc. The name is
+// regex-escaped. Mirrors the flexibility the parser allows, so deletion
+// removes hand-written variants, not only the canonical token referenceToken
+// produces.
+function referencePattern(kind: "input" | "call" | "format", name: string): RegExp {
+	const n = escapeRegExp(name);
+	const inner = kind === "input" ? `inputs\\.${n}` : `steps\\.${n}\\.output`;
+	return new RegExp(`\\{\\{\\s*${inner}\\s*\\}\\}`, "g");
+}
+
+// Remove every occurrence of a source reference from the target step's
+// template, then conservatively collapse the blank lines the removal leaves
+// (3+ newlines -> 2) and trim the edges. Returns the new draft and how many
+// occurrences were removed (0 means the draft is returned unchanged). Pure /
+// immutable. Throws on unknown / neither-call-nor-format steps. If removing
+// the reference empties a required template, the result is an invalid
+// manifest; the caller's parseManifest gate rejects it and leaves the draft
+// in place.
+export function removeReference(
+	draft: Record<string, unknown>,
+	targetStepId: string,
+	refKind: "input" | "call" | "format",
+	refName: string,
+): { draft: Record<string, unknown>; removed: number } {
+	const steps = (draft.steps ?? {}) as Record<string, Record<string, unknown>>;
+	const step = steps[targetStepId];
+	if (!step) throw new Error(`removeReference: unknown step "${targetStepId}"`);
+	let field: "prompt" | "format";
+	if ("call" in step) field = "prompt";
+	else if ("format" in step) field = "format";
+	else
+		throw new Error(`removeReference: step "${targetStepId}" is neither a call nor a format step`);
+	const current = String(step[field] ?? "");
+	const pattern = referencePattern(refKind, refName);
+	const matches = current.match(pattern);
+	const removed = matches ? matches.length : 0;
+	if (removed === 0) return { draft, removed: 0 };
+	const next = current
+		.replace(pattern, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+	return { draft: updateStepField(draft, targetStepId, field, next), removed };
+}
+
 export interface SaveGate {
 	dirty: boolean;
 	previewPending: boolean;
