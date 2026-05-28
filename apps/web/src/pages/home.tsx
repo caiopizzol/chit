@@ -58,10 +58,10 @@ export function Home() {
 						<p>Chat is one agent at a time with you in the middle. A chit takes the middle out.</p>
 					</div>
 
-					<h2>The chit is the law.</h2>
+					<h2>The chit is the routine.</h2>
 					<p class="lede">
 						A chit declares who runs, what context flows, what permissions apply, and where the work
-						goes next. The runtime honors the chit. The receipt at the end proves what happened.
+						goes next. The runtime reads the chit. The output shows what ran.
 					</p>
 					<pre>
 						<span class="key">{"{"}</span>
@@ -98,11 +98,8 @@ export function Home() {
 						{"}"}
 					</pre>
 
-					<h2>Receipts, not transcripts.</h2>
-					<p class="lede">
-						The CLI says what ran. No chat log. A structured receipt you can diff against last
-						week's.
-					</p>
+					<h2>The run says what ran.</h2>
+					<p class="lede">The CLI says what ran. No chat log.</p>
 					<pre class="terminal">
 						<span class="cmd">$ chit run examples/consult.json --scope work-session</span>
 						{"\n"}
@@ -122,7 +119,6 @@ export function Home() {
 						}
 						<span class="pass-line">run passes</span>
 						{"\n"}
-						<span class="meta">receipt: ~/.local/state/chit/runs/...</span>
 					</pre>
 
 					<h2>Read the chit before it fires.</h2>
@@ -257,7 +253,7 @@ export function Home() {
 						</svg>
 					</div>
 
-					<h2>Every chit, accounted for.</h2>
+					<h2>Every chit, checked.</h2>
 					<p class="lede">
 						Permissions are typed. Capabilities are checked. The chit cannot lie about what it
 						enforces.

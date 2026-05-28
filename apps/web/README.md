@@ -24,19 +24,11 @@ Then from this directory:
 bun run deploy
 ```
 
-The Worker deploys to `chit-web.<your-account>.workers.dev` until a custom domain is added.
+The Worker deploys to `chit.run` (the live custom domain) and to `chit-web.<your-account>.workers.dev` (kept alive as a no-DNS fallback for testing).
 
-## Adding a custom domain
+## Custom domain
 
-When the brand domain is secured (planned: `chitgraph.com`):
-
-1. Add the domain as a Cloudflare zone.
-2. Edit `wrangler.toml`:
-   - Set `workers_dev = false` (or delete the line if you want both).
-   - Uncomment the `[[routes]]` blocks at the bottom and replace the pattern.
-3. `bun run deploy`.
-
-The `custom_domain = true` flag handles DNS for you (no `_workers` CNAME needed).
+`chit.run` is wired in `wrangler.toml` under `[[routes]]` with `custom_domain = true`, which handles DNS via Cloudflare automatically (no `_workers` CNAME needed). The domain must be added as a Cloudflare zone before the first deploy.
 
 ## What's deployed
 
