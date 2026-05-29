@@ -216,6 +216,8 @@ GET  /client/:asset                          token-less; serves index.js / index
 GET  /api/documents/:docId                   token required; ?surface=<kind>; returns DocumentDetail (incl. hash)
 POST /api/documents/:docId/preview           token required; body PreviewRequest; returns PreviewResponse (no disk write)
 PUT  /api/documents/:docId                   token required; body SaveRequest; 200 SaveResponse, 409 ConflictResponse, 404 if unknown/missing, 400 on bad surface or baseHash
+GET  /api/loops                              token required; LoopSummary[] read from .chit/loops under cwd, newest-first (read-only)
+GET  /api/loops/:loopId                      token required; LoopRecord[] for one loop; 404 unknown, 400 unsafe id, 422 invalid log
 GET  /api/installed                          token required; lifecycle.list() -> InstalledSummary[] (501 if no lifecycle)
 POST /api/install                            token required; { docId, surface, baseHash, force?, overrideName? }; 200 InstallSummary, 409 ConflictResponse on baseHash drift, 404 unknown docId, 400 bad body, 422 install failure, 501 if no lifecycle
 DELETE /api/installed/:name                  token required; lifecycle.uninstall(name); 200 UninstallSummary, 422 failure, 501 if no lifecycle

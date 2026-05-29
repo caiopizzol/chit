@@ -76,6 +76,20 @@ chit · 2 iterations · 3m 12s
    iteration.
 3. **Studio render**: a Loops drawer reading the log, the compact rail above.
 
+## Server contract (Studio read path)
+
+Studio serves the log read-only over two token-gated routes (`apps/studio/src/server/loops.ts`):
+
+- `GET /api/loops` -> `LoopSummary[]` (`loopId`, `scope`, `task`, `status` =
+  the stop status or `in-progress`, `iterations`, `totalElapsedMs | null`,
+  `startedAt`), newest-started first. Files that fail to parse/validate, have an
+  unsafe basename, or whose header `loopId` disagrees with the filename are
+  skipped (never surfaced).
+- `GET /api/loops/:loopId` -> `LoopRecord[]` for one loop. `404` unknown, `400`
+  unsafe id, `422` invalid log. The browser only ever sends the safe-slug
+  `loopId`; the server resolves the path under cwd. The client never infers a
+  filesystem path or parses JSONL itself.
+
 ## Out of scope (v0)
 
 - Search/history across loops (the dense table is a later view).

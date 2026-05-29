@@ -52,6 +52,7 @@ function setup(opts: { clientDistDir?: string; lifecycle?: StudioLifecycle } = {
 	const token = generateToken();
 	const app = buildApp({
 		token,
+		cwd,
 		makeBootstrap,
 		store,
 		allowedHosts: ALLOWED,
@@ -862,6 +863,7 @@ describe("SSR shell payload escaping", () => {
 			const token = generateToken();
 			const app = buildApp({
 				token,
+				cwd,
 				makeBootstrap,
 				store,
 				allowedHosts: ALLOWED,

@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
 import { discover } from "./discovery.ts";
 import { buildBootstrap, DocStore } from "./docs.ts";
+import { listLoops, readLoop } from "./loops.ts";
 import { renderShell } from "./shell.ts";
 import { generateToken } from "./token.ts";
 import type { StudioLifecycle } from "./types.ts";
@@ -91,6 +92,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 	const clientDistDir = opts.clientDistDir ?? CLIENT_DIST;
 	const app = buildApp({
 		token,
+		cwd: opts.cwd,
 		makeBootstrap,
 		store,
 		allowedHosts,
@@ -125,6 +127,8 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 
 interface BuildAppOptions {
 	token: string;
+	// Invocation cwd, used to locate .chit/loops for the read-only loop routes.
+	cwd: string;
 	makeBootstrap: () => import("./types.ts").Bootstrap;
 	store: DocStore;
 	allowedHosts: Set<string>;
@@ -238,6 +242,23 @@ export function buildApp(opts: BuildAppOptions) {
 		const result = opts.store.preview(docId, draft, surface);
 		if (!result) return c.text("not found", 404);
 		return c.json(result);
+	});
+
+	// Read-only convergence-log routes (docs/loop-view-v0.md). The browser sees
+	// only the safe-slug loopId; .chit/loops lives under the invocation cwd.
+
+	app.get("/api/loops", (c) => {
+		return c.json(listLoops(opts.cwd));
+	});
+
+	app.get("/api/loops/:loopId", (c) => {
+		const result = readLoop(opts.cwd, c.req.param("loopId"));
+		if (result.kind === "not-found") return c.text("not found", 404);
+		if (result.kind === "invalid-id") return new Response("invalid loop id", { status: 400 });
+		if (result.kind === "invalid-log") {
+			return new Response(`invalid loop log: ${result.message}`, { status: 422 });
+		}
+		return c.json(result.records);
 	});
 
 	// Lifecycle endpoints. Absent lifecycle (read-only Studio) -> 501. The
