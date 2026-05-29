@@ -86,6 +86,7 @@ Small cleanups worth doing before the next major slice (Studio).
   The surfacing layer alone is not enough; the detection piece in the store is the real work.
 - **Capability name validation in `requires`.** Today an author can typo `can_show_markdonw` and validation passes until install. Add a known-capability set check at parse time.
 - **CLI install command emits warnings about residual unenforced permissions.** Currently `installClaudeSkill` returns `enforcementGaps`; the CLI prints a count. Surface them as structured `InvocationWarning`s instead, sharing the runtime side-channel.
+- **MCP `chit_run_step` registers the cancel controller before the duplicate-step check.** `server.ts` does `controllers.set(key, controller)` before `await runStep(...)`, but `runStep` only rejects a duplicate once it sees `status === "running"`. A second concurrent `chit_run_step` on the same run+step overwrites the registry entry, then its rejection path's `finally controllers.delete(key)` removes it, leaving the genuinely in-flight step with no registered controller, so `chit_cancel` reports `not_running` and can't abort it. The engine running-lock still prevents a double-spawn, so the run itself stays correct; only cancel is weakened, and only under concurrent same-step calls. Fix by registering the controller atomically with the pending->running transition inside `runStep` (engine-owned), not in the server before the lock.
 
 ## UI / inspector enhancements (within `chit show`)
 
