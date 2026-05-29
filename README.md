@@ -4,46 +4,65 @@ A thin runtime for multi-agent workflows. Stop being the glue between your agent
 
 ## What this is
 
-A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, where a validator checks, where you check. The runtime reads the chit and runs it inside your Claude Code or CLI session. You stop being the copy-paste layer between two terminals.
+A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, where a reviewer checks, where you check. The runtime reads the chit and runs it inside your Claude Code, MCP, or CLI session. You stop being the copy-paste layer between two terminals.
 
-The manifest is the artifact. A shared runtime executes it. Surfaces (Claude Code skill, MCP tool, CLI command) are thin shims that call the runtime with a manifest id and inputs.
+The manifest is the artifact. A shared runtime executes it. Surfaces (Claude Code skill, MCP tools, CLI command) are thin shims that call the runtime with a manifest and inputs.
 
 ## What this isn't
 
 - Not a workflow engine. No schedulers, triggers, cron, databases, SaaS connectors.
 - Not a code generator. Manifests are interpreted, not compiled.
-- Not an agent framework. We do not define how agents reason.
+- Not an agent framework. We do not define how agents reason; we define how they hand work to each other.
 - Not a chat tool. The word is *chit*, not *chat*.
-- Not a dynamic router. v1 ships static DAGs only. Agent-decided handoffs come later if real recipes demand them.
+- Not a dynamic router. Manifests are static DAGs: no loops, no conditionals. Iteration, when you want it, is driven by an orchestrator on top, never by the manifest.
 
 ## Layers
 
-1. **Agents.** Registry of invocable participants (Codex CLI, Claude CLI, MCP servers, others via adapters).
+1. **Agents.** Registry of invocable participants (Codex CLI, Claude CLI, others via adapters).
 2. **Chits.** JSON manifests wiring agents into handoff graphs for a task.
-3. **Surfaces.** Adapters that expose a chit as a Claude Code skill, MCP tool, or CLI command.
+3. **Surfaces.** Adapters that expose a chit as a Claude Code skill, MCP tools, or a CLI command.
+
+## Surfaces
+
+- **CLI.** `chit run | show | install | list | uninstall | studio | loop-log`.
+- **Claude Code skill.** Install a chit as a slash-invocable skill.
+- **MCP (stepwise).** `chit_start`, then `chit_run_step` per step with a live heartbeat, so each handoff is a separate visible tool call you can watch and cancel. See `docs/mcp-v0.md`.
+- **Studio.** A local web editor for chits (graph view + inspector) plus a read-only Loops drawer that renders convergence-log runs. `chit studio [path]`. Early.
+
+## The implement/check loop
+
+chit runs the recurring routine of "one agent implements, another reviews, repeat until it converges or needs you." Two modes:
+
+- **Supervised.** Your Claude Code chat implements; a chit `per_scope` Codex advisor reviews each round (`apps/cli/examples/implementation-check-thread.json`, which has the reviewer inspect the git diff directly). The chat owns the loop and the human checkpoint. Pattern: `docs/supervised-convergence.md`.
+- **Autonomous.** chit runs both agents: a write-capable Claude implements, a read-only Codex reviews (`apps/cli/examples/converge.json`), driven one iteration per `chit_start` from the MCP. You sequence and checkpoint; run it against a git worktree. Manifests cannot loop, so the iteration lives in the orchestrator, not the chit.
+
+A run can record a convergence log (`chit loop-log`, written to `.chit/loops/<id>.jsonl`) that Studio's Loops drawer renders.
 
 ## Repository layout
 
-This is a Bun workspace monorepo.
+Bun workspace monorepo.
 
 ```
 .
 ├── apps/
-│   ├── cli/        chit CLI: run, install, show, list, uninstall
+│   ├── cli/        chit CLI + the MCP stepwise surface
+│   ├── studio/     local web editor (graph + inspector + Loops drawer)
 │   └── web/        landing site: Hono on Cloudflare Workers + Assets
 └── packages/
-    └── core/       browser-safe core: manifest parser, agents registry, graph model,
-                    install marker, show renderer. Imported by apps/cli and apps/web.
+    └── core/       browser-safe core: manifest parser, agents registry, graph
+                    model, convergence-log model, install marker, show renderer.
 ```
 
 ## Status
 
-Pre-v0. Shipped today: runtime, CLI, Claude Code skill surface, inspector (ASCII / JSON / Mermaid / HTML), install marker, safe lifecycle, browser-safe core boundary. Not shipped: audit log, Studio web UI, MCP surface, declared human-checkpoint steps.
+Early, and honest about it. Shipped: the runtime; the CLI (`run` / `install` / `show` / `list` / `uninstall` / `studio` / `loop-log`); the Claude Code skill surface; the MCP stepwise surface; the inspector (ASCII / JSON / Mermaid / HTML); Studio (graph editor + read-only Loops view); the convergence log; supervised and autonomous implement/check loops; the install marker and safe lifecycle; the browser-safe core boundary. Not shipped: a full audit log / trace replay; declared human-checkpoint or loop steps inside manifests (static DAGs, by design); recording which manifest a loop ran.
 
-See `brand.md` for positioning and voice. See `apps/cli/examples/` for the canonical manifests:
+Canonical manifests in `apps/cli/examples/`:
 
-- `investigate-bug.json`: sequential with verification.
-- `consult.json`: parallel fan-out (the consult-two-models pattern).
+- `investigate-bug.json`: sequential, with verification.
+- `consult.json`: parallel fan-out (consult two models).
+- `implementation-check-thread.json`: the per_scope Codex checker for supervised convergence.
+- `converge.json`: the autonomous loop (Claude implements with write access, Codex reviews read-only).
 
 ## Develop
 
@@ -55,7 +74,6 @@ bun run check                     # biome (lint + format)
 bun run check:browser             # @chit/core node-leakage check
 bun run cli ...                   # chit-cli from root
 bun run web:dev                   # apps/web local server (wrangler dev)
-bun run web:deploy                # apps/web to Cloudflare Workers
 ```
 
 ## License
