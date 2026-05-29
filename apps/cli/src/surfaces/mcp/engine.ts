@@ -32,7 +32,7 @@ export interface StepRecord {
 	participantId?: string;
 	agentId?: string;
 	session?: string;
-	status: "pending" | "done" | "failed";
+	status: "pending" | "running" | "done" | "failed";
 	durationMs?: number;
 	output?: string;
 	error?: string;
@@ -148,7 +148,13 @@ export function finalOutput(run: Run): string | undefined {
 export async function runStep(run: Run, stepId: string, heartbeat: Heartbeat): Promise<StepRecord> {
 	const rec = run.records[stepId];
 	if (!rec) throw new RuntimeError(`unknown step "${stepId}"`);
+	// Only pending steps may run. running = in flight (reject duplicates);
+	// done/failed = terminal. This is the lock that makes "chit governs legal
+	// order" mean a legal step also runs exactly once.
+	if (rec.status === "running") throw new RuntimeError(`step "${stepId}" is already running`);
 	if (rec.status === "done") throw new RuntimeError(`step "${stepId}" already ran`);
+	if (rec.status === "failed")
+		throw new RuntimeError(`step "${stepId}" previously failed (terminal)`);
 
 	const deps = run.manifest.dependencies[stepId] ?? [];
 	const undone = deps.filter((d) => run.records[d]?.status !== "done");
@@ -159,6 +165,10 @@ export async function runStep(run: Run, stepId: string, heartbeat: Heartbeat): P
 
 	const step = run.manifest.steps[stepId];
 	if (!step) throw new RuntimeError(`internal: step "${stepId}" missing`);
+	// Mark running synchronously, BEFORE the first await, so a concurrent
+	// runStep on the same step sees "running" and is rejected. This closes the
+	// double-spawn hole: the record stayed "pending" through the whole call.
+	rec.status = "running";
 	const startedAt = Date.now();
 	try {
 		let output: string;
