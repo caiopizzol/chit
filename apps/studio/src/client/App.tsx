@@ -11,7 +11,7 @@
 // selection is sticky, the cursor is pointer, and selected nodes get an
 // inverted header strip plus an outer ink outline.
 
-import type { SurfaceKind, ValidationReport } from "@chit/core";
+import type { LoopRecord, SurfaceKind, ValidationReport } from "@chit/core";
 import {
 	applyEdgeChanges,
 	Background,
@@ -40,6 +40,7 @@ import type {
 } from "./state.ts";
 import { useDocumentEditor } from "./useDocumentEditor.ts";
 import { useInstalled } from "./useInstalled.ts";
+import { type LoopsState, useLoops } from "./useLoops.ts";
 
 const SURFACES: SurfaceKind[] = ["claude-skill", "cli"];
 
@@ -604,6 +605,129 @@ function InstalledDrawer({
 	);
 }
 
+function fmtElapsed(ms: number | null): string {
+	if (ms === null) return "—";
+	const s = Math.round(ms / 1000);
+	if (s < 60) return `${s}s`;
+	return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+// The compact iteration rail for one loop, rendered from its records. The
+// server already validated structure/consistency; this only reads.
+function LoopRail({ records }: { records: LoopRecord[] }) {
+	const header = records.find((r) => r.type === "loop");
+	const stop = records.find((r) => r.type === "stop");
+	const iterations = records.filter((r) => r.type === "iteration");
+	const status = stop?.type === "stop" ? stop.status : "in-progress";
+	return (
+		<div className="loop-rail">
+			{header?.type === "loop" && (
+				<div className="rail-head">
+					<div className="rail-head-top">
+						<span className={`loop-status loop-status--${status}`}>{status}</span>
+						<span className="rail-meta">
+							{iterations.length} iterations ·{" "}
+							{fmtElapsed(stop?.type === "stop" ? stop.totalElapsedMs : null)}
+						</span>
+					</div>
+					<p className="rail-scope">{header.scope}</p>
+					<p className="rail-task">{header.task}</p>
+				</div>
+			)}
+			<ol className="rail-iters">
+				{iterations.map(
+					(it) =>
+						it.type === "iteration" && (
+							<li key={it.n} className="rail-iter">
+								<div className="rail-line">
+									<span className="rail-n">{it.n}</span> {it.implementSummary}
+								</div>
+								<div className="rail-sub">
+									{it.changedFiles.length} files
+									{it.changedFiles.length > 0 ? `: ${it.changedFiles.join(", ")}` : ""}
+								</div>
+								<div className="rail-sub">checks: {it.checksRun}</div>
+								<div className="rail-sub">
+									check <span className={`verdict verdict--${it.verdict}`}>{it.verdict}</span> ·{" "}
+									{Math.round(it.checkDurationMs / 1000)}s · {it.findingCount} findings
+								</div>
+								<div className="rail-sub">decide {it.decision}</div>
+							</li>
+						),
+				)}
+			</ol>
+			{stop?.type === "stop" && (
+				<div className="rail-stop">
+					✓ stopped: {stop.status} ({stop.reason})
+				</div>
+			)}
+		</div>
+	);
+}
+
+function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => void }) {
+	const { list, detail, select, clearSelection } = loops;
+	const inDetail = detail.status !== "idle";
+	useEffect(() => {
+		function onKey(e: KeyboardEvent) {
+			if (e.key !== "Escape") return;
+			// Escape backs out of a selected loop first, then closes the drawer.
+			if (inDetail) clearSelection();
+			else onClose();
+		}
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose, clearSelection, inDetail]);
+
+	function body() {
+		if (detail.status === "loading") return <div className="empty">Loading…</div>;
+		if (detail.status === "error") return <div className="refetch-error">{detail.error}</div>;
+		if (detail.status === "ready") return <LoopRail records={detail.records} />;
+		// detail idle -> the loop list
+		if (list.status === "loading") return <div className="empty">Loading…</div>;
+		if (list.status === "error") return <div className="refetch-error">{list.error}</div>;
+		if (list.loops.length === 0) {
+			return <div className="empty">No loops recorded in this directory.</div>;
+		}
+		return (
+			<ul className="loop-list">
+				{list.loops.map((l) => (
+					<li key={l.loopId}>
+						<button type="button" className="loop-item" onClick={() => void select(l.loopId)}>
+							<span className="loop-task">{l.task}</span>
+							<span className="loop-meta">
+								<span className={`loop-status loop-status--${l.status}`}>{l.status}</span>{" "}
+								{l.iterations} iters · {fmtElapsed(l.totalElapsedMs)}
+							</span>
+						</button>
+					</li>
+				))}
+			</ul>
+		);
+	}
+
+	return (
+		<div className="drawer-overlay">
+			<button type="button" className="drawer-backdrop" aria-label="Close" onClick={onClose} />
+			<aside className="drawer" role="dialog" aria-modal="true" aria-label="Loops">
+				<header className="drawer-head">
+					{inDetail ? (
+						<button type="button" className="drawer-back" onClick={clearSelection}>
+							← Loops
+						</button>
+					) : (
+						<h2>Loops</h2>
+					)}
+					<button type="button" className="drawer-close" aria-label="Close" onClick={onClose}>
+						×
+					</button>
+				</header>
+				{body()}
+			</aside>
+		</div>
+	);
+}
+
 function ConflictBanner({ onReload }: { onReload: () => void }) {
 	return (
 		<div className="conflict-banner">
@@ -626,10 +750,12 @@ function isTargetable(type: string | undefined): boolean {
 function OpenMode({ initial }: { initial: OpenClientState }) {
 	const editor = useDocumentEditor(initial);
 	const installed = useInstalled(initial.docId);
+	const loops = useLoops();
 	const [diffOpen, setDiffOpen] = useState(false);
 	const [edgeError, setEdgeError] = useState<string | null>(null);
 	const [installOpen, setInstallOpen] = useState(false);
 	const [drawerOpen, setDrawerOpen] = useState(false);
+	const [loopsOpen, setLoopsOpen] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
 	const [installConflict, setInstallConflict] = useState(false);
 
@@ -872,6 +998,16 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					>
 						Installed{installed.list.length > 0 ? ` (${installed.list.length})` : ""}
 					</button>
+					<button
+						type="button"
+						className="btn-secondary loops-btn"
+						onClick={() => setLoopsOpen(true)}
+					>
+						Loops
+						{loops.list.status === "ready" && loops.list.loops.length > 0
+							? ` (${loops.list.loops.length})`
+							: ""}
+					</button>
 					<span className="header-divider">·</span>
 					<SurfaceSelector
 						value={editor.surface}
@@ -962,6 +1098,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					onClose={() => setDrawerOpen(false)}
 				/>
 			)}
+			{loopsOpen && <LoopsDrawer loops={loops} onClose={() => setLoopsOpen(false)} />}
 		</>
 	);
 }

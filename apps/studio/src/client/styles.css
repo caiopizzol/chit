@@ -103,7 +103,8 @@ header.app .dirty-dot {
 }
 header.app .save-btn,
 header.app .install-btn,
-header.app .installed-btn {
+header.app .installed-btn,
+header.app .loops-btn {
 	font-size: 10px;
 	padding: 4px 12px;
 	letter-spacing: 0.1em;
@@ -730,4 +731,139 @@ header.app .installed-btn {
 	white-space: pre-wrap;
 	border-left: 3px solid var(--ink);
 	margin: 0;
+}
+
+/* Loop view (read-only convergence log) */
+.loop-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.loop-item {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 100%;
+	text-align: left;
+	background: var(--sheet);
+	border: 1px solid var(--hairline);
+	border-radius: 2px;
+	padding: 10px 12px;
+	margin-bottom: 8px;
+	cursor: pointer;
+	font: inherit;
+	color: var(--ink);
+}
+.loop-item:hover {
+	border-color: var(--ink);
+}
+.loop-task {
+	font-weight: 600;
+	font-size: 13px;
+}
+.loop-meta {
+	color: var(--faded);
+	font-size: 12px;
+}
+.loop-status {
+	display: inline-block;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 1px 6px;
+	border: 1px solid var(--hairline);
+	border-radius: 2px;
+	margin-right: 6px;
+}
+.loop-status--converged {
+	border-color: var(--ink);
+	color: var(--ink);
+}
+.loop-status--in-progress {
+	color: var(--faded);
+}
+.loop-status--blocked,
+.loop-status--needs-decision,
+.loop-status--max-iterations {
+	border-color: #8a3b2e;
+	color: #8a3b2e;
+}
+.drawer-back {
+	background: none;
+	border: none;
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+	color: var(--ink);
+	padding: 0;
+}
+.loop-rail {
+	padding: 4px 2px;
+}
+.rail-head {
+	margin-bottom: 12px;
+}
+.rail-head-top {
+	display: flex;
+	align-items: center;
+}
+.rail-meta {
+	color: var(--faded);
+	font-size: 12px;
+	margin-left: 6px;
+}
+.rail-scope {
+	margin: 6px 0 0;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--faded);
+}
+.rail-task {
+	margin: 6px 0 0;
+	font-size: 13px;
+}
+.rail-iters {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.rail-iter {
+	border-left: 2px solid var(--hairline);
+	padding: 6px 0 10px 12px;
+	margin-bottom: 4px;
+}
+.rail-line {
+	font-size: 13px;
+	font-weight: 600;
+}
+.rail-n {
+	display: inline-block;
+	min-width: 18px;
+	color: var(--faded);
+}
+.rail-sub {
+	font-size: 12px;
+	color: var(--carbon);
+	margin-top: 2px;
+}
+.verdict {
+	text-transform: uppercase;
+	font-size: 11px;
+	letter-spacing: 0.04em;
+}
+.verdict--proceed {
+	color: var(--ink);
+}
+.verdict--revise {
+	color: #8a6d1f;
+}
+.verdict--block {
+	color: #8a3b2e;
+}
+.rail-stop {
+	margin-top: 10px;
+	font-size: 12.5px;
+	border-top: 1px solid var(--hairline);
+	padding-top: 8px;
 }
