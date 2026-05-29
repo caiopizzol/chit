@@ -11,10 +11,13 @@ code; see receipts 0004-0006 and `proposals/conversational-handoff-needs-mcp.md`
   step (`parse.ts` topological sort rejects cycles; step kinds are only `call` /
   `format`; `docs/backlog.md` defers HITL). A "repeat until" cannot be expressed
   in a manifest, by design.
-- chit has no strong implementer: `claude-cli` runs `claude --print` (one-shot,
-  keeps only the final result, no iterative edits) and `codex-exec` is
-  `--sandbox read-only`. The strongest, most-supervised executor available is the
-  interactive Claude Code chat (full tools, edits, tests, your approval).
+- chit's implementer is real (this was previously mischaracterized here):
+  `claude-cli` runs `claude --print`, which uses tools and edits files - verified,
+  and the `converge` manifest (`apps/cli/examples/converge.json`) drives it
+  autonomously (a write-capable Claude implements; `codex-exec --sandbox
+  read-only` reviews). So the executor can be either the interactive Claude Code
+  chat (full conversational context, your per-edit approval) or a chit-spawned
+  Claude (autonomous, run under a worktree + human checkpoint).
 
 So the loop and the checkpoint belong to the orchestrator (the chat); chit runs
 one bounded check per call.
@@ -53,12 +56,15 @@ and runs against the shipped MCP server.
 
 ## What this is NOT (and why)
 
-- Not an autonomous "Chit Converge" that implements on its own. That needs a
-  write-capable, tool-using executor adapter, which does not exist and is the
-  hard/risky part (sandbox + permissions + unsupervised edits). It is gated
-  behind a focused spike: *can a chit-spawned write-capable agent make a small
-  repo change that a read-only reviewer then catches/accepts?* Build the
-  autonomous loop only if that passes; until then, the chat is the executor.
+- Autonomous "Chit Converge" now EXISTS - the spike passed. The `converge`
+  manifest (`apps/cli/examples/converge.json`) runs a write-capable `claude-cli`
+  implementer plus a read-only `codex-exec` reviewer, driven from the MCP one
+  iteration per `chit_start` while a human sequences and checkpoints (run under a
+  worktree). Supervised convergence (this doc) is the lighter-weight mode when you
+  want this conversation's context to do the implementing; reach for the converge
+  manifest when you want the agents to run it themselves. The real constraint is
+  unchanged: manifests can't loop, so the iteration is always driven by an
+  orchestrator, never the manifest.
 - Not a manifest loop / conditional / checkpoint step kind (breaks the static-DAG
   thesis; the chat loops and checkpoints for free).
 - Not a second headless Claude inside chit (weak, context-blind, drifts from the

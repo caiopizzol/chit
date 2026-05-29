@@ -699,7 +699,8 @@ function LoopConfig({ header }: { header: LoopRecord & { type: "loop" } }) {
 // Static explainer for the supervised-convergence policy. Presentational only:
 // the implement -> check -> decide loop as a small diagram plus the conditions
 // that stop it. Shown above the loop list so the history below reads against the
-// rules that produced it. A later slice adds per-loop config; this is fixed copy.
+// rules that produced it. This is fixed copy; per-loop config (scope,
+// maxIterations, etc.) is shown by LoopConfig in the detail view.
 function LoopPolicy() {
 	const stages = ["Implement", "Check", "Decide"];
 	const stops = [
