@@ -207,6 +207,9 @@ export function runLoopLog(argv: string[], io: LoopLogIO = defaultIO): number {
 			io.err(`chit loop-log: ${e.message}\n`);
 			return 1;
 		}
-		throw e;
+		// Any other error (e.g. an unexpected filesystem failure) still exits with
+		// a clean `chit loop-log:` message and a non-zero code, not a raw stack.
+		io.err(`chit loop-log: ${(e as Error).message}\n`);
+		return 1;
 	}
 }

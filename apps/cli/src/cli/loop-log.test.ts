@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type LoopLogIO, runLoopLog } from "./loop-log.ts";
@@ -210,5 +210,20 @@ describe("loop-log CLI: usage and store errors map to exit codes", () => {
 		);
 		expect(r.code).toBe(2);
 		expect(r.err).toMatch(/changed-files/);
+	});
+
+	test("an unexpected fs error exits 1 with a clean message, not a raw stack", () => {
+		// --cwd points at a regular file, so mkdirSync(.chit/loops) throws a raw
+		// ENOTDIR (not a LoopStoreError); it must still surface cleanly.
+		const filePath = join(cwd, "not-a-dir");
+		writeFileSync(filePath, "x");
+		const out: string[] = [];
+		const err: string[] = [];
+		const code = runLoopLog(
+			["start", "--scope", "s", "--task", "t", "--max-iterations", "3", "--cwd", filePath],
+			{ out: (s) => out.push(s), err: (s) => err.push(s) },
+		);
+		expect(code).toBe(1);
+		expect(err.join("")).toMatch(/^chit loop-log: /);
 	});
 });
