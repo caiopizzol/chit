@@ -665,6 +665,42 @@ function LoopRail({ records }: { records: LoopRecord[] }) {
 	);
 }
 
+// Static explainer for the supervised-convergence policy. Presentational only:
+// the implement -> check -> decide loop as a small diagram plus the conditions
+// that stop it. Shown above the loop list so the history below reads against the
+// rules that produced it. A later slice adds per-loop config; this is fixed copy.
+function LoopPolicy() {
+	const stages = ["Implement", "Check", "Decide"];
+	const stops = [
+		"Proceed + task complete",
+		"Block / human input needed",
+		"An ambiguous decision",
+		"Max iterations reached",
+	];
+	return (
+		<section className="loop-policy">
+			<h3 className="loop-policy-head">Loop policy</h3>
+			<div className="policy-flow">
+				{stages.map((stage, i) => (
+					<span key={stage} className="policy-flow-step">
+						<span className="policy-stage">{stage}</span>
+						{i < stages.length - 1 && <span className="policy-arrow">→</span>}
+					</span>
+				))}
+			</div>
+			<div className="policy-repeat">↻ repeat until it converges or needs you</div>
+			<div className="policy-stops">
+				<span className="policy-stops-label">Stops when</span>
+				<ul className="policy-stops-list">
+					{stops.map((s) => (
+						<li key={s}>{s}</li>
+					))}
+				</ul>
+			</div>
+		</section>
+	);
+}
+
 function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => void }) {
 	const { list, detail, select, clearSelection } = loops;
 	const inDetail = detail.status !== "idle";
@@ -679,11 +715,8 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 		return () => window.removeEventListener("keydown", onKey);
 	}, [onClose, clearSelection, inDetail]);
 
-	function body() {
-		if (detail.status === "loading") return <div className="empty">Loading…</div>;
-		if (detail.status === "error") return <div className="refetch-error">{detail.error}</div>;
-		if (detail.status === "ready") return <LoopRail records={detail.records} />;
-		// detail idle -> the loop list
+	// The idle/list sub-states, rendered below the static LoopPolicy explainer.
+	function listBody() {
 		if (list.status === "loading") return <div className="empty">Loading…</div>;
 		if (list.status === "error") return <div className="refetch-error">{list.error}</div>;
 		if (list.loops.length === 0) {
@@ -703,6 +736,19 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 					</li>
 				))}
 			</ul>
+		);
+	}
+
+	function body() {
+		if (detail.status === "loading") return <div className="empty">Loading…</div>;
+		if (detail.status === "error") return <div className="refetch-error">{detail.error}</div>;
+		if (detail.status === "ready") return <LoopRail records={detail.records} />;
+		// detail idle -> the static policy explainer above the loop list
+		return (
+			<>
+				<LoopPolicy />
+				{listBody()}
+			</>
 		);
 	}
 

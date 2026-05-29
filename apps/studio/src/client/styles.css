@@ -733,6 +733,85 @@ header.app .loops-btn {
 	margin: 0;
 }
 
+/* Loop policy explainer: static implement -> check -> decide diagram plus the
+   stop conditions, shown atop the loop list. Presentational only. */
+.loop-policy {
+	background: var(--sheet);
+	border: 1px solid var(--hairline);
+	border-radius: 2px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+}
+.loop-policy-head {
+	margin: 0 0 10px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--faded);
+}
+.policy-flow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px;
+}
+.policy-flow-step {
+	display: inline-flex;
+	align-items: center;
+}
+.policy-stage {
+	border: 1px solid var(--ink);
+	border-radius: 2px;
+	padding: 3px 8px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--ink);
+	background: var(--paper);
+}
+.policy-arrow {
+	color: var(--faded);
+	padding: 0 6px;
+}
+.policy-repeat {
+	margin-top: 8px;
+	font-size: 11px;
+	color: var(--faded);
+}
+.policy-stops {
+	margin-top: 12px;
+	border-top: 1px solid var(--hairline);
+	padding-top: 10px;
+}
+.policy-stops-label {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--faded);
+}
+.policy-stops-list {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+}
+.policy-stops-list li {
+	position: relative;
+	padding-left: 16px;
+	font-size: 12px;
+	color: var(--carbon);
+	line-height: 1.5;
+}
+.policy-stops-list li::before {
+	content: "◆";
+	position: absolute;
+	left: 0;
+	font-size: 9px;
+	color: var(--ink);
+}
+
 /* Loop view (read-only convergence log) */
 .loop-list {
 	list-style: none;
