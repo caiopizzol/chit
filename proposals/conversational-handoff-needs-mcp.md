@@ -75,7 +75,18 @@ This addresses *"I do not know what chit sent and received"* (post-hoc, or live
 in a terminal; buffered-then-shown via the skill). It does NOT address *"watch
 the agent think"* (the adapter keeps only the final answer; intermediate agent
 reasoning is discarded) or *"jump in mid-flow"* (the run is still one closed
-call). Those remain the MCP / checkpoint question. The re-run in chat is the
+call). Those remain the MCP / checkpoint question.
+
+A headless multi-task run (receipt 0003) sharpened the priority: the worst part
+of the experience is a single step going silent for 141-164s (the codex verify
+step), with the trace showing `> step "verify"` and then nothing until it
+returns. The pain is as much *within-step latency* as between-step steering.
+Step-level trace does not fix it, and neither would step-level MCP tool calls on
+their own (you would still wait on one opaque `chit_run_step`). The deeper lever
+is surfacing the intermediate agent events the adapter currently discards
+(streaming within a step). Worth weighing alongside the stepwise-MCP shape: the
+two are complementary (stepwise MCP for between-step control, within-step
+streaming for "is it still working?"). The re-run in chat is the
 evidence: if a clear transcript makes the batch skill feel acceptable, the MCP
 work can wait; if it still feels like a black box you cannot steer, the stepwise
 MCP shape above is the decisive next bet.
@@ -99,3 +110,13 @@ decisive next bet is **stepwise static DAG over MCP** (not free-form model
 orchestration, and ahead of a bare human-checkpoint step), because it is the
 only shape that gives visibility and interjection while keeping chit's
 declared-order thesis intact.
+
+One refinement to keep explicit, from the headless run: within-step streaming
+does NOT help the Claude skill surface by itself, because skills buffer the
+whole command before substituting its output. It helps terminal runs, and it
+becomes essential for an MCP surface. So the next bet is not "stepwise MCP OR
+streaming" - it is **stepwise MCP with per-step progress / agent-event
+streaming**. A bare `chit_run_step` tool that sits silent for 164 seconds would
+reproduce the same "is this alive?" distrust at a smaller boundary. Between-step
+control (stepwise) and within-step liveness (streaming) are both required; one
+without the other still feels like a box.

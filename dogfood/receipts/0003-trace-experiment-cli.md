@@ -58,6 +58,39 @@ turn within a single run, and the trace makes that legible.
   answer; codex's/claude's intermediate reasoning is discarded), or "jump in
   mid-flow" (the run is still one closed call).
 
+## Headless multi-task run (sub-agent, 2026-05-29)
+
+Ran three more tasks headless (via `chit run --trace`, not the in-chat skill) to
+learn how trace + the handoff behave across task types. All exited 0 first try.
+
+- TASK A (`ask-codex`, single call): codex read the named file and cited real
+  lines (`codex-exec.ts:46-58`, `:97-120`). Trace adds little for one call, as
+  expected. `ask` step: 46s.
+- TASK B (`propose-verify-revise`, README task): propose 27s, **verify 164s**,
+  revise 35s. Codex gave five file:line-cited findings (caught the
+  `bun run cli --cwd apps/cli` path mismatch); claude's revise addressed all
+  five and changed the artifact.
+- TASK C (`propose-verify-revise`, the permission-gate decision): propose 15s,
+  **verify 141s**, revise 48s. Codex caught a substantive error: claude first
+  recommended "Option 2 now," and codex flagged that this contradicts the
+  source proposal's own "defer until Dogfood v0 finishes" and that "remove the
+  read_only default from examples" is mechanically wrong (examples omit
+  `permissions`; the parser supplies `read_only` at parse.ts:148). Claude's
+  revise retracted "Option 2 now" and "zero weakening" - phrases from its own
+  proposal that were NOT in the revise prompt, so per_scope resume is reproven.
+
+What this teaches (headless can show this): the handoff is real, not theater
+(codex produced specific, cited critique and in C flipped the answer), output
+quality is high, and per_scope resume works. What it sharpened: the dominant
+discomfort is not (only) between-step steering - it is the **silent multi-minute
+verify step** (141-164s here vs 31s in the first run; it varies). The trace
+shows `> step "verify"` then nothing until it finishes, because the adapter
+discards intermediate agent events (TASK A's finding). A human watching that
+gap would reasonably think it hung. Step-level trace does not fix this; neither
+would step-level MCP tool calls by themselves. The deeper lever is surfacing
+*within-step* progress (the intermediate events the adapter currently throws
+away).
+
 ## Follow-ups
 
 - The in-chat re-run is the gate (both skills reinstalled with `--trace`): does
