@@ -26,8 +26,11 @@ import {
 	type StepControllers,
 	startRun,
 } from "./engine.ts";
+import { RunStore } from "./run-store.ts";
 
-const runs = new Map<string, Run>();
+// Idle-evicting run store (sweeps on chit_start) so the in-memory run map is
+// bounded; see run-store.ts.
+const runs = new RunStore();
 // AbortControllers for in-flight steps, so chit_cancel can stop a running step
 // even after the model's turn is interrupted (the server keeps running).
 const controllers: StepControllers = new Map();
@@ -96,6 +99,9 @@ server.registerTool(
 		},
 	},
 	async ({ manifest_path, inputs, scope, cwd, allow_unenforced_permissions }) => {
+		// Opportunistic idle cleanup on every chit_start request, before the work,
+		// so cleanup still happens when this start fails (bad manifest, etc.).
+		runs.sweep(Date.now());
 		const path = isAbsolute(manifest_path) ? manifest_path : resolve(process.cwd(), manifest_path);
 		let raw: unknown;
 		try {
@@ -116,7 +122,7 @@ server.registerTool(
 		} catch (e) {
 			return errorResult((e as Error).message);
 		}
-		runs.set(run.runId, run);
+		runs.add(run, Date.now());
 		return jsonResult(describeRun(run));
 	},
 );
@@ -128,7 +134,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string() },
 	},
 	async ({ run_id }) => {
-		const run = runs.get(run_id);
+		const run = runs.get(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 		return jsonResult(describeRun(run));
 	},
@@ -142,7 +148,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string(), step_id: z.string() },
 	},
 	async ({ run_id, step_id }, extra) => {
-		const run = runs.get(run_id);
+		const run = runs.get(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 
 		let progress = 0;
@@ -200,6 +206,10 @@ server.registerTool(
 			return errorResult((e as Error).message);
 		} finally {
 			controllers.delete(key);
+			// Refresh idle timer after the step settles: a multi-minute step's
+			// touch-on-lookup is stale by now, and it's no longer running, so a
+			// concurrent chit_start sweep could otherwise evict it immediately.
+			runs.touch(run_id, Date.now());
 		}
 	},
 );
@@ -212,7 +222,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string(), step_id: z.string() },
 	},
 	async ({ run_id, step_id }) => {
-		const run = runs.get(run_id);
+		const run = runs.get(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 		const result = cancelStep(run, step_id, controllers);
 		if (result === "unknown_step") return errorResult(`unknown step "${step_id}"`);
@@ -233,7 +243,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string() },
 	},
 	async ({ run_id }) => {
-		const run = runs.get(run_id);
+		const run = runs.get(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 		const trace = run.manifest.executionOrder.flat().map((id) => {
 			const r = run.records[id];

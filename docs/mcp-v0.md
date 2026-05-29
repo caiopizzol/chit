@@ -116,7 +116,11 @@ probe (start a long step, Esc after the first heartbeat, record what happens):
 
 ## Known limits / backlog
 
-- Runs live in an in-memory `Map`; a server restart/reconnect loses them.
+- Runs live in an in-memory store (`run-store.ts`); a server restart/reconnect
+  loses them. The store is idle-evicting: a run untouched for > 1h is dropped on
+  the next `chit_start` sweep, unless it still has a `running` step (those are
+  never evicted). Cleanup is opportunistic, so memory is bounded by future
+  starts, not by wall-clock alone.
 - `inputs` are string→string; `file[]` inputs are not expressible via MCP.
 - Concurrent `per_scope` steps would hit the session store's read-modify-write
   race (`docs/backlog.md`).
