@@ -9,6 +9,11 @@ export interface AdapterCallRequest {
 	// own shape (e.g., Codex threadId, Claude sessionId). Absent for the first
 	// call, or for participants whose session policy is not `per_scope`.
 	session?: unknown;
+	// If provided, an adapter must kill its child process when this aborts and
+	// reject (rather than return). Optional: the CLI runtime does not pass one,
+	// so its behavior is unchanged. Used by the MCP stepwise surface to make a
+	// running step cancellable.
+	signal?: AbortSignal;
 }
 
 export interface AdapterCallResult {

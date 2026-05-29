@@ -16,6 +16,13 @@ for arg in "$@"; do
   if [ "$arg" = "resume" ]; then IS_RESUME=1; fi
 done
 
+if [ -n "$HANDOFF_TEST_SLEEP" ]; then
+  cat > /dev/null
+  # exec so the long-runner IS the spawned process (as the real codex binary is),
+  # not an orphanable child: proc.kill() then terminates it and closes its pipes.
+  exec sleep "$HANDOFF_TEST_SLEEP"
+fi
+
 if [ -n "$HANDOFF_TEST_FAKE_EXIT" ] && [ "$HANDOFF_TEST_FAKE_EXIT" != "0" ]; then
   cat > /dev/null
   echo "boom: codex error" >&2
@@ -272,5 +279,32 @@ describe("CodexExecAdapter: session resume", () => {
 		});
 		expect(result.output).toBe("OK: prompt received");
 		expect(result.session).toEqual({ threadId: "fake-1" });
+	});
+});
+
+describe("CodexExecAdapter: cancellation", () => {
+	test("aborting the signal kills the child and rejects fast", async () => {
+		// Fake codex sleeps 10s; without honoring the abort, the call would hang
+		// that long. We abort after 100ms and assert it rejects well under 10s,
+		// which can only happen if the child was killed and the await unblocked.
+		process.env.HANDOFF_TEST_SLEEP = "10";
+		try {
+			const adapter = new CodexExecAdapter({});
+			const controller = new AbortController();
+			const started = Date.now();
+			const p = adapter.call({
+				participantId: "p",
+				agentId: "codex",
+				stepId: "s",
+				input: "hi",
+				cwd: TMPDIR,
+				signal: controller.signal,
+			});
+			setTimeout(() => controller.abort(), 100);
+			await expect(p).rejects.toThrow();
+			expect(Date.now() - started).toBeLessThan(4000);
+		} finally {
+			delete process.env.HANDOFF_TEST_SLEEP;
+		}
 	});
 });

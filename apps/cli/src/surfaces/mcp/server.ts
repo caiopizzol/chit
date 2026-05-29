@@ -15,9 +15,22 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
-import { finalOutput, isComplete, type Run, readySteps, runStep, startRun } from "./engine.ts";
+import {
+	cancelStep,
+	controllerKey,
+	finalOutput,
+	isComplete,
+	type Run,
+	readySteps,
+	runStep,
+	type StepControllers,
+	startRun,
+} from "./engine.ts";
 
 const runs = new Map<string, Run>();
+// AbortControllers for in-flight steps, so chit_cancel can stop a running step
+// even after the model's turn is interrupted (the server keeps running).
+const controllers: StepControllers = new Map();
 const registry = loadRegistry();
 
 const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
@@ -137,22 +150,34 @@ server.registerTool(
 		const heartbeat = (message: string) => {
 			progress++;
 			if (progressToken !== undefined) {
-				void extra.sendNotification({
-					method: "notifications/progress",
-					params: { progressToken, progress, message },
-				});
+				void extra
+					.sendNotification({
+						method: "notifications/progress",
+						params: { progressToken, progress, message },
+					})
+					.catch(() => {});
 			}
 			void server
 				.sendLoggingMessage({ level: "info", data: message, logger: "chit" })
 				.catch(() => {});
 		};
 
+		// chit owns a controller for this step so chit_cancel can stop it. Fold in
+		// the client's own signal: if Esc ever propagates, it aborts the same
+		// controller. The controller stays registered for the whole call so a
+		// chit_cancel issued after the model's turn is interrupted can still reach
+		// it (the server keeps running the in-flight step).
+		const controller = new AbortController();
+		extra.signal.addEventListener("abort", () => controller.abort(), { once: true });
+		const key = controllerKey(run_id, step_id);
+		controllers.set(key, controller);
+
 		const rec0 = run.records[step_id];
 		if (rec0?.kind === "call") {
 			heartbeat(`${step_id} · starting · call ${rec0.participantId} (${rec0.agentId})`);
 		}
 		try {
-			const rec = await runStep(run, step_id, heartbeat);
+			const rec = await runStep(run, step_id, heartbeat, controller.signal);
 			heartbeat(`${step_id} · done in ${rec.durationMs}ms`);
 			return jsonResult({
 				ran: step_id,
@@ -161,8 +186,42 @@ server.registerTool(
 				...describeRun(run),
 			});
 		} catch (e) {
+			const rec = run.records[step_id];
+			if (rec?.status === "cancelled") {
+				// Cancellation is a clean terminal outcome, not an error.
+				heartbeat(`${step_id} · cancelled after ${rec.durationMs}ms`);
+				return jsonResult({
+					cancelled: true,
+					step: step_id,
+					durationMs: rec.durationMs,
+					...describeRun(run),
+				});
+			}
 			return errorResult((e as Error).message);
+		} finally {
+			controllers.delete(key);
 		}
+	},
+);
+
+server.registerTool(
+	"chit_cancel",
+	{
+		description:
+			"Cancel a step that is currently running: aborts its controller, which kills the agent's child process and settles the step as cancelled (terminal, blocks dependents). Returns cancelled:true if it stopped a running step, or a reason (already_done | not_running) otherwise. Use after interrupting a long step.",
+		inputSchema: { run_id: z.string(), step_id: z.string() },
+	},
+	async ({ run_id, step_id }) => {
+		const run = runs.get(run_id);
+		if (!run) return errorResult(`unknown run_id ${run_id}`);
+		const result = cancelStep(run, step_id, controllers);
+		if (result === "unknown_step") return errorResult(`unknown step "${step_id}"`);
+		return jsonResult({
+			step: step_id,
+			cancelled: result === "cancelled",
+			reason: result === "cancelled" ? undefined : result,
+			...describeRun(run),
+		});
 	},
 );
 

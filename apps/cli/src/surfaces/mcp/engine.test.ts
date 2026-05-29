@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { parseManifest } from "@chit/core";
 import { prepareInputs } from "../../runtime/render.ts";
 import type { AdapterCallResult, AdapterMap, RuntimeAdapter } from "../../runtime/types.ts";
-import { isComplete, type Run, readySteps, runStep } from "./engine.ts";
+import {
+	cancelStep,
+	controllerKey,
+	isComplete,
+	type Run,
+	readySteps,
+	runStep,
+	type StepControllers,
+} from "./engine.ts";
 
 // A two-step chain: a (from input) -> b (from a's output). deps: a=[], b=[a].
 const CHAIN = {
@@ -117,6 +125,73 @@ describe("mcp engine: running-state lock", () => {
 		await first;
 		expect(run.records.a?.status).toBe("done");
 		expect(run.outputs.a).toBe("A");
+	});
+});
+
+describe("mcp engine: cancellation", () => {
+	test("aborting a running step marks it cancelled (not failed), blocks dependents, and is terminal", async () => {
+		// Adapter that settles only when the signal aborts, mimicking a real
+		// adapter that kills its child and rejects on abort.
+		const adapters: AdapterMap = {
+			fake: {
+				call: (req) =>
+					new Promise<AdapterCallResult>((_resolve, reject) => {
+						req.signal?.addEventListener("abort", () => reject(new Error("aborted by client")), {
+							once: true,
+						});
+					}),
+			},
+		};
+		const run = makeRun(CHAIN, { x: "hi" }, adapters);
+		const controller = new AbortController();
+
+		const p = runStep(run, "a", () => {}, controller.signal);
+		expect(run.records.a?.status).toBe("running");
+
+		controller.abort();
+		await expect(p).rejects.toThrow();
+		// Cancelled, not failed: the user stopped it.
+		expect(run.records.a?.status).toBe("cancelled");
+		// Blocks dependents and is terminal.
+		expect(readySteps(run)).toEqual([]);
+		await expect(runStep(run, "a", () => {})).rejects.toThrow(/was cancelled/);
+	});
+});
+
+describe("mcp engine: chit_cancel via the controller registry", () => {
+	test("cancelStep aborts an in-flight step -> rejects, marks cancelled, blocks dependents", async () => {
+		// Adapter that settles only when its signal aborts (kills + rejects).
+		const adapters: AdapterMap = {
+			fake: {
+				call: (req) =>
+					new Promise<AdapterCallResult>((_resolve, reject) => {
+						req.signal?.addEventListener("abort", () => reject(new Error("killed")), {
+							once: true,
+						});
+					}),
+			},
+		};
+		const run = makeRun(CHAIN, { x: "hi" }, adapters);
+		const controllers: StepControllers = new Map();
+		// Mirror the server: register a controller and run the step on its signal.
+		const controller = new AbortController();
+		controllers.set(controllerKey(run.runId, "a"), controller);
+		const p = runStep(run, "a", () => {}, controller.signal);
+		expect(run.records.a?.status).toBe("running");
+
+		expect(cancelStep(run, "a", controllers)).toBe("cancelled");
+		await expect(p).rejects.toThrow();
+		expect(run.records.a?.status).toBe("cancelled");
+		expect(readySteps(run)).toEqual([]);
+	});
+
+	test("cancelStep reports not_running / already_done / unknown_step", async () => {
+		const run = makeRun(CHAIN, { x: "hi" }, immediate("A"));
+		const controllers: StepControllers = new Map();
+		expect(cancelStep(run, "a", controllers)).toBe("not_running"); // pending, no controller
+		expect(cancelStep(run, "nope", controllers)).toBe("unknown_step");
+		await runStep(run, "a", () => {});
+		expect(cancelStep(run, "a", controllers)).toBe("already_done");
 	});
 });
 

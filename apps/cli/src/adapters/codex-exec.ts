@@ -40,33 +40,46 @@ export class CodexExecAdapter implements RuntimeAdapter {
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			proc.stdin.write(req.input);
-			proc.stdin.end();
+			// Client cancellation: kill the child so it stops burning rather than
+			// running orphaned. The caller discriminates on signal.aborted, not on
+			// the thrown error, so this need not be a specific error type.
+			const onAbort = () => proc.kill();
+			req.signal?.addEventListener("abort", onAbort, { once: true });
+			try {
+				proc.stdin.write(req.input);
+				proc.stdin.end();
 
-			const [stdoutText, stderrText, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
+				const [stdoutText, stderrText, exitCode] = await Promise.all([
+					new Response(proc.stdout).text(),
+					new Response(proc.stderr).text(),
+					proc.exited,
+				]);
 
-			if (exitCode !== 0) {
-				const cleaned = sanitize(stderrText || stdoutText, sensitive);
-				const tail = cleaned.trim().split("\n").slice(-5).join("\n");
-				throw new Error(`codex exec exited ${exitCode}: ${tail.slice(0, 500)}`);
+				// A killed proc exits non-zero; check abort first so cancellation is
+				// not misreported as a normal failure.
+				if (req.signal?.aborted) throw new Error("aborted by client");
+
+				if (exitCode !== 0) {
+					const cleaned = sanitize(stderrText || stdoutText, sensitive);
+					const tail = cleaned.trim().split("\n").slice(-5).join("\n");
+					throw new Error(`codex exec exited ${exitCode}: ${tail.slice(0, 500)}`);
+				}
+
+				const { threadId: newThreadId, agentText } = parseJsonlStream(stdoutText);
+				if (!agentText) {
+					throw new Error("no agent_message in codex output");
+				}
+
+				// On resume, codex doesn't always re-emit thread.started; preserve the
+				// prior id so the coordinator can still reach the session next time.
+				const effectiveThreadId = newThreadId ?? priorThreadId;
+				return {
+					output: agentText,
+					session: effectiveThreadId ? { threadId: effectiveThreadId } : undefined,
+				};
+			} finally {
+				req.signal?.removeEventListener("abort", onAbort);
 			}
-
-			const { threadId: newThreadId, agentText } = parseJsonlStream(stdoutText);
-			if (!agentText) {
-				throw new Error("no agent_message in codex output");
-			}
-
-			// On resume, codex doesn't always re-emit thread.started; preserve the
-			// prior id so the coordinator can still reach the session next time.
-			const effectiveThreadId = newThreadId ?? priorThreadId;
-			return {
-				output: agentText,
-				session: effectiveThreadId ? { threadId: effectiveThreadId } : undefined,
-			};
 		} catch (e) {
 			const message = sanitize((e as Error).message || String(e), sensitive);
 			throw new Error(message);

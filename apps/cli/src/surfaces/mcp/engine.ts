@@ -32,7 +32,7 @@ export interface StepRecord {
 	participantId?: string;
 	agentId?: string;
 	session?: string;
-	status: "pending" | "running" | "done" | "failed";
+	status: "pending" | "running" | "done" | "failed" | "cancelled";
 	durationMs?: number;
 	output?: string;
 	error?: string;
@@ -145,16 +145,50 @@ export function finalOutput(run: Run): string | undefined {
 	return run.outputs[run.manifest.output];
 }
 
-export async function runStep(run: Run, stepId: string, heartbeat: Heartbeat): Promise<StepRecord> {
+// Registry of AbortControllers for in-flight steps, keyed per run+step. The
+// server registers a controller while a step runs (and folds in the client's
+// own cancel signal); chit_cancel aborts it. Cancellation is an explicit chit
+// action, not a dependency on ambient Esc behavior.
+export type StepControllers = Map<string, AbortController>;
+
+export function controllerKey(runId: string, stepId: string): string {
+	return `${runId}:${stepId}`;
+}
+
+export type CancelResult = "cancelled" | "already_done" | "not_running" | "unknown_step";
+
+// Abort an in-flight step's controller if one is registered. The running
+// runStep then rejects (its adapter kills the child) and the record settles to
+// "cancelled" a tick later — chit_cancel reports what it could do right now.
+export function cancelStep(run: Run, stepId: string, controllers: StepControllers): CancelResult {
+	const rec = run.records[stepId];
+	if (!rec) return "unknown_step";
+	const controller = controllers.get(controllerKey(run.runId, stepId));
+	if (controller) {
+		controller.abort();
+		return "cancelled";
+	}
+	if (rec.status === "done") return "already_done";
+	return "not_running";
+}
+
+export async function runStep(
+	run: Run,
+	stepId: string,
+	heartbeat: Heartbeat,
+	signal?: AbortSignal,
+): Promise<StepRecord> {
 	const rec = run.records[stepId];
 	if (!rec) throw new RuntimeError(`unknown step "${stepId}"`);
 	// Only pending steps may run. running = in flight (reject duplicates);
-	// done/failed = terminal. This is the lock that makes "chit governs legal
-	// order" mean a legal step also runs exactly once.
+	// done/failed/cancelled = terminal. This is the lock that makes "chit governs
+	// legal order" mean a legal step also runs exactly once.
 	if (rec.status === "running") throw new RuntimeError(`step "${stepId}" is already running`);
 	if (rec.status === "done") throw new RuntimeError(`step "${stepId}" already ran`);
 	if (rec.status === "failed")
 		throw new RuntimeError(`step "${stepId}" previously failed (terminal)`);
+	if (rec.status === "cancelled")
+		throw new RuntimeError(`step "${stepId}" was cancelled (terminal)`);
 
 	const deps = run.manifest.dependencies[stepId] ?? [];
 	const undone = deps.filter((d) => run.records[d]?.status !== "done");
@@ -196,6 +230,7 @@ export async function runStep(run: Run, stepId: string, heartbeat: Heartbeat): P
 					stepId,
 					input,
 					cwd: run.invocationCwd,
+					signal,
 				});
 				output = result.output;
 			} finally {
@@ -208,7 +243,9 @@ export async function runStep(run: Run, stepId: string, heartbeat: Heartbeat): P
 		run.outputs[stepId] = output;
 		return rec;
 	} catch (e) {
-		rec.status = "failed";
+		// Discriminate on the signal, not the error shape: an aborted call is a
+		// cancellation (the user stopped it), distinct from a real failure.
+		rec.status = signal?.aborted ? "cancelled" : "failed";
 		rec.durationMs = Date.now() - startedAt;
 		rec.error = e instanceof Error ? e.message : String(e);
 		throw e;

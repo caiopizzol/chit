@@ -44,42 +44,55 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			proc.stdin.write(req.input);
-			proc.stdin.end();
-
-			const [stdoutText, stderrText, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
-
-			if (exitCode !== 0) {
-				const cleaned = sanitize(stderrText || stdoutText, sensitive);
-				const tail = cleaned.trim().split("\n").slice(-5).join("\n");
-				throw new Error(`claude --print exited ${exitCode}: ${tail.slice(0, 500)}`);
-			}
-
-			let parsed: ClaudePrintResult;
+			// Client cancellation: kill the child so it stops burning rather than
+			// running orphaned. The caller discriminates on signal.aborted, not on
+			// the thrown error, so this need not be a specific error type.
+			const onAbort = () => proc.kill();
+			req.signal?.addEventListener("abort", onAbort, { once: true });
 			try {
-				parsed = JSON.parse(stdoutText.trim()) as ClaudePrintResult;
-			} catch (e) {
-				throw new Error(`claude --print output was not valid JSON: ${(e as Error).message}`);
-			}
+				proc.stdin.write(req.input);
+				proc.stdin.end();
 
-			if (parsed.is_error || parsed.subtype !== "success") {
-				throw new Error(
-					parsed.result ?? `claude returned non-success subtype: ${parsed.subtype ?? "unknown"}`,
-				);
-			}
-			if (!parsed.result) {
-				throw new Error("claude --print returned no result field");
-			}
+				const [stdoutText, stderrText, exitCode] = await Promise.all([
+					new Response(proc.stdout).text(),
+					new Response(proc.stderr).text(),
+					proc.exited,
+				]);
 
-			const effectiveSessionId = parsed.session_id ?? priorSessionId;
-			return {
-				output: parsed.result,
-				session: effectiveSessionId ? { sessionId: effectiveSessionId } : undefined,
-			};
+				// A killed proc exits non-zero; check abort first so cancellation is
+				// not misreported as a normal failure.
+				if (req.signal?.aborted) throw new Error("aborted by client");
+
+				if (exitCode !== 0) {
+					const cleaned = sanitize(stderrText || stdoutText, sensitive);
+					const tail = cleaned.trim().split("\n").slice(-5).join("\n");
+					throw new Error(`claude --print exited ${exitCode}: ${tail.slice(0, 500)}`);
+				}
+
+				let parsed: ClaudePrintResult;
+				try {
+					parsed = JSON.parse(stdoutText.trim()) as ClaudePrintResult;
+				} catch (e) {
+					throw new Error(`claude --print output was not valid JSON: ${(e as Error).message}`);
+				}
+
+				if (parsed.is_error || parsed.subtype !== "success") {
+					throw new Error(
+						parsed.result ?? `claude returned non-success subtype: ${parsed.subtype ?? "unknown"}`,
+					);
+				}
+				if (!parsed.result) {
+					throw new Error("claude --print returned no result field");
+				}
+
+				const effectiveSessionId = parsed.session_id ?? priorSessionId;
+				return {
+					output: parsed.result,
+					session: effectiveSessionId ? { sessionId: effectiveSessionId } : undefined,
+				};
+			} finally {
+				req.signal?.removeEventListener("abort", onAbort);
+			}
 		} catch (e) {
 			const message = sanitize((e as Error).message || String(e), sensitive);
 			throw new Error(message);
