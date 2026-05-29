@@ -41,6 +41,11 @@ const REQUIRED_TOP_KEYS = [
 
 const ID_RE = /^[a-z][a-z0-9-]*$/;
 const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+// Reserved JS object-prototype keys. Input names, participant ids, and step
+// ids become keys in plain objects (here, and in the runtime's records/outputs
+// maps), so allowing these would let a user-authored manifest pollute
+// prototypes. Rejected at parse so every surface is protected.
+const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
 const ALLOWED_INPUT_KEYS = new Set(["type", "optional"]);
 const ALLOWED_INPUT_TYPES: ReadonlySet<string> = new Set(["string", "file[]"]);
@@ -74,6 +79,8 @@ function parseInputs(raw: unknown): Record<string, NormalizedInput> {
 	for (const [name, val] of Object.entries(raw)) {
 		const path = `inputs.${name}`;
 		if (!IDENT_RE.test(name)) throw new ManifestError(path, "input name must be an identifier");
+		if (RESERVED_IDS.has(name))
+			throw new ManifestError(path, "input name must not be a reserved name");
 		if (!isObject(val)) throw new ManifestError(path, "must be an object");
 		for (const k of Object.keys(val)) {
 			if (!ALLOWED_INPUT_KEYS.has(k)) throw new ManifestError(path, `unknown field "${k}"`);
@@ -126,6 +133,8 @@ function parseParticipants(raw: unknown): Record<string, NormalizedParticipant> 
 	for (const [name, val] of Object.entries(raw)) {
 		const path = `participants.${name}`;
 		if (!IDENT_RE.test(name)) throw new ManifestError(path, "participant id must be an identifier");
+		if (RESERVED_IDS.has(name))
+			throw new ManifestError(path, "participant id must not be a reserved name");
 		if (!isObject(val)) throw new ManifestError(path, "must be an object");
 		for (const k of Object.keys(val)) {
 			if (!ALLOWED_PARTICIPANT_KEYS.has(k)) throw new ManifestError(path, `unknown field "${k}"`);
@@ -301,6 +310,8 @@ function parseSteps(
 	for (const stepId of stepIds) {
 		if (!IDENT_RE.test(stepId))
 			throw new ManifestError(`steps.${stepId}`, "step id must be an identifier");
+		if (RESERVED_IDS.has(stepId))
+			throw new ManifestError(`steps.${stepId}`, "step id must not be a reserved name");
 	}
 
 	const out: Record<string, NormalizedStep> = {};

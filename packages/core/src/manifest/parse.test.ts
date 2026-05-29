@@ -219,3 +219,29 @@ describe("invalid manifests fail with useful errors", () => {
 		);
 	});
 });
+
+describe("reserved ids (prototype-pollution guard)", () => {
+	// Built via JSON.parse, not object literals: a literal `{ __proto__: ... }`
+	// sets the prototype rather than an own key, while JSON.parse creates a real
+	// own "__proto__" key — exactly the pollution vector being guarded.
+	test("rejects __proto__ as a step id", () => {
+		const raw = JSON.parse(
+			'{"schema":1,"id":"x","description":"d","inputs":{"q":{"type":"string"}},"participants":{"a":{"agent":"codex","role":"r","session":"stateless"}},"steps":{"__proto__":{"call":"a","prompt":"{{ inputs.q }}"}},"output":"__proto__"}',
+		);
+		expectManifestError(raw, "steps.__proto__", "reserved");
+	});
+
+	test("rejects constructor as a participant id", () => {
+		const raw = JSON.parse(
+			'{"schema":1,"id":"x","description":"d","inputs":{"q":{"type":"string"}},"participants":{"constructor":{"agent":"codex","role":"r","session":"stateless"}},"steps":{"s":{"call":"constructor","prompt":"{{ inputs.q }}"}},"output":"s"}',
+		);
+		expectManifestError(raw, "participants.constructor", "reserved");
+	});
+
+	test("rejects prototype as an input name", () => {
+		const raw = JSON.parse(
+			'{"schema":1,"id":"x","description":"d","inputs":{"prototype":{"type":"string"}},"participants":{"a":{"agent":"codex","role":"r","session":"stateless"}},"steps":{"s":{"call":"a","prompt":"{{ inputs.prototype }}"}},"output":"s"}',
+		);
+		expectManifestError(raw, "inputs.prototype", "reserved");
+	});
+});
