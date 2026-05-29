@@ -16,3 +16,6 @@ apps/studio/dist/
 apps/studio/test-results/
 apps/studio/playwright-report/
 apps/studio/.playwright/
+
+# Local Claude Code runtime state (scheduled-task lock, etc.)
+.claude/
