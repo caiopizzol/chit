@@ -179,6 +179,27 @@ describe("installClaudeSkill: file generation", () => {
 		expect(body).toContain("} 2>&1");
 	});
 
+	test("SKILL.md bakes --trace only when requested", () => {
+		const out = mkdtempSync(join(TMPDIR, "install-"));
+		const traced = installClaudeSkill({
+			manifestPath: CONSULT_PATH,
+			outputDir: out,
+			runtimePath: PROJECT_ROOT,
+			allowUnenforcedPermissions: true,
+			trace: true,
+		});
+		expect(extractBashBlock(readFileSync(traced.skillMdPath, "utf-8"))).toContain("--trace");
+
+		const out2 = mkdtempSync(join(TMPDIR, "install-"));
+		const plain = installClaudeSkill({
+			manifestPath: CONSULT_PATH,
+			outputDir: out2,
+			runtimePath: PROJECT_ROOT,
+			allowUnenforcedPermissions: true,
+		});
+		expect(extractBashBlock(readFileSync(plain.skillMdPath, "utf-8"))).not.toContain("--trace");
+	});
+
 	test("heredoc delimiter is randomized per install (accidental-collision resistance)", () => {
 		const manifestPath = CONSULT_PATH;
 		const r1 = installClaudeSkill({

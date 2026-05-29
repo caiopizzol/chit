@@ -172,6 +172,16 @@ describe("parseArgs", () => {
 		expect(args.allowUnenforcedPermissions).toBe(true);
 	});
 
+	test("--trace captured on run, defaults false", () => {
+		expect(parseArgs(["run", "m.json", "--trace"]).trace).toBe(true);
+		expect(parseArgs(["run", "m.json"]).trace).toBe(false);
+	});
+
+	test("--trace captured on install, defaults false", () => {
+		expect(parseArgs(["install", "m.json", "--as", "claude-skill", "--trace"]).trace).toBe(true);
+		expect(parseArgs(["install", "m.json", "--as", "claude-skill"]).trace).toBe(false);
+	});
+
 	test("install without manifest path rejected", () => {
 		expect(() => parseArgs(["install"])).toThrow(/manifest path/);
 	});
