@@ -665,6 +665,37 @@ function LoopRail({ records }: { records: LoopRecord[] }) {
 	);
 }
 
+// Per-loop config strip, shown atop the detail view. Reads the loop's header
+// record (scope/repo/startedAt/maxIterations). The convergence log does not
+// record which checker manifest the loop ran against, so that row is labeled
+// "not recorded" rather than invented.
+function LoopConfig({ header }: { header: LoopRecord & { type: "loop" } }) {
+	return (
+		<dl className="loop-config">
+			<div className="config-row">
+				<dt>scope</dt>
+				<dd>{header.scope}</dd>
+			</div>
+			<div className="config-row">
+				<dt>repo</dt>
+				<dd>{header.repo}</dd>
+			</div>
+			<div className="config-row">
+				<dt>started</dt>
+				<dd>{header.startedAt}</dd>
+			</div>
+			<div className="config-row">
+				<dt>max iterations</dt>
+				<dd>{header.maxIterations}</dd>
+			</div>
+			<div className="config-row">
+				<dt>checker manifest</dt>
+				<dd className="config-absent">not recorded</dd>
+			</div>
+		</dl>
+	);
+}
+
 // Static explainer for the supervised-convergence policy. Presentational only:
 // the implement -> check -> decide loop as a small diagram plus the conditions
 // that stop it. Shown above the loop list so the history below reads against the
@@ -742,7 +773,15 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 	function body() {
 		if (detail.status === "loading") return <div className="empty">Loading…</div>;
 		if (detail.status === "error") return <div className="refetch-error">{detail.error}</div>;
-		if (detail.status === "ready") return <LoopRail records={detail.records} />;
+		if (detail.status === "ready") {
+			const header = detail.records.find((r) => r.type === "loop");
+			return (
+				<>
+					{header?.type === "loop" && <LoopConfig header={header} />}
+					<LoopRail records={detail.records} />
+				</>
+			);
+		}
 		// detail idle -> the static policy explainer above the loop list
 		return (
 			<>

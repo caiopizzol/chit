@@ -812,6 +812,44 @@ header.app .loops-btn {
 	color: var(--ink);
 }
 
+/* Per-loop config strip: the selected loop's header fields, shown above the
+   rail. The checker manifest row is "not recorded" (the log does not store it). */
+.loop-config {
+	margin: 0 0 14px;
+	padding: 10px 12px;
+	background: var(--sheet);
+	border: 1px solid var(--hairline);
+	border-radius: 2px;
+}
+.config-row {
+	display: grid;
+	grid-template-columns: 110px 1fr;
+	gap: 8px;
+	font-size: 12px;
+	line-height: 1.5;
+	padding: 2px 0;
+}
+.config-row + .config-row {
+	border-top: 1px solid var(--hairline);
+}
+.config-row dt {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--faded);
+	align-self: center;
+}
+.config-row dd {
+	margin: 0;
+	color: var(--carbon);
+	word-break: break-word;
+}
+.config-absent {
+	color: var(--faded);
+	font-style: italic;
+}
+
 /* Loop view (read-only convergence log) */
 .loop-list {
 	list-style: none;

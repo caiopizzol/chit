@@ -73,6 +73,14 @@ test("loops drawer: list -> select -> compact rail -> Escape back", async ({ pag
 		await expect(drawer.locator(".verdict--revise")).toBeVisible();
 		await expect(drawer).toContainText("stopped: converged");
 
+		// The per-loop config strip reads the header: maxIterations 3, and the
+		// checker manifest is labeled "not recorded" (the log does not store it).
+		const config = drawer.locator(".loop-config");
+		await expect(config).toContainText("max iterations");
+		await expect(config).toContainText("3");
+		await expect(config).toContainText("checker manifest");
+		await expect(config.locator(".config-absent")).toHaveText("not recorded");
+
 		// Escape backs out to the list (not closed): the loop row is shown again.
 		await page.keyboard.press("Escape");
 		await expect(drawer).toBeVisible();
