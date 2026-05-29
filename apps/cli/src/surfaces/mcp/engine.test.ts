@@ -147,7 +147,7 @@ describe("mcp engine: cancellation", () => {
 		const run = makeRun(CHAIN, { x: "hi" }, adapters);
 		const controller = new AbortController();
 
-		const p = runStep(run, "a", () => {}, controller.signal);
+		const p = runStep(run, "a", () => {}, controller);
 		expect(run.records.a?.status).toBe("running");
 
 		controller.abort();
@@ -175,11 +175,11 @@ describe("mcp engine: chit_cancel via the controller registry", () => {
 		};
 		const run = makeRun(CHAIN, { x: "hi" }, adapters);
 		const controllers: StepControllers = new Map();
-		// Mirror the server: register a controller and run the step on its signal.
+		// runStep registers the controller in the map itself (after the lock).
 		const controller = new AbortController();
-		controllers.set(controllerKey(run.runId, "a"), controller);
-		const p = runStep(run, "a", () => {}, controller.signal);
+		const p = runStep(run, "a", () => {}, controller, controllers);
 		expect(run.records.a?.status).toBe("running");
+		expect(controllers.get(controllerKey(run.runId, "a"))).toBe(controller);
 
 		expect(cancelStep(run, "a", controllers)).toBe("cancelled");
 		await expect(p).rejects.toThrow();
@@ -194,6 +194,41 @@ describe("mcp engine: chit_cancel via the controller registry", () => {
 		expect(cancelStep(run, "nope", controllers)).toBe("unknown_step");
 		await runStep(run, "a", () => {});
 		expect(cancelStep(run, "a", controllers)).toBe("already_done");
+	});
+
+	test("a rejected duplicate runStep does not clobber the in-flight controller", async () => {
+		// Adapter settles only on abort, so the first call stays in flight.
+		const adapters: AdapterMap = {
+			fake: {
+				call: (req) =>
+					new Promise<AdapterCallResult>((_resolve, reject) => {
+						req.signal?.addEventListener("abort", () => reject(new Error("killed")), {
+							once: true,
+						});
+					}),
+			},
+		};
+		const run = makeRun(CHAIN, { x: "hi" }, adapters);
+		const controllers: StepControllers = new Map();
+		const key = controllerKey(run.runId, "a");
+
+		const owner = new AbortController();
+		const first = runStep(run, "a", () => {}, owner, controllers);
+		expect(run.records.a?.status).toBe("running");
+		expect(controllers.get(key)).toBe(owner);
+
+		// A concurrent duplicate with its own controller is rejected by the lock
+		// and must NOT overwrite or delete the owner's registered controller.
+		const dup = new AbortController();
+		await expect(runStep(run, "a", () => {}, dup, controllers)).rejects.toThrow(/already running/);
+		expect(controllers.get(key)).toBe(owner);
+
+		// So chit_cancel still reaches the real in-flight step.
+		expect(cancelStep(run, "a", controllers)).toBe("cancelled");
+		await expect(first).rejects.toThrow();
+		expect(run.records.a?.status).toBe("cancelled");
+		// And the slot is freed once the owner settles.
+		expect(controllers.get(key)).toBeUndefined();
 	});
 });
 
@@ -211,7 +246,7 @@ describe("mcp engine: abort-window checks", () => {
 		const run = makeRun(CHAIN, { x: "hi" }, adapters);
 		const controller = new AbortController();
 		controller.abort();
-		await expect(runStep(run, "a", () => {}, controller.signal)).rejects.toThrow();
+		await expect(runStep(run, "a", () => {}, controller)).rejects.toThrow();
 		expect(run.records.a?.status).toBe("cancelled");
 		expect(called).toBe(false);
 		expect(run.outputs.a).toBeUndefined();
@@ -228,7 +263,7 @@ describe("mcp engine: abort-window checks", () => {
 			},
 		};
 		const run = makeRun(CHAIN, { x: "hi" }, adapters);
-		await expect(runStep(run, "a", () => {}, controller.signal)).rejects.toThrow();
+		await expect(runStep(run, "a", () => {}, controller)).rejects.toThrow();
 		expect(run.records.a?.status).toBe("cancelled");
 		expect(run.outputs.a).toBeUndefined();
 	});

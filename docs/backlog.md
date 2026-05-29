@@ -24,6 +24,16 @@ typecheck, biome, and check:browser all clean
 
 ## Recently completed
 
+### MCP cancel-controller registration race
+
+`chit_run_step` registered the cancel controller in the `controllers` registry before `runStep` enforced the running-lock, so a concurrent duplicate call on the same run+step overwrote then deleted the live step's controller, leaving `chit_cancel` unable to abort the real in-flight step (the engine lock still prevented a double-spawn, so only cancel was weakened).
+
+What landed:
+
+- `runStep` now takes the `AbortController` and the `StepControllers` registry, derives the signal from the controller, and registers it only after it wins the lock (synchronous, atomic with `status='running'`, before the first await); it unregisters in a `finally` guarded by an ownership check.
+- `server.ts` no longer sets/deletes the controller before the lock (and dropped the now-unused `controllerKey` import).
+- Regression test `a rejected duplicate runStep does not clobber the in-flight controller`: the duplicate rejects, the owner's controller stays registered, and `cancelStep` still aborts the real step.
+
 ### Lifecycle: install marker + `chit list` + safe `chit uninstall`
 
 Operational hygiene for installed skills. The safety boundary is a per-install `.handoff-install.json` marker; `chit uninstall` refuses to remove a directory without one, so accidental rm-rf of an unrelated same-named skill is impossible.
@@ -86,7 +96,6 @@ Small cleanups worth doing before the next major slice (Studio).
   The surfacing layer alone is not enough; the detection piece in the store is the real work.
 - **Capability name validation in `requires`.** Today an author can typo `can_show_markdonw` and validation passes until install. Add a known-capability set check at parse time.
 - **CLI install command emits warnings about residual unenforced permissions.** Currently `installClaudeSkill` returns `enforcementGaps`; the CLI prints a count. Surface them as structured `InvocationWarning`s instead, sharing the runtime side-channel.
-- **MCP `chit_run_step` registers the cancel controller before the duplicate-step check.** `server.ts` does `controllers.set(key, controller)` before `await runStep(...)`, but `runStep` only rejects a duplicate once it sees `status === "running"`. A second concurrent `chit_run_step` on the same run+step overwrites the registry entry, then its rejection path's `finally controllers.delete(key)` removes it, leaving the genuinely in-flight step with no registered controller, so `chit_cancel` reports `not_running` and can't abort it. The engine running-lock still prevents a double-spawn, so the run itself stays correct; only cancel is weakened, and only under concurrent same-step calls. Fix by registering the controller atomically with the pending->running transition inside `runStep` (engine-owned), not in the server before the lock.
 
 ## UI / inspector enhancements (within `chit show`)
 

@@ -188,13 +188,16 @@ export async function runStep(
 	run: Run,
 	stepId: string,
 	heartbeat: Heartbeat,
-	signal?: AbortSignal,
+	controller?: AbortController,
+	controllers?: StepControllers,
 ): Promise<StepRecord> {
 	const rec = run.records[stepId];
 	if (!rec) throw new RuntimeError(`unknown step "${stepId}"`);
 	// Only pending steps may run. running = in flight (reject duplicates);
 	// done/failed/cancelled = terminal. This is the lock that makes "chit governs
-	// legal order" mean a legal step also runs exactly once.
+	// legal order" mean a legal step also runs exactly once. These checks run
+	// BEFORE any controller registration, so a rejected duplicate never touches
+	// the registry and cannot clobber the in-flight step's controller.
 	if (rec.status === "running") throw new RuntimeError(`step "${stepId}" is already running`);
 	if (rec.status === "done") throw new RuntimeError(`step "${stepId}" already ran`);
 	if (rec.status === "failed")
@@ -211,10 +214,18 @@ export async function runStep(
 
 	const step = run.manifest.steps[stepId];
 	if (!step) throw new RuntimeError(`internal: step "${stepId}" missing`);
+	const signal = controller?.signal;
 	// Mark running synchronously, BEFORE the first await, so a concurrent
 	// runStep on the same step sees "running" and is rejected. This closes the
 	// double-spawn hole: the record stayed "pending" through the whole call.
 	rec.status = "running";
+	// Register the cancel controller now that THIS call owns the step (atomic
+	// with the lock above, still before the first await). chit_cancel resolves
+	// the in-flight step through this registry; registering here, not in the
+	// caller before the lock, is what keeps a rejected duplicate from
+	// overwriting then deleting it.
+	const key = controllerKey(run.runId, stepId);
+	if (controller && controllers) controllers.set(key, controller);
 	const startedAt = Date.now();
 	try {
 		// Cancel may have landed between readiness and here.
@@ -267,5 +278,11 @@ export async function runStep(
 		rec.durationMs = Date.now() - startedAt;
 		rec.error = e instanceof Error ? e.message : String(e);
 		throw e;
+	} finally {
+		// Unregister, but only if we still own the slot. The lock prevents another
+		// call from registering this key while we run, so the guard is defensive.
+		if (controller && controllers && controllers.get(key) === controller) {
+			controllers.delete(key);
+		}
 	}
 }

@@ -17,7 +17,6 @@ import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
 import {
 	cancelStep,
-	controllerKey,
 	finalOutput,
 	isComplete,
 	type Run,
@@ -175,15 +174,18 @@ server.registerTool(
 		// it (the server keeps running the in-flight step).
 		const controller = new AbortController();
 		extra.signal.addEventListener("abort", () => controller.abort(), { once: true });
-		const key = controllerKey(run_id, step_id);
-		controllers.set(key, controller);
+		// runStep registers this controller in `controllers` only after this call
+		// wins the running-lock, and unregisters it on settle. Doing it there, not
+		// here before the lock, stops a duplicate concurrent chit_run_step from
+		// overwriting then deleting the live step's controller (which would leave
+		// chit_cancel unable to reach it).
 
 		const rec0 = run.records[step_id];
 		if (rec0?.kind === "call") {
 			heartbeat(`${step_id} · starting · call ${rec0.participantId} (${rec0.agentId})`);
 		}
 		try {
-			const rec = await runStep(run, step_id, heartbeat, controller.signal);
+			const rec = await runStep(run, step_id, heartbeat, controller, controllers);
 			heartbeat(`${step_id} · done in ${rec.durationMs}ms`);
 			return jsonResult({
 				ran: step_id,
@@ -205,7 +207,6 @@ server.registerTool(
 			}
 			return errorResult((e as Error).message);
 		} finally {
-			controllers.delete(key);
 			// Refresh idle timer after the step settles: a multi-minute step's
 			// touch-on-lookup is stale by now, and it's no longer running, so a
 			// concurrent chit_start sweep could otherwise evict it immediately.
