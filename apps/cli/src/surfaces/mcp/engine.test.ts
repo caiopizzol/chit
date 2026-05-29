@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseManifest } from "@chit/core";
+import { loadRegistry } from "../../agents/parse.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import type { AdapterCallResult, AdapterMap, RuntimeAdapter } from "../../runtime/types.ts";
 import {
@@ -10,6 +11,7 @@ import {
 	readySteps,
 	runStep,
 	type StepControllers,
+	startRun,
 } from "./engine.ts";
 
 // A two-step chain: a (from input) -> b (from a's output). deps: a=[], b=[a].
@@ -192,6 +194,99 @@ describe("mcp engine: chit_cancel via the controller registry", () => {
 		expect(cancelStep(run, "nope", controllers)).toBe("unknown_step");
 		await runStep(run, "a", () => {});
 		expect(cancelStep(run, "a", controllers)).toBe("already_done");
+	});
+});
+
+describe("mcp engine: abort-window checks", () => {
+	test("a signal aborted before start cancels without invoking the adapter", async () => {
+		let called = false;
+		const adapters: AdapterMap = {
+			fake: {
+				call: async () => {
+					called = true;
+					return { output: "A" };
+				},
+			},
+		};
+		const run = makeRun(CHAIN, { x: "hi" }, adapters);
+		const controller = new AbortController();
+		controller.abort();
+		await expect(runStep(run, "a", () => {}, controller.signal)).rejects.toThrow();
+		expect(run.records.a?.status).toBe("cancelled");
+		expect(called).toBe(false);
+		expect(run.outputs.a).toBeUndefined();
+	});
+
+	test("an abort landing as the adapter returns is not committed as done", async () => {
+		const controller = new AbortController();
+		const adapters: AdapterMap = {
+			fake: {
+				call: async () => {
+					controller.abort(); // abort lands during the call; adapter returns anyway
+					return { output: "A" };
+				},
+			},
+		};
+		const run = makeRun(CHAIN, { x: "hi" }, adapters);
+		await expect(runStep(run, "a", () => {}, controller.signal)).rejects.toThrow();
+		expect(run.records.a?.status).toBe("cancelled");
+		expect(run.outputs.a).toBeUndefined();
+	});
+});
+
+describe("mcp engine: startRun rejects per_scope without a scope", () => {
+	const SCOPED = {
+		schema: 1,
+		id: "sc",
+		description: "d",
+		inputs: { q: { type: "string" } },
+		// codex enforces read_only (no gap), so this isolates the scope check.
+		participants: { a: { agent: "codex", role: "r", session: "per_scope" } },
+		steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
+		output: "s",
+	};
+	const opts = { inputs: { q: "x" }, registry: loadRegistry(), invocationCwd: "/tmp" as string };
+
+	test("rejects when no scope is supplied", () => {
+		expect(() =>
+			startRun("t", { rawManifest: SCOPED, ...opts, allowUnenforcedPermissions: true }),
+		).toThrow(/scope is required/);
+	});
+
+	test("accepts when a scope is supplied", () => {
+		expect(() =>
+			startRun("t", {
+				rawManifest: SCOPED,
+				...opts,
+				scope: "s1",
+				allowUnenforcedPermissions: true,
+			}),
+		).not.toThrow();
+	});
+});
+
+describe("mcp engine: isComplete requires every step done", () => {
+	const TWO_BRANCH = {
+		schema: 1,
+		id: "tb",
+		description: "d",
+		inputs: { x: { type: "string" } },
+		participants: { p: { agent: "fake", role: "r", session: "stateless" } },
+		steps: {
+			main: { format: "{{ inputs.x }}" },
+			extra: { call: "p", prompt: "{{ inputs.x }}" }, // independent, not the output
+		},
+		output: "main",
+	};
+
+	test("an independent pending branch keeps the run incomplete", async () => {
+		const run = makeRun(TWO_BRANCH, { x: "hi" }, immediate("E"));
+		await runStep(run, "main", () => {});
+		expect(run.records.main?.status).toBe("done");
+		// Old behavior (output-step-only) would call this complete; it is not.
+		expect(isComplete(run)).toBe(false);
+		await runStep(run, "extra", () => {});
+		expect(isComplete(run)).toBe(true);
 	});
 });
 

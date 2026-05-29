@@ -77,6 +77,15 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 		);
 	}
 
+	// A per_scope manifest needs a scope to persist sessions. Without one it
+	// would silently run stateless — reject instead so the caller passes a scope.
+	const needsScope = Object.values(manifest.participants).some((p) => p.session === "per_scope");
+	if (needsScope && opts.scope === undefined) {
+		throw new RuntimeError(
+			`manifest "${manifest.id}" has per_scope participant(s); a scope is required (pass scope to chit_start)`,
+		);
+	}
+
 	const baseAdapters: AdapterMap = {};
 	for (const p of Object.values(manifest.participants)) {
 		if (!(p.agent in baseAdapters)) {
@@ -137,8 +146,11 @@ export function readySteps(run: Run): string[] {
 	return ready;
 }
 
+// Complete only when EVERY step is done — not just the output step. An
+// independent branch that does not feed `output` must not let the run report
+// complete while it is still pending (or failed/cancelled).
 export function isComplete(run: Run): boolean {
-	return run.records[run.manifest.output]?.status === "done";
+	return Object.values(run.records).every((r) => r.status === "done");
 }
 
 export function finalOutput(run: Run): string | undefined {
@@ -205,6 +217,8 @@ export async function runStep(
 	rec.status = "running";
 	const startedAt = Date.now();
 	try {
+		// Cancel may have landed between readiness and here.
+		if (signal?.aborted) throw new RuntimeError(`step "${stepId}" cancelled before start`);
 		let output: string;
 		if (step.kind === "format") {
 			output = renderTemplate(step.format, run.preparedInputs, run.outputs);
@@ -237,6 +251,10 @@ export async function runStep(
 				clearInterval(iv);
 			}
 		}
+		// Cancel may have landed while the call was completing (or an adapter
+		// ignored the signal and returned anyway). Don't commit a cancelled step
+		// as done.
+		if (signal?.aborted) throw new RuntimeError(`step "${stepId}" cancelled`);
 		rec.status = "done";
 		rec.durationMs = Date.now() - startedAt;
 		rec.output = output;
