@@ -3,12 +3,14 @@
 // the client bundle and the API on one port), so no CORS configuration is
 // involved.
 
+import type { LoopRecord } from "@chit/core";
 import type {
 	ConflictResponse,
 	DocumentDetail,
 	ErrorSaveResponse,
 	InstalledSummary,
 	InstallSummary,
+	LoopSummary,
 	PreviewResponse,
 	SavedSaveResponse,
 	UninstallSummary,
@@ -159,4 +161,27 @@ export async function uninstallDocument(name: string): Promise<UninstallSummary>
 		);
 	}
 	return (await res.json()) as UninstallSummary;
+}
+
+// --- Convergence log (read-only) ---
+
+// List loop summaries. The server reads .chit/loops under cwd; the client never
+// touches the filesystem or parses JSONL.
+export async function fetchLoops(): Promise<LoopSummary[]> {
+	const res = await fetch("/api/loops", { headers: authHeaders() });
+	if (!res.ok) {
+		throw new StudioApiError(res.status, `GET /api/loops: ${res.status} ${await res.text()}`);
+	}
+	return (await res.json()) as LoopSummary[];
+}
+
+// Fetch one loop's records by its safe-slug id. The id is the only thing the
+// browser sends; the server resolves the path.
+export async function fetchLoop(loopId: string): Promise<LoopRecord[]> {
+	const url = `/api/loops/${encodeURIComponent(loopId)}`;
+	const res = await fetch(url, { headers: authHeaders() });
+	if (!res.ok) {
+		throw new StudioApiError(res.status, `GET ${url}: ${res.status} ${await res.text()}`);
+	}
+	return (await res.json()) as LoopRecord[];
 }

@@ -8,25 +8,12 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	LoopLogError,
-	type LoopRecord,
-	type LoopStopStatus,
-	parseLoopLog,
-	validateLoopLog,
-} from "@chit/core";
+import { LoopLogError, type LoopRecord, parseLoopLog, validateLoopLog } from "@chit/core";
+import type { LoopSummary } from "./types.ts";
+
+export type { LoopSummary };
 
 const SAFE_LOOP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-
-export interface LoopSummary {
-	loopId: string;
-	scope: string;
-	task: string;
-	status: LoopStopStatus | "in-progress";
-	iterations: number;
-	totalElapsedMs: number | null;
-	startedAt: string;
-}
 
 function loopsDir(cwd: string): string {
 	return join(cwd, ".chit", "loops");

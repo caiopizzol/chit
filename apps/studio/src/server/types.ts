@@ -3,7 +3,7 @@
 // server is the only consumer in sub-unit 1.0; the client will import the
 // same module from across the workspace once it lands.
 
-import type { GraphModel, NormalizedManifest } from "@chit/core";
+import type { GraphModel, LoopStopStatus, NormalizedManifest } from "@chit/core";
 
 export type ParsedStudioDocument = {
 	id: string;
@@ -136,6 +136,19 @@ export interface InstallRequest {
 	force?: boolean;
 	overrideName?: string;
 	allowUnenforcedPermissions?: boolean;
+}
+
+// Read-only convergence-log view (docs/loop-view-v0.md). GET /api/loops returns
+// LoopSummary[]; GET /api/loops/:loopId returns LoopRecord[] (the @chit/core
+// type). loopId is the validated, safe-slug file basename.
+export interface LoopSummary {
+	loopId: string;
+	scope: string;
+	task: string;
+	status: LoopStopStatus | "in-progress";
+	iterations: number;
+	totalElapsedMs: number | null;
+	startedAt: string;
 }
 
 export type Bootstrap =
