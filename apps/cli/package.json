@@ -16,6 +16,8 @@
 	},
 	"dependencies": {
 		"@chit/core": "workspace:*",
-		"chit-studio": "workspace:*"
+		"@modelcontextprotocol/sdk": "^1.18.0",
+		"chit-studio": "workspace:*",
+		"zod": "^4.4.3"
 	}
 }
