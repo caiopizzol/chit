@@ -35,40 +35,55 @@ async function runStep(
 	invocationCwd: string,
 	onTrace: (event: TraceEvent) => void,
 ): Promise<string> {
-	onTrace({ type: "step.started", stepId });
+	const step = manifest.steps[stepId];
+	if (!step) throw new RuntimeError(`internal: step "${stepId}" not found`);
+	// Date.now() is fine here: this is CLI runtime code, not a workflow script.
+	const startedAt = Date.now();
 	try {
-		const step = manifest.steps[stepId];
-		if (!step) throw new RuntimeError(`internal: step "${stepId}" not found`);
-
-		let output: string;
 		if (step.kind === "format") {
-			output = renderTemplate(step.format, preparedInputs, stepOutputs);
-		} else {
-			const participant = manifest.participants[step.call];
-			if (!participant) {
-				throw new RuntimeError(`internal: participant "${step.call}" not found`);
-			}
-			const adapter = adapters[participant.agent];
-			if (!adapter) {
-				throw new RuntimeError(`no adapter for agent "${participant.agent}"`);
-			}
-			const renderedPrompt = renderTemplate(step.prompt, preparedInputs, stepOutputs);
-			const input = buildAgentInput(participant.role, renderedPrompt);
-			const result = await adapter.call({
-				participantId: step.call,
-				agentId: participant.agent,
-				stepId,
-				input,
-				cwd: invocationCwd,
-			});
-			output = result.output;
+			onTrace({ type: "step.started", stepId, kind: "format" });
+			const output = renderTemplate(step.format, preparedInputs, stepOutputs);
+			onTrace({ type: "step.completed", stepId, output, durationMs: Date.now() - startedAt });
+			return output;
 		}
 
-		onTrace({ type: "step.completed", stepId });
-		return output;
+		const participant = manifest.participants[step.call];
+		if (!participant) {
+			throw new RuntimeError(`internal: participant "${step.call}" not found`);
+		}
+		const adapter = adapters[participant.agent];
+		if (!adapter) {
+			throw new RuntimeError(`no adapter for agent "${participant.agent}"`);
+		}
+		// Emit started AFTER rendering so the trace carries the exact prompt sent.
+		const renderedPrompt = renderTemplate(step.prompt, preparedInputs, stepOutputs);
+		onTrace({
+			type: "step.started",
+			stepId,
+			kind: "call",
+			participantId: step.call,
+			agentId: participant.agent,
+			session: participant.session,
+			prompt: renderedPrompt,
+		});
+		const input = buildAgentInput(participant.role, renderedPrompt);
+		const result = await adapter.call({
+			participantId: step.call,
+			agentId: participant.agent,
+			stepId,
+			input,
+			cwd: invocationCwd,
+		});
+		onTrace({
+			type: "step.completed",
+			stepId,
+			output: result.output,
+			durationMs: Date.now() - startedAt,
+		});
+		return result.output;
 	} catch (e) {
 		const error = e instanceof Error ? e.message : String(e);
-		onTrace({ type: "step.failed", stepId, error });
+		onTrace({ type: "step.failed", stepId, error, durationMs: Date.now() - startedAt });
 		throw e;
 	}
 }

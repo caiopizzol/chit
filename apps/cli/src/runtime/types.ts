@@ -24,10 +24,24 @@ export interface RuntimeAdapter {
 
 export type AdapterMap = Record<string, RuntimeAdapter>;
 
+// Trace events carry enough to reconstruct what each step did: the kind, and
+// for call steps the participant/agent/session-policy and the rendered prompt
+// actually sent to the adapter (otherwise invisible, since the prompt is
+// interpolated at run time). completed/failed carry wall-clock duration.
+// result.trace always collects the full payload; the CLI `--trace` renderer
+// shows previews of prompt/output, not full dumps.
 export type TraceEvent =
-	| { type: "step.started"; stepId: string }
-	| { type: "step.completed"; stepId: string }
-	| { type: "step.failed"; stepId: string; error: string };
+	| {
+			type: "step.started";
+			stepId: string;
+			kind: "call" | "format";
+			participantId?: string;
+			agentId?: string;
+			session?: string;
+			prompt?: string;
+	  }
+	| { type: "step.completed"; stepId: string; output: string; durationMs: number }
+	| { type: "step.failed"; stepId: string; error: string; durationMs: number };
 
 export interface ExecuteOptions {
 	inputs: Record<string, unknown>;

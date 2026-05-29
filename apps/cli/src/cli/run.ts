@@ -16,7 +16,7 @@ import { AdapterError, buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { RuntimeError } from "../runtime/render.ts";
-import type { AdapterMap, RunResult } from "../runtime/types.ts";
+import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
 import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import { installClaudeSkill, SurfaceInstallError } from "../surfaces/claude-skill.ts";
@@ -60,6 +60,9 @@ interface ParsedArgs {
 	listJson: boolean;
 	// Shared.
 	allowUnenforcedPermissions: boolean;
+	// `run`: render a step transcript to stderr. `install`: bake --trace into
+	// the generated skill so it shows its work.
+	trace: boolean;
 }
 
 function emptyArgs(command: ParsedArgs["command"]): ParsedArgs {
@@ -69,6 +72,7 @@ function emptyArgs(command: ParsedArgs["command"]): ParsedArgs {
 		allowUnenforcedPermissions: false,
 		force: false,
 		listJson: false,
+		trace: false,
 	};
 }
 
@@ -194,6 +198,8 @@ function parseRunArgs(argv: string[]): ParsedArgs {
 			out.scope = next;
 		} else if (a === "--allow-unenforced-permissions") {
 			out.allowUnenforcedPermissions = true;
+		} else if (a === "--trace") {
+			out.trace = true;
 		} else if (a === "--input-stdin") {
 			const next = argv[++i];
 			if (!next) throw new Error("--input-stdin requires an input name");
@@ -232,6 +238,8 @@ function parseInstallArgs(argv: string[]): ParsedArgs {
 			out.force = true;
 		} else if (a === "--allow-unenforced-permissions") {
 			out.allowUnenforcedPermissions = true;
+		} else if (a === "--trace") {
+			out.trace = true;
 		} else {
 			throw new Error(`unknown flag: ${a}`);
 		}
@@ -258,6 +266,9 @@ run options:
   --allow-unenforced-permissions  Run anyway when an adapter can't enforce a declared
                                 permission (e.g., claude-cli + filesystem: read_only).
                                 Emits a warning every run; use deliberately.
+  --trace                       Render a step transcript to stderr (id, participant,
+                                agent, session policy, elapsed, status, prompt/output
+                                previews). Streams live in a terminal. Off by default.
 
 show options:
   --surface <kind>              Validate against a surface (claude-skill | cli). Without
@@ -291,6 +302,8 @@ install options:
                                 before installing. Without --force, install refuses.
   --allow-unenforced-permissions  See above. Required if the manifest declares
                                 permissions the chosen adapter cannot enforce.
+  --trace                       Bake --trace into the generated skill so each run
+                                emits its step transcript (visible in chat).
 
 Loads a manifest, builds adapters from the agent registry, and runs the
 chit to completion. Prints final output to stdout, or a failure summary
@@ -468,6 +481,10 @@ export async function runMain(argv: string[]): Promise<number> {
 			inputs: args.inputs,
 			adapters: effectiveAdapters,
 			invocationCwd: args.invocationCwd ?? process.cwd(),
+			// --trace renders a step transcript to stderr as steps settle. In a
+			// terminal this streams live; via the skill surface (which buffers the
+			// whole command) it all arrives at once, ahead of the final output.
+			onTrace: args.trace ? (e) => process.stderr.write(`${renderTraceEvent(e)}\n`) : undefined,
 		});
 	} catch (e) {
 		if (e instanceof RuntimeError) {
@@ -501,6 +518,36 @@ function defaultRuntimePath(): string {
 	return dirname(dirname(import.meta.dir));
 }
 
+// --- Trace rendering (--trace) ---
+
+const TRACE_PREVIEW_CHARS = 280;
+
+// One-line, length-capped preview. Full prompt/output stay in result.trace;
+// --trace deliberately shows previews, not dumps, so a chat transcript stays
+// readable.
+function tracePreview(label: string, text: string): string {
+	const oneLine = text.replace(/\s+/g, " ").trim();
+	const clipped =
+		oneLine.length > TRACE_PREVIEW_CHARS
+			? `${oneLine.slice(0, TRACE_PREVIEW_CHARS)}… (${text.length} chars)`
+			: oneLine;
+	return `chit: trace |   ${label}: ${clipped}`;
+}
+
+function renderTraceEvent(e: TraceEvent): string {
+	if (e.type === "step.started") {
+		if (e.kind === "call") {
+			const head = `chit: trace > step "${e.stepId}": call ${e.participantId} (agent ${e.agentId}, session ${e.session})`;
+			return `${head}\n${tracePreview("prompt", e.prompt ?? "")}`;
+		}
+		return `chit: trace > step "${e.stepId}": format`;
+	}
+	if (e.type === "step.completed") {
+		return `chit: trace < step "${e.stepId}": done in ${e.durationMs}ms\n${tracePreview("output", e.output)}`;
+	}
+	return `chit: trace x step "${e.stepId}": FAILED in ${e.durationMs}ms: ${e.error}`;
+}
+
 function runInstall(args: ParsedArgs): number {
 	if (!args.manifestPath) {
 		process.stderr.write(`chit: install requires a manifest path\n\n${HELP}`);
@@ -526,6 +573,7 @@ function runInstall(args: ParsedArgs): number {
 			allowUnenforcedPermissions: args.allowUnenforcedPermissions,
 			overrideName: args.overrideName,
 			force: args.force,
+			trace: args.trace,
 		});
 		process.stdout.write(`chit: installed skill at ${result.skillDir}\n`);
 		process.stdout.write(`  SKILL.md: ${result.skillMdPath}\n`);

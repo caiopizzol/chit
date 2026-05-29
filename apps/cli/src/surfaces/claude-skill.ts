@@ -60,6 +60,10 @@ export interface InstallOptions {
 	// --allow-unenforced-permissions flag and the runtime will warn on every
 	// invocation. If false, install refuses with SurfaceInstallError.
 	allowUnenforcedPermissions?: boolean;
+	// If true, the generated SKILL.md runs with --trace, so each invocation emits
+	// a step transcript (id, participant, agent, session, elapsed, previews)
+	// ahead of the final output. Off by default.
+	trace?: boolean;
 	// Used by tests to inject a fixture registry. Production callers omit this.
 	registry?: NormalizedRegistry;
 }
@@ -188,6 +192,7 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 			runtimePath,
 			primaryInputName: primaryInput,
 			allowUnenforced: gaps.length > 0,
+			trace: opts.trace === true,
 			heredocDelimiter: generateHeredocDelimiter(),
 			installName,
 		}),
@@ -227,6 +232,7 @@ interface BuildOptions {
 	runtimePath: string;
 	primaryInputName: string;
 	allowUnenforced: boolean;
+	trace: boolean;
 	heredocDelimiter: string;
 	installName: string;
 }
@@ -237,10 +243,12 @@ function buildSkillMd(opts: BuildOptions): string {
 		runtimePath,
 		primaryInputName,
 		allowUnenforced,
+		trace,
 		heredocDelimiter,
 		installName,
 	} = opts;
 	const allowFlag = allowUnenforced ? `\\\n    --allow-unenforced-permissions ` : "";
+	const traceFlag = trace ? `\\\n    --trace ` : "";
 
 	// The fenced block uses ``` ```! ``` (NOT ``` ```bash ```). Claude Code's
 	// preprocessor executes ``` ```! ``` blocks BEFORE rendering the skill into
@@ -297,7 +305,7 @@ disable-model-invocation: true
   bun "${runtimePath}/src/cli/run.ts" run \\
     "\${CLAUDE_SKILL_DIR}/manifest.json" \\
     --scope "$SCOPE" \\
-    --invocation-cwd "$WORKTREE" ${allowFlag}\\
+    --invocation-cwd "$WORKTREE" ${allowFlag}${traceFlag}\\
     --input-stdin ${primaryInputName} <<'${heredocDelimiter}'
 $ARGUMENTS
 ${heredocDelimiter}
