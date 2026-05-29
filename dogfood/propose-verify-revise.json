@@ -1,0 +1,46 @@
+{
+	"schema": 1,
+	"id": "propose-verify-revise",
+	"description": "Claude proposes, Codex verifies, Claude revises. One task in, one reviewed answer out. The handoff you usually do by hand, pasting between two screens.",
+
+	"inputs": {
+		"task": { "type": "string" }
+	},
+
+	"requires": {
+		"can_show_markdown": true
+	},
+
+	"participants": {
+		"proposer": {
+			"agent": "claude",
+			"role": "Propose a concrete answer to the task, then later revise it after a reviewer critiques it. Be specific and concise.",
+			"session": "per_scope"
+		},
+		"verifier": {
+			"agent": "codex",
+			"role": "Skeptical reviewer. Find concrete problems, missing cases, and wrong claims. Cite file:line when reviewing code. Be specific; do not rubber-stamp.",
+			"session": "stateless"
+		}
+	},
+
+	"steps": {
+		"propose": {
+			"call": "proposer",
+			"prompt": "{{ inputs.task }}"
+		},
+		"verify": {
+			"call": "verifier",
+			"prompt": "Review this proposed answer and list concrete problems or gaps. Do not rewrite it.\n\n--- proposal ---\n{{ steps.propose.output }}"
+		},
+		"revise": {
+			"call": "proposer",
+			"prompt": "A reviewer raised the points below about your earlier proposal. Revise your answer to address them. You are continuing your own session, so you already have your original proposal in context; do not ask for it to be repasted.\n\n--- review ---\n{{ steps.verify.output }}"
+		},
+		"out": {
+			"format": "## Proposal (Claude)\n\n{{ steps.propose.output }}\n\n## Review (Codex)\n\n{{ steps.verify.output }}\n\n## Revised (Claude, continuing)\n\n{{ steps.revise.output }}"
+		}
+	},
+
+	"output": "out"
+}
