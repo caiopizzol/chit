@@ -6,6 +6,7 @@ export * from "./agents/registry.ts";
 export * from "./agents/types.ts";
 export * from "./graph-model.ts";
 export * from "./install-marker.ts";
+export * from "./loops/log.ts";
 export * from "./manifest/parse.ts";
 export * from "./manifest/types.ts";
 export * from "./shared.ts";

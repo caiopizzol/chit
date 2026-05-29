@@ -25,6 +25,7 @@ ENTRIES=(
   src/agents/types.ts
   src/graph-model.ts
   src/install-marker.ts
+  src/loops/log.ts
   src/shared.ts
   src/show.ts
   src/index.ts

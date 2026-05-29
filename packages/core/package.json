@@ -12,6 +12,7 @@
 		"./agents/types": "./src/agents/types.ts",
 		"./graph-model": "./src/graph-model.ts",
 		"./install-marker": "./src/install-marker.ts",
+		"./loops/log": "./src/loops/log.ts",
 		"./shared": "./src/shared.ts",
 		"./show": "./src/show.ts"
 	},
