@@ -1,12 +1,15 @@
 # proposal: conversational handoff wants MCP or human-checkpoints, not skills
 
-- Status: open, decision deferred (dogfood signal, not a commitment)
+- Status: RESOLVED → build it. The progress-spike proved Claude Code renders MCP
+  progress/log heartbeats live; the stepwise chit MCP spike
+  (`apps/cli/src/surfaces/mcp/`) ran propose-verify-revise end to end and the
+  live heartbeat through a 221s step felt materially better than the silent
+  skill (receipt 0004). Stepwise static DAG over MCP is the conversational
+  surface. Next: running-state lock, then cooperative cancellation, then
+  within-step adapter streaming.
 - Motivated by: Dogfood v0 scenario 5 design; the requirement to run a handoff
   inside the Claude CLI chat, see each agent's response as it lands, and jump in
   with a manual turn when needed.
-- Decision needed: does the MCP surface (or a human-checkpoint step kind) move
-  up the roadmap, given the skill surface cannot deliver the in-chat,
-  interruptible experience?
 
 ## The signal
 
