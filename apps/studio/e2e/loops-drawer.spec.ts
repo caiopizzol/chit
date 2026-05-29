@@ -31,7 +31,7 @@ test("loops drawer: list -> select -> compact rail -> Escape back", async ({ pag
 			checksRun: "264 tests",
 			verdict: "revise",
 			findingCount: 2,
-			decision: "revise",
+			decision: "proceed",
 			checkDurationMs: 18000,
 			at: "2026-05-29T10:01:00.000Z",
 		},
@@ -81,6 +81,15 @@ test("loops drawer: list -> select -> compact rail -> Escape back", async ({ pag
 		await expect(maxRow.locator("dd")).toHaveText("3");
 		await expect(config).toContainText("checker manifest");
 		await expect(config.locator(".config-absent")).toHaveText("not recorded");
+
+		// The trail renders the loop owner's DECISION per iteration; the rail renders
+		// the reviewer's VERDICT. The seed sets them differently (decision: proceed,
+		// verdict: revise), so this pins which field each reads: the trail shows a
+		// proceed chip while the rail (asserted above) shows the revise verdict. The
+		// stop status closes the trail.
+		const trail = drawer.locator(".verdict-trail");
+		await expect(trail.locator(".trail-chip--proceed")).toBeVisible();
+		await expect(trail.locator(".trail-stop--converged")).toBeVisible();
 
 		// Escape backs out to the list (not closed): the loop row is shown again.
 		await page.keyboard.press("Escape");

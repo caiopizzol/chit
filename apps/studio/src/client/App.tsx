@@ -11,7 +11,7 @@
 // selection is sticky, the cursor is pointer, and selected nodes get an
 // inverted header strip plus an outer ink outline.
 
-import type { LoopRecord, SurfaceKind, ValidationReport } from "@chit/core";
+import type { LoopRecord, LoopStopStatus, SurfaceKind, ValidationReport } from "@chit/core";
 import {
 	applyEdgeChanges,
 	Background,
@@ -665,6 +665,43 @@ function LoopRail({ records }: { records: LoopRecord[] }) {
 	);
 }
 
+const STOP_LABEL: Record<LoopStopStatus, string> = {
+	converged: "converged",
+	blocked: "blocked",
+	"max-iterations": "max iterations",
+	"needs-decision": "needs decision",
+};
+
+// Compact convergence shape: one chip per iteration showing the loop owner's
+// decision (proceed/revise/block - what was chosen after review, not the raw
+// verdict), then a final chip for the stop status. Complements the rail's
+// chronological detail with an at-a-glance read of how the loop converged.
+function VerdictTrail({ records }: { records: LoopRecord[] }) {
+	const iterations = records.filter((r) => r.type === "iteration");
+	const stop = records.find((r) => r.type === "stop");
+	return (
+		<div className="verdict-trail">
+			{iterations.map(
+				(it) =>
+					it.type === "iteration" && (
+						<span
+							key={it.n}
+							className={`trail-chip trail-chip--${it.decision}`}
+							title={`iteration ${it.n}: decided ${it.decision}`}
+						>
+							{it.decision}
+						</span>
+					),
+			)}
+			{stop?.type === "stop" && (
+				<span className={`trail-chip trail-stop trail-stop--${stop.status}`}>
+					{STOP_LABEL[stop.status] ?? stop.status}
+				</span>
+			)}
+		</div>
+	);
+}
+
 // Per-loop config strip, shown atop the detail view. Reads the loop's header
 // record (scope/repo/startedAt/maxIterations). The convergence log does not
 // record which checker manifest the loop ran against, so that row is labeled
@@ -779,6 +816,7 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 			return (
 				<>
 					{header?.type === "loop" && <LoopConfig header={header} />}
+					<VerdictTrail records={detail.records} />
 					<LoopRail records={detail.records} />
 				</>
 			);

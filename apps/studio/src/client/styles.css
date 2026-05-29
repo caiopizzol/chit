@@ -984,3 +984,49 @@ header.app .loops-btn {
 	border-top: 1px solid var(--hairline);
 	padding-top: 8px;
 }
+
+/* Verdict trail: the convergence shape as per-iteration decision chips + a stop
+   chip, shown above the rail. */
+.verdict-trail {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	margin: 0 0 12px;
+}
+.trail-chip {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	border: 1px solid var(--hairline);
+	border-radius: 2px;
+	padding: 1px 6px;
+	color: var(--carbon);
+}
+.trail-chip--proceed {
+	color: var(--ink);
+	border-color: var(--ink);
+}
+.trail-chip--revise {
+	color: #8a6d1f;
+	border-color: #8a6d1f;
+}
+.trail-chip--block {
+	color: #8a3b2e;
+	border-color: #8a3b2e;
+}
+.trail-stop {
+	font-weight: 600;
+	background: var(--sheet);
+}
+.trail-stop--converged {
+	color: var(--ink);
+	border-color: var(--ink);
+}
+.trail-stop--blocked,
+.trail-stop--needs-decision,
+.trail-stop--max-iterations {
+	color: #8a3b2e;
+	border-color: #8a3b2e;
+}
