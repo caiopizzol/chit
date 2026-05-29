@@ -44,9 +44,12 @@ Per iteration (default budget: 3):
 Stop conditions: `block`; an ambiguous product/design decision; failing tests
 needing a user choice; any destructive/outward-facing action; or max iterations.
 
-The shipped form is the user-global Claude Code skill `supervised-convergence`
-(`~/.claude/skills/supervised-convergence/SKILL.md`), which encodes this policy.
-It needs zero chit code changes and runs against the shipped MCP server.
+The shipped form is the Claude Code skill versioned in this repo at
+`skills/supervised-convergence/SKILL.md`, which encodes this policy. Install it
+by copying that directory to `~/.claude/skills/` (user-global) or a project's
+`.claude/skills/`, and set the skill's `manifest_path` to your absolute path to
+`apps/cli/examples/codex-advisor-thread.json`. It needs zero chit code changes
+and runs against the shipped MCP server.
 
 ## What this is NOT (and why)
 
