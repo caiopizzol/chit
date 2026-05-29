@@ -1,0 +1,37 @@
+{
+	"schema": 1,
+	"id": "codex-advisor-thread",
+	"description": "Persistent Codex advisor for one ongoing thread. You keep driving Claude in your Claude Code chat (that preserves Claude's context); paste Claude's latest answer in as claude_response and this reviews it. Codex is per_scope, so it remembers prior questions/reviews in the same scope. Usage: same scope = same thread (use a new scope for unrelated work); pass cwd = the repo so Codex inspects the right files; do NOT edit the advisor role mid-thread (role is part of the session fingerprint, so editing it starts a fresh Codex thread). MCP-only (three inputs; not claude-skill-installable). Preserves Codex context, not Claude chat context.",
+
+	"inputs": {
+		"task": { "type": "string" },
+		"claude_response": { "type": "string" },
+		"context": { "type": "string", "optional": true }
+	},
+
+	"requires": {
+		"can_show_markdown": true
+	},
+
+	"participants": {
+		"codex_advisor": {
+			"agent": "codex",
+			"role": "You are a persistent, skeptical second-opinion advisor across an ongoing thread of questions in this scope. Use prior questions and your prior reviews in this scope when relevant, but never rely on memory over current evidence. Review Claude's proposed answer before the human decides whether to execute. Do not implement. Do not agree for the sake of agreeing. Verify technical claims by inspecting the repo and running non-mutating checks; cite file:line and command results. If something cannot be verified, say so plainly.",
+			"session": "per_scope",
+			"permissions": { "filesystem": "read_only" }
+		}
+	},
+
+	"steps": {
+		"review": {
+			"call": "codex_advisor",
+			"prompt": "Current task or question:\n{{ inputs.task }}\n\nClaude's latest response:\n{{ inputs.claude_response }}\n\nAdditional context, if any:\n{{ inputs.context }}\n\nWhat do you think? Do not agree for the sake of agreeing, do not assume everything is true before deeply verifying (and writing/running tests when applicable). If relevant, inspect files and run non-mutating checks. Don't implement - just advise. Draw on prior context from this advisor thread when relevant, but do not rely on memory over evidence. Return: (1) Verdict: proceed / revise / block. (2) Concrete findings, ordered by severity, with file:line where applicable. (3) What Claude must verify before executing. (4) If there are no issues, say so plainly and name the remaining risk."
+		},
+
+		"out": {
+			"format": "## Codex advisor review\n\n{{ steps.review.output }}\n\n---\n\nPaste back to Claude:\n\nLet's go. If helpful or relevant please consider the Codex review above, but DO NOT assume it is correct before deeply verifying or testing against it (MUST). If the review is wrong, say why and proceed with the correct approach."
+		}
+	},
+
+	"output": "out"
+}
