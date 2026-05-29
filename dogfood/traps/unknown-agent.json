@@ -3,7 +3,9 @@
 	"id": "trap-unknown-agent",
 	"description": "Participant points at an agent that is not in the registry.",
 	"inputs": { "q": { "type": "string" } },
-	"participants": { "advisor": { "agent": "gpt-9000", "role": "Advisor.", "session": "stateless" } },
+	"participants": {
+		"advisor": { "agent": "gpt-9000", "role": "Advisor.", "session": "stateless" }
+	},
 	"steps": { "ask": { "call": "advisor", "prompt": "{{ inputs.q }}" } },
 	"output": "ask"
 }
