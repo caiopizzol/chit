@@ -116,7 +116,18 @@ describe("convergence log: validation", () => {
 
 describe("convergence log: structural validation (validateLoopLog)", () => {
 	test("accepts a complete log: loop -> iterations -> stop", () => {
-		expect(validateLoopLog([header, iteration, stop])).toEqual([header, iteration, stop]);
+		const stopOne: LoopStopRecord = { ...stop, iterations: 1 }; // matches the one iteration
+		expect(validateLoopLog([header, iteration, stopOne])).toEqual([header, iteration, stopOne]);
+	});
+
+	test("rejects non-sequential iteration numbers", () => {
+		const it3: LoopIterationRecord = { ...iteration, n: 3 };
+		expect(() => validateLoopLog([header, iteration, it3])).toThrow(/sequential/);
+	});
+
+	test("rejects a stop whose iterations count contradicts the records", () => {
+		const stopWrong: LoopStopRecord = { ...stop, iterations: 5 };
+		expect(() => validateLoopLog([header, iteration, stopWrong])).toThrow(/stop\.iterations/);
 	});
 
 	test("accepts an in-progress log with no stop yet", () => {

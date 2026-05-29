@@ -220,5 +220,25 @@ export function validateLoopLog(records: LoopRecord[]): LoopRecord[] {
 			throw new LoopLogError(`log: record ${i + 1} must be an iteration`);
 		}
 	}
+	// Cross-record consistency: iteration numbers are sequential 1..N, and a
+	// stop's iteration count matches the records actually present. The writer
+	// produces these; the reader (Studio) rejects a file that contradicts them
+	// rather than rendering nonsense totals.
+	const iterations = records.filter((r): r is LoopIterationRecord => r.type === "iteration");
+	iterations.forEach((it, k) => {
+		if (it.n !== k + 1) {
+			throw new LoopLogError(
+				`log: iteration numbers must be sequential 1..N (record ${k + 1} has n=${it.n})`,
+			);
+		}
+	});
+	if (stopAt !== -1) {
+		const stopRec = records[stopAt] as LoopStopRecord;
+		if (stopRec.iterations !== iterations.length) {
+			throw new LoopLogError(
+				`log: stop.iterations=${stopRec.iterations} but the log has ${iterations.length} iteration record(s)`,
+			);
+		}
+	}
 	return records;
 }
