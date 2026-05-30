@@ -4,6 +4,7 @@
 
 export * from "./agents/registry.ts";
 export * from "./agents/types.ts";
+export * from "./audit/events.ts";
 export * from "./graph-model.ts";
 export * from "./install-marker.ts";
 export * from "./loops/log.ts";

@@ -23,6 +23,7 @@ ENTRIES=(
   src/manifest/types.ts
   src/agents/registry.ts
   src/agents/types.ts
+  src/audit/events.ts
   src/graph-model.ts
   src/install-marker.ts
   src/loops/log.ts

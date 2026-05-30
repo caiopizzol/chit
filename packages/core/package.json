@@ -10,6 +10,7 @@
 		"./manifest/types": "./src/manifest/types.ts",
 		"./agents": "./src/agents/registry.ts",
 		"./agents/types": "./src/agents/types.ts",
+		"./audit/events": "./src/audit/events.ts",
 		"./graph-model": "./src/graph-model.ts",
 		"./install-marker": "./src/install-marker.ts",
 		"./loops/log": "./src/loops/log.ts",
