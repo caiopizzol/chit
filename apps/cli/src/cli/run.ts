@@ -26,6 +26,7 @@ import {
 	listInstalled,
 	uninstall,
 } from "../surfaces/lifecycle.ts";
+import { runConverge } from "./converge.ts";
 import { runLoopLog } from "./loop-log.ts";
 
 const BASE_CLI_CAPABILITIES: ReadonlySet<string> = new Set(["can_show_markdown"]);
@@ -256,6 +257,7 @@ const HELP = `Usage:
   chit uninstall <name> [--to <dir>]
   chit studio [path]
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
+  chit converge --task <text> --scope <id> [options]   (chit converge --help)
   chit -h | --help
 
 run options:
@@ -329,6 +331,9 @@ export async function runMain(argv: string[]): Promise<number> {
 	// loop-log has nested sub-verbs and its own flags; it owns its parsing in a
 	// separate module so the flat-command parser below stays simple.
 	if (argv[0] === "loop-log") return runLoopLog(argv.slice(1));
+	// converge drives the autonomous implement/check loop; it owns its own
+	// flags and loop logic in a separate module, same as loop-log.
+	if (argv[0] === "converge") return runConverge(argv.slice(1));
 
 	let args: ParsedArgs;
 	try {
