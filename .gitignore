@@ -19,3 +19,8 @@ apps/studio/.playwright/
 
 # Local Claude Code runtime state (scheduled-task lock, etc.)
 .claude/
+
+# Convergence loop logs (chit loop-log / chit converge write here). Product
+# summaries, but they carry task/change text and may reference sensitive
+# content; never commit them. Full audit transcripts live in ~/.local/state.
+.chit/
