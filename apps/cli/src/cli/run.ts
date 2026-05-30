@@ -14,6 +14,9 @@ import {
 } from "@chit/core";
 import { AdapterError, buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
+import { AuditRecorder } from "../audit/recorder.ts";
+import { AuditStore } from "../audit/store.ts";
+import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { RuntimeError } from "../runtime/render.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
@@ -65,6 +68,10 @@ interface ParsedArgs {
 	// `run`: render a step transcript to stderr. `install`: bake --trace into
 	// the generated skill so it shows its work.
 	trace: boolean;
+	// `run`: persist a full audit run (prompts/outputs/usage as blobs) to the
+	// audit store. Opt-in: prompt/output blobs can contain secrets, so plain
+	// `chit run` does NOT audit unless --audit is passed.
+	audit: boolean;
 }
 
 function emptyArgs(command: ParsedArgs["command"]): ParsedArgs {
@@ -75,6 +82,7 @@ function emptyArgs(command: ParsedArgs["command"]): ParsedArgs {
 		force: false,
 		listJson: false,
 		trace: false,
+		audit: false,
 	};
 }
 
@@ -202,6 +210,8 @@ function parseRunArgs(argv: string[]): ParsedArgs {
 			out.allowUnenforcedPermissions = true;
 		} else if (a === "--trace") {
 			out.trace = true;
+		} else if (a === "--audit") {
+			out.audit = true;
 		} else if (a === "--input-stdin") {
 			const next = argv[++i];
 			if (!next) throw new Error("--input-stdin requires an input name");
@@ -273,6 +283,9 @@ run options:
   --trace                       Render a step transcript to stderr (id, participant,
                                 agent, session policy, elapsed, status, prompt/output
                                 previews). Streams live in a terminal. Off by default.
+  --audit                       Persist a full audit run (prompts, outputs, token
+                                usage as blobs) under the local state dir. Off by
+                                default: blobs can contain secrets. Prints the run id.
 
 show options:
   --surface <kind>              Validate against a surface (claude-skill | cli). Without
@@ -480,30 +493,75 @@ export async function runMain(argv: string[]): Promise<number> {
 		throw e;
 	}
 
+	const invocationCwd = args.invocationCwd ?? process.cwd();
+
+	// Opt-in audit: persist a full run (prompts/outputs/usage as blobs) to the
+	// audit store. Best-effort and transparent, like the converge path. The audit
+	// wrapper sits BENEATH the session wrapper so the recorder sees injected/
+	// returned sessions.
 	let effectiveAdapters = adapters;
+	let recorder: AuditRecorder | undefined;
+	const startedAt = Date.now();
+	if (args.audit) {
+		recorder = new AuditRecorder(new AuditStore(), crypto.randomUUID(), {
+			manifestId: manifest.id,
+			cwd: invocationCwd,
+			surface: "cli",
+			...(args.scope !== undefined && { scope: args.scope }),
+		});
+		recorder.runStarted();
+		effectiveAdapters = wrapAdaptersWithAudit(effectiveAdapters, recorder);
+	}
 	if (args.scope !== undefined) {
 		const store = new FileSessionStore(defaultSessionDir());
-		effectiveAdapters = wrapAdaptersWithSessions(adapters, manifest, registry, args.scope, store);
+		effectiveAdapters = wrapAdaptersWithSessions(
+			effectiveAdapters,
+			manifest,
+			registry,
+			args.scope,
+			store,
+		);
 	}
+
+	// --trace renders to stderr; audit feeds the recorder. Compose both.
+	const onTrace =
+		args.trace || recorder
+			? (e: TraceEvent) => {
+					if (args.trace) process.stderr.write(`${renderTraceEvent(e)}\n`);
+					recorder?.fromTrace(e);
+				}
+			: undefined;
+
+	// Surface the audit run id on stderr (never stdout, which carries the result)
+	// so a user can find the transcript - including for a FAILED run. Only when the
+	// audit run was actually written: if any audit write failed (lastError), there
+	// is no usable transcript to point at, so stay silent.
+	const reportAudit = () => {
+		if (recorder && recorder.lastError === undefined) {
+			process.stderr.write(`chit: audit run ${recorder.runId}\n`);
+		}
+	};
 
 	let result: RunResult;
 	try {
 		result = await executeManifest(manifest, {
 			inputs: args.inputs,
 			adapters: effectiveAdapters,
-			invocationCwd: args.invocationCwd ?? process.cwd(),
-			// --trace renders a step transcript to stderr as steps settle. In a
-			// terminal this streams live; via the skill surface (which buffers the
-			// whole command) it all arrives at once, ahead of the final output.
-			onTrace: args.trace ? (e) => process.stderr.write(`${renderTraceEvent(e)}\n`) : undefined,
+			invocationCwd,
+			onTrace,
 		});
 	} catch (e) {
+		recorder?.runCompleted("failed", Date.now() - startedAt);
+		reportAudit();
 		if (e instanceof RuntimeError) {
 			process.stderr.write(`chit: ${e.message}\n`);
 			return 2;
 		}
 		throw e;
 	}
+
+	recorder?.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
+	reportAudit();
 
 	if (result.ok) {
 		process.stdout.write(result.output);

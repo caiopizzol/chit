@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AuditStore } from "../audit/store.ts";
 import { parseArgs } from "./run.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
@@ -177,6 +178,11 @@ describe("parseArgs", () => {
 		expect(parseArgs(["run", "m.json"]).trace).toBe(false);
 	});
 
+	test("--audit captured on run, defaults false", () => {
+		expect(parseArgs(["run", "m.json", "--audit"]).audit).toBe(true);
+		expect(parseArgs(["run", "m.json"]).audit).toBe(false);
+	});
+
 	test("--trace captured on install, defaults false", () => {
 		expect(parseArgs(["install", "m.json", "--as", "claude-skill", "--trace"]).trace).toBe(true);
 		expect(parseArgs(["install", "m.json", "--as", "claude-skill"]).trace).toBe(false);
@@ -258,6 +264,90 @@ describe("handoff run (subprocess)", () => {
 		]);
 		expect(code).toBe(0);
 		expect(stdout).toContain("CODEX_ANSWER: 42");
+	});
+
+	test("--audit persists a full audit run (cli surface) without changing output", async () => {
+		// Isolate the audit store in a fresh state dir so we can read it back.
+		const stateDir = mkdtempSync(join(tmpdir(), "chit-run-audit-"));
+		try {
+			const { stdout, stderr, code } = await runCLI(
+				["run", ASK_CODEX, "--input", "question=hi", "--audit"],
+				{ XDG_STATE_HOME: stateDir },
+			);
+			expect(code).toBe(0);
+			expect(stdout).toContain("CODEX_ANSWER: 42"); // output unchanged by audit
+			expect(stderr).toMatch(/audit run /); // run id surfaced on stderr
+
+			const store = new AuditStore(join(stateDir, "handoff", "audit"));
+			const runs = store.listRuns();
+			expect(runs.length).toBe(1);
+			const events = store.readEvents(runs[0] as string);
+			expect(events[0]).toMatchObject({ type: "run.started", surface: "cli" });
+			expect(events.at(-1)?.type).toBe("run.completed");
+			// The single codex call produced a completed adapter call with a readable
+			// output blob.
+			const done = events.find((e) => e.type === "adapter.call.completed");
+			expect(
+				done?.type === "adapter.call.completed" &&
+					store.readBlob(runs[0] as string, done.outputBlob).length,
+			).toBeGreaterThan(0);
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("plain run does NOT write an audit run (audit is opt-in)", async () => {
+		const stateDir = mkdtempSync(join(tmpdir(), "chit-run-noaudit-"));
+		try {
+			const { code } = await runCLI(["run", ASK_CODEX, "--input", "question=hi"], {
+				XDG_STATE_HOME: stateDir,
+			});
+			expect(code).toBe(0);
+			expect(new AuditStore(join(stateDir, "handoff", "audit")).listRuns()).toEqual([]);
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("--audit surfaces the run id even when the run FAILS, and records run.completed", async () => {
+		const stateDir = mkdtempSync(join(tmpdir(), "chit-run-auditfail-"));
+		try {
+			// Omit the required `question` input -> the run fails (exit 2) after the
+			// audit run has already started; the id must still be discoverable.
+			const { stderr, code } = await runCLI(["run", ASK_CODEX, "--audit"], {
+				XDG_STATE_HOME: stateDir,
+			});
+			expect(code).toBe(2);
+			expect(stderr).toMatch(/audit run /);
+			const store = new AuditStore(join(stateDir, "handoff", "audit"));
+			const runs = store.listRuns();
+			expect(runs.length).toBe(1);
+			const events = store.readEvents(runs[0] as string);
+			expect(events[0]?.type).toBe("run.started");
+			const last = events.at(-1);
+			expect(last?.type === "run.completed" && last.status).toBe("failed");
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("--audit does NOT print a run id when the audit store cannot be written", async () => {
+		// Point XDG_STATE_HOME at a regular FILE so the audit dir cannot be created;
+		// audit writes fail (best-effort, swallowed) and the run still succeeds, but
+		// no misleading audit id is printed.
+		const stateFile = join(mkdtempSync(join(tmpdir(), "chit-run-badstate-")), "not-a-dir");
+		writeFileSync(stateFile, "x");
+		try {
+			const { stdout, stderr, code } = await runCLI(
+				["run", ASK_CODEX, "--input", "question=hi", "--audit"],
+				{ XDG_STATE_HOME: stateFile },
+			);
+			expect(code).toBe(0); // audit is best-effort: the run still succeeds
+			expect(stdout).toContain("CODEX_ANSWER: 42"); // output unaffected
+			expect(stderr).not.toMatch(/audit run /); // no link to a missing transcript
+		} finally {
+			rmSync(stateFile, { force: true });
+		}
 	});
 
 	test("ask-claude.json end-to-end with fake claude (needs allow-unenforced)", async () => {
