@@ -3,8 +3,18 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type NormalizedRegistry, parseManifest } from "@chit/core";
+import { AuditStore } from "../audit/store.ts";
 import { readLoop } from "../loops/log-store.ts";
-import { type ConvergeExecute, type ConvergeIO, convergeLoop, runConverge } from "./converge.ts";
+import type { AdapterMap } from "../runtime/types.ts";
+import { FileSessionStore } from "../sessions/store.ts";
+import {
+	type ConvergeExecute,
+	type ConvergeIO,
+	convergeLoop,
+	makeAuditedExecute,
+	runConverge,
+} from "./converge.ts";
 
 let cwd: string;
 
@@ -262,6 +272,25 @@ describe("convergeLoop", () => {
 		const { execute } = fakeExecute([reviewJson("proceed")]); // fakeExecute trace is []
 		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "U2", execute });
 		expect("usage" in firstIteration("U2")).toBe(false);
+	});
+
+	test("links the iteration to its audit run via detailsRef when execute returns an auditRunId", async () => {
+		const review = reviewJson("proceed");
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "x", review },
+			trace: [],
+			auditRunId: "abc-123",
+		});
+		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "D1", execute });
+		expect(firstIteration("D1").detailsRef).toBe("audit:abc-123");
+	});
+
+	test("omits detailsRef when execute returns no auditRunId", async () => {
+		const { execute } = fakeExecute([reviewJson("proceed")]);
+		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "D2", execute });
+		expect("detailsRef" in firstIteration("D2")).toBe(false);
 	});
 
 	test("resolves to block when the JSON block is absent, even if prose says proceed", async () => {
@@ -717,5 +746,83 @@ describe("runConverge (CLI)", () => {
 		// implement is checked first, so the error names it specifically.
 		expect(err).toMatch(/"implement" must be a call step/);
 		expect(() => readLoop(cwd, "SHAPE3")).toThrow();
+	});
+});
+
+describe("converge: makeAuditedExecute (audit wiring)", () => {
+	// A minimal stateless converge-shaped manifest: inputs task/prior_review (the
+	// shape the driver passes), a single call step + format out. Stateless so the
+	// session wrapper passes through and an empty registry suffices.
+	const mini = parseManifest({
+		schema: 1,
+		id: "mini-converge",
+		description: "minimal converge-shaped manifest for audit-wiring tests",
+		inputs: { task: { type: "string" }, prior_review: { type: "string" } },
+		requires: { can_show_markdown: true },
+		participants: { worker: { agent: "codex", role: "do the task", session: "stateless" } },
+		steps: {
+			implement: { call: "worker", prompt: "{{ inputs.task }}" },
+			out: { format: "{{ steps.implement.output }}" },
+		},
+		output: "out",
+	});
+	const emptyRegistry = { agents: {} } as unknown as NormalizedRegistry;
+	const fakeAdapters = (): AdapterMap => ({
+		codex: { call: async (r) => ({ output: `OK:${r.stepId}`, usage: { inputTokens: 7 } }) },
+	});
+
+	test("writes a full audit run and links it, with loop metadata on run.started", async () => {
+		const auditStore = new AuditStore(join(cwd, "audit"));
+		const execute = makeAuditedExecute(
+			mini,
+			fakeAdapters(),
+			emptyRegistry,
+			"s",
+			cwd,
+			new FileSessionStore(join(cwd, "sess")),
+			auditStore,
+		);
+		const result = await execute(
+			{ task: "do x", prior_review: "" },
+			{ loopId: "L1", iteration: 2 },
+		);
+		expect(result.ok).toBe(true);
+		expect(result.auditRunId).toBeDefined();
+
+		const events = auditStore.readEvents(result.auditRunId as string);
+		expect(events[0]).toMatchObject({
+			type: "run.started",
+			surface: "converge",
+			loopId: "L1",
+			iteration: 2,
+		});
+		expect(events[events.length - 1]?.type).toBe("run.completed");
+		expect(events.some((e) => e.type === "adapter.call.completed")).toBe(true);
+	});
+
+	test("withholds auditRunId (no dangling link) when the audit store fails, run still succeeds", async () => {
+		const broken = {
+			openRun() {
+				throw new Error("disk full");
+			},
+			writeBlob() {
+				throw new Error("disk full");
+			},
+			appendEvent() {
+				throw new Error("disk full");
+			},
+		} as unknown as AuditStore;
+		const execute = makeAuditedExecute(
+			mini,
+			fakeAdapters(),
+			emptyRegistry,
+			"s",
+			cwd,
+			new FileSessionStore(join(cwd, "sess")),
+			broken,
+		);
+		const result = await execute({ task: "x", prior_review: "" }, { loopId: "L1", iteration: 1 });
+		expect(result.ok).toBe(true); // audit is best-effort: the run still succeeds
+		expect(result.auditRunId).toBeUndefined(); // but no link to a missing transcript
 	});
 });

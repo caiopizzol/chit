@@ -31,11 +31,15 @@ import {
 } from "@chit/core";
 import { buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
+import { AuditRecorder } from "../audit/recorder.ts";
+import { AuditStore } from "../audit/store.ts";
+import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
 import { appendIteration, startLoop, stopLoop } from "../loops/log-store.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
 import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
+import type { SessionStore } from "../sessions/types.ts";
 
 export interface ConvergeIO {
 	out: (s: string) => void;
@@ -76,10 +80,17 @@ const CHECKS_RUN_FALLBACK = "unreported";
 // The default (buildExecute) runs the real adapter-backed manifest; tests pass
 // a fake returning canned outputs so the loop logic runs without spawning
 // agents.
-export type ConvergeExecute = (inputs: {
-	task: string;
-	prior_review: string;
-}) => Promise<RunResult>;
+// The execute result is the manifest RunResult plus an optional auditRunId: the
+// audit run this iteration was recorded under, used to link the loop iteration
+// record to its audit transcript. auditRunId is WITHHELD when the audit write
+// failed, so a loop record never links to a missing transcript. `ctx` carries
+// the loop position so the audit run.started can name its source loop/iteration.
+// Both ctx and auditRunId are optional, so a fake/non-audited execute (tests, or
+// a future caller that does not audit) still satisfies the contract.
+export type ConvergeExecute = (
+	inputs: { task: string; prior_review: string },
+	ctx?: { loopId: string; iteration: number },
+) => Promise<RunResult & { auditRunId?: string }>;
 
 export interface ConvergeLoopOptions {
 	cwd: string;
@@ -245,9 +256,12 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 	let status: LoopStopStatus | undefined;
 
 	for (let i = 1; i <= opts.maxIterations; i++) {
-		let result: RunResult;
+		let result: RunResult & { auditRunId?: string };
 		try {
-			result = await opts.execute({ task: opts.task, prior_review: priorReview });
+			result = await opts.execute(
+				{ task: opts.task, prior_review: priorReview },
+				{ loopId, iteration: i },
+			);
 		} catch (e) {
 			// The run threw (not a graceful ok:false). Close the loop as blocked so
 			// it is not left open, then rethrow for a clean CLI error + non-zero exit.
@@ -283,6 +297,8 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 			checkDurationMs: reviewDurationMs(result.trace),
 			// Total token/cost across the run's calls (implement + review).
 			...(usage && { usage }),
+			// Link to the audit transcript for this iteration's run, when audited.
+			...(result.auditRunId && { detailsRef: `audit:${result.auditRunId}` }),
 		});
 		iterations++;
 
@@ -328,14 +344,68 @@ function buildExecute(
 			baseAdapters[p.agent] = buildAdapter(agent);
 		}
 	}
-	const adapters = wrapAdaptersWithSessions(
-		baseAdapters,
+	return makeAuditedExecute(
 		manifest,
+		baseAdapters,
 		registry,
 		scope,
+		cwd,
 		new FileSessionStore(defaultSessionDir()),
+		new AuditStore(),
 	);
-	return (inputs) => executeManifest(manifest, { inputs, adapters, invocationCwd: cwd });
+}
+
+// Wrap a base adapter map into a converge execute that records each manifest run
+// to the audit store (run/step/adapter-call events + prompt/output blobs +
+// usage). Exported so the audit wiring is testable with fake adapters and an
+// injectable store. Audit is best-effort and never breaks the run; if any audit
+// write failed (recorder.lastError set), auditRunId is WITHHELD so the loop
+// record never links to a missing/partial transcript. The session wrapper sits
+// OUTSIDE the audit wrapper so the recorder sees the session layer's injected
+// prior session and the adapter's returned new session.
+export function makeAuditedExecute(
+	manifest: NormalizedManifest,
+	baseAdapters: AdapterMap,
+	registry: NormalizedRegistry,
+	scope: string,
+	cwd: string,
+	sessionStore: SessionStore,
+	auditStore: AuditStore,
+): ConvergeExecute {
+	return async (inputs, ctx) => {
+		const runId = crypto.randomUUID();
+		const recorder = new AuditRecorder(auditStore, runId, {
+			manifestId: manifest.id,
+			cwd,
+			surface: "converge",
+			scope,
+			...(ctx?.loopId !== undefined && { loopId: ctx.loopId }),
+			...(ctx?.iteration !== undefined && { iteration: ctx.iteration }),
+		});
+		recorder.runStarted();
+		const adapters = wrapAdaptersWithSessions(
+			wrapAdaptersWithAudit(baseAdapters, recorder),
+			manifest,
+			registry,
+			scope,
+			sessionStore,
+		);
+		const startedAt = Date.now();
+		try {
+			const result = await executeManifest(manifest, {
+				inputs,
+				adapters,
+				invocationCwd: cwd,
+				onTrace: (e) => recorder.fromTrace(e),
+			});
+			recorder.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
+			// Link only when the whole audit run was written cleanly.
+			return recorder.lastError === undefined ? { ...result, auditRunId: runId } : result;
+		} catch (e) {
+			recorder.runCompleted("failed", Date.now() - startedAt);
+			throw e;
+		}
+	};
 }
 
 // --manifest is generic, but the driver assumes a converge-shaped manifest: it
