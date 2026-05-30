@@ -63,6 +63,31 @@ describe("convergence log: serialize/validate round-trip", () => {
 		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
 		expect("detailsRef" in rec).toBe(false);
 	});
+
+	test("optional usage survives the round-trip (full and partial)", () => {
+		const full: LoopIterationRecord = {
+			...iteration,
+			usage: {
+				inputTokens: 1200,
+				outputTokens: 340,
+				cachedInputTokens: 800,
+				reasoningTokens: 64,
+				estimatedCostUsd: 0.0123,
+			},
+		};
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(full)))).toEqual(full);
+		// Partial: a Codex-only iteration has tokens but no cost.
+		const partial: LoopIterationRecord = {
+			...iteration,
+			usage: { inputTokens: 10, outputTokens: 2 },
+		};
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(partial)))).toEqual(partial);
+	});
+
+	test("an absent usage is omitted, not set to undefined", () => {
+		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
+		expect("usage" in rec).toBe(false);
+	});
 });
 
 describe("convergence log: validation", () => {
@@ -111,6 +136,28 @@ describe("convergence log: validation", () => {
 		expect(validateLoopRecord({ ...iteration, findingCount: 0 })).toMatchObject({
 			findingCount: 0,
 		});
+	});
+
+	test("rejects invalid usage (negative/fractional token, bad cost, empty block)", () => {
+		expect(() => validateLoopRecord({ ...iteration, usage: { inputTokens: -1 } })).toThrow(
+			/inputTokens/,
+		);
+		expect(() => validateLoopRecord({ ...iteration, usage: { outputTokens: 1.5 } })).toThrow(
+			/outputTokens/,
+		);
+		expect(() => validateLoopRecord({ ...iteration, usage: { estimatedCostUsd: -0.01 } })).toThrow(
+			/estimatedCostUsd/,
+		);
+		expect(() =>
+			validateLoopRecord({ ...iteration, usage: { estimatedCostUsd: Number.POSITIVE_INFINITY } }),
+		).toThrow(/estimatedCostUsd/);
+		expect(() => validateLoopRecord({ ...iteration, usage: {} })).toThrow(/at least one/);
+	});
+
+	test("accepts a fractional cost in usage (cost is not an integer)", () => {
+		expect(validateLoopRecord({ ...iteration, usage: { estimatedCostUsd: 0.0042 } })).toMatchObject(
+			{ usage: { estimatedCostUsd: 0.0042 } },
+		);
 	});
 });
 

@@ -210,6 +210,60 @@ describe("convergeLoop", () => {
 		expect(it.checkDurationMs).toBe(4200);
 	});
 
+	test("records token usage summed across implement and review steps", async () => {
+		const review = reviewJson("proceed");
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "did it", review },
+			trace: [
+				{
+					type: "step.completed",
+					stepId: "implement",
+					output: "x",
+					durationMs: 100,
+					// Claude-style: tokens + a reported cost.
+					usage: {
+						inputTokens: 6590,
+						outputTokens: 40,
+						cachedInputTokens: 17308,
+						estimatedCostUsd: 0.066,
+					},
+				},
+				{
+					type: "step.completed",
+					stepId: "review",
+					output: review,
+					durationMs: 4200,
+					// Codex-style: tokens incl. reasoning, no cost.
+					usage: {
+						inputTokens: 15642,
+						cachedInputTokens: 4480,
+						outputTokens: 26,
+						reasoningTokens: 19,
+					},
+				},
+			],
+		});
+		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "U1", execute });
+		const it = firstIteration("U1");
+		// Per-field sums: input 6590+15642, output 40+26, cached 17308+4480; reasoning
+		// only review (19); cost only implement (0.066) since review reports none.
+		expect(it.usage).toEqual({
+			inputTokens: 22232,
+			outputTokens: 66,
+			cachedInputTokens: 21788,
+			reasoningTokens: 19,
+			estimatedCostUsd: 0.066,
+		});
+	});
+
+	test("usage is absent in the record when no step reported usage", async () => {
+		const { execute } = fakeExecute([reviewJson("proceed")]); // fakeExecute trace is []
+		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "U2", execute });
+		expect("usage" in firstIteration("U2")).toBe(false);
+	});
+
 	test("resolves to block when the JSON block is absent, even if prose says proceed", async () => {
 		// The reviewer echoes the option list ("proceed / revise / block") but emits
 		// no JSON block. The driver must fail safe to block, never read proceed.

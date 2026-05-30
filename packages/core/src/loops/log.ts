@@ -9,6 +9,8 @@
 // header line, one `iteration` line per round, then a `stop` line. See
 // docs/loop-view-v0.md.
 
+import type { AdapterUsage } from "../audit/events.ts";
+
 export type LoopVerdict = "proceed" | "revise" | "block";
 export type LoopStopStatus = "converged" | "blocked" | "max-iterations" | "needs-decision";
 
@@ -43,6 +45,13 @@ export interface LoopIterationRecord {
 	checkDurationMs: number;
 	at: string; // ISO 8601
 	detailsRef?: string;
+	// Token/cost for the whole iteration: the sum of every adapter call's usage
+	// in the run (implement + review). Optional: absent when no call reported
+	// usage. Cost is the sum of REPORTED costs only (Claude reports a cost; Codex
+	// reports tokens but no cost), so it is a known-cost floor, not a guaranteed
+	// total spend. Tokens across providers are a volume signal, not one billing
+	// unit. Same shape as the adapter/audit usage so views speak one type.
+	usage?: AdapterUsage;
 }
 
 export interface LoopStopRecord {
@@ -99,6 +108,45 @@ function stringArray(o: Record<string, unknown>, key: string, ctx: string): stri
 	return v as string[];
 }
 
+const USAGE_INT_FIELDS = [
+	"inputTokens",
+	"outputTokens",
+	"totalTokens",
+	"cachedInputTokens",
+	"reasoningTokens",
+] as const;
+
+// Validate an optional usage block, mirroring the AdapterUsage invariants in
+// audit/events.ts: token fields are non-negative integers, cost is finite and
+// non-negative, and a present block must carry at least one field. Validated
+// here (not shared with the audit validator) so this module stays self-contained
+// and browser-safe and throws LoopLogError, the same way it already keeps its own
+// obj/str/int helpers separate from the audit module's.
+function optUsage(o: Record<string, unknown>, ctx: string): AdapterUsage | undefined {
+	if (o.usage === undefined) return undefined;
+	const u = obj(o.usage, `${ctx}.usage`);
+	const usage: AdapterUsage = {};
+	for (const f of USAGE_INT_FIELDS) {
+		const v = u[f];
+		if (v === undefined) continue;
+		if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+			throw new LoopLogError(`${ctx}.usage: "${f}" must be an integer >= 0`);
+		}
+		usage[f] = v;
+	}
+	const cost = u.estimatedCostUsd;
+	if (cost !== undefined) {
+		if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) {
+			throw new LoopLogError(`${ctx}.usage: "estimatedCostUsd" must be a finite number >= 0`);
+		}
+		usage.estimatedCostUsd = cost;
+	}
+	if (Object.keys(usage).length === 0) {
+		throw new LoopLogError(`${ctx}.usage: must have at least one field`);
+	}
+	return usage;
+}
+
 // Validate a single parsed record. Defensive: the writer should emit valid
 // records, but Studio reads files that may be hand-edited, partial, or stale.
 export function validateLoopRecord(raw: unknown): LoopRecord {
@@ -133,6 +181,8 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 			at: str(o, "at", ctx),
 		};
 		if (o.detailsRef !== undefined) rec.detailsRef = str(o, "detailsRef", ctx);
+		const usage = optUsage(o, ctx);
+		if (usage !== undefined) rec.usage = usage;
 		return rec;
 	}
 	if (type === "stop") {

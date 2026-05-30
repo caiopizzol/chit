@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
+	type AdapterUsage,
 	findEnforcementGaps,
 	findUnknownAgents,
 	formatEnforcementGaps,
@@ -157,6 +158,37 @@ function reviewDurationMs(trace: TraceEvent[]): number {
 	return 0;
 }
 
+const USAGE_KEYS: (keyof AdapterUsage)[] = [
+	"inputTokens",
+	"outputTokens",
+	"totalTokens",
+	"cachedInputTokens",
+	"reasoningTokens",
+	"estimatedCostUsd",
+];
+
+// Total usage for the iteration: sum every completed call step's usage in the
+// run (implement + review). Per field, so a field absent from all steps stays
+// absent (not zero). Each step's usage is already a valid AdapterUsage (the
+// adapters guarantee it), so the per-field sum stays valid. Returns undefined
+// when no step reported usage. Cost sums only the providers that report one, so
+// it is a known-cost floor, not a guaranteed total spend.
+function sumTraceUsage(trace: TraceEvent[]): AdapterUsage | undefined {
+	const usage: AdapterUsage = {};
+	let any = false;
+	for (const e of trace) {
+		if (e.type !== "step.completed" || !e.usage) continue;
+		for (const k of USAGE_KEYS) {
+			const v = e.usage[k];
+			if (typeof v === "number") {
+				usage[k] = (usage[k] ?? 0) + v;
+				any = true;
+			}
+		}
+	}
+	return any ? usage : undefined;
+}
+
 function capSummary(text: string): string {
 	// The record rejects empty strings; a run that produced no summary still
 	// needs a placeholder.
@@ -238,6 +270,7 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 
 		const reviewText = result.outputs.review ?? "";
 		const review = parseReview(reviewText);
+		const usage = sumTraceUsage(result.trace);
 		appendIteration(opts.cwd, loopId, {
 			implementSummary: capSummary(result.outputs.implement ?? ""),
 			changedFiles: gitChangedFiles(opts.cwd),
@@ -248,6 +281,8 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 			decision: review.verdict,
 			// The check (review) step's own duration, not the whole-run wall time.
 			checkDurationMs: reviewDurationMs(result.trace),
+			// Total token/cost across the run's calls (implement + review).
+			...(usage && { usage }),
 		});
 		iterations++;
 

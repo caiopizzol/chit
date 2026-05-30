@@ -27,6 +27,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	type AdapterUsage,
 	type LoopHeaderRecord,
 	type LoopIterationRecord,
 	type LoopRecord,
@@ -122,6 +123,7 @@ export interface AppendOptions {
 	decision: LoopVerdict;
 	checkDurationMs: number;
 	detailsRef?: string;
+	usage?: AdapterUsage;
 	clock?: Clock;
 }
 
@@ -156,6 +158,7 @@ export function appendIteration(
 		at: iso((opts.clock ?? realClock)()),
 	};
 	if (opts.detailsRef !== undefined) rec.detailsRef = opts.detailsRef;
+	if (opts.usage !== undefined) rec.usage = opts.usage;
 	appendFileSync(path, `${serializeLoopRecord(rec)}\n`);
 	return { n, path };
 }

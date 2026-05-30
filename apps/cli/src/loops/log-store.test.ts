@@ -93,6 +93,20 @@ describe("loop-log store: append", () => {
 		expect(it).toMatchObject({ verdict: "revise", decision: "proceed" });
 	});
 
+	test("persists optional usage and reads it back; absent when not passed", () => {
+		start("L1");
+		appendIteration(cwd, "L1", {
+			...baseAppend,
+			usage: { inputTokens: 300, outputTokens: 80, estimatedCostUsd: 0.05 },
+		});
+		appendIteration(cwd, "L1", baseAppend);
+		const iters = readLoop(cwd, "L1").filter((r) => r.type === "iteration");
+		expect(iters[0]).toMatchObject({
+			usage: { inputTokens: 300, outputTokens: 80, estimatedCostUsd: 0.05 },
+		});
+		expect("usage" in iters[1]).toBe(false);
+	});
+
 	test("refuses to append after a stop", () => {
 		start("L1");
 		appendIteration(cwd, "L1", baseAppend);
