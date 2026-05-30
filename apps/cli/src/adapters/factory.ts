@@ -23,6 +23,7 @@ export function buildAdapter(agent: NormalizedAgent): RuntimeAdapter {
 				model: agent.model,
 				passModelOnResume: agent.passModelOnResume,
 				env: agent.env,
+				strictMcp: agent.strictMcp,
 			});
 		default: {
 			const exhaustive: never = agent.adapter;

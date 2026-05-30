@@ -84,6 +84,42 @@ describe("computeFingerprint", () => {
 		expect(a).not.toBe(b);
 	});
 
+	test("strictMcp undefined and true hash the same (both strict-on)", () => {
+		const a = computeFingerprint({
+			agent: agent({ adapter: "claude-cli", strictMcp: undefined }),
+			participant: participant(),
+		});
+		const b = computeFingerprint({
+			agent: agent({ adapter: "claude-cli", strictMcp: true }),
+			participant: participant(),
+		});
+		expect(a).toBe(b);
+	});
+
+	test("strictMcp:false produces a different fingerprint (opt-out forks)", () => {
+		const a = computeFingerprint({
+			agent: agent({ adapter: "claude-cli", strictMcp: true }),
+			participant: participant(),
+		});
+		const b = computeFingerprint({
+			agent: agent({ adapter: "claude-cli", strictMcp: false }),
+			participant: participant(),
+		});
+		expect(a).not.toBe(b);
+	});
+
+	test("strictMcp has no fingerprint effect on a non-claude-cli adapter", () => {
+		const a = computeFingerprint({
+			agent: agent({ adapter: "codex-exec", strictMcp: true }),
+			participant: participant(),
+		});
+		const b = computeFingerprint({
+			agent: agent({ adapter: "codex-exec", strictMcp: false }),
+			participant: participant(),
+		});
+		expect(a).toBe(b);
+	});
+
 	test("sensitive env values do not affect fingerprint", () => {
 		const a = computeFingerprint({
 			agent: agent({ env: { ANTHROPIC_AUTH_TOKEN: "secret-1" } }),

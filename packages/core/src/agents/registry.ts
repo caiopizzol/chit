@@ -68,6 +68,7 @@ const ALLOWED_ENTRY_KEYS = new Set([
 	"passModelOnResume",
 	"description",
 	"env",
+	"strictMcp",
 ]);
 const AGENT_ID_RE = /^[a-z][a-z0-9-]*$/;
 
@@ -149,6 +150,12 @@ function parseAgent(id: string, raw: unknown, configPath: string): NormalizedAge
 	}
 	if (raw.env !== undefined) {
 		out.env = parseEnv(raw.env, `${path}.env`);
+	}
+	if (raw.strictMcp !== undefined) {
+		if (typeof raw.strictMcp !== "boolean") {
+			throw new RegistryError(`${path}.strictMcp`, "must be a boolean");
+		}
+		out.strictMcp = raw.strictMcp;
 	}
 
 	return out;

@@ -17,6 +17,9 @@ export interface NormalizedAgent {
 	passModelOnResume: boolean;
 	description?: string;
 	env?: Record<string, string>;
+	// Strict MCP isolation for the claude-cli adapter. Undefined means "use the
+	// adapter default" (on); set false to let an advisor that needs MCP opt out.
+	strictMcp?: boolean;
 	builtIn: boolean;
 }
 

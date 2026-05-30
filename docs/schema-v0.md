@@ -121,12 +121,14 @@ The fingerprint hashes enough of the `(agent, participant)` pair that a meaningf
 
 Fingerprint inputs (SHA-256, first 16 hex chars):
 
-- Agent registry config: `id`, `adapter` kind, `model`, `reasoningEffort`, base URL (from `env.ANTHROPIC_BASE_URL` / `env.OPENAI_BASE_URL` / `env.OLLAMA_HOST`), `passModelOnResume`.
+- Agent registry config: `id`, `adapter` kind, `model`, `reasoningEffort`, base URL (from `env.ANTHROPIC_BASE_URL` / `env.OPENAI_BASE_URL` / `env.OLLAMA_HOST`), `passModelOnResume`, `strictMcp` (claude-cli only; hashed as its effective on/off value, so `undefined` and `true` match).
 - Participant `role` text.
 - Participant `session` policy.
 - Participant `permissions`.
 
 Sensitive env values (API keys, tokens) are deliberately NOT in the fingerprint material.
+
+`strictMcp` defaults to on: a chit-spawned `claude` runs with `--strict-mcp-config` and an empty MCP config, so it inherits none of the user's global MCP servers/tools/hooks. This is a safety boundary now that an autonomous loop can let claude edit. Setting `strictMcp: false` on a claude-cli agent is an advanced opt-out for an advisor that genuinely needs MCP; because it changes which servers the spawned claude sees, toggling it forks the session.
 
 On a fingerprint mismatch, the next call sees `session: undefined` (the coordinator can't find a matching entry) and the adapter starts fresh. The old entry remains in the state file but is orphaned — no future call will reference that fingerprint. A periodic cleanup pass could prune stale entries; not yet implemented.
 

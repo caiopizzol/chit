@@ -1,7 +1,7 @@
 {
 	"schema": 1,
 	"id": "converge",
-	"description": "Autonomous convergence: a write-capable Claude implements a slice, then a read-only Codex reviews the diff and returns proceed/revise/block. Drive it in a loop from the MCP - one chit_start per iteration, same scope so both agents keep their thread, feeding the prior review back in via inputs.prior_review. The human sequences and checkpoints (inspect the diff each round, stop if it goes sideways); chit runs the agents. Run against an isolated worktree, not the main checkout.",
+	"description": "Autonomous convergence: a write-capable Claude implements a slice, then a read-only Codex reviews the diff and returns proceed/revise/block. Drive it in a loop with the `chit converge` CLI driver, or stepwise from the MCP - one chit_start per iteration, same scope so both agents keep their thread, feeding the prior review back in via inputs.prior_review. The human sequences and checkpoints (inspect the diff each round, stop if it goes sideways); chit runs the agents. Run against an isolated worktree, not the main checkout.",
 
 	"inputs": {
 		"task": { "type": "string" },

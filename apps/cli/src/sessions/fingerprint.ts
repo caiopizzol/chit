@@ -28,6 +28,12 @@ export function computeFingerprint(input: FingerprintInput): string {
 		model: agent.model ?? null,
 		reasoningEffort: agent.reasoningEffort ?? null,
 		passModelOnResume: agent.passModelOnResume,
+		// Hash EFFECTIVE behavior, not raw config: for claude-cli, undefined and
+		// true both mean strict-on, so only an explicit false differs (no spurious
+		// fork). On other adapters strictMcp has no runtime effect, so it hashes
+		// as null. Toggling the effective value forks the session, like model /
+		// passModelOnResume / env do.
+		strictMcp: agent.adapter === "claude-cli" ? agent.strictMcp !== false : null,
 		baseUrl,
 		role: participant.role,
 		session: participant.session,

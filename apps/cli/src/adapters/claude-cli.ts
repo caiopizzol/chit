@@ -5,6 +5,12 @@ export interface ClaudeCliConfig {
 	model?: string;
 	passModelOnResume?: boolean;
 	env?: Record<string, string>;
+	// Strict MCP isolation: by default the spawned `claude --print` is launched
+	// with --strict-mcp-config and an empty MCP config so it loads NONE of the
+	// user's global MCP servers/tools/hooks. This is a safety boundary now that
+	// `chit converge` lets Claude edit autonomously. Opt out (set false) only for
+	// a user-defined advisor that genuinely needs MCP.
+	strictMcp?: boolean;
 }
 
 interface ClaudePrintResult {
@@ -101,6 +107,14 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 
 	private buildCommand(priorSessionId: string | undefined): string[] {
 		const cmd = ["claude", "--print", "--output-format", "json"];
+		// Strict MCP isolation (default on): --strict-mcp-config makes Claude use
+		// ONLY the inline config we pass, ignoring the user's global ~/.claude.json
+		// and project MCP; the empty {"mcpServers":{}} means zero MCP servers. So a
+		// chit-spawned autonomous Claude inherits none of the user's MCP
+		// servers/tools/hooks. Opt out via strictMcp:false.
+		if (this.config.strictMcp !== false) {
+			cmd.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
+		}
 		if (priorSessionId) {
 			cmd.push("--resume", priorSessionId);
 			// Custom endpoints (Ollama, etc.) drop the model on resume and default

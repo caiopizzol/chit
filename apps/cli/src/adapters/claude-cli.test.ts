@@ -217,6 +217,80 @@ describe("ClaudeCliAdapter: env and command construction", () => {
 			writeFakeBin("claude", FAKE_CLAUDE);
 		}
 	});
+
+	test("by default passes --strict-mcp-config and an empty-servers --mcp-config", async () => {
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-strict-mcp-default.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("--strict-mcp-config");
+			expect(argv).toContain("--mcp-config");
+			// The config value sits immediately after --mcp-config and declares no servers.
+			const mcpConfig = argv[argv.indexOf("--mcp-config") + 1];
+			expect(JSON.parse(mcpConfig)).toEqual({ mcpServers: {} });
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("strictMcp:false omits the strict-MCP flags (opt-out)", async () => {
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-strict-mcp-off.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({ strictMcp: false });
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).not.toContain("--strict-mcp-config");
+			expect(argv).not.toContain("--mcp-config");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("strict-MCP flags coexist with --resume and --model", async () => {
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-strict-mcp-resume.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({ model: "opus", passModelOnResume: true });
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				session: { sessionId: "prior" },
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("--strict-mcp-config");
+			expect(argv).toContain("--mcp-config");
+			expect(argv).toContain("--resume");
+			expect(argv).toContain("prior");
+			expect(argv).toContain("--model");
+			expect(argv).toContain("opus");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
 });
 
 describe("ClaudeCliAdapter: session resume", () => {

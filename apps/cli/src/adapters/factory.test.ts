@@ -25,4 +25,14 @@ describe("buildAdapter", () => {
 		const adapter = buildAdapter(agent({ adapter: "claude-cli", id: "claude", model: "opus" }));
 		expect(adapter).toBeInstanceOf(ClaudeCliAdapter);
 	});
+
+	test("forwards agent.strictMcp into the ClaudeCliAdapter config", () => {
+		const adapter = buildAdapter(
+			agent({ adapter: "claude-cli", id: "needs-mcp", strictMcp: false }),
+		);
+		// strictMcp must reach ClaudeCliConfig so the opt-out is reachable from
+		// real user config, not just the adapter constructor.
+		const config = (adapter as unknown as { config: { strictMcp?: boolean } }).config;
+		expect(config.strictMcp).toBe(false);
+	});
 });

@@ -113,6 +113,20 @@ describe("parseRegistry", () => {
 		});
 		expect(reg.agents.fast?.passModelOnResume).toBe(false);
 	});
+
+	test("a user claude-cli agent can opt out of strict MCP", () => {
+		const reg = parseRegistry({
+			agents: { "needs-mcp": { adapter: "claude-cli", strictMcp: false } },
+		});
+		expect(reg.agents["needs-mcp"]?.strictMcp).toBe(false);
+	});
+
+	test("strictMcp is undefined when omitted (adapter default applies)", () => {
+		const reg = parseRegistry({
+			agents: { plain: { adapter: "claude-cli" } },
+		});
+		expect(reg.agents.plain?.strictMcp).toBeUndefined();
+	});
 });
 
 describe("parseRegistry: invalid configs", () => {
@@ -180,6 +194,14 @@ describe("parseRegistry: invalid configs", () => {
 		expectRegistryError(
 			{ agents: { x: { adapter: "claude-cli", passModelOnResume: "yes" } } },
 			"agents.x.passModelOnResume",
+			"must be a boolean",
+		);
+	});
+
+	test("strictMcp must be boolean", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "claude-cli", strictMcp: "no" } } },
+			"agents.x.strictMcp",
 			"must be a boolean",
 		);
 	});
