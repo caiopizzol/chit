@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterCallCompletedEvent, AuditEvent, RunStartedEvent } from "@chit/core";
@@ -109,6 +109,88 @@ describe("audit store: events", () => {
 
 	test("readEvents throws cleanly for a run with no log", () => {
 		expect(() => store.readEvents("R1")).toThrow(/no audit log/);
+	});
+});
+
+// Seed a run whose newest activity (last event ts) is tsMs, optionally with a
+// blob of a known size. recencyMs reads the last event ts, so this gives prune
+// a deterministic recency without relying on filesystem mtimes.
+function seedRun(id: string, tsMs: number, blobBody?: string): void {
+	store.appendEvent(id, { ...runStarted(id), ts: new Date(tsMs).toISOString() });
+	if (blobBody !== undefined) store.writeBlob(id, blobBody);
+}
+
+describe("audit store: prune (retention)", () => {
+	test("no caps prunes nothing", () => {
+		seedRun("r1", 1_000_000);
+		expect(store.prune()).toEqual([]);
+		expect(store.listRuns()).toEqual(["r1"]);
+	});
+
+	test("maxRuns keeps the newest N by last-activity, prunes the rest", () => {
+		seedRun("r1", 1_000_000);
+		seedRun("r2", 2_000_000);
+		seedRun("r3", 3_000_000);
+		expect(store.prune({ maxRuns: 2 })).toEqual(["r1"]);
+		expect(store.listRuns().sort()).toEqual(["r2", "r3"]);
+	});
+
+	test("maxAgeMs drops runs older than now - maxAgeMs", () => {
+		seedRun("old", 1_000_000);
+		seedRun("fresh", 5_000_000);
+		expect(store.prune({ maxAgeMs: 1_000_000, clock: () => 5_000_000 })).toEqual(["old"]);
+		expect(store.listRuns()).toEqual(["fresh"]);
+	});
+
+	test("maxTotalBytes keeps the newest runs whose cumulative size fits", () => {
+		const big = "x".repeat(10_000);
+		seedRun("r1", 1_000_000, big);
+		seedRun("r2", 2_000_000, big);
+		seedRun("r3", 3_000_000, big);
+		// Newest-first r3,r2,r1: r3 (~10k) + r2 (~20k) fit under 25k; r1 tips over.
+		expect(store.prune({ maxTotalBytes: 25_000 })).toEqual(["r1"]);
+		expect(store.listRuns().sort()).toEqual(["r2", "r3"]);
+	});
+
+	test("a pruned run is removed entirely, blobs included", () => {
+		seedRun("r1", 1_000_000, "blob body");
+		expect(store.prune({ maxRuns: 0 })).toEqual(["r1"]);
+		expect(store.listRuns()).toEqual([]);
+		expect(existsSync(join(baseDir, "runs", "r1"))).toBe(false);
+	});
+
+	test("caps union: a run selected by either age or count is pruned once", () => {
+		seedRun("r1", 1_000_000);
+		seedRun("r2", 2_000_000);
+		seedRun("r3", 3_000_000);
+		// maxRuns:2 selects r1; maxAgeMs (cutoff 2.5M at now=3M) also selects r1 and r2.
+		const pruned = store.prune({ maxRuns: 2, maxAgeMs: 500_000, clock: () => 3_000_000 }).sort();
+		expect(pruned).toEqual(["r1", "r2"]);
+		expect(store.listRuns()).toEqual(["r3"]);
+	});
+
+	test("rejects invalid caps before deleting anything", () => {
+		seedRun("r1", 1_000_000);
+		seedRun("r2", 2_000_000);
+		expect(() => store.prune({ maxRuns: -1 })).toThrow(/maxRuns/);
+		expect(() => store.prune({ maxRuns: 1.5 })).toThrow(/maxRuns/);
+		expect(() => store.prune({ maxAgeMs: -1 })).toThrow(/maxAgeMs/);
+		expect(() => store.prune({ maxAgeMs: Number.POSITIVE_INFINITY })).toThrow(/maxAgeMs/);
+		expect(() => store.prune({ maxTotalBytes: -1 })).toThrow(/maxTotalBytes/);
+		// Validation runs before any deletion, so both runs survive.
+		expect(store.listRuns().sort()).toEqual(["r1", "r2"]);
+	});
+
+	test("a run with an unparseable ts falls back to dir mtime for recency", () => {
+		// "not-a-date" is schema-valid (non-empty string) but Date.parse -> NaN.
+		store.appendEvent("bad", { ...runStarted("bad"), ts: "not-a-date" });
+		// Force the run dir mtime old so the fallback recency is deterministic.
+		const oldMs = 1_000_000;
+		utimesSync(join(baseDir, "runs", "bad"), new Date(oldMs), new Date(oldMs));
+		// now=5M, maxAgeMs=1M -> cutoff 4M; mtime 1M < 4M, so the run is pruned.
+		// Without the finite-ts fallback its recency would be NaN and it would
+		// silently escape age pruning.
+		expect(store.prune({ maxAgeMs: 1_000_000, clock: () => 5_000_000 })).toEqual(["bad"]);
 	});
 });
 
