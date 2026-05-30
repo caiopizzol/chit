@@ -47,6 +47,15 @@ else
   echo '{"type":"thread.started","thread_id":"fake-1"}'
   echo '{"type":"item.completed","item":{"type":"agent_message","text":"OK: prompt received"}}'
 fi
+if [ -n "$HANDOFF_TEST_EMIT_USAGE" ]; then
+  echo '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5}}'
+fi
+if [ -n "$HANDOFF_TEST_EMIT_USAGE_2" ]; then
+  echo '{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3}}'
+fi
+if [ -n "$HANDOFF_TEST_EMIT_USAGE_BAD" ]; then
+  echo '{"type":"turn.completed","usage":{"input_tokens":-1,"cached_input_tokens":1.5,"output_tokens":2,"reasoning_output_tokens":3}}'
+fi
 `;
 
 // Fake codex variant that records its argv to $HANDOFF_TEST_ARGS_FILE for
@@ -148,6 +157,78 @@ describe("CodexExecAdapter: stdin and parsing", () => {
 			).rejects.toThrow(/no agent_message/);
 		} finally {
 			delete process.env.HANDOFF_TEST_NO_AGENT_MSG;
+		}
+	});
+});
+
+describe("CodexExecAdapter: usage extraction", () => {
+	async function run(): Promise<Awaited<ReturnType<CodexExecAdapter["call"]>>> {
+		return new CodexExecAdapter({}).call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+		});
+	}
+
+	test("maps a turn.completed usage block onto AdapterUsage", async () => {
+		process.env.HANDOFF_TEST_EMIT_USAGE = "1";
+		try {
+			const result = await run();
+			expect(result.usage).toEqual({
+				inputTokens: 100,
+				cachedInputTokens: 40,
+				outputTokens: 20,
+				reasoningTokens: 5,
+			});
+		} finally {
+			delete process.env.HANDOFF_TEST_EMIT_USAGE;
+		}
+	});
+
+	test("sums usage across multiple turn.completed events", async () => {
+		process.env.HANDOFF_TEST_EMIT_USAGE = "1";
+		process.env.HANDOFF_TEST_EMIT_USAGE_2 = "1";
+		try {
+			const result = await run();
+			// turn 1: in 100 / cached 40 / out 20 / reasoning 5; turn 2: in 7 / out 3.
+			expect(result.usage).toEqual({
+				inputTokens: 107,
+				cachedInputTokens: 40,
+				outputTokens: 23,
+				reasoningTokens: 5,
+			});
+		} finally {
+			delete process.env.HANDOFF_TEST_EMIT_USAGE;
+			delete process.env.HANDOFF_TEST_EMIT_USAGE_2;
+		}
+	});
+
+	test("omits fields a turn did not report (absent is not zero)", async () => {
+		process.env.HANDOFF_TEST_EMIT_USAGE_2 = "1"; // only {input_tokens, output_tokens}
+		try {
+			const result = await run();
+			expect(result.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
+		} finally {
+			delete process.env.HANDOFF_TEST_EMIT_USAGE_2;
+		}
+	});
+
+	test("usage is absent when codex emits no turn.completed", async () => {
+		const result = await run();
+		expect(result.usage).toBeUndefined();
+	});
+
+	test("drops invalid token values (negative, fractional) to stay schema-valid", async () => {
+		process.env.HANDOFF_TEST_EMIT_USAGE_BAD = "1";
+		try {
+			const result = await run();
+			// input_tokens -1 and cached_input_tokens 1.5 are dropped; only the
+			// non-negative integers output 2 and reasoning 3 survive.
+			expect(result.usage).toEqual({ outputTokens: 2, reasoningTokens: 3 });
+		} finally {
+			delete process.env.HANDOFF_TEST_EMIT_USAGE_BAD;
 		}
 	});
 });

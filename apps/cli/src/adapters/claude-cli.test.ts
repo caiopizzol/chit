@@ -40,6 +40,14 @@ if [ -n "$HANDOFF_TEST_CLAUDE_IS_ERROR" ]; then
   echo '{"is_error":true,"result":"claude blew up","subtype":"error_during_execution"}'
   exit 0
 fi
+if [ -n "$HANDOFF_TEST_CLAUDE_USAGE" ]; then
+  echo '{"session_id":"fake-claude-session","result":"OK","subtype":"success","is_error":false,"usage":{"input_tokens":6590,"output_tokens":4,"cache_read_input_tokens":17308,"cache_creation_input_tokens":3851},"total_cost_usd":0.0657}'
+  exit 0
+fi
+if [ -n "$HANDOFF_TEST_CLAUDE_USAGE_BAD" ]; then
+  echo '{"session_id":"fake-claude-session","result":"OK","subtype":"success","is_error":false,"usage":{"input_tokens":-1,"output_tokens":1.5,"cache_read_input_tokens":2},"total_cost_usd":-0.5}'
+  exit 0
+fi
 
 if [ "$IS_RESUME" = "1" ]; then
   echo '{"session_id":"resumed-session","result":"RESUMED: claude received your prompt","subtype":"success","is_error":false}'
@@ -154,6 +162,53 @@ describe("ClaudeCliAdapter: stdin and parsing", () => {
 			).rejects.toThrow(/claude blew up/);
 		} finally {
 			delete process.env.HANDOFF_TEST_CLAUDE_IS_ERROR;
+		}
+	});
+});
+
+describe("ClaudeCliAdapter: usage extraction", () => {
+	async function run(): Promise<Awaited<ReturnType<ClaudeCliAdapter["call"]>>> {
+		return new ClaudeCliAdapter({}).call({
+			participantId: "claude",
+			agentId: "claude",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+		});
+	}
+
+	test("maps the top-level usage block and total_cost_usd onto AdapterUsage", async () => {
+		process.env.HANDOFF_TEST_CLAUDE_USAGE = "1";
+		try {
+			const result = await run();
+			// cachedInputTokens = cache_read_input_tokens; cache_creation is not a
+			// token field (its cost is already in the authoritative total_cost_usd);
+			// claude reports no total or reasoning token, so those stay absent.
+			expect(result.usage).toEqual({
+				inputTokens: 6590,
+				outputTokens: 4,
+				cachedInputTokens: 17308,
+				estimatedCostUsd: 0.0657,
+			});
+		} finally {
+			delete process.env.HANDOFF_TEST_CLAUDE_USAGE;
+		}
+	});
+
+	test("usage is absent when claude reports no usage block", async () => {
+		const result = await run();
+		expect(result.usage).toBeUndefined();
+	});
+
+	test("drops invalid token/cost values (negative, fractional) to stay schema-valid", async () => {
+		process.env.HANDOFF_TEST_CLAUDE_USAGE_BAD = "1";
+		try {
+			const result = await run();
+			// input_tokens -1 and output_tokens 1.5 and total_cost_usd -0.5 are all
+			// dropped; only cache_read_input_tokens 2 (a non-negative integer) survives.
+			expect(result.usage).toEqual({ cachedInputTokens: 2 });
+		} finally {
+			delete process.env.HANDOFF_TEST_CLAUDE_USAGE_BAD;
 		}
 	});
 });

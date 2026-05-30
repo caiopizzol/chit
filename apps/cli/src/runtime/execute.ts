@@ -79,6 +79,7 @@ async function runStep(
 			stepId,
 			output: result.output,
 			durationMs: Date.now() - startedAt,
+			...(result.usage && { usage: result.usage }),
 		});
 		return result.output;
 	} catch (e) {

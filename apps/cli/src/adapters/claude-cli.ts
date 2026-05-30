@@ -1,5 +1,7 @@
+import type { AdapterUsage } from "@chit/core";
 import type { AdapterCallRequest, AdapterCallResult, RuntimeAdapter } from "../runtime/types.ts";
 import { findSensitiveValues, sanitize } from "./sanitize.ts";
+import { nonNegInt, nonNegNum } from "./usage.ts";
 
 // Default hard ceiling for a single adapter call (15 minutes). Motivated by a
 // real wedge where a child stayed alive at 0% CPU emitting nothing for 20+
@@ -26,6 +28,41 @@ interface ClaudePrintResult {
 	result?: string;
 	is_error?: boolean;
 	subtype?: string;
+	// Verified shape (claude 2.1.x --print --output-format json): a top-level
+	// `usage` block plus an authoritative `total_cost_usd`. Read tolerantly: the
+	// CLI may add/rename fields across versions, and any absent field is omitted.
+	usage?: {
+		input_tokens?: unknown;
+		output_tokens?: unknown;
+		cache_read_input_tokens?: unknown;
+	};
+	total_cost_usd?: unknown;
+}
+
+// Extract token/cost usage from a claude --print result, tolerantly. Returns a
+// partial AdapterUsage with only the fields the CLI actually reported, or
+// undefined if it reported none. claude already aggregates usage across its
+// internal turns, so the top-level block is the per-call total (no summing).
+//
+// cachedInputTokens maps to cache_read_input_tokens (input served from cache).
+// cache_creation_input_tokens is intentionally not surfaced as a token field;
+// its cost is already captured in the authoritative total_cost_usd. No total or
+// reasoning token is reported by this CLI, so those stay absent rather than
+// guessed.
+function extractClaudeUsage(parsed: ClaudePrintResult): AdapterUsage | undefined {
+	const usage: AdapterUsage = {};
+	const u = parsed.usage;
+	if (u) {
+		const input = nonNegInt(u.input_tokens);
+		if (input !== undefined) usage.inputTokens = input;
+		const output = nonNegInt(u.output_tokens);
+		if (output !== undefined) usage.outputTokens = output;
+		const cached = nonNegInt(u.cache_read_input_tokens);
+		if (cached !== undefined) usage.cachedInputTokens = cached;
+	}
+	const cost = nonNegNum(parsed.total_cost_usd);
+	if (cost !== undefined) usage.estimatedCostUsd = cost;
+	return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
 // Claude sessions are opaque to the runtime; the adapter shapes them as
@@ -112,9 +149,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 				}
 
 				const effectiveSessionId = parsed.session_id ?? priorSessionId;
+				const usage = extractClaudeUsage(parsed);
 				return {
 					output: parsed.result,
 					session: effectiveSessionId ? { sessionId: effectiveSessionId } : undefined,
+					...(usage && { usage }),
 				};
 			} finally {
 				clearTimeout(timer);

@@ -1,5 +1,7 @@
+import type { AdapterUsage } from "@chit/core";
 import type { AdapterCallRequest, AdapterCallResult, RuntimeAdapter } from "../runtime/types.ts";
 import { findSensitiveValues, sanitize } from "./sanitize.ts";
+import { nonNegInt } from "./usage.ts";
 
 // Default hard ceiling for a single adapter call (15 minutes). Motivated by a
 // real wedge where a child stayed alive at 0% CPU emitting nothing for 20+
@@ -19,6 +21,16 @@ interface CodexJsonEvent {
 	type: string;
 	thread_id?: string;
 	item?: { id?: string; type?: string; text?: string };
+	// Verified shape (codex-cli 0.135.0): a `turn.completed` event carries a
+	// usage block. One exec emits a single turn.completed in practice (observed
+	// even with a tool call), but parseJsonlStream sums across them defensively.
+	// No cost is reported by this CLI.
+	usage?: {
+		input_tokens?: unknown;
+		cached_input_tokens?: unknown;
+		output_tokens?: unknown;
+		reasoning_output_tokens?: unknown;
+	};
 }
 
 // Codex sessions are opaque to the runtime; the adapter shapes them as
@@ -85,7 +97,7 @@ export class CodexExecAdapter implements RuntimeAdapter {
 					throw new Error(`codex exec exited ${exitCode}: ${tail.slice(0, 500)}`);
 				}
 
-				const { threadId: newThreadId, agentText } = parseJsonlStream(stdoutText);
+				const { threadId: newThreadId, agentText, usage } = parseJsonlStream(stdoutText);
 				if (!agentText) {
 					throw new Error("no agent_message in codex output");
 				}
@@ -96,6 +108,7 @@ export class CodexExecAdapter implements RuntimeAdapter {
 				return {
 					output: agentText,
 					session: effectiveThreadId ? { threadId: effectiveThreadId } : undefined,
+					...(usage && { usage }),
 				};
 			} finally {
 				clearTimeout(timer);
@@ -128,9 +141,23 @@ export class CodexExecAdapter implements RuntimeAdapter {
 	}
 }
 
-function parseJsonlStream(stdout: string): { threadId?: string; agentText?: string } {
+function parseJsonlStream(stdout: string): {
+	threadId?: string;
+	agentText?: string;
+	usage?: AdapterUsage;
+} {
 	let threadId: string | undefined;
 	let agentText: string | undefined;
+	// Accumulate usage across turn.completed events, per field. A field is summed
+	// only across turns where it appears, and stays ABSENT if no turn reported it
+	// (an absent field is not the same as zero). One turn is the observed case.
+	const sum: { input?: number; cached?: number; output?: number; reasoning?: number } = {};
+	// Only non-negative integers count; an invalid field is dropped so the summed
+	// usage always satisfies the AdapterUsage schema invariants.
+	const add = (key: keyof typeof sum, val: unknown): void => {
+		const n = nonNegInt(val);
+		if (n !== undefined) sum[key] = (sum[key] ?? 0) + n;
+	};
 	for (const line of stdout.split("\n")) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
@@ -150,6 +177,21 @@ function parseJsonlStream(stdout: string): { threadId?: string; agentText?: stri
 		) {
 			agentText = evt.item.text;
 		}
+		if (evt.type === "turn.completed" && evt.usage) {
+			add("input", evt.usage.input_tokens);
+			add("cached", evt.usage.cached_input_tokens);
+			add("output", evt.usage.output_tokens);
+			add("reasoning", evt.usage.reasoning_output_tokens);
+		}
 	}
-	return { threadId, agentText };
+	const usage: AdapterUsage = {};
+	if (sum.input !== undefined) usage.inputTokens = sum.input;
+	if (sum.cached !== undefined) usage.cachedInputTokens = sum.cached;
+	if (sum.output !== undefined) usage.outputTokens = sum.output;
+	if (sum.reasoning !== undefined) usage.reasoningTokens = sum.reasoning;
+	return {
+		threadId,
+		agentText,
+		usage: Object.keys(usage).length > 0 ? usage : undefined,
+	};
 }

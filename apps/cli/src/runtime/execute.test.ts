@@ -309,6 +309,35 @@ describe("executeManifest: trace events", () => {
 		expect(liveEvents).toEqual(result.trace);
 	});
 
+	test("call step.completed carries adapter usage; format step does not", async () => {
+		const manifest = loadExample("investigate-bug");
+		const usageAdapter: RuntimeAdapter = {
+			call: (req) =>
+				Promise.resolve({
+					output: `OK:${req.stepId}`,
+					usage: { inputTokens: 10, outputTokens: 2, estimatedCostUsd: 0.001 },
+				}),
+		};
+		const result = await executeManifest(manifest, {
+			inputs: { issue: "x" },
+			adapters: { codex: usageAdapter, claude: usageAdapter },
+			invocationCwd: TMPDIR,
+		});
+		expect(result.ok).toBe(true);
+
+		const completed = result.trace.filter((e) => e.type === "step.completed");
+		// A call step (diagnose) carries the adapter's usage through the trace.
+		const diagnose = completed.find((e) => e.stepId === "diagnose");
+		expect(diagnose?.type === "step.completed" && diagnose.usage).toEqual({
+			inputTokens: 10,
+			outputTokens: 2,
+			estimatedCostUsd: 0.001,
+		});
+		// The format step (out) has no adapter call, so no usage.
+		const out = completed.find((e) => e.stepId === "out");
+		expect(out?.type === "step.completed" && "usage" in out).toBe(false);
+	});
+
 	test("failure trace includes step.failed event", async () => {
 		const manifest = loadExample("investigate-bug");
 		const failing: RuntimeAdapter = {
