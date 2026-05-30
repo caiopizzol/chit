@@ -211,6 +211,14 @@ describe("audit events: validation", () => {
 		expect(() => validateAuditEvent({ ...stepCompleted, durationMs: 1.5 })).toThrow(/durationMs/);
 	});
 
+	test("step.completed: optional outputBlob round-trips, is omitted when absent, rejects empty", () => {
+		const withBlob: StepCompletedEvent = { ...stepCompleted, outputBlob: "d".repeat(64) };
+		expect(validateAuditEvent(JSON.parse(serializeAuditEvent(withBlob)))).toEqual(withBlob);
+		const rt = validateAuditEvent(JSON.parse(serializeAuditEvent(stepCompleted)));
+		expect("outputBlob" in rt).toBe(false);
+		expect(() => validateAuditEvent({ ...stepCompleted, outputBlob: "" })).toThrow(/outputBlob/);
+	});
+
 	test("rejects changedFiles that is not a string array", () => {
 		expect(() => validateAuditEvent({ ...loopIteration, changedFiles: [1, 2] })).toThrow(
 			/changedFiles/,

@@ -17,6 +17,7 @@ import type {
 	AuditSurface,
 	RunStartedEvent,
 	RunStatus,
+	StepCompletedEvent,
 	StepStartedEvent,
 } from "@chit/core";
 import type { AdapterCallRequest, AdapterCallResult, TraceEvent } from "../runtime/types.ts";
@@ -106,13 +107,17 @@ export class AuditRecorder {
 				if (e.session !== undefined) ev.session = e.session;
 				this.store.appendEvent(this.runId, ev);
 			} else if (e.type === "step.completed") {
-				this.store.appendEvent(this.runId, {
+				const ev: StepCompletedEvent = {
 					type: "step.completed",
 					runId: this.runId,
 					ts: this.ts(),
 					stepId: e.stepId,
 					durationMs: e.durationMs,
-				});
+				};
+				// Capture the step's output verbatim. Content-addressed, so a call
+				// step's output shares the blob its adapter.call.completed wrote.
+				ev.outputBlob = this.store.writeBlob(this.runId, e.output);
+				this.store.appendEvent(this.runId, ev);
 			} else if (e.type === "step.failed") {
 				this.store.appendEvent(this.runId, {
 					type: "step.failed",

@@ -6,6 +6,7 @@ import {
 	type AdapterCallCompletedEvent,
 	type AdapterCallStartedEvent,
 	parseManifest,
+	type StepCompletedEvent,
 } from "@chit/core";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterCallRequest, RuntimeAdapter } from "../runtime/types.ts";
@@ -93,6 +94,11 @@ describe("AuditRecorder", () => {
 		expect(store.readBlob("R1", done?.outputBlob ?? "")).toBe("OUT BODY");
 		expect(done?.usage).toEqual({ inputTokens: 10, outputTokens: 2 });
 		expect(done?.status).toBe("ok");
+		// step.completed also captures the step output as a blob (full replay).
+		const stepDone = store
+			.readEvents("R1")
+			.find((e): e is StepCompletedEvent => e.type === "step.completed");
+		expect(store.readBlob("R1", stepDone?.outputBlob ?? "")).toBe("OUT BODY");
 		expect(rec.lastError).toBeUndefined();
 	});
 
@@ -227,6 +233,13 @@ describe("audit integration via executeManifest", () => {
 			if (e.type === "adapter.call.started")
 				expect(store.readBlob("RUN", e.inputBlob).length).toBeGreaterThan(0);
 		}
+		// Every step.completed captures its output as a blob, INCLUDING the format
+		// step ("out"), which has no adapter call - the full-replay guarantee.
+		const stepDones = events.filter((e): e is StepCompletedEvent => e.type === "step.completed");
+		expect(stepDones.every((s) => typeof s.outputBlob === "string")).toBe(true);
+		const out = stepDones.find((s) => s.stepId === "out");
+		expect(out).toBeDefined();
+		expect(store.readBlob("RUN", out?.outputBlob ?? "").length).toBeGreaterThan(0);
 		expect(rec.lastError).toBeUndefined();
 	});
 });

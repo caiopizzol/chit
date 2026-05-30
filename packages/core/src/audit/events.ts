@@ -110,6 +110,13 @@ export interface StepCompletedEvent extends AuditEnvelope {
 	type: "step.completed";
 	stepId: string;
 	durationMs: number;
+	// The step's output, as a blob ref. Captured for EVERY step so the audit is a
+	// full replay, not just an agent-call transcript: a format step (e.g. the run's
+	// final output assembly) has no adapter call, so this is the only place its
+	// output is recorded. For a call step the output equals the adapter's, and
+	// since blobs are content-addressed the two refs point at the same blob.
+	// Optional: a writer that does not have the output may omit it.
+	outputBlob?: BlobRef;
 }
 
 export interface StepFailedEvent extends AuditEnvelope {
@@ -378,13 +385,16 @@ export function validateAuditEvent(raw: unknown): AuditEvent {
 
 	if (type === "step.completed") {
 		const ctx = "step.completed";
-		return {
+		const ev: StepCompletedEvent = {
 			type,
 			runId,
 			ts,
 			stepId: str(o, "stepId", ctx),
 			durationMs: int(o, "durationMs", ctx, 0),
 		};
+		const outputBlob = optStr(o, "outputBlob", ctx);
+		if (outputBlob !== undefined) ev.outputBlob = outputBlob;
+		return ev;
 	}
 
 	if (type === "step.failed") {
