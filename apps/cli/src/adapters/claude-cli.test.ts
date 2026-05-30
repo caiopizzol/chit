@@ -11,6 +11,14 @@ for arg in "$@"; do
   if [ "$arg" = "--resume" ]; then IS_RESUME=1; fi
 done
 
+if [ -n "$HANDOFF_TEST_SLEEP" ]; then
+  cat > /dev/null
+  # exec so the long-runner IS the spawned process (as the real claude binary
+  # is), not an orphanable child: proc.kill() then terminates it and closes its
+  # pipes. proc.kill() reaches only this direct child, not a descendant tree.
+  exec sleep "$HANDOFF_TEST_SLEEP"
+fi
+
 if [ -n "$HANDOFF_TEST_FAKE_EXIT" ] && [ "$HANDOFF_TEST_FAKE_EXIT" != "0" ]; then
   cat > /dev/null
   echo "boom: claude error" >&2
@@ -402,5 +410,32 @@ describe("ClaudeCliAdapter: session resume", () => {
 		});
 		expect(result.output).toBe("OK: claude received your prompt");
 		expect(result.session).toEqual({ sessionId: "fake-claude-session" });
+	});
+});
+
+describe("ClaudeCliAdapter: call timeout watchdog", () => {
+	test("kills the child and rejects with a timeout error when callTimeoutMs elapses", async () => {
+		// Fake claude sleeps 10s but the watchdog fires at 200ms. The reject can
+		// only arrive quickly if the child was killed and the awaits unblocked.
+		// The long-runner is `exec sleep` (the direct child), so proc.kill()
+		// reaches it. NOTE: proc.kill() terminates only the DIRECT child, not a
+		// deeper descendant tree - the same limitation the cancel path has.
+		process.env.HANDOFF_TEST_SLEEP = "10";
+		try {
+			const adapter = new ClaudeCliAdapter({ callTimeoutMs: 200 });
+			const started = Date.now();
+			await expect(
+				adapter.call({
+					participantId: "claude",
+					agentId: "claude",
+					stepId: "ask",
+					input: "hi",
+					cwd: TMPDIR,
+				}),
+			).rejects.toThrow(/claude --print timed out after 200ms/);
+			expect(Date.now() - started).toBeLessThan(4000);
+		} finally {
+			delete process.env.HANDOFF_TEST_SLEEP;
+		}
 	});
 });

@@ -130,6 +130,8 @@ Sensitive env values (API keys, tokens) are deliberately NOT in the fingerprint 
 
 `strictMcp` defaults to on: a chit-spawned `claude` runs with `--strict-mcp-config` and an empty MCP config, so it inherits none of the user's global MCP servers/tools/hooks. This is a safety boundary now that an autonomous loop can let claude edit. Setting `strictMcp: false` on a claude-cli agent is an advanced opt-out for an advisor that genuinely needs MCP; because it changes which servers the spawned claude sees, toggling it forks the session.
 
+`callTimeoutMs` is another operator-facing agents.json field (both adapters): a hard per-call timeout in milliseconds (positive integer; defaults to 15 minutes / `900000`) after which the adapter kills the child agent and fails with a distinct timeout error. Unlike `strictMcp` it is deliberately NOT fingerprint material - it is execution governance, not session identity or context, so changing it does not fork a resumed session.
+
 On a fingerprint mismatch, the next call sees `session: undefined` (the coordinator can't find a matching entry) and the adapter starts fresh. The old entry remains in the state file but is orphaned — no future call will reference that fingerprint. A periodic cleanup pass could prune stale entries; not yet implemented.
 
 **Deferred**: A visible note in the run output when a fingerprint mismatch is detected. The fresh start is currently silent. Will be added when the runtime gains a way to communicate per-step metadata beyond raw output.

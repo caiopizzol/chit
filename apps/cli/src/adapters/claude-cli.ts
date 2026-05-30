@@ -1,10 +1,18 @@
 import type { AdapterCallRequest, AdapterCallResult, RuntimeAdapter } from "../runtime/types.ts";
 import { findSensitiveValues, sanitize } from "./sanitize.ts";
 
+// Default hard ceiling for a single adapter call (15 minutes). Motivated by a
+// real wedge where a child stayed alive at 0% CPU emitting nothing for 20+
+// minutes, hanging the whole run.
+const DEFAULT_CALL_TIMEOUT_MS = 15 * 60_000;
+
 export interface ClaudeCliConfig {
 	model?: string;
 	passModelOnResume?: boolean;
 	env?: Record<string, string>;
+	// Hard per-call ceiling in ms. When the timer fires the child is killed and
+	// the call rejects with a timeout error. Unset means DEFAULT_CALL_TIMEOUT_MS.
+	callTimeoutMs?: number;
 	// Strict MCP isolation: by default the spawned `claude --print` is launched
 	// with --strict-mcp-config and an empty MCP config so it loads NONE of the
 	// user's global MCP servers/tools/hooks. This is a safety boundary now that
@@ -55,6 +63,16 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 			// the thrown error, so this need not be a specific error type.
 			const onAbort = () => proc.kill();
 			req.signal?.addEventListener("abort", onAbort, { once: true });
+			// Hard timeout watchdog: a wedged child (alive, no output) would
+			// otherwise leave the awaits below pending forever. proc.kill() only
+			// reaches the DIRECT child, not its descendant tree - same limitation
+			// the cancel path above has; process-tree killing is out of scope.
+			const timeoutMs = this.config.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+			let timedOut = false;
+			const timer = setTimeout(() => {
+				timedOut = true;
+				proc.kill();
+			}, timeoutMs);
 			try {
 				proc.stdin.write(req.input);
 				proc.stdin.end();
@@ -65,9 +83,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 					proc.exited,
 				]);
 
-				// A killed proc exits non-zero; check abort first so cancellation is
-				// not misreported as a normal failure.
+				// A killed proc exits non-zero; check abort/timeout first so neither is
+				// misreported as a normal failure. External cancel and timeout both
+				// kill the child but produce distinct errors.
 				if (req.signal?.aborted) throw new Error("aborted by client");
+				if (timedOut) throw new Error(`claude --print timed out after ${timeoutMs}ms`);
 
 				if (exitCode !== 0) {
 					const cleaned = sanitize(stderrText || stdoutText, sensitive);
@@ -97,6 +117,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 					session: effectiveSessionId ? { sessionId: effectiveSessionId } : undefined,
 				};
 			} finally {
+				clearTimeout(timer);
 				req.signal?.removeEventListener("abort", onAbort);
 			}
 		} catch (e) {

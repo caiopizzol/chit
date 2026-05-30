@@ -35,4 +35,18 @@ describe("buildAdapter", () => {
 		const config = (adapter as unknown as { config: { strictMcp?: boolean } }).config;
 		expect(config.strictMcp).toBe(false);
 	});
+
+	test("forwards agent.callTimeoutMs into the CodexExecAdapter config", () => {
+		const adapter = buildAdapter(agent({ adapter: "codex-exec", callTimeoutMs: 1234 }));
+		const config = (adapter as unknown as { config: { callTimeoutMs?: number } }).config;
+		expect(config.callTimeoutMs).toBe(1234);
+	});
+
+	test("forwards agent.callTimeoutMs into the ClaudeCliAdapter config", () => {
+		const adapter = buildAdapter(
+			agent({ adapter: "claude-cli", id: "claude", callTimeoutMs: 5678 }),
+		);
+		const config = (adapter as unknown as { config: { callTimeoutMs?: number } }).config;
+		expect(config.callTimeoutMs).toBe(5678);
+	});
 });

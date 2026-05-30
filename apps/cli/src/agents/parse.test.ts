@@ -127,6 +127,20 @@ describe("parseRegistry", () => {
 		});
 		expect(reg.agents.plain?.strictMcp).toBeUndefined();
 	});
+
+	test("a valid positive-integer callTimeoutMs is accepted", () => {
+		const reg = parseRegistry({
+			agents: { slow: { adapter: "codex-exec", callTimeoutMs: 600000 } },
+		});
+		expect(reg.agents.slow?.callTimeoutMs).toBe(600000);
+	});
+
+	test("callTimeoutMs is undefined when omitted (adapter default applies)", () => {
+		const reg = parseRegistry({
+			agents: { plain: { adapter: "codex-exec" } },
+		});
+		expect(reg.agents.plain?.callTimeoutMs).toBeUndefined();
+	});
 });
 
 describe("parseRegistry: invalid configs", () => {
@@ -203,6 +217,22 @@ describe("parseRegistry: invalid configs", () => {
 			{ agents: { x: { adapter: "claude-cli", strictMcp: "no" } } },
 			"agents.x.strictMcp",
 			"must be a boolean",
+		);
+	});
+
+	test("callTimeoutMs must be a positive integer (rejects zero/negative)", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "codex-exec", callTimeoutMs: 0 } } },
+			"agents.x.callTimeoutMs",
+			"must be a positive integer",
+		);
+	});
+
+	test("callTimeoutMs must be an integer (rejects non-integer)", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "codex-exec", callTimeoutMs: 1.5 } } },
+			"agents.x.callTimeoutMs",
+			"must be a positive integer",
 		);
 	});
 

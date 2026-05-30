@@ -17,6 +17,7 @@ export function buildAdapter(agent: NormalizedAgent): RuntimeAdapter {
 				model: agent.model,
 				reasoningEffort: agent.reasoningEffort,
 				env: agent.env,
+				callTimeoutMs: agent.callTimeoutMs,
 			});
 		case "claude-cli":
 			return new ClaudeCliAdapter({
@@ -24,6 +25,7 @@ export function buildAdapter(agent: NormalizedAgent): RuntimeAdapter {
 				passModelOnResume: agent.passModelOnResume,
 				env: agent.env,
 				strictMcp: agent.strictMcp,
+				callTimeoutMs: agent.callTimeoutMs,
 			});
 		default: {
 			const exhaustive: never = agent.adapter;

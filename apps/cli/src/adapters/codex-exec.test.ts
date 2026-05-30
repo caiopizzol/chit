@@ -308,3 +308,31 @@ describe("CodexExecAdapter: cancellation", () => {
 		}
 	});
 });
+
+describe("CodexExecAdapter: call timeout watchdog", () => {
+	test("kills the child and rejects with a timeout error when callTimeoutMs elapses", async () => {
+		// Fake codex sleeps 10s but the watchdog fires at 200ms. The reject can
+		// only arrive quickly if the child was killed and the awaits unblocked.
+		// The long-runner is `exec sleep` (the direct child), so proc.kill()
+		// reaches it; a wrapping shell would orphan it and keep the pipe open.
+		// NOTE: proc.kill() terminates only the DIRECT child, not a deeper
+		// descendant tree - the same limitation the cancel path has.
+		process.env.HANDOFF_TEST_SLEEP = "10";
+		try {
+			const adapter = new CodexExecAdapter({ callTimeoutMs: 200 });
+			const started = Date.now();
+			await expect(
+				adapter.call({
+					participantId: "codex",
+					agentId: "codex",
+					stepId: "ask",
+					input: "hi",
+					cwd: TMPDIR,
+				}),
+			).rejects.toThrow(/codex exec timed out after 200ms/);
+			expect(Date.now() - started).toBeLessThan(4000);
+		} finally {
+			delete process.env.HANDOFF_TEST_SLEEP;
+		}
+	});
+});
