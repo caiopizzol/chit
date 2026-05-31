@@ -72,9 +72,11 @@ and runs against the shipped MCP server.
 
 ## Reminders that bite
 
-- The checker must be `codex-exec` (it actually enforces `read-only`).
-  `claude-cli` is not yet sandboxed (`docs/backlog.md`), so don't rely on it as a
-  read-only reviewer.
+- Prefer `codex-exec` as the checker: it runs in a hard OS sandbox
+  (`--sandbox read-only`), the firmest read-only guarantee. `claude-cli` now also
+  enforces `read_only` via `--permission-mode plan` (a softer, permission-level
+  guarantee inside Claude, not an OS sandbox), so it can serve as a read-only
+  reviewer too; codex stays the default for the strongest boundary.
 - Reuse one `scope` per thread; pass `cwd` = the repo; don't edit the advisor
   `role` mid-thread (it's in the session fingerprint and forks a fresh thread).
 - Keep the advisor serial per scope (the session store has a read-modify-write

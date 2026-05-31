@@ -73,6 +73,7 @@ async function runStep(
 			stepId,
 			input,
 			cwd: invocationCwd,
+			filesystem: participant.permissions.filesystem,
 		});
 		onTrace({
 			type: "step.completed",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildGraphModel, parseManifest, parseRegistry } from "@chit/core";
+import { buildGraphModel, parseManifest, parseRegistry, validationSeverity } from "@chit/core";
 import {
 	appendReference,
 	canonicalize,
@@ -312,9 +312,9 @@ describe("canSave", () => {
 		graphModel: graphFor(raw, surface),
 	});
 
-	test("dirty + clean preview + warn validation is saveable", () => {
-		// consult on claude-skill yields permissions warn (claude gap), which is
-		// saveable. Use a codex-only chit so there is no gap at all = ok.
+	test("dirty + clean preview + ok validation is saveable", () => {
+		// A codex-only chit on claude-skill has no enforcement gap (codex sandboxes),
+		// so validation is ok, which is saveable.
 		const g = base(chit("consult"), "claude-skill");
 		expect(canSave(g)).toBe(true);
 	});
@@ -336,19 +336,24 @@ describe("canSave", () => {
 	});
 
 	test("warn-severity validation (needs_override) is saveable", () => {
-		// claude participant on claude-skill: claude-cli cannot enforce read_only
-		// -> permissions needs_override -> warn severity -> still saveable.
-		const warnChit = JSON.stringify({
-			schema: 1,
-			id: "w",
-			description: "d",
-			inputs: { q: { type: "string" } },
-			requires: {},
-			participants: { c: { agent: "claude", role: "r", session: "stateless" } },
-			steps: { s: { call: "c", prompt: "{{ inputs.q }}" } },
-			output: "s",
-		});
-		const g = base(warnChit, "claude-skill");
-		expect(canSave(g)).toBe(true);
+		// No built-in adapter produces a real gap anymore (both enforce read_only), so
+		// synthesize a needs_override report to confirm warn severity stays saveable.
+		const g = base(chit("w"), "claude-skill");
+		const warnG = {
+			...g,
+			graphModel: {
+				...g.graphModel,
+				validation: {
+					capabilities: { compatible: true, missing: [] },
+					permissions: {
+						status: "needs_override" as const,
+						gaps: [{ participantId: "a", agentId: "codex", permission: "filesystem: read_only" }],
+					},
+					agents: { resolved: true, unknown: [] },
+				},
+			},
+		};
+		expect(validationSeverity(warnG.graphModel.validation)).toBe("warn");
+		expect(canSave(warnG)).toBe(true);
 	});
 });

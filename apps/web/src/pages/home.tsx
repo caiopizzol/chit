@@ -113,10 +113,8 @@ export function Home() {
 						{"\n  "}
 						<span class="pass-line">agents: resolved</span>
 						{"\n  "}
-						<span class="warn-line">permissions: needs override</span>
-						{
-							"\n    claude requires filesystem read_only;\n    claude-cli cannot enforce it\n\nexecution:\n  level 0:  ask_codex, ask_claude\n  level 1:  out\n\n"
-						}
+						<span class="pass-line">permissions: ok</span>
+						{"\n\nexecution:\n  level 0:  ask_codex, ask_claude\n  level 1:  out\n\n"}
 						<span class="pass-line">run passes</span>
 						{"\n"}
 					</pre>
@@ -218,7 +216,7 @@ export function Home() {
 								font-size="10"
 								fill="#2A2A2A"
 							>
-								claude-cli · warn
+								claude-cli · plan mode
 							</text>
 							<rect
 								x="480"
@@ -268,7 +266,7 @@ export function Home() {
 							<div class="ind" />
 							<div class="label">WARN</div>
 							<div class="body">
-								permission gap · claude-cli cannot enforce filesystem read_only
+								permission gap · an adapter cannot enforce a declared permission
 							</div>
 						</div>
 						<div class="receipt-line fail">

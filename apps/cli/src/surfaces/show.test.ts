@@ -18,13 +18,32 @@ function buildConsult(surface?: string): GraphModel {
 	return buildGraphModel(parseManifest(CONSULT), REGISTRY, surface);
 }
 
+// consult no longer has a real enforcement gap: both codex (sandbox) and claude
+// (plan mode) enforce read_only. To exercise the needs_override / warn rendering
+// branches, inject a synthetic gap into the validation report.
+function consultWithSyntheticGap(): GraphModel {
+	const model = buildConsult("claude-skill");
+	if (!model.validation) throw new Error("expected validation");
+	return {
+		...model,
+		validation: {
+			...model.validation,
+			permissions: {
+				status: "needs_override",
+				gaps: [{ participantId: "claude", agentId: "claude", permission: "filesystem: read_only" }],
+			},
+		},
+	};
+}
+
 describe("renderShow: json", () => {
 	test("emits parseable JSON matching the graph model", () => {
 		const out = renderShow(buildConsult("claude-skill"), "json");
 		const parsed = JSON.parse(out);
 		expect(parsed.manifest.id).toBe("consult");
 		expect(parsed.surface.kind).toBe("claude-skill");
-		expect(parsed.validation.permissions.status).toBe("needs_override");
+		// Both adapters enforce read_only now, so consult validates with no gaps.
+		expect(parsed.validation.permissions.status).toBe("ok");
 	});
 
 	test("includes resolved per-participant config", () => {
@@ -42,7 +61,8 @@ describe("renderShow: ascii", () => {
 		const out = renderShow(buildConsult("claude-skill"), "ascii");
 		expect(out).toContain("manifest: consult");
 		expect(out).toContain("surface: claude-skill");
-		expect(out).toContain("NEEDS OVERRIDE");
+		// consult now validates clean (both adapters enforce read_only).
+		expect(out).toContain("permissions:  OK");
 		expect(out).toContain("participants:");
 		expect(out).toContain("codex");
 		expect(out).toContain("claude");
@@ -51,6 +71,15 @@ describe("renderShow: ascii", () => {
 		expect(out).toContain("level 1");
 		expect(out).toContain("[final]");
 		expect(out).toContain("(output)");
+	});
+
+	test("renders NEEDS OVERRIDE and the gap line when a gap is present", () => {
+		// Synthetic gap (no built-in adapter produces one now) drives the
+		// needs_override rendering branch.
+		const out = renderShow(consultWithSyntheticGap(), "ascii");
+		expect(out).toContain("NEEDS OVERRIDE");
+		expect(out).toContain("claude");
+		expect(out).toContain("cannot enforce");
 	});
 
 	test("renders effective participant config, with defaults and claude strict-MCP", () => {
@@ -139,15 +168,21 @@ describe("renderShow: html", () => {
 		expect(out).toContain("strictMcp: on");
 	});
 
-	test("shows validation block when surface provided and gaps exist", () => {
+	test("consult validates with Permissions OK (both adapters enforce)", () => {
 		const out = renderShow(buildConsult("claude-skill"), "html");
+		expect(out).toContain("Permissions OK");
+		expect(out).not.toContain("cannot enforce");
+	});
+
+	test("shows validation block when a gap exists", () => {
+		const out = renderShow(consultWithSyntheticGap(), "html");
 		expect(out).toContain("Permissions: needs_override");
 		expect(out).toContain("claude");
 		expect(out).toContain("cannot enforce");
 	});
 
 	test("permission-only gap renders as warn (yellow), not error (red)", () => {
-		const out = renderShow(buildConsult("claude-skill"), "html");
+		const out = renderShow(consultWithSyntheticGap(), "html");
 		expect(out).toContain('<section class="validation warn">');
 		expect(out).not.toContain('<section class="validation error">');
 	});

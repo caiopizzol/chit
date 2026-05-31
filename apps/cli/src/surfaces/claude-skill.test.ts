@@ -11,13 +11,34 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INSTALL_MARKER_FILENAME } from "@chit/core";
+import {
+	type AdapterKind,
+	INSTALL_MARKER_FILENAME,
+	type NormalizedRegistry,
+	parseRegistry,
+} from "@chit/core";
 import { installClaudeSkill, SurfaceInstallError } from "./claude-skill.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 const CONSULT_PATH = join(PROJECT_ROOT, "examples", "consult.json");
 const ASK_CODEX_PATH = join(PROJECT_ROOT, "examples", "ask-codex.json");
 const INVESTIGATE_BUG_PATH = join(PROJECT_ROOT, "examples", "investigate-bug.json");
+
+// A test-only registry whose claude agent points at an adapter kind with no
+// descriptor, so read_only is unenforceable. No built-in adapter is unenforceable
+// anymore, so this keeps the install-refusal path under test.
+const UNENFORCED_REGISTRY: NormalizedRegistry = {
+	...parseRegistry(undefined),
+	agents: {
+		...parseRegistry(undefined).agents,
+		claude: {
+			id: "claude",
+			adapter: "noop" as AdapterKind,
+			passModelOnResume: false,
+			builtIn: true,
+		},
+	},
+};
 
 const FAKE_CODEX = `#!/bin/sh
 IS_RESUME=0
@@ -172,16 +193,18 @@ describe("installClaudeSkill: file generation", () => {
 		expect(body).toContain("CLAUDE_SKILL_DIR");
 		expect(body).toContain("manifest.json");
 		expect(body).toContain("--scope");
-		expect(body).toContain("--allow-unenforced-permissions");
+		// consult is fully enforced now (codex sandbox + claude plan mode), so no
+		// --allow-unenforced-permissions flag is baked into the skill.
+		expect(body).not.toContain("--allow-unenforced-permissions");
 		// User input flows through --input-stdin + single-quoted heredoc, not
 		// through shell interpolation. This is the shell-injection hardening.
 		expect(body).toContain("--input-stdin question");
 		// Heredoc delimiter is randomized per install (16 hex chars of entropy),
 		// to make accidental collision with user input astronomically unlikely.
 		expect(body).toMatch(/<<'CHIT_INPUT_[0-9A-F]{16}_EOF'/);
-		// Body is wrapped in `{ ... } 2>&1` so stderr (the unenforced-permission
-		// WARNING and any runtime errors) reaches the captured output that
-		// Claude sees in place of the fenced block.
+		// Body is wrapped in `{ ... } 2>&1` so stderr (any runtime errors, and the
+		// unenforced-permission WARNING when a future adapter cannot enforce)
+		// reaches the captured output that Claude sees in place of the fenced block.
 		expect(body).toContain("} 2>&1");
 	});
 
@@ -328,14 +351,28 @@ describe("installClaudeSkill: install marker", () => {
 });
 
 describe("installClaudeSkill: validation", () => {
-	test("refuses install when permissions unenforceable and flag not set", () => {
-		const manifestPath = CONSULT_PATH;
+	test("installs consult without the override flag now that both adapters enforce read_only", () => {
+		// claude-cli enforces read_only via plan mode, codex-exec via its sandbox, so
+		// consult has no unenforceable permission and installs with the flag off.
+		const r = installClaudeSkill({
+			manifestPath: CONSULT_PATH,
+			outputDir: mkdtempSync(join(TMPDIR, "install-")),
+			runtimePath: PROJECT_ROOT,
+			allowUnenforcedPermissions: false,
+		});
+		expect(existsSync(r.skillDir)).toBe(true);
+	});
+
+	test("refuses install when a participant's adapter cannot enforce its permission (synthetic non-enforcing adapter)", () => {
+		// No built-in adapter is unenforceable anymore; inject a registry whose claude
+		// agent cannot enforce read_only to keep the refusal path covered.
 		expect(() =>
 			installClaudeSkill({
-				manifestPath,
+				manifestPath: CONSULT_PATH,
 				outputDir: mkdtempSync(join(TMPDIR, "install-")),
 				runtimePath: PROJECT_ROOT,
 				allowUnenforcedPermissions: false,
+				registry: UNENFORCED_REGISTRY,
 			}),
 		).toThrow(SurfaceInstallError);
 	});
@@ -506,17 +543,16 @@ describe("installClaudeSkill: validation", () => {
 		).toThrow(/unknown agent "does-not-exist"/);
 	});
 
-	test("returns the enforcement gaps it accepted (for traceability)", () => {
+	test("returns no enforcement gaps for consult (both adapters enforce)", () => {
+		// codex sandboxes and claude runs in plan mode, so consult installs with no
+		// enforcement gaps and needs no override flag.
 		const manifestPath = CONSULT_PATH;
 		const r = installClaudeSkill({
 			manifestPath,
 			outputDir: mkdtempSync(join(TMPDIR, "install-")),
 			runtimePath: PROJECT_ROOT,
-			allowUnenforcedPermissions: true,
 		});
-		expect(r.enforcementGaps.length).toBe(1);
-		expect(r.enforcementGaps[0]?.participantId).toBe("claude");
-		expect(r.enforcementGaps[0]?.permission).toBe("filesystem: read_only");
+		expect(r.enforcementGaps).toEqual([]);
 	});
 });
 
@@ -552,10 +588,6 @@ describe("installClaudeSkill: acceptance round-trip", () => {
 		expect(r1.code).toBe(0);
 		expect(r1.stdout).toContain("CODEX_ANSWER");
 		expect(r1.stdout).toContain("CLAUDE_ANSWER");
-		// `{ ... } 2>&1` folds the runtime's stderr WARNING into stdout, so
-		// Claude Code's `! ` preprocessor sees it and surfaces it to the user.
-		expect(r1.stdout).toContain("WARNING");
-		expect(r1.stdout).toContain("unenforced permissions");
 
 		// Session file is written under the temp XDG_STATE_HOME (new chit path).
 		const sessionsDir = join(stateDir, "chit", "sessions");
@@ -624,33 +656,5 @@ describe("installClaudeSkill: acceptance round-trip", () => {
 		expect(captured).toContain("$(echo PWNED)");
 		expect(captured).toContain("`id`");
 		expect(captured).toContain("&& rm -rf /");
-	});
-
-	test("permission warning fires every run, matching CLI behavior", async () => {
-		const manifestPath = CONSULT_PATH;
-		const out = mkdtempSync(join(TMPDIR, "install-"));
-		const stateDir = mkdtempSync(join(TMPDIR, "state-"));
-		const r = installClaudeSkill({
-			manifestPath,
-			outputDir: out,
-			runtimePath: PROJECT_ROOT,
-			allowUnenforcedPermissions: true,
-		});
-		const body = extractBashBlock(readFileSync(r.skillMdPath, "utf-8")).replace(
-			/\$ARGUMENTS/g,
-			"hi",
-		);
-		const env: Record<string, string> = {
-			...(process.env as Record<string, string>),
-			PATH: `${FAKE_BIN_DIR}:${process.env.PATH ?? ""}`,
-			CLAUDE_SESSION_ID: "another-session",
-			CLAUDE_SKILL_DIR: r.skillDir,
-			XDG_STATE_HOME: stateDir,
-		};
-		const first = await runBash(body, env, out);
-		const second = await runBash(body, env, out);
-		// `{ ... } 2>&1` folds the runtime's stderr into the captured stdout.
-		expect(first.stdout).toContain("WARNING");
-		expect(second.stdout).toContain("WARNING");
 	});
 });

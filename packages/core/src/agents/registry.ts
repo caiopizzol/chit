@@ -27,11 +27,17 @@ export class RegistryError extends Error {
 const ADAPTERS: Record<AdapterKind, AdapterDescriptor> = {
 	"codex-exec": {
 		kind: "codex-exec",
+		// Hard OS sandbox: codex exec always runs with `--sandbox read-only`.
 		capabilities: { enforces_filesystem_read_only: true },
 	},
 	"claude-cli": {
 		kind: "claude-cli",
-		capabilities: { enforces_filesystem_read_only: false },
+		// Enforced by claude PLAN-MODE PERMISSIONS, not an OS/filesystem sandbox: a
+		// read_only participant is run with `--permission-mode plan`, which blocks
+		// every write (file edits and write-capable Bash) while allowing reads and
+		// read-only shell. Codex remains the hard sandbox; this is a softer,
+		// permission-level guarantee.
+		capabilities: { enforces_filesystem_read_only: true },
 	},
 };
 const ADAPTER_KINDS: ReadonlySet<string> = new Set(Object.keys(ADAPTERS));

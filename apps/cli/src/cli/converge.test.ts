@@ -494,11 +494,11 @@ describe("runConverge (CLI)", () => {
 	});
 
 	// A converge-shaped manifest (implement + review call steps) whose reviewer is
-	// claude with read_only — claude-cli cannot enforce read_only, so this has an
-	// enforcement gap (unlike the default converge.json, where the reviewer is
-	// codex). `gap: false` swaps the reviewer to write to remove the gap.
-	function writeGapManifest(gap: boolean): string {
-		const reviewerPerms = gap ? "read_only" : "write";
+	// claude with read_only. claude-cli now enforces read_only via plan mode, so
+	// this manifest has no enforcement gap and runs without the override flag. The
+	// param picks the reviewer's filesystem permission.
+	function writeClaudeReviewerManifest(readOnly: boolean): string {
+		const reviewerPerms = readOnly ? "read_only" : "write";
 		const manifest = {
 			schema: 1,
 			id: "converge-gap-test",
@@ -530,44 +530,13 @@ describe("runConverge (CLI)", () => {
 		return path;
 	}
 
-	test("an enforcement gap without the flag exits 1 with a clean error", async () => {
-		const manifestPath = writeGapManifest(true);
-		const saved = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
-		process.env.XDG_CONFIG_HOME = cwd; // built-in registry (claude -> claude-cli)
-		try {
-			const err: string[] = [];
-			const io: ConvergeIO = { out: () => {}, err: (s) => err.push(s) };
-			const code = await runConverge(
-				[
-					"--task",
-					"t",
-					"--scope",
-					"s",
-					"--cwd",
-					cwd,
-					"--loop-id",
-					"GAP1",
-					"--manifest",
-					manifestPath,
-				],
-				io,
-			);
-			expect(code).toBe(1);
-			expect(err.join("")).toMatch(/cannot enforce required permissions/);
-			expect(err.join("")).toMatch(/reviewer/);
-			// It refused before running, so no loop log was created.
-			expect(() => readLoop(cwd, "GAP1")).toThrow();
-		} finally {
-			restoreEnv(saved);
-		}
-	});
-
-	test("an enforcement gap WITH the flag passes the governance gate", async () => {
-		// With the flag the gate is bypassed (a warning is emitted) and the loop
-		// proceeds to run. A fake `claude` that exits non-zero makes the run fail,
-		// which proves we got past the gate (the error is a run failure, not the
-		// enforce refusal).
-		const manifestPath = writeGapManifest(true);
+	test("a claude read_only reviewer runs without the override flag (plan mode enforces)", async () => {
+		// claude-cli enforces read_only via plan mode, so a read_only reviewer is no
+		// longer an enforcement gap: converge proceeds without
+		// --allow-unenforced-permissions and emits no unenforced-permission warning.
+		// A fake `claude` that exits non-zero makes the run fail, which proves we got
+		// past the governance gate (a run failure, not an enforce refusal).
+		const manifestPath = writeClaudeReviewerManifest(true);
 		const binDir = join(cwd, "bin");
 		mkdirSync(binDir, { recursive: true });
 		const claudePath = join(binDir, "claude");
@@ -594,20 +563,19 @@ describe("runConverge (CLI)", () => {
 					"--cwd",
 					cwd,
 					"--loop-id",
-					"GAP2",
+					"GAP1",
 					"--manifest",
 					manifestPath,
-					"--allow-unenforced-permissions",
 				],
 				io,
 			);
 			const errText = err.join("");
-			// Passed the gate: no enforce refusal, just the warning, then it ran.
+			// Passed the gate without the flag: no enforce refusal, no warning.
 			expect(errText).not.toMatch(/cannot enforce required permissions/);
-			expect(errText).toMatch(/WARNING -- unenforced permission/);
+			expect(errText).not.toMatch(/WARNING -- unenforced permission/);
 			// It proceeded to run; the fake claude failed, so the loop was recorded.
 			expect(code).toBe(1);
-			expect(stopStatus("GAP2")).toBe("blocked");
+			expect(stopStatus("GAP1")).toBe("blocked");
 		} finally {
 			restoreEnv(saved);
 		}

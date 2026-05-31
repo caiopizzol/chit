@@ -281,8 +281,9 @@ run options:
   --invocation-cwd <path>       Working directory passed to adapters. Defaults to cwd.
   --scope <id>                  Enable per_scope session persistence keyed by this id.
   --allow-unenforced-permissions  Run anyway when an adapter can't enforce a declared
-                                permission (e.g., claude-cli + filesystem: read_only).
-                                Emits a warning every run; use deliberately.
+                                permission. Both built-in adapters enforce filesystem
+                                read_only today, so this is reserved for a future adapter
+                                that cannot. Emits a warning every run; use deliberately.
   --trace                       Render a step transcript to stderr (id, participant,
                                 agent, session policy, elapsed, status, prompt/output
                                 previews). Streams live in a terminal. Off by default.
@@ -334,13 +335,17 @@ by (scope, manifestId, participantId, fingerprint).
 
 Permission enforcement: each participant's declared permissions are checked
 against the chosen adapter's capabilities at install time. If the adapter
-cannot enforce a permission (e.g., claude-cli cannot enforce filesystem:
-read_only), the run is rejected unless --allow-unenforced-permissions is set.
+cannot enforce a permission, the run is rejected unless
+--allow-unenforced-permissions is set. Both built-in adapters enforce
+filesystem read_only today: codex-exec via --sandbox read-only (a hard OS
+sandbox), claude-cli via --permission-mode plan (Claude plan-mode permissions,
+not an OS/filesystem sandbox).
 
 Limitations in this build:
 - file[] inputs are not yet supported via the CLI.
-- claude-cli does not yet sandbox file access. Manifests using claude with
-  filesystem: read_only (the default) require --allow-unenforced-permissions.
+- claude-cli read-only is enforced by Claude plan-mode permissions, not an
+  OS/filesystem sandbox: plan mode blocks writes (file edits and write-capable
+  Bash) from inside claude. Codex remains the hard sandbox.
 `;
 
 export async function runMain(argv: string[]): Promise<number> {

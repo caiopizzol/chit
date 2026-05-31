@@ -88,7 +88,6 @@ Both adapters surface events LIVE as they arrive: each reads stdout incrementall
 
 Small cleanups worth doing before the next major slice (Studio).
 
-- **Real `claude-cli` sandboxing.** Pass `--allowedTools` or similar so `claude-cli` actually enforces filesystem read-only. Flips `enforces_filesystem_read_only` to `true` and removes the WARNING for default consult/ask-claude usage. Closes the documented governance gap.
 - **Atomic write + locking for `FileSessionStore`.** Tracked in `docs/schema-v0.md` Concurrency note. Two concurrent CLI runs with the same `--scope` could race and drop a session entry. Acceptable for single-user single-shell; fix before treating sessions as durable infra.
 - **Fingerprint mismatch visible note.** Two pieces, both needed:
   1. *Detection.* `FileSessionStore.load(key)` currently returns `undefined` on any miss, conflating "no prior session for this participant" with "different fingerprint exists for same participant." Add `list(scope, manifestId, participantId): SessionKey[]` so the coordinator can detect a real mismatch (some fingerprint exists but doesn't match this run's).
@@ -156,4 +155,4 @@ Live-vendor verifications we said we'd do but haven't run yet:
 
 - Decide what `chit` becomes as a real distributable (npm package? compiled binary? bun-installable script?). Today users run via `bun apps/cli/src/cli/run.ts`. Affects the `runtimePath` auto-detection in `chit install`.
 - README hasn't been updated since the initial commit; current state is roughly right but missing the install/show commands and the surface story.
-- Consider whether `examples/consult.json` should drop `permissions.filesystem: read_only` from the claude participant once `claude-cli` actually sandboxes. Today it's the canonical demo of the unenforced-permission warning; if claude-cli enforces, the example becomes silent on governance.
+- Consider whether `examples/consult.json` still earns `permissions.filesystem: read_only` on the claude participant now that `claude-cli` enforces it via plan mode. It used to be the canonical demo of the unenforced-permission warning; with enforcement in place it installs clean and no longer exercises that path (synthetic fixtures cover the warning instead).

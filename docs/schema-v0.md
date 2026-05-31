@@ -148,13 +148,13 @@ An install flag (e.g., `--allow-unenforced-permissions`) can opt into installing
 
 Adapters declare per-permission enforceability. Examples:
 
-- `codex-exec` adapter: enforces `filesystem: read_only` via `--sandbox read-only`.
-- `claude-cli` adapter: does not currently enforce filesystem; depends on Claude's own tool permissions.
+- `codex-exec` adapter: enforces `filesystem: read_only` via `--sandbox read-only` (a hard OS sandbox).
+- `claude-cli` adapter: enforces `filesystem: read_only` by running claude with `--permission-mode plan`. This is a Claude plan-mode permission, not an OS/filesystem sandbox: plan mode blocks every write (file edits and write-capable Bash) while still allowing reads and read-only shell.
 - Generic subprocess adapter: cannot enforce; install fails when `read_only` requested unless flag set.
 
 **Status**: enforced at the CLI surface. Each participant's declared `permissions.filesystem` is checked against the chosen adapter's capabilities at install/run time. If the adapter declares `enforces_filesystem_read_only: false` and the participant declares `filesystem: read_only` (the default), the run fails with a locative error unless `--allow-unenforced-permissions` is passed. With the flag, the CLI emits a warning to stderr listing every unenforceable permission before each run.
 
-This means in practice: any manifest using a `claude-cli` participant requires `--allow-unenforced-permissions` (claude-cli does not yet sandbox filesystem access). Codex-only manifests run cleanly because `codex-exec` applies `--sandbox read-only`. When claude-cli is taught to restrict tools (a future adapter change), the gap closes without manifest changes.
+This means in practice: both built-in adapters enforce `filesystem: read_only`, so the standard manifests run cleanly with no override flag. `codex-exec` applies `--sandbox read-only` (a hard OS sandbox); `claude-cli` applies `--permission-mode plan` (Claude plan-mode permissions, not a sandbox). The caveat for claude-cli: read-only is a permission-level guarantee enforced inside claude, not an OS boundary, so it is softer than codex's sandbox. The `--allow-unenforced-permissions` flag remains for any future adapter that cannot enforce a declared permission.
 
 ## Deferred details
 

@@ -97,7 +97,7 @@ server.registerTool(
 				.boolean()
 				.default(true)
 				.describe(
-					"Proceed when an adapter can't enforce a declared permission (e.g. claude read_only)",
+					"Proceed when an adapter can't enforce a declared permission (both built-in adapters enforce read_only today)",
 				),
 			audit: z
 				.boolean()

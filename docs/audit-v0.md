@@ -89,7 +89,7 @@ run 9b41-...
   tokens: in 22232, out 66, cached 21788, reasoning 19; reported cost: $0.0658
 
 participants (recorded config):
-  implementer  agent=claude  session=per_scope  permissions=write  adapter=claude-cli  enforces=NO
+  implementer  agent=claude  session=per_scope  permissions=write  adapter=claude-cli  enforces=yes
     config  model=default  effort=default  callTimeout=default  noProgress=off  strictMcp=on  passModelOnResume=no
 
 timeline:

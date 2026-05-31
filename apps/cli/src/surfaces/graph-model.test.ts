@@ -70,7 +70,8 @@ describe("buildGraphModel: structural fields", () => {
 		expect(model.participants.codex?.adapter).toBe("codex-exec");
 		expect(model.participants.codex?.enforcesReadOnly).toBe(true);
 		expect(model.participants.claude?.adapter).toBe("claude-cli");
-		expect(model.participants.claude?.enforcesReadOnly).toBe(false);
+		// claude-cli now enforces read_only via plan mode, so it reports true too.
+		expect(model.participants.claude?.enforcesReadOnly).toBe(true);
 	});
 
 	test("requires.effective is declared ∪ inferred", () => {
@@ -202,14 +203,15 @@ describe("buildGraphModel: surface and validation", () => {
 		expect(model.validation).toBeNull();
 	});
 
-	test("claude-skill surface: consult is capability-compatible but needs override", () => {
+	test("claude-skill surface: consult is compatible with no permission gaps", () => {
+		// Both participants (codex + claude) enforce read_only now, so consult has
+		// no enforcement gaps and needs no override flag.
 		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "claude-skill");
 		expect(model.surface?.kind).toBe("claude-skill");
 		expect(model.validation?.capabilities.compatible).toBe(true);
 		expect(model.validation?.capabilities.missing).toEqual([]);
-		expect(model.validation?.permissions.status).toBe("needs_override");
-		expect(model.validation?.permissions.gaps.length).toBe(1);
-		expect(model.validation?.permissions.gaps[0]?.participantId).toBe("claude");
+		expect(model.validation?.permissions.status).toBe("ok");
+		expect(model.validation?.permissions.gaps).toEqual([]);
 	});
 
 	test("claude-skill surface: ask-codex has no gaps (codex-exec enforces)", () => {
@@ -283,8 +285,19 @@ describe("validationSeverity", () => {
 	});
 
 	test("permission needs override only → warn (overridable)", () => {
+		// No built-in adapter produces a real gap anymore (both enforce read_only),
+		// so synthesize a needs_override report to verify the severity mapping, the
+		// same way the "blocked" case below is constructed.
 		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "claude-skill");
-		expect(validationSeverity(model.validation)).toBe("warn");
+		const needsOverride = {
+			capabilities: { compatible: true, missing: [] },
+			permissions: {
+				status: "needs_override" as const,
+				gaps: [{ participantId: "claude", agentId: "claude", permission: "filesystem: read_only" }],
+			},
+			agents: { resolved: true, unknown: [] },
+		};
+		expect(validationSeverity({ ...model.validation, ...needsOverride })).toBe("warn");
 	});
 
 	test("codex-only manifest → ok", () => {

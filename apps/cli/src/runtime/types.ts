@@ -1,4 +1,4 @@
-import type { AdapterUsage } from "@chit/core";
+import type { AdapterUsage, FilesystemPermission } from "@chit/core";
 
 // One intra-call event from the underlying CLI stream. Both adapters emit these
 // live: each reads stdout incrementally and calls AdapterCallRequest.onEvent per
@@ -34,6 +34,13 @@ export interface AdapterCallRequest {
 	// does no per-event work), while the audit wrapper sets it to record
 	// adapter.event. Both adapters implement it.
 	onEvent?: (event: AdapterEvent) => void;
+	// The calling participant's declared filesystem permission. Adapters that can
+	// enforce read_only consult it per call: claude-cli runs with
+	// `--permission-mode plan` when read_only (codex-exec always sandboxes, so it
+	// ignores this). Threaded per call, not baked into the adapter, so one adapter
+	// instance can serve participants with different permissions. Optional: when
+	// omitted the adapter keeps its permissive default (claude can write).
+	filesystem?: FilesystemPermission;
 }
 
 export interface AdapterCallResult {

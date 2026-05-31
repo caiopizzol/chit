@@ -497,6 +497,107 @@ describe("ClaudeCliAdapter: env and command construction", () => {
 			writeFakeBin("claude", FAKE_CLAUDE);
 		}
 	});
+
+	test("adds --permission-mode plan when the participant is read_only", async () => {
+		// Read-only enforcement: plan mode blocks writes inside claude. This is the
+		// only place the flag is added; it pairs with the registry descriptor
+		// flipping enforces_filesystem_read_only to true for claude-cli.
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-plan-readonly.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				filesystem: "read_only",
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("--permission-mode");
+			// The mode sits immediately after the flag.
+			expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("plan");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("omits --permission-mode plan when the participant is write", async () => {
+		// write is the permissive option: today's behavior, claude can write, so no
+		// plan-mode flag is added.
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-plan-write.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				filesystem: "write",
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).not.toContain("--permission-mode");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("omits --permission-mode plan when no filesystem permission is passed", async () => {
+		// An omitted permission keeps the permissive default (claude can write), so
+		// callers/tests that don't thread it through are unaffected.
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-plan-unset.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).not.toContain("--permission-mode");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("plan mode coexists with --resume on a read_only resume call", async () => {
+		// Read-only enforcement is per-invocation like --effort, so it must also be
+		// present on resume calls, not just the fresh call.
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-plan-resume.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				session: { sessionId: "prior" },
+				filesystem: "read_only",
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("--resume");
+			expect(argv).toContain("--permission-mode");
+			expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("plan");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
 });
 
 describe("ClaudeCliAdapter: session resume", () => {

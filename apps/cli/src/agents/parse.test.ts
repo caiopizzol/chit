@@ -46,9 +46,11 @@ describe("built-in agents and adapter descriptors", () => {
 		expect(codexExec).toBeDefined();
 		expect(codexExec?.capabilities.enforces_filesystem_read_only).toBe(true);
 
+		// claude-cli enforces read_only via `--permission-mode plan` (a Claude
+		// plan-mode permission, not an OS sandbox), so it declares true too.
 		const claudeCli = getAdapterDescriptor("claude-cli");
 		expect(claudeCli).toBeDefined();
-		expect(claudeCli?.capabilities.enforces_filesystem_read_only).toBe(false);
+		expect(claudeCli?.capabilities.enforces_filesystem_read_only).toBe(true);
 	});
 
 	test("getAdapterDescriptor returns undefined for unknown kinds", () => {

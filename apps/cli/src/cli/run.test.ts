@@ -364,18 +364,6 @@ describe("handoff run (subprocess)", () => {
 		}
 	});
 
-	test("ask-claude.json end-to-end with fake claude (needs allow-unenforced)", async () => {
-		const { stdout, code } = await runCLI([
-			"run",
-			ASK_CLAUDE,
-			"--allow-unenforced-permissions",
-			"--input",
-			"question=is it tuesday",
-		]);
-		expect(code).toBe(0);
-		expect(stdout).toContain("CLAUDE_ANSWER: yes");
-	});
-
 	test("consult-stateless.json runs codex + claude in parallel", async () => {
 		const { stdout, code } = await runCLI([
 			"run",
@@ -391,16 +379,17 @@ describe("handoff run (subprocess)", () => {
 		expect(stdout).toContain("CLAUDE_ANSWER: yes");
 	});
 
-	test("rejects claude manifest without --allow-unenforced-permissions", async () => {
-		const { stderr, code } = await runCLI(["run", ASK_CLAUDE, "--input", "question=hi"]);
-		expect(code).toBe(2);
-		expect(stderr).toContain("cannot enforce required permissions");
-		expect(stderr).toContain("filesystem: read_only");
-		expect(stderr).toContain("claude");
-		expect(stderr).toContain("--allow-unenforced-permissions");
+	test("claude manifest runs without --allow-unenforced-permissions (plan mode enforces)", async () => {
+		// claude read_only is now enforced via --permission-mode plan, so the run
+		// no longer needs the override flag and emits no unenforced-permission gate.
+		const { stdout, stderr, code } = await runCLI(["run", ASK_CLAUDE, "--input", "question=hi"]);
+		expect(code).toBe(0);
+		expect(stdout).toContain("CLAUDE_ANSWER: yes");
+		expect(stderr).not.toContain("cannot enforce required permissions");
 	});
 
-	test("claude manifest with --allow-unenforced-permissions runs and warns on stderr", async () => {
+	test("claude manifest runs clean with no unenforced-permission warning", async () => {
+		// Passing the flag is now a harmless no-op (no gaps to warn about).
 		const { stderr, code } = await runCLI([
 			"run",
 			ASK_CLAUDE,
@@ -409,9 +398,8 @@ describe("handoff run (subprocess)", () => {
 			"question=hi",
 		]);
 		expect(code).toBe(0);
-		expect(stderr).toContain("WARNING");
-		expect(stderr).toContain("unenforced permissions");
-		expect(stderr).toContain("claude");
+		expect(stderr).not.toContain("WARNING");
+		expect(stderr).not.toContain("unenforced permissions");
 	});
 
 	test("codex-only manifest needs no enforcement override (codex-exec sandboxes)", async () => {
@@ -740,7 +728,7 @@ describe("handoff run (subprocess)", () => {
 		expect(stdout).not.toContain("NEEDS OVERRIDE");
 	});
 
-	test("show against claude-skill surface flags claude's unenforced permissions", async () => {
+	test("show against claude-skill surface reports permissions OK (claude now enforces)", async () => {
 		const { stdout, code } = await runCLI([
 			"show",
 			CONSULT,
@@ -750,9 +738,9 @@ describe("handoff run (subprocess)", () => {
 			"ascii",
 		]);
 		expect(code).toBe(0);
-		expect(stdout).toContain("NEEDS OVERRIDE");
-		expect(stdout).toContain("claude");
-		expect(stdout).toContain("cannot enforce");
+		expect(stdout).toContain("permissions:  OK");
+		expect(stdout).not.toContain("NEEDS OVERRIDE");
+		expect(stdout).not.toContain("cannot enforce");
 	});
 
 	test("show against claude-skill surface flags can_pass_files missing for file[] inputs", async () => {
@@ -770,9 +758,9 @@ describe("handoff run (subprocess)", () => {
 		expect(stdout).toContain("can_pass_files");
 	});
 
-	test("install rejects claude manifest without --allow-unenforced-permissions", async () => {
+	test("install accepts claude manifest without --allow-unenforced-permissions (plan mode enforces)", async () => {
 		const target = mkdtempSync(join(TMPDIR, "install-target-"));
-		const { stderr, code } = await runCLI([
+		const { stdout, stderr, code } = await runCLI([
 			"install",
 			ASK_CLAUDE,
 			"--as",
@@ -782,8 +770,9 @@ describe("handoff run (subprocess)", () => {
 			"--runtime-path",
 			PROJECT_ROOT,
 		]);
-		expect(code).toBe(2);
-		expect(stderr).toContain("cannot enforce required permissions");
+		expect(code).toBe(0);
+		expect(stdout).toContain("installed skill at");
+		expect(stderr).not.toContain("cannot enforce required permissions");
 	});
 
 	test("list returns 'no installs found' against an empty parent dir", async () => {

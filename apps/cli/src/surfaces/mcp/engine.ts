@@ -308,6 +308,7 @@ export async function runStep(
 					input,
 					cwd: run.invocationCwd,
 					signal,
+					filesystem: participant.permissions.filesystem,
 				});
 				output = result.output;
 			} finally {

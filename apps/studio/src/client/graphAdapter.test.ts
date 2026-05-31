@@ -5,11 +5,33 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildGraphModel, parseManifest, parseRegistry } from "@chit/core";
+import {
+	type AdapterKind,
+	buildGraphModel,
+	type NormalizedRegistry,
+	parseManifest,
+	parseRegistry,
+} from "@chit/core";
 import { adaptGraphModel } from "./graphAdapter.ts";
 
 const REGISTRY = parseRegistry(undefined);
 const EXAMPLES_DIR = join(import.meta.dir, "..", "..", "..", "cli", "examples");
+
+// A test-only registry whose claude agent points at an adapter kind with no
+// descriptor, so read_only is unenforceable. No built-in adapter is unenforceable
+// anymore, so this keeps the gap -> warn rendering path under test.
+const UNENFORCED_REGISTRY: NormalizedRegistry = {
+	...REGISTRY,
+	agents: {
+		...REGISTRY.agents,
+		claude: {
+			id: "claude",
+			adapter: "noop" as AdapterKind,
+			passModelOnResume: false,
+			builtIn: true,
+		},
+	},
+};
 
 function loadGraphModel(filename: string) {
 	const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, filename), "utf-8"));
@@ -104,12 +126,24 @@ describe("adaptGraphModel", () => {
 		}
 	});
 
-	test("consult + claude-skill: ask_claude gets warn (gap), ask_codex does not", () => {
+	test("consult + claude-skill: no permission warns now that both adapters enforce read_only", () => {
 		const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, "consult.json"), "utf-8"));
 		const manifest = parseManifest(raw);
 		const model = buildGraphModel(manifest, REGISTRY, "claude-skill");
 		expect(model.validation).not.toBeNull();
-		// Sanity: at least one gap exists on the claude participant.
+		// codex sandboxes, claude uses plan mode: neither participant is a gap.
+		expect(model.validation?.permissions.gaps ?? []).toEqual([]);
+		const adapted = adaptGraphModel(model);
+		for (const id of ["ask_claude", "ask_codex"]) {
+			const node = adapted.nodes.find((n) => n.id === id);
+			expect((node?.data as { warn?: unknown }).warn).toBeUndefined();
+		}
+	});
+
+	test("a permission gap renders as a 'needs check' warn on the call node (synthetic non-enforcing adapter)", () => {
+		const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, "consult.json"), "utf-8"));
+		const manifest = parseManifest(raw);
+		const model = buildGraphModel(manifest, UNENFORCED_REGISTRY, "claude-skill");
 		const gappedParticipants = new Set(
 			model.validation?.permissions.gaps.map((g) => g.participantId),
 		);

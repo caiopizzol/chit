@@ -1,4 +1,4 @@
-import type { AdapterUsage } from "@chit/core";
+import type { AdapterUsage, FilesystemPermission } from "@chit/core";
 import type {
 	AdapterCallRequest,
 	AdapterCallResult,
@@ -101,7 +101,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 		const sensitive = findSensitiveValues(this.config.env);
 		try {
 			const priorSessionId = getClaudeSessionId(req.session);
-			const cmd = this.buildCommand(priorSessionId);
+			const cmd = this.buildCommand(priorSessionId, req.filesystem);
 
 			// CLAUDECODE=0 prevents the spawned claude from detecting it's running
 			// inside Claude Code, which would trigger recursive harness behavior.
@@ -216,7 +216,10 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 		}
 	}
 
-	private buildCommand(priorSessionId: string | undefined): string[] {
+	private buildCommand(
+		priorSessionId: string | undefined,
+		filesystem: FilesystemPermission | undefined,
+	): string[] {
 		// stream-json requires --verbose alongside --print (verified against the
 		// installed claude). --include-partial-messages surfaces the incremental
 		// stream_event deltas so the audit layer preserves the full observable
@@ -229,6 +232,15 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 			"stream-json",
 			"--include-partial-messages",
 		];
+		// Filesystem read_only enforcement: plan mode blocks every write (file
+		// edits AND write-capable Bash) while still allowing reads and read-only
+		// shell. This is a Claude plan-mode PERMISSION, not an OS/filesystem
+		// sandbox. Only added for read_only; the permissive "write" default (and an
+		// omitted permission) keep today's behavior, where claude can write.
+		// Verified against claude 2.1.98, which supports `--permission-mode plan`.
+		if (filesystem === "read_only") {
+			cmd.push("--permission-mode", "plan");
+		}
 		// Strict MCP isolation (default on): --strict-mcp-config makes Claude use
 		// ONLY the inline config we pass, ignoring the user's global ~/.claude.json
 		// and project MCP; the empty {"mcpServers":{}} means zero MCP servers. This
