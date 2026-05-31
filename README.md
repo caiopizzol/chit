@@ -34,7 +34,7 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (Claude Cod
 chit runs the recurring routine of "one agent implements, another reviews, repeat until it converges or needs you." Two modes:
 
 - **Supervised.** Your Claude Code chat implements; a chit `per_scope` Codex advisor reviews each round (`apps/cli/examples/implementation-check-thread.json`, which has the reviewer inspect the git diff directly). The chat owns the loop and the human checkpoint. Pattern: `docs/supervised-convergence.md`.
-- **Autonomous.** chit runs both agents: a write-capable Claude implements, a read-only Codex reviews (`apps/cli/examples/converge.json`), driven one iteration per `chit_start` from the MCP. You sequence and checkpoint; run it against a git worktree. Manifests cannot loop, so the iteration lives in the orchestrator, not the chit.
+- **Autonomous.** `chit converge` runs both agents: a write-capable Claude implements, a read-only Codex reviews (`apps/cli/examples/converge.json`), looping to convergence. You set the task, run it against a git worktree, then inspect the loop log and audit transcript and run the final gates yourself. Manifests cannot loop, so the iteration lives in the driver, not the chit. Operating guide: `docs/self-hosting.md`.
 
 A run can record a convergence log (`chit loop-log`, written to `.chit/loops/<id>.jsonl`) that Studio's Loops drawer renders.
 
