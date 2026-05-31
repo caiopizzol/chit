@@ -35,3 +35,19 @@ export interface NormalizedRegistry {
 	agents: Record<string, NormalizedAgent>;
 	configPath?: string;
 }
+
+// The effective agent config resolved for a participant, for display and audit.
+// An undefined field means the adapter / CLI default applies (e.g. no model
+// pinned). strictMcp and passModelOnResume are only meaningful for claude-cli and
+// are omitted for other adapters. env is REDACTED to its key names only; values
+// never appear here. Lives here (not in graph-model) so the audit schema can
+// reuse it without depending on the graph renderer.
+export interface ParticipantConfig {
+	model?: string;
+	reasoningEffort?: string;
+	strictMcp?: boolean;
+	passModelOnResume?: boolean;
+	callTimeoutMs?: number;
+	noProgressTimeoutMs?: number;
+	envKeys?: string[];
+}

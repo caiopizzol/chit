@@ -10,6 +10,7 @@ import {
 	findUnknownAgents,
 	parseManifest,
 	renderShow,
+	resolveParticipantSnapshots,
 	type ShowFormat,
 } from "@chit/core";
 import { AdapterError, buildAdapter } from "../adapters/factory.ts";
@@ -512,6 +513,7 @@ export async function runMain(argv: string[]): Promise<number> {
 			cwd: invocationCwd,
 			surface: "cli",
 			...(args.scope !== undefined && { scope: args.scope }),
+			participants: resolveParticipantSnapshots(manifest, registry),
 		});
 		recorder.runStarted();
 		effectiveAdapters = wrapAdaptersWithAudit(effectiveAdapters, recorder);

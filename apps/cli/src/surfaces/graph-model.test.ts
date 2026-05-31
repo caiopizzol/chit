@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildGraphModel, parseManifest, parseRegistry, validationSeverity } from "@chit/core";
+import {
+	buildGraphModel,
+	parseManifest,
+	parseRegistry,
+	resolveParticipantSnapshots,
+	validationSeverity,
+} from "@chit/core";
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "examples");
 const CONSULT = JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8"));
@@ -166,6 +172,26 @@ describe("buildGraphModel: effective participant config", () => {
 			},
 		});
 		expect(buildGraphModel(manifestWithGhost, REGISTRY).participants.ghost?.config).toEqual({});
+	});
+
+	test("resolveParticipantSnapshots returns the config snapshot, without role", () => {
+		const snaps = resolveParticipantSnapshots(CFG_MANIFEST, CUSTOM_REGISTRY);
+		expect(snaps.reviewer).toEqual({
+			agentId: "codex-deep",
+			adapter: "codex-exec",
+			session: "per_scope",
+			permissions: { filesystem: "read_only" },
+			enforcesReadOnly: true,
+			config: {
+				model: "gpt-5.5",
+				reasoningEffort: "xhigh",
+				callTimeoutMs: 600000,
+				noProgressTimeoutMs: 120000,
+				envKeys: ["OPENAI_BASE_URL"],
+			},
+		});
+		// role is deliberately omitted from the snapshot (it lives in prompt blobs).
+		expect(snaps.reviewer && "role" in snaps.reviewer).toBe(false);
 	});
 });
 

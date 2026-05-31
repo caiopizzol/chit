@@ -1,4 +1,5 @@
-import type { GraphEdge, GraphModel, GraphNode, ParticipantConfig } from "./graph-model.ts";
+import type { ParticipantConfig } from "./agents/types.ts";
+import type { GraphEdge, GraphModel, GraphNode } from "./graph-model.ts";
 import { validationSeverity } from "./graph-model.ts";
 
 export type ShowFormat = "json" | "ascii" | "mermaid" | "html";
@@ -8,7 +9,7 @@ export type ShowFormat = "json" | "ascii" | "mermaid" | "html";
 // default applies; "off" means the no-progress watchdog is disabled. strictMcp
 // and passModelOnResume appear only when set (claude-cli). env shows redacted key
 // names only.
-function configPairs(c: ParticipantConfig): Array<[string, string]> {
+export function configPairs(c: ParticipantConfig): Array<[string, string]> {
 	const pairs: Array<[string, string]> = [
 		["model", c.model ?? "default"],
 		["effort", c.reasoningEffort ?? "default"],

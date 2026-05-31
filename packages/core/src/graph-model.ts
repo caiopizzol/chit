@@ -1,5 +1,6 @@
 import { getAdapterDescriptor } from "./agents/registry.ts";
-import type { NormalizedAgent, NormalizedRegistry } from "./agents/types.ts";
+import type { NormalizedAgent, NormalizedRegistry, ParticipantConfig } from "./agents/types.ts";
+import type { AuditParticipantSnapshot } from "./audit/events.ts";
 import type {
 	FilesystemPermission,
 	InputType,
@@ -86,21 +87,6 @@ export function validationSeverity(v: ValidationReport | null): ValidationSeveri
 	if (v.permissions.status === "blocked") return "error";
 	if (v.permissions.status !== "ok") return "warn";
 	return "ok";
-}
-
-// The effective agent config chit resolved for a participant, from the registry.
-// An undefined field means "the adapter / CLI default applies" (e.g. no model
-// pinned). strictMcp and passModelOnResume are only meaningful for claude-cli and
-// are omitted for other adapters. env is REDACTED to its key names only; values
-// never appear here. So an operator can see exactly what a run will use.
-export interface ParticipantConfig {
-	model?: string;
-	reasoningEffort?: string;
-	strictMcp?: boolean;
-	passModelOnResume?: boolean;
-	callTimeoutMs?: number;
-	noProgressTimeoutMs?: number;
-	envKeys?: string[];
 }
 
 export interface ParticipantInfo {
@@ -267,6 +253,30 @@ export function buildGraphModel(
 			effective: { ...manifest.requires },
 		},
 	};
+}
+
+// Resolve the per-participant config snapshot to persist at run start, so an
+// audited run records exactly what config it ran with (the registry can change
+// afterward). Reuses buildGraphModel's participant resolution and drops the role
+// text: role already appears in the rendered prompt blobs, and leaving it out
+// keeps the run.started event small and less sensitive.
+export function resolveParticipantSnapshots(
+	manifest: NormalizedManifest,
+	registry: NormalizedRegistry,
+): Record<string, AuditParticipantSnapshot> {
+	const { participants } = buildGraphModel(manifest, registry);
+	const snapshots: Record<string, AuditParticipantSnapshot> = {};
+	for (const [pid, p] of Object.entries(participants)) {
+		snapshots[pid] = {
+			agentId: p.agentId,
+			adapter: p.adapter,
+			session: p.session,
+			permissions: p.permissions,
+			enforcesReadOnly: p.enforcesReadOnly,
+			config: p.config,
+		};
+	}
+	return snapshots;
 }
 
 // Resolve the effective config chit will run a participant's agent with, for

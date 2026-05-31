@@ -10,7 +10,7 @@
 // run with no terminal marker. The reader never infers success from the absence
 // of a terminal event.
 
-import { type AdapterUsage, type AuditEvent, formatAdapterUsage } from "@chit/core";
+import { type AdapterUsage, type AuditEvent, configPairs, formatAdapterUsage } from "@chit/core";
 import { AuditStore } from "../audit/store.ts";
 
 export interface AuditIO {
@@ -291,6 +291,31 @@ function runShow(
 	const reason = s.status === "incomplete" ? ` (${describeIncomplete(s, events)})` : "";
 	io.out(`  status: ${s.status}${reason}\n`);
 	io.out(`  ${formatAdapterUsage(s.usage)}\n`);
+
+	// Recorded participant config: what this run actually used at start. Render the
+	// SNAPSHOT, never today's registry (which can have changed since the run). An
+	// older run that predates the snapshot says so rather than guessing.
+	const startedEvent = events.find((e) => e.type === "run.started");
+	const snapshots = startedEvent?.type === "run.started" ? startedEvent.participants : undefined;
+	io.out("\nparticipants (recorded config):\n");
+	if (!snapshots || Object.keys(snapshots).length === 0) {
+		io.out("  recorded config unavailable (older audit run)\n");
+	} else {
+		for (const [pid, p] of Object.entries(snapshots)) {
+			const enforces = p.enforcesReadOnly ? "enforces=yes" : "enforces=NO";
+			io.out(
+				`  ${pid}  agent=${p.agentId}  session=${p.session}  permissions=${p.permissions.filesystem}  adapter=${p.adapter}  ${enforces}\n`,
+			);
+			const pairs =
+				p.adapter === "unknown"
+					? "unresolved (unknown agent)"
+					: configPairs(p.config)
+							.map(([k, v]) => `${k}=${v}`)
+							.join("  ");
+			io.out(`    config  ${pairs}\n`);
+		}
+	}
+
 	io.out("\ntimeline:\n");
 	for (const e of events) {
 		for (const line of renderEvent(store, runId, e, opts.blobs)) io.out(`  ${line}\n`);

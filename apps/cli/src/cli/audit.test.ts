@@ -335,3 +335,40 @@ describe("chit audit arg parsing", () => {
 		expect(c.out()).toMatch(/chit audit <command>/);
 	});
 });
+
+describe("chit audit show: recorded participant config", () => {
+	test("renders the config snapshot recorded at run start", () => {
+		store.appendEvent("RC", {
+			type: "run.started",
+			runId: "RC",
+			ts: "2026-05-31T10:00:00.000Z",
+			manifestId: "m",
+			cwd: "/c",
+			surface: "converge",
+			participants: {
+				reviewer: {
+					agentId: "codex-deep",
+					adapter: "codex-exec",
+					session: "per_scope",
+					permissions: { filesystem: "read_only" },
+					enforcesReadOnly: true,
+					config: { model: "gpt-5.5", reasoningEffort: "xhigh" },
+				},
+			},
+		});
+		const c = capture();
+		runAudit(["show", "RC"], c.io, store);
+		expect(c.out()).toMatch(/participants \(recorded config\):/);
+		expect(c.out()).toMatch(/reviewer\s+agent=codex-deep.*adapter=codex-exec/);
+		expect(c.out()).toContain("model=gpt-5.5");
+		expect(c.out()).toContain("effort=xhigh");
+	});
+
+	test("says recorded config is unavailable for a run without the snapshot", () => {
+		// seedComplete's run.started predates the snapshot (no participants field).
+		seedComplete("R1", "2026-05-29");
+		const c = capture();
+		runAudit(["show", "R1"], c.io, store);
+		expect(c.out()).toContain("recorded config unavailable (older audit run)");
+	});
+});

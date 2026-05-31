@@ -40,6 +40,13 @@ text, and each raw event body are written to `blobs/` and referenced by their
 sha256, so the same content is stored once. Every step's output is captured,
 including format steps that have no agent call, so a run can be read back in full.
 
+`run.started` also records a snapshot of the config each participant ran with:
+agent id, adapter, session, filesystem permission, and the effective model,
+reasoning effort, strict-MCP, and timeouts. The audit shows what the run actually
+used, not what the registry says now (agent profiles can change after a run). Env
+values are never recorded, only their key names. The snapshot is optional, so a
+run from before it existed reads back as "recorded config unavailable".
+
 `adapter.call.completed` carries token usage when the CLI reports it. claude
 reports input/output/cache tokens and a cost. codex reports tokens and no cost, so
 a summed cost is a known floor, not a guaranteed total. Token counts across
@@ -67,10 +74,10 @@ chit audit show <runId>
 ```
 
 `list` prints the runs, newest first, with status and a usage summary. `show`
-prints one run's timeline and a usage summary. Both take `--json`. `show` takes
-`--blobs` (alias `--include-bodies`) to print the blob bodies (rendered prompts,
-outputs, and raw adapter event bodies); without it, only the event timeline is
-shown.
+prints one run's recorded participant config, then its timeline and a usage
+summary. Both take `--json`. `show` takes `--blobs` (alias `--include-bodies`) to
+print the blob bodies (rendered prompts, outputs, and raw adapter event bodies);
+without it, only the event timeline is shown.
 
 ```text
 chit audit show 9b41-...
@@ -80,6 +87,10 @@ run 9b41-...
   started: 2026-05-31T10:00:00.000Z
   status: ok
   tokens: in 22232, out 66, cached 21788, reasoning 19; reported cost: $0.0658
+
+participants (recorded config):
+  implementer  agent=claude  session=per_scope  permissions=write  adapter=claude-cli  enforces=NO
+    config  model=default  effort=default  callTimeout=default  noProgress=off  strictMcp=on  passModelOnResume=no
 
 timeline:
   run.started   manifest=converge surface=converge scope=audit-cli

@@ -297,6 +297,14 @@ describe("handoff run (subprocess)", () => {
 				done?.type === "adapter.call.completed" &&
 					store.readBlob(runs[0] as string, done.outputBlob).length,
 			).toBeGreaterThan(0);
+			// run.started records the resolved per-participant config snapshot, so the
+			// audit shows what this run actually used (end-to-end through the surface).
+			const started = events[0];
+			const snaps = started?.type === "run.started" ? started.participants : undefined;
+			expect(snaps).toBeDefined();
+			const codexSnap = Object.values(snaps ?? {}).find((p) => p.adapter === "codex-exec");
+			expect(codexSnap).toBeDefined();
+			expect(codexSnap?.config).toBeDefined();
 		} finally {
 			rmSync(stateDir, { recursive: true, force: true });
 		}

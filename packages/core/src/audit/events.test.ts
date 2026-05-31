@@ -363,3 +363,79 @@ describe("audit events: parse errors name the line", () => {
 		expect(() => parseAuditLog(body)).toThrow(/line 2:/);
 	});
 });
+
+describe("run.started participant config snapshot", () => {
+	const withSnapshot: RunStartedEvent = {
+		...runStarted,
+		participants: {
+			reviewer: {
+				agentId: "codex-deep",
+				adapter: "codex-exec",
+				session: "per_scope",
+				permissions: { filesystem: "read_only" },
+				enforcesReadOnly: true,
+				config: { model: "gpt-5.5", reasoningEffort: "xhigh", envKeys: ["OPENAI_BASE_URL"] },
+			},
+			implementer: {
+				agentId: "claude-opus",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: { model: "opus", strictMcp: false, passModelOnResume: true },
+			},
+		},
+	};
+
+	test("a run.started with a participant snapshot round-trips", () => {
+		const rt = validateAuditEvent(JSON.parse(serializeAuditEvent(withSnapshot)));
+		expect(rt).toEqual(withSnapshot);
+	});
+
+	test("the snapshot is optional (backward-compatible with older runs)", () => {
+		// runStarted has no participants; it must validate and stay absent.
+		const rt = validateAuditEvent(JSON.parse(serializeAuditEvent(runStarted)));
+		expect((rt as RunStartedEvent).participants).toBeUndefined();
+	});
+
+	test("rejects a bad session enum in a snapshot", () => {
+		const bad = {
+			...runStarted,
+			participants: { p: { ...withSnapshot.participants?.reviewer, session: "forever" } },
+		};
+		expect(() => validateAuditEvent(bad)).toThrow(/session/);
+	});
+
+	test("rejects a non-boolean enforcesReadOnly in a snapshot", () => {
+		const bad = {
+			...runStarted,
+			participants: { p: { ...withSnapshot.participants?.reviewer, enforcesReadOnly: "yes" } },
+		};
+		expect(() => validateAuditEvent(bad)).toThrow(/enforcesReadOnly/);
+	});
+
+	test("rejects a snapshot entry missing config (config is required, not defaulted)", () => {
+		const { config: _drop, ...noConfig } = withSnapshot.participants?.reviewer ?? {
+			config: {},
+		};
+		const bad = { ...runStarted, participants: { p: noConfig } };
+		expect(() => validateAuditEvent(bad)).toThrow(/config/);
+	});
+
+	test("accepts an empty config object (a default agent records config: {})", () => {
+		const rt = validateAuditEvent({
+			...runStarted,
+			participants: {
+				p: {
+					agentId: "codex",
+					adapter: "codex-exec",
+					session: "stateless",
+					permissions: { filesystem: "read_only" },
+					enforcesReadOnly: true,
+					config: {},
+				},
+			},
+		}) as RunStartedEvent;
+		expect(rt.participants?.p?.config).toEqual({});
+	});
+});

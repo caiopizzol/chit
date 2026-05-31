@@ -13,6 +13,7 @@ import {
 	type NormalizedManifest,
 	type NormalizedRegistry,
 	parseManifest,
+	resolveParticipantSnapshots,
 } from "@chit/core";
 import { buildAdapter } from "../../adapters/factory.ts";
 import { AuditRecorder } from "../../audit/recorder.ts";
@@ -131,6 +132,7 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 				cwd: opts.invocationCwd,
 				surface: "mcp",
 				...(opts.scope !== undefined && { scope: opts.scope }),
+				participants: resolveParticipantSnapshots(manifest, opts.registry),
 			},
 			opts.now,
 		);

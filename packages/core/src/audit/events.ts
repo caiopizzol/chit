@@ -13,6 +13,11 @@
 // node-backed audit store (fs, blob writing, retention) lives in apps/cli and
 // is a later slice. This module is the SCHEMA ONLY.
 
+// Type-only imports of sibling domain types (browser-safe, no runtime/node deps),
+// for the run.started participant config snapshot.
+import type { ParticipantConfig } from "../agents/types.ts";
+import type { FilesystemPermission, SessionPolicy } from "../manifest/types.ts";
+
 // An opaque reference to a blob the store writes (today a sha256 hex digest, but
 // the schema does not constrain the format: the store owns the naming scheme).
 // The event carries only this reference so the JSONL line stays small.
@@ -31,11 +36,26 @@ const STEP_KINDS: ReadonlySet<string> = new Set(["call", "format"]);
 const VERDICTS: ReadonlySet<string> = new Set(["proceed", "revise", "block"]);
 const ADAPTER_CALL_STATUSES: ReadonlySet<string> = new Set(["ok", "error", "cancelled", "timeout"]);
 const RUN_STATUSES: ReadonlySet<string> = new Set(["ok", "failed", "cancelled", "timeout"]);
+const SESSION_POLICIES: ReadonlySet<string> = new Set(["stateless", "per_topology", "per_scope"]);
+const FS_PERMISSIONS: ReadonlySet<string> = new Set(["read_only", "write"]);
 
 // Every event carries this envelope: which run, and when (ISO 8601).
 interface AuditEnvelope {
 	runId: string;
 	ts: string;
+}
+
+// A point-in-time record of what config a participant ran with, captured at run
+// start so an audit run shows what it ACTUALLY used (the registry can change
+// later). Role text is deliberately omitted: it lives in the rendered prompt
+// blobs, and keeping it out keeps the event small and less sensitive.
+export interface AuditParticipantSnapshot {
+	agentId: string;
+	adapter: string;
+	session: SessionPolicy;
+	permissions: { filesystem: FilesystemPermission };
+	enforcesReadOnly: boolean;
+	config: ParticipantConfig;
 }
 
 export interface RunStartedEvent extends AuditEnvelope {
@@ -48,6 +68,9 @@ export interface RunStartedEvent extends AuditEnvelope {
 	manifestPath?: string;
 	scope?: string;
 	commandArgs?: string[];
+	// The resolved per-participant config at run start. Optional: older audit runs
+	// (and writers that do not pass it) omit it, and the reader says so.
+	participants?: Record<string, AuditParticipantSnapshot>;
 }
 
 export interface StepStartedEvent extends AuditEnvelope {
@@ -293,6 +316,75 @@ function optStringArray(
 	return stringArray(o, key, ctx);
 }
 
+function bool(o: Record<string, unknown>, key: string, ctx: string): boolean {
+	if (typeof o[key] !== "boolean") {
+		throw new AuditEventError(`${ctx}: "${key}" must be a boolean`);
+	}
+	return o[key] as boolean;
+}
+
+function optBool(o: Record<string, unknown>, key: string, ctx: string): boolean | undefined {
+	if (o[key] === undefined) return undefined;
+	return bool(o, key, ctx);
+}
+
+// Parse a participant's config sub-object: only the known typed fields are
+// carried (unknown fields ignored), each validated like the rest of the schema.
+function parseParticipantConfig(raw: unknown, ctx: string): ParticipantConfig {
+	const o = obj(raw, ctx);
+	const config: ParticipantConfig = {};
+	const model = optStr(o, "model", ctx);
+	if (model !== undefined) config.model = model;
+	const effort = optStr(o, "reasoningEffort", ctx);
+	if (effort !== undefined) config.reasoningEffort = effort;
+	const strictMcp = optBool(o, "strictMcp", ctx);
+	if (strictMcp !== undefined) config.strictMcp = strictMcp;
+	const passModelOnResume = optBool(o, "passModelOnResume", ctx);
+	if (passModelOnResume !== undefined) config.passModelOnResume = passModelOnResume;
+	const callTimeoutMs = optInt(o, "callTimeoutMs", ctx, 1);
+	if (callTimeoutMs !== undefined) config.callTimeoutMs = callTimeoutMs;
+	const noProgressTimeoutMs = optInt(o, "noProgressTimeoutMs", ctx, 1);
+	if (noProgressTimeoutMs !== undefined) config.noProgressTimeoutMs = noProgressTimeoutMs;
+	const envKeys = optStringArray(o, "envKeys", ctx);
+	if (envKeys !== undefined) config.envKeys = envKeys;
+	return config;
+}
+
+// Parse the optional run.started participant config snapshot. Defensive, like the
+// rest of the schema: each entry's required fields are validated, config
+// included (an empty config object is valid, but a missing one is rejected).
+function optParticipantSnapshots(
+	o: Record<string, unknown>,
+	ctx: string,
+): Record<string, AuditParticipantSnapshot> | undefined {
+	if (o.participants === undefined) return undefined;
+	const map = obj(o.participants, `${ctx}.participants`);
+	const out: Record<string, AuditParticipantSnapshot> = {};
+	for (const [pid, raw] of Object.entries(map)) {
+		const pctx = `${ctx}.participants.${pid}`;
+		const p = obj(raw, pctx);
+		const perms = obj(p.permissions, `${pctx}.permissions`);
+		out[pid] = {
+			agentId: str(p, "agentId", pctx),
+			adapter: str(p, "adapter", pctx),
+			session: enumVal<SessionPolicy>(p, "session", pctx, SESSION_POLICIES),
+			permissions: {
+				filesystem: enumVal<FilesystemPermission>(
+					perms,
+					"filesystem",
+					`${pctx}.permissions`,
+					FS_PERMISSIONS,
+				),
+			},
+			enforcesReadOnly: bool(p, "enforcesReadOnly", pctx),
+			// config is required on a snapshot entry (an empty object is valid for a
+			// default agent); a missing config is a malformed entry, not "defaults".
+			config: parseParticipantConfig(p.config, `${pctx}.config`),
+		};
+	}
+	return out;
+}
+
 // Validate a single parsed event. Defensive: the writer should emit valid
 // events, but Studio reads files that may be hand-edited, partial, or stale.
 export function validateAuditEvent(raw: unknown): AuditEvent {
@@ -324,6 +416,8 @@ export function validateAuditEvent(raw: unknown): AuditEvent {
 		if (scope !== undefined) ev.scope = scope;
 		const commandArgs = optStringArray(o, "commandArgs", ctx);
 		if (commandArgs !== undefined) ev.commandArgs = commandArgs;
+		const participants = optParticipantSnapshots(o, ctx);
+		if (participants !== undefined) ev.participants = participants;
 		return ev;
 	}
 

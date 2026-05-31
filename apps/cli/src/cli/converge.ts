@@ -28,6 +28,7 @@ import {
 	type NormalizedManifest,
 	type NormalizedRegistry,
 	parseManifest,
+	resolveParticipantSnapshots,
 } from "@chit/core";
 import { buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
@@ -381,6 +382,7 @@ export function makeAuditedExecute(
 			scope,
 			...(ctx?.loopId !== undefined && { loopId: ctx.loopId }),
 			...(ctx?.iteration !== undefined && { iteration: ctx.iteration }),
+			participants: resolveParticipantSnapshots(manifest, registry),
 		});
 		recorder.runStarted();
 		const adapters = wrapAdaptersWithSessions(
