@@ -27,6 +27,16 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 				cwd: "/x",
 				surface: "converge",
 				scope: "e2e-scope",
+				participants: {
+					implementer: {
+						agentId: "claude",
+						adapter: "claude-cli",
+						session: "per_scope",
+						permissions: { filesystem: "write" },
+						enforcesReadOnly: false,
+						config: { model: "opus", strictMcp: true, passModelOnResume: false },
+					},
+				},
 			},
 			{
 				type: "adapter.call.started",
@@ -121,6 +131,12 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 			await expect(drawer).toContainText("run.completed");
 			await expect(drawer).toContainText("status:");
 			await expect(drawer).toContainText("reported cost: $0.0658");
+
+			// The recorded participant config snapshot renders (from run.started, not
+			// the current registry), with the same formatting as `chit audit show`.
+			await expect(drawer).toContainText("participants (recorded config)");
+			await expect(drawer).toContainText("model=opus");
+			await expect(drawer).toContainText("strictMcp=on");
 
 			// Bodies are collapsed by default; expanding one reveals the prompt.
 			const body = drawer.locator(".audit-body summary").first();

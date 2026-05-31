@@ -14,12 +14,14 @@
 import type {
 	AdapterUsage,
 	AuditEvent,
+	AuditParticipantSnapshot,
 	LoopRecord,
 	LoopStopStatus,
+	ParticipantInfo,
 	SurfaceKind,
 	ValidationReport,
 } from "@chit/core";
-import { formatAdapterUsage } from "@chit/core";
+import { configPairs, formatAdapterUsage } from "@chit/core";
 import {
 	applyEdgeChanges,
 	Background,
@@ -128,11 +130,13 @@ const FILESYSTEMS = ["read_only", "write"];
 function CallInspector({
 	data,
 	draftSource,
+	resolvedParticipants,
 	onParticipantField,
 	onStepField,
 }: {
 	data: CallData;
 	draftSource: Record<string, unknown>;
+	resolvedParticipants: Record<string, ParticipantInfo>;
 	onParticipantField: (
 		participantId: string,
 		field: "role" | "session" | "filesystem",
@@ -141,6 +145,7 @@ function CallInspector({
 	onStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
 }) {
 	const pid = data.participantId;
+	const resolved = resolvedParticipants[pid];
 	const steps = (draftSource.steps ?? {}) as Record<string, Record<string, unknown>>;
 	const prompt = String(steps[data.id]?.prompt ?? "");
 	const participants = (draftSource.participants ?? {}) as Record<string, Record<string, unknown>>;
@@ -226,6 +231,18 @@ function CallInspector({
 					))}
 				</select>
 			</div>
+			{resolved && (
+				<div className="field">
+					<div className="field-label">effective config (resolved, read-only)</div>
+					<div className="field-value inspector-config">
+						{resolved.adapter === "unknown"
+							? "unresolved (unknown agent)"
+							: configPairs(resolved.config)
+									.map(([k, v]) => `${k}=${v}`)
+									.join("  ")}
+					</div>
+				</div>
+			)}
 		</section>
 	);
 }
@@ -275,11 +292,13 @@ function FormatInspector({
 function Inspector({
 	selected,
 	draftSource,
+	resolvedParticipants,
 	onParticipantField,
 	onStepField,
 }: {
 	selected: Node | null;
 	draftSource: Record<string, unknown>;
+	resolvedParticipants: Record<string, ParticipantInfo>;
 	onParticipantField: (
 		participantId: string,
 		field: "role" | "session" | "filesystem",
@@ -300,6 +319,7 @@ function Inspector({
 			<CallInspector
 				data={selected.data as CallData}
 				draftSource={draftSource}
+				resolvedParticipants={resolvedParticipants}
 				onParticipantField={onParticipantField}
 				onStepField={onStepField}
 			/>
@@ -884,6 +904,7 @@ function AuditView({ events, blobs }: { events: AuditEvent[]; blobs: Record<stri
 				</p>
 				<p className="audit-usage">{renderAuditUsage(events)}</p>
 			</div>
+			{started?.type === "run.started" && <AuditParticipants snapshot={started.participants} />}
 			<ol className="audit-timeline">
 				{events.map((e, i) => {
 					const ref = eventBlobRef(e);
@@ -902,6 +923,40 @@ function AuditView({ events, blobs }: { events: AuditEvent[]; blobs: Record<stri
 					);
 				})}
 			</ol>
+		</div>
+	);
+}
+
+// The config each participant ran with, recorded on run.started. Rendered from
+// the SNAPSHOT (never re-resolved from the current registry), with the same
+// older-run fallback and formatting as `chit audit show`.
+function AuditParticipants({ snapshot }: { snapshot?: Record<string, AuditParticipantSnapshot> }) {
+	const entries = snapshot ? Object.entries(snapshot) : [];
+	return (
+		<div className="audit-participants">
+			<p className="audit-participants-label">participants (recorded config)</p>
+			{entries.length === 0 ? (
+				<p className="audit-participants-empty">recorded config unavailable (older audit run)</p>
+			) : (
+				<ul>
+					{entries.map(([pid, p]) => (
+						<li key={pid} className="audit-participant">
+							<span className="audit-participant-id">{pid}</span>{" "}
+							<span className="audit-participant-meta">
+								agent={p.agentId} · adapter={p.adapter} · session={p.session} · fs=
+								{p.permissions.filesystem}
+							</span>
+							<div className="audit-participant-config">
+								{p.adapter === "unknown"
+									? "unresolved (unknown agent)"
+									: configPairs(p.config)
+											.map(([k, v]) => `${k}=${v}`)
+											.join("  ")}
+							</div>
+						</li>
+					))}
+				</ul>
+			)}
 		</div>
 	);
 }
@@ -1339,6 +1394,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 					<Inspector
 						selected={selected}
 						draftSource={editor.draftSource}
+						resolvedParticipants={editor.graphModel.participants}
 						onParticipantField={editor.setParticipantField}
 						onStepField={editor.setStepField}
 					/>

@@ -201,6 +201,11 @@ header.app .loops-btn {
 	outline: 1px solid var(--ink);
 	outline-offset: -1px;
 }
+.inspector-config {
+	font-family: var(--mono, monospace);
+	font-size: 11px;
+	color: var(--carbon);
+}
 
 /* Install-review modal: explanatory note + permission consent (shown only when
    the chit has enforcement gaps). */
@@ -1001,6 +1006,45 @@ header.app .loops-btn {
 .audit-status--timeout {
 	color: var(--ink, #0a0a0a);
 	font-weight: 600;
+}
+.audit-participants {
+	margin-bottom: 10px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--hairline);
+}
+.audit-participants-label {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: var(--carbon);
+	margin: 0 0 4px 0;
+}
+.audit-participants-empty {
+	font-size: 12px;
+	font-family: var(--mono, monospace);
+	color: var(--carbon);
+	margin: 0;
+}
+.audit-participants ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.audit-participant {
+	margin-bottom: 4px;
+}
+.audit-participant-id {
+	font-weight: 600;
+	font-size: 12px;
+}
+.audit-participant-meta,
+.audit-participant-config {
+	font-family: var(--mono, monospace);
+	font-size: 11px;
+	color: var(--carbon);
+}
+.audit-participant-config {
+	margin-top: 1px;
 }
 .audit-timeline {
 	list-style: none;
