@@ -47,6 +47,21 @@ if [ -n "$HANDOFF_TEST_WAIT_FILE" ]; then
   echo '{"type":"turn.completed"}'
   exit 0
 fi
+# Drip gate: emit a line every ~120ms for ~5 lines (total well over a 400ms
+# no-progress timeout), so the run only completes if the watchdog RESETS on each
+# chunk. Without per-chunk reset it would fire mid-drip.
+if [ -n "$HANDOFF_TEST_DRIP" ]; then
+  cat > /dev/null
+  echo '{"type":"thread.started","thread_id":"drip-1"}'
+  i=0
+  while [ "$i" -lt 5 ]; do
+    sleep 0.12
+    echo '{"type":"item.started"}'
+    i=$((i + 1))
+  done
+  echo '{"type":"item.completed","item":{"type":"agent_message","text":"DRIP: done"}}'
+  exit 0
+fi
 if [ -n "$HANDOFF_TEST_LAST_INPUT" ]; then
   cat > "$HANDOFF_TEST_LAST_INPUT"
 else
@@ -537,4 +552,47 @@ describe("CodexExecAdapter: call timeout watchdog", () => {
 			delete process.env.HANDOFF_TEST_SLEEP;
 		}
 	});
+});
+
+describe("CodexExecAdapter: no-progress watchdog", () => {
+	test("kills the child and fails with a no-progress error when stdout stays silent", async () => {
+		// The fake emits nothing and sleeps 10s; the no-progress watchdog fires at
+		// 200ms. A fast reject proves the no-progress kill, distinct from the 15min
+		// hard timeout. Off by default, so only this opted-in agent is affected.
+		process.env.HANDOFF_TEST_SLEEP = "10";
+		try {
+			const started = Date.now();
+			await expect(
+				new CodexExecAdapter({ noProgressTimeoutMs: 200 }).call({
+					participantId: "codex",
+					agentId: "codex",
+					stepId: "ask",
+					input: "hi",
+					cwd: TMPDIR,
+				}),
+			).rejects.toThrow(/made no progress for 200ms/);
+			expect(Date.now() - started).toBeLessThan(4000);
+		} finally {
+			delete process.env.HANDOFF_TEST_SLEEP;
+		}
+	});
+
+	test("does not fire while output keeps arriving (timer resets per chunk)", async () => {
+		// The fake drips a line every ~120ms for ~600ms total, longer than the 400ms
+		// timeout. It can only complete if each chunk resets the watchdog; without
+		// the per-chunk reset it would be killed mid-drip.
+		process.env.HANDOFF_TEST_DRIP = "1";
+		try {
+			const result = await new CodexExecAdapter({ noProgressTimeoutMs: 400 }).call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "hi",
+				cwd: TMPDIR,
+			});
+			expect(result.output).toBe("DRIP: done");
+		} finally {
+			delete process.env.HANDOFF_TEST_DRIP;
+		}
+	}, 15000);
 });

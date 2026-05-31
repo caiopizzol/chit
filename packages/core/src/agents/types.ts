@@ -24,6 +24,10 @@ export interface NormalizedAgent {
 	// means "use the adapter default" (15 min). Execution governance, not session
 	// identity, so it is NOT part of the session fingerprint.
 	callTimeoutMs?: number;
+	// No-progress watchdog in ms (positive integer): kill the child if no stdout
+	// arrives for this long, catching a wedged session before the hard timeout.
+	// Undefined means off. Execution governance, NOT part of the fingerprint.
+	noProgressTimeoutMs?: number;
 	builtIn: boolean;
 }
 

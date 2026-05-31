@@ -55,6 +55,21 @@ if [ -n "$HANDOFF_TEST_CLAUDE_WAIT_FILE" ]; then
   echo '{"type":"result","session_id":"live-claude","result":"LIVE: claude done","subtype":"success","is_error":false}'
   exit 0
 fi
+# Drip gate: emit a stream_event every ~120ms for ~5 lines (total well over a
+# 400ms no-progress timeout), so the run only completes if the watchdog RESETS on
+# each chunk. Without per-chunk reset it would fire mid-drip.
+if [ -n "$HANDOFF_TEST_CLAUDE_DRIP" ]; then
+  cat > /dev/null
+  echo '{"type":"system","subtype":"init","session_id":"drip-claude"}'
+  i=0
+  while [ "$i" -lt 5 ]; do
+    sleep 0.12
+    echo '{"type":"stream_event","event":{"type":"content_block_delta"}}'
+    i=$((i + 1))
+  done
+  echo '{"type":"result","session_id":"drip-claude","result":"DRIP: claude done","subtype":"success","is_error":false}'
+  exit 0
+fi
 if [ -n "$HANDOFF_TEST_CLAUDE_ENV_FILE" ]; then
   printf 'CLAUDECODE=%s\\n' "$CLAUDECODE" > "$HANDOFF_TEST_CLAUDE_ENV_FILE"
 fi
@@ -775,4 +790,47 @@ describe("ClaudeCliAdapter: call timeout watchdog", () => {
 			delete process.env.HANDOFF_TEST_SLEEP;
 		}
 	});
+});
+
+describe("ClaudeCliAdapter: no-progress watchdog", () => {
+	test("kills the child and fails with a no-progress error when stdout stays silent", async () => {
+		// The fake emits nothing and sleeps 10s; the no-progress watchdog fires at
+		// 200ms. A fast reject proves the no-progress kill, distinct from the 15min
+		// hard timeout. Off by default, so only this opted-in agent is affected.
+		process.env.HANDOFF_TEST_SLEEP = "10";
+		try {
+			const started = Date.now();
+			await expect(
+				new ClaudeCliAdapter({ noProgressTimeoutMs: 200 }).call({
+					participantId: "claude",
+					agentId: "claude",
+					stepId: "ask",
+					input: "hi",
+					cwd: TMPDIR,
+				}),
+			).rejects.toThrow(/made no progress for 200ms/);
+			expect(Date.now() - started).toBeLessThan(4000);
+		} finally {
+			delete process.env.HANDOFF_TEST_SLEEP;
+		}
+	});
+
+	test("does not fire while output keeps arriving (timer resets per chunk)", async () => {
+		// The fake drips a stream_event every ~120ms for ~600ms total, longer than
+		// the 400ms timeout. It can only complete if each chunk resets the watchdog;
+		// without the per-chunk reset it would be killed mid-drip.
+		process.env.HANDOFF_TEST_CLAUDE_DRIP = "1";
+		try {
+			const result = await new ClaudeCliAdapter({ noProgressTimeoutMs: 400 }).call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "hi",
+				cwd: TMPDIR,
+			});
+			expect(result.output).toBe("DRIP: claude done");
+		} finally {
+			delete process.env.HANDOFF_TEST_CLAUDE_DRIP;
+		}
+	}, 15000);
 });

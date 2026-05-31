@@ -70,6 +70,7 @@ const ALLOWED_ENTRY_KEYS = new Set([
 	"env",
 	"strictMcp",
 	"callTimeoutMs",
+	"noProgressTimeoutMs",
 ]);
 const AGENT_ID_RE = /^[a-z][a-z0-9-]*$/;
 
@@ -167,6 +168,16 @@ function parseAgent(id: string, raw: unknown, configPath: string): NormalizedAge
 			throw new RegistryError(`${path}.callTimeoutMs`, "must be a positive integer");
 		}
 		out.callTimeoutMs = raw.callTimeoutMs;
+	}
+	if (raw.noProgressTimeoutMs !== undefined) {
+		if (
+			typeof raw.noProgressTimeoutMs !== "number" ||
+			!Number.isInteger(raw.noProgressTimeoutMs) ||
+			raw.noProgressTimeoutMs <= 0
+		) {
+			throw new RegistryError(`${path}.noProgressTimeoutMs`, "must be a positive integer");
+		}
+		out.noProgressTimeoutMs = raw.noProgressTimeoutMs;
 	}
 
 	return out;

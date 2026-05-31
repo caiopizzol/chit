@@ -141,6 +141,20 @@ describe("parseRegistry", () => {
 		});
 		expect(reg.agents.plain?.callTimeoutMs).toBeUndefined();
 	});
+
+	test("a valid positive-integer noProgressTimeoutMs is accepted", () => {
+		const reg = parseRegistry({
+			agents: { watched: { adapter: "codex-exec", noProgressTimeoutMs: 120000 } },
+		});
+		expect(reg.agents.watched?.noProgressTimeoutMs).toBe(120000);
+	});
+
+	test("noProgressTimeoutMs is undefined when omitted (watchdog off)", () => {
+		const reg = parseRegistry({
+			agents: { plain: { adapter: "codex-exec" } },
+		});
+		expect(reg.agents.plain?.noProgressTimeoutMs).toBeUndefined();
+	});
 });
 
 describe("parseRegistry: invalid configs", () => {
@@ -232,6 +246,22 @@ describe("parseRegistry: invalid configs", () => {
 		expectRegistryError(
 			{ agents: { x: { adapter: "codex-exec", callTimeoutMs: 1.5 } } },
 			"agents.x.callTimeoutMs",
+			"must be a positive integer",
+		);
+	});
+
+	test("noProgressTimeoutMs must be a positive integer (rejects zero/negative)", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "codex-exec", noProgressTimeoutMs: 0 } } },
+			"agents.x.noProgressTimeoutMs",
+			"must be a positive integer",
+		);
+	});
+
+	test("noProgressTimeoutMs must be an integer (rejects non-integer)", () => {
+		expectRegistryError(
+			{ agents: { x: { adapter: "codex-exec", noProgressTimeoutMs: 2.5 } } },
+			"agents.x.noProgressTimeoutMs",
 			"must be a positive integer",
 		);
 	});

@@ -60,4 +60,20 @@ describe("buildAdapter", () => {
 		const config = (adapter as unknown as { config: { reasoningEffort?: string } }).config;
 		expect(config.reasoningEffort).toBe("high");
 	});
+
+	test("forwards agent.noProgressTimeoutMs into both adapter configs", () => {
+		// Without this the no-progress watchdog would be unreachable from agents.json
+		// (the registry accepts it, but it must reach the adapter to take effect).
+		const codex = buildAdapter(agent({ adapter: "codex-exec", noProgressTimeoutMs: 90000 }));
+		expect(
+			(codex as unknown as { config: { noProgressTimeoutMs?: number } }).config.noProgressTimeoutMs,
+		).toBe(90000);
+		const claude = buildAdapter(
+			agent({ adapter: "claude-cli", id: "claude", noProgressTimeoutMs: 90000 }),
+		);
+		expect(
+			(claude as unknown as { config: { noProgressTimeoutMs?: number } }).config
+				.noProgressTimeoutMs,
+		).toBe(90000);
+	});
 });

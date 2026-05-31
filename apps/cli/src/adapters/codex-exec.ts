@@ -20,6 +20,13 @@ export interface CodexExecConfig {
 	// Hard per-call ceiling in ms. When the timer fires the child is killed and
 	// the call rejects with a timeout error. Unset means DEFAULT_CALL_TIMEOUT_MS.
 	callTimeoutMs?: number;
+	// No-progress watchdog: kill the child if NO stdout arrives for this many ms,
+	// catching a wedged session earlier than the hard ceiling. OFF by default
+	// (undefined): legitimate reasoning waits on the model API with zero stdout
+	// (a multi-second-plus silent gap), which is indistinguishable from a wedge
+	// except by elapsed time, so this must exceed the longest expected quiet gap.
+	// Opt in per agent (e.g. an unattended converge loop) rather than globally.
+	noProgressTimeoutMs?: number;
 }
 
 interface CodexJsonEvent {
@@ -80,9 +87,31 @@ export class CodexExecAdapter implements RuntimeAdapter {
 				timedOut = true;
 				proc.kill();
 			}, timeoutMs);
+			// No-progress watchdog: a separate, usually shorter clock that fires when
+			// no stdout has arrived for noProgressTimeoutMs. armNoProgress() resets it
+			// (called per stdout chunk), so it measures the gap since the last output.
+			// Disabled when unset, so the default behavior is the hard timeout alone.
+			const noProgressMs = this.config.noProgressTimeoutMs;
+			let noProgress = false;
+			let progressTimer: ReturnType<typeof setTimeout> | undefined;
+			const armNoProgress = (): void => {
+				if (noProgressMs === undefined) return;
+				if (progressTimer) clearTimeout(progressTimer);
+				progressTimer = setTimeout(() => {
+					noProgress = true;
+					proc.kill();
+				}, noProgressMs);
+			};
+			const disarmNoProgress = (): void => {
+				if (progressTimer) clearTimeout(progressTimer);
+				progressTimer = undefined;
+			};
 			try {
 				proc.stdin.write(req.input);
 				proc.stdin.end();
+				// Start the no-progress clock now, so a child that emits nothing at all
+				// is still caught. It is disarmed the moment stdout closes (below).
+				armNoProgress();
 
 				const [stdoutText, stderrText, exitCode] = await Promise.all([
 					// Read stdout incrementally, surfacing each JSONL line to onEvent AS IT
@@ -91,17 +120,20 @@ export class CodexExecAdapter implements RuntimeAdapter {
 					// arrival, not a single post-exit flush. Returns the full text for the
 					// parse below; always drains stdout (the parse needs it and an undrained
 					// pipe blocks the child). A run that emits events then fails still
-					// preserves them, since each line is surfaced as it is read.
-					readCodexStdout(proc.stdout, req.onEvent),
+					// preserves them, since each line is surfaced as it is read. armNoProgress
+					// resets the no-progress watchdog on each chunk; disarm once stdout
+					// closes so the child's exit delay never trips it.
+					readCodexStdout(proc.stdout, req.onEvent, armNoProgress).finally(disarmNoProgress),
 					new Response(proc.stderr).text(),
 					proc.exited,
 				]);
 
-				// A killed proc exits non-zero; check abort/timeout first so neither is
-				// misreported as a normal failure. External cancel and timeout both
-				// kill the child but produce distinct errors.
+				// A killed proc exits non-zero; check abort/timeout/no-progress first so
+				// none is misreported as a normal failure. Each kills the child but
+				// produces a distinct error.
 				if (req.signal?.aborted) throw new Error("aborted by client");
 				if (timedOut) throw new Error(`codex exec timed out after ${timeoutMs}ms`);
+				if (noProgress) throw new Error(`codex exec made no progress for ${noProgressMs}ms`);
 
 				if (exitCode !== 0) {
 					const cleaned = sanitize(stderrText || stdoutText, sensitive);
@@ -124,6 +156,7 @@ export class CodexExecAdapter implements RuntimeAdapter {
 				};
 			} finally {
 				clearTimeout(timer);
+				disarmNoProgress();
 				req.signal?.removeEventListener("abort", onAbort);
 			}
 		} catch (e) {
@@ -164,6 +197,7 @@ export class CodexExecAdapter implements RuntimeAdapter {
 async function readCodexStdout(
 	stream: ReadableStream<Uint8Array>,
 	onEvent: ((event: AdapterEvent) => void) | undefined,
+	onProgress?: () => void,
 ): Promise<string> {
 	const decoder = new TextDecoder();
 	let full = "";
@@ -196,6 +230,9 @@ async function readCodexStdout(
 		}
 	};
 	for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
+		// Stdout arrived: reset the no-progress watchdog regardless of audit (this
+		// is a liveness signal, not an event-recording one).
+		onProgress?.();
 		const text = decoder.decode(chunk, { stream: true });
 		if (!text) continue;
 		full += text;
