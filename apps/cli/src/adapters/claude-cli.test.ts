@@ -44,6 +44,17 @@ if [ -n "$HANDOFF_TEST_CLAUDE_EMIT_THEN_FAIL" ]; then
   echo "boom: claude crashed mid-stream" >&2
   exit 7
 fi
+# Liveness gate: emit the system line, then BLOCK until the test creates the wait
+# file. The test creates it only from inside onEvent, so the process can finish
+# only if the system event was surfaced to onEvent WHILE this process was still
+# running. A buffered (post-exit) reader would deadlock here.
+if [ -n "$HANDOFF_TEST_CLAUDE_WAIT_FILE" ]; then
+  cat > /dev/null
+  echo '{"type":"system","subtype":"init","session_id":"live-claude"}'
+  while [ ! -f "$HANDOFF_TEST_CLAUDE_WAIT_FILE" ]; do sleep 0.02; done
+  echo '{"type":"result","session_id":"live-claude","result":"LIVE: claude done","subtype":"success","is_error":false}'
+  exit 0
+fi
 if [ -n "$HANDOFF_TEST_CLAUDE_ENV_FILE" ]; then
   printf 'CLAUDECODE=%s\\n' "$CLAUDECODE" > "$HANDOFF_TEST_CLAUDE_ENV_FILE"
 fi
@@ -689,6 +700,51 @@ describe("ClaudeCliAdapter: raw event stream (onEvent)", () => {
 			stepId: "ask",
 			input: "x",
 			cwd: TMPDIR,
+		});
+		expect(result.output).toBe("OK: claude received your prompt");
+	});
+
+	test("surfaces an event to onEvent BEFORE the process completes (live, not post-exit)", async () => {
+		// The fake emits the system line, then blocks until a wait file exists. We
+		// create that file only from inside onEvent, so the call can complete only if
+		// the system event reached onEvent while the child was still running. A
+		// buffered (read-all-then-emit) implementation would deadlock and time out.
+		const waitFile = join(TMPDIR, "claude-live-go.txt");
+		rmSync(waitFile, { force: true });
+		process.env.HANDOFF_TEST_CLAUDE_WAIT_FILE = waitFile;
+		const events: { type: string; raw: string }[] = [];
+		try {
+			const result = await new ClaudeCliAdapter({}).call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				onEvent: (e) => {
+					events.push(e);
+					if (e.type === "system") writeFileSync(waitFile, "go");
+				},
+			});
+			expect(result.output).toBe("LIVE: claude done");
+			expect(events.map((e) => e.type)).toEqual(["system", "result"]);
+		} finally {
+			delete process.env.HANDOFF_TEST_CLAUDE_WAIT_FILE;
+			rmSync(waitFile, { force: true });
+		}
+	}, 15000);
+
+	test("a throwing onEvent does not abort the drain or fail the call", async () => {
+		// onEvent is observational: a handler that throws must not break the stdout
+		// drain, the parse, or the run.
+		const result = await new ClaudeCliAdapter({}).call({
+			participantId: "claude",
+			agentId: "claude",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+			onEvent: () => {
+				throw new Error("handler boom");
+			},
 		});
 		expect(result.output).toBe("OK: claude received your prompt");
 	});

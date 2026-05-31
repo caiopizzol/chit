@@ -129,16 +129,17 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 				proc.stdin.end();
 
 				const [stdoutText, stderrText, exitCode] = await Promise.all([
-					new Response(proc.stdout).text(),
+					// Read stdout incrementally, surfacing each stream-json line to onEvent
+					// AS IT ARRIVES (claude streams system/stream_event deltas, then the
+					// assistant message, then the result), so audit timestamps reflect real
+					// arrival, not a single post-exit flush. Returns the full text for the
+					// parse below; always drains stdout (the parse needs it and an undrained
+					// pipe blocks the child). A run that emits events then fails still
+					// preserves them, since each line is surfaced as it is read.
+					readClaudeStdout(proc.stdout, req.onEvent),
 					new Response(proc.stderr).text(),
 					proc.exited,
 				]);
-
-				// Surface the raw Claude stream-json event stream for audit BEFORE any
-				// failure check, so a run that emitted events and then failed (or was
-				// killed) still preserves what it did. Guarded, so an unaudited run does
-				// no work here.
-				if (req.onEvent) emitClaudeEvents(stdoutText, req.onEvent);
 
 				// A killed proc exits non-zero; check abort/timeout first so neither is
 				// misreported as a normal failure. External cancel and timeout both
@@ -227,24 +228,64 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 	}
 }
 
-// Surface EVERY parseable JSONL line verbatim as an AdapterEvent (type + raw),
-// so the audit layer preserves the observable Claude stream-json event stream
-// (system, stream_event deltas, assistant, rate_limit_event, result), not just
-// the final answer. Called before the failure checks, so a run that emitted
-// events and then failed still has them preserved. Only invoked on audited runs
-// (caller guards on req.onEvent), so an unaudited run does no work here.
-function emitClaudeEvents(stdout: string, onEvent: (event: AdapterEvent) => void): void {
-	for (const line of stdout.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
+// Read claude's stdout to completion, returning the full text for the parse
+// while surfacing each parseable stream-json line to onEvent AS IT ARRIVES. This
+// preserves the observable Claude event stream (system, stream_event deltas,
+// assistant, rate_limit_event, result), not just the final answer, with real
+// arrival timing. onEvent is optional: an unaudited run does no per-line work and
+// just accumulates the text. Lines split on "\n"; a final line with no trailing
+// newline is still surfaced. Each line is emitted as it is read, before the
+// caller's failure checks, so a run that emits events then fails still preserves
+// them. A caller's onEvent that throws is swallowed (observational), so it never
+// aborts the stdout drain or fails the run.
+async function readClaudeStdout(
+	stream: ReadableStream<Uint8Array>,
+	onEvent: ((event: AdapterEvent) => void) | undefined,
+): Promise<string> {
+	const decoder = new TextDecoder();
+	let full = "";
+	let pending = "";
+	const emitLine = (raw: string): void => {
+		const trimmed = raw.trim();
+		if (!trimmed) return;
 		let evt: { type?: unknown };
 		try {
 			evt = JSON.parse(trimmed) as { type?: unknown };
 		} catch {
-			continue;
+			return;
 		}
-		if (typeof evt.type === "string") onEvent({ type: evt.type, raw: trimmed });
+		if (typeof evt.type !== "string") return;
+		try {
+			onEvent?.({ type: evt.type, raw: trimmed });
+		} catch {
+			// ignore: a misbehaving observer never breaks the run
+		}
+	};
+	const drainCompleteLines = (): void => {
+		let nl = pending.indexOf("\n");
+		while (nl !== -1) {
+			emitLine(pending.slice(0, nl));
+			pending = pending.slice(nl + 1);
+			nl = pending.indexOf("\n");
+		}
+	};
+	for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
+		const text = decoder.decode(chunk, { stream: true });
+		if (!text) continue;
+		full += text;
+		// Unaudited runs skip all line work; they only need the accumulated text.
+		if (!onEvent) continue;
+		pending += text;
+		drainCompleteLines();
 	}
+	const tail = decoder.decode();
+	if (tail) full += tail;
+	if (onEvent) {
+		if (tail) pending += tail;
+		drainCompleteLines();
+		if (pending.trim()) emitLine(pending);
+	}
+	return full;
 }
 
 // Scan the JSONL stream for the FINAL `result` event, which carries the same
