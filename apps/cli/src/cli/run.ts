@@ -29,6 +29,7 @@ import {
 	listInstalled,
 	uninstall,
 } from "../surfaces/lifecycle.ts";
+import { runAudit } from "./audit.ts";
 import { runConverge } from "./converge.ts";
 import { runLoopLog } from "./loop-log.ts";
 
@@ -268,6 +269,7 @@ const HELP = `Usage:
   chit studio [path]
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
   chit converge --task <text> --scope <id> [options]   (chit converge --help)
+  chit audit <list|show> [options]   (chit audit --help)
   chit -h | --help
 
 run options:
@@ -347,6 +349,8 @@ export async function runMain(argv: string[]): Promise<number> {
 	// converge drives the autonomous implement/check loop; it owns its own
 	// flags and loop logic in a separate module, same as loop-log.
 	if (argv[0] === "converge") return runConverge(argv.slice(1));
+	// audit reads the persisted audit transcripts; read-only, its own parsing.
+	if (argv[0] === "audit") return runAudit(argv.slice(1));
 
 	let args: ParsedArgs;
 	try {
