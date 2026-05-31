@@ -11,7 +11,15 @@
 // selection is sticky, the cursor is pointer, and selected nodes get an
 // inverted header strip plus an outer ink outline.
 
-import type { LoopRecord, LoopStopStatus, SurfaceKind, ValidationReport } from "@chit/core";
+import type {
+	AdapterUsage,
+	AuditEvent,
+	LoopRecord,
+	LoopStopStatus,
+	SurfaceKind,
+	ValidationReport,
+} from "@chit/core";
+import { formatAdapterUsage } from "@chit/core";
 import {
 	applyEdgeChanges,
 	Background,
@@ -614,7 +622,20 @@ function fmtElapsed(ms: number | null): string {
 
 // The compact iteration rail for one loop, rendered from its records. The
 // server already validated structure/consistency; this only reads.
-function LoopRail({ records }: { records: LoopRecord[] }) {
+// A loop iteration's detailsRef is "audit:<runId>" when the run was audited.
+// Returns the runId, or undefined for an unaudited iteration.
+function auditRunIdOf(detailsRef: string | undefined): string | undefined {
+	const m = detailsRef?.match(/^audit:(.+)$/);
+	return m?.[1];
+}
+
+function LoopRail({
+	records,
+	onOpenAudit,
+}: {
+	records: LoopRecord[];
+	onOpenAudit?: (runId: string) => void;
+}) {
 	const header = records.find((r) => r.type === "loop");
 	const stop = records.find((r) => r.type === "stop");
 	const iterations = records.filter((r) => r.type === "iteration");
@@ -652,6 +673,18 @@ function LoopRail({ records }: { records: LoopRecord[] }) {
 									{Math.round(it.checkDurationMs / 1000)}s · {it.findingCount} findings
 								</div>
 								<div className="rail-sub">decide {it.decision}</div>
+								{(() => {
+									const runId = auditRunIdOf(it.detailsRef);
+									return runId && onOpenAudit ? (
+										<button
+											type="button"
+											className="rail-audit-link"
+											onClick={() => onOpenAudit(runId)}
+										>
+											view transcript →
+										</button>
+									) : null;
+								})()}
 							</li>
 						),
 				)}
@@ -770,19 +803,124 @@ function LoopPolicy() {
 	);
 }
 
+const USAGE_KEYS: (keyof AdapterUsage)[] = [
+	"inputTokens",
+	"outputTokens",
+	"totalTokens",
+	"cachedInputTokens",
+	"reasoningTokens",
+	"estimatedCostUsd",
+];
+
+// Sum adapter-call token usage across a run, then render it with the shared
+// @chit/core formatter so the Studio and CLI views never drift.
+function renderAuditUsage(events: AuditEvent[]): string {
+	const usage: AdapterUsage = {};
+	let any = false;
+	for (const e of events) {
+		if (e.type !== "adapter.call.completed" || !e.usage) continue;
+		for (const k of USAGE_KEYS) {
+			const v = e.usage[k];
+			if (typeof v === "number") {
+				usage[k] = (usage[k] ?? 0) + v;
+				any = true;
+			}
+		}
+	}
+	return formatAdapterUsage(any ? usage : undefined);
+}
+
+// The blob ref an event references (prompt, output, raw), if any.
+function eventBlobRef(e: AuditEvent): string | undefined {
+	if (e.type === "adapter.call.started") return e.inputBlob;
+	if (e.type === "adapter.call.completed") return e.outputBlob;
+	if (e.type === "step.completed") return e.outputBlob;
+	if (e.type === "adapter.event") return e.rawBlob;
+	return undefined;
+}
+
+function auditEventLine(e: AuditEvent): string {
+	switch (e.type) {
+		case "run.started":
+			return `run.started · ${e.manifestId} (${e.surface})`;
+		case "step.started":
+			return `step.started · ${e.stepId} (${e.kind})`;
+		case "adapter.call.started":
+			return `adapter.call.started · ${e.stepId} ${e.participantId}/${e.agentId}`;
+		case "adapter.call.completed":
+			return `adapter.call.completed · ${e.stepId} ${e.status} · ${e.durationMs}ms`;
+		case "adapter.event":
+			return `adapter.event · ${e.stepId} ${e.eventType}`;
+		case "step.completed":
+			return `step.completed · ${e.stepId} ${e.durationMs}ms`;
+		case "step.failed":
+			return `step.failed · ${e.stepId} ${e.durationMs}ms · ${e.error}`;
+		case "loop.iteration.recorded":
+			return `loop.iteration.recorded · n=${e.n} ${e.verdict}`;
+		case "run.completed":
+			return `run.completed · ${e.status} ${e.durationMs}ms`;
+	}
+}
+
+// The audit transcript for one run: header (surface/manifest/status + an
+// INCOMPLETE flag when there is no run.completed), a usage summary, and the
+// event timeline. Prompt/output bodies are collapsed by default.
+function AuditView({ events, blobs }: { events: AuditEvent[]; blobs: Record<string, string> }) {
+	const started = events.find((r) => r.type === "run.started");
+	const completed = events.find((r) => r.type === "run.completed");
+	const status = completed?.type === "run.completed" ? completed.status : "incomplete";
+	return (
+		<div className="audit-view">
+			<div className="audit-head">
+				{started?.type === "run.started" && (
+					<p className="audit-meta">
+						{started.surface} · {started.manifestId}
+						{started.scope ? ` · ${started.scope}` : ""}
+					</p>
+				)}
+				<p className="audit-status">
+					status: <span className={`audit-status--${status}`}>{status}</span>
+					{status === "incomplete" ? " (no run.completed: failed, cancelled, or abandoned)" : ""}
+				</p>
+				<p className="audit-usage">{renderAuditUsage(events)}</p>
+			</div>
+			<ol className="audit-timeline">
+				{events.map((e, i) => {
+					const ref = eventBlobRef(e);
+					const body = ref !== undefined ? blobs[ref] : undefined;
+					return (
+						// biome-ignore lint/suspicious/noArrayIndexKey: the audit timeline is append-only and never reordered
+						<li key={i} className="audit-event">
+							<div className="audit-line">{auditEventLine(e)}</div>
+							{body !== undefined && (
+								<details className="audit-body">
+									<summary>body ({body.length} chars)</summary>
+									<pre>{body}</pre>
+								</details>
+							)}
+						</li>
+					);
+				})}
+			</ol>
+		</div>
+	);
+}
+
 function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => void }) {
-	const { list, detail, select, clearSelection } = loops;
+	const { list, detail, audit, select, clearSelection, selectAudit, clearAudit } = loops;
 	const inDetail = detail.status !== "idle";
+	const inAudit = audit.status !== "idle";
 	useEffect(() => {
 		function onKey(e: KeyboardEvent) {
 			if (e.key !== "Escape") return;
-			// Escape backs out of a selected loop first, then closes the drawer.
-			if (inDetail) clearSelection();
+			// Escape backs out one level at a time: audit -> loop detail -> list -> close.
+			if (inAudit) clearAudit();
+			else if (inDetail) clearSelection();
 			else onClose();
 		}
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [onClose, clearSelection, inDetail]);
+	}, [onClose, clearSelection, clearAudit, inDetail, inAudit]);
 
 	// The idle/list sub-states, rendered below the static LoopPolicy explainer.
 	function listBody() {
@@ -809,6 +947,15 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 	}
 
 	function body() {
+		// An open audit transcript takes over the detail pane (it was reached from
+		// a loop iteration); backing out returns to the loop.
+		if (inAudit) {
+			if (audit.status === "loading") return <div className="empty">Loading…</div>;
+			if (audit.status === "error") return <div className="refetch-error">{audit.error}</div>;
+			if (audit.status === "ready") {
+				return <AuditView events={audit.events} blobs={audit.blobs} />;
+			}
+		}
 		if (detail.status === "loading") return <div className="empty">Loading…</div>;
 		if (detail.status === "error") return <div className="refetch-error">{detail.error}</div>;
 		if (detail.status === "ready") {
@@ -817,7 +964,7 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 				<>
 					{header?.type === "loop" && <LoopConfig header={header} />}
 					<VerdictTrail records={detail.records} />
-					<LoopRail records={detail.records} />
+					<LoopRail records={detail.records} onOpenAudit={(runId) => void selectAudit(runId)} />
 				</>
 			);
 		}
@@ -835,7 +982,11 @@ function LoopsDrawer({ loops, onClose }: { loops: LoopsState; onClose: () => voi
 			<button type="button" className="drawer-backdrop" aria-label="Close" onClick={onClose} />
 			<aside className="drawer" role="dialog" aria-modal="true" aria-label="Loops">
 				<header className="drawer-head">
-					{inDetail ? (
+					{inAudit ? (
+						<button type="button" className="drawer-back" onClick={clearAudit}>
+							← Loop
+						</button>
+					) : inDetail ? (
 						<button type="button" className="drawer-back" onClick={clearSelection}>
 							← Loops
 						</button>

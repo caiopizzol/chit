@@ -25,7 +25,10 @@ export interface StudioInstance {
 	close: () => Promise<void>;
 }
 
-export async function launchStudio(fixtureName: string): Promise<StudioInstance> {
+export async function launchStudio(
+	fixtureName: string,
+	extraEnv: Record<string, string> = {},
+): Promise<StudioInstance> {
 	const dir = mkdtempSync(join(tmpdir(), "chit-e2e-"));
 	const skillsDir = mkdtempSync(join(tmpdir(), "chit-e2e-skills-"));
 	const file = join(dir, fixtureName);
@@ -33,7 +36,7 @@ export async function launchStudio(fixtureName: string): Promise<StudioInstance>
 
 	const child: ChildProcess = spawn("bun", [CLI, "studio", fixtureName], {
 		cwd: dir,
-		env: { ...process.env, CHIT_SKILLS_DIR: skillsDir },
+		env: { ...process.env, CHIT_SKILLS_DIR: skillsDir, ...extraEnv },
 	});
 
 	// Kill the child (if still alive) and remove both temp dirs. Idempotent so

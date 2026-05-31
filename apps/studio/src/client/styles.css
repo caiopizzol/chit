@@ -964,6 +964,76 @@ header.app .loops-btn {
 	color: var(--carbon);
 	margin-top: 2px;
 }
+.rail-audit-link {
+	margin-top: 4px;
+	padding: 0;
+	border: none;
+	background: none;
+	font-family: var(--mono, monospace);
+	font-size: 12px;
+	color: var(--carbon);
+	text-decoration: underline;
+	cursor: pointer;
+}
+.rail-audit-link:hover {
+	color: var(--ink, #0a0a0a);
+}
+
+/* Audit transcript view (docs/audit-v0.md), reached from a loop iteration. */
+.audit-head {
+	padding: 8px 0;
+	border-bottom: 1px solid var(--hairline);
+	margin-bottom: 8px;
+}
+.audit-meta,
+.audit-status,
+.audit-usage {
+	font-size: 12px;
+	margin: 2px 0;
+	font-family: var(--mono, monospace);
+}
+.audit-status--ok {
+	color: var(--carbon);
+}
+.audit-status--failed,
+.audit-status--cancelled,
+.audit-status--incomplete,
+.audit-status--timeout {
+	color: var(--ink, #0a0a0a);
+	font-weight: 600;
+}
+.audit-timeline {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.audit-event {
+	border-left: 2px solid var(--hairline);
+	padding: 4px 0 4px 10px;
+	margin-bottom: 2px;
+}
+.audit-line {
+	font-family: var(--mono, monospace);
+	font-size: 12px;
+}
+.audit-body {
+	margin-top: 2px;
+	font-size: 12px;
+}
+.audit-body summary {
+	cursor: pointer;
+	color: var(--faded);
+}
+.audit-body pre {
+	white-space: pre-wrap;
+	word-break: break-word;
+	background: var(--receipt, #e0dbc6);
+	padding: 6px 8px;
+	margin: 4px 0 0;
+	max-height: 320px;
+	overflow: auto;
+	font-size: 11px;
+}
 .verdict {
 	text-transform: uppercase;
 	font-size: 11px;

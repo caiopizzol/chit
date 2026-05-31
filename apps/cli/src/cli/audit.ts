@@ -9,7 +9,7 @@
 // can be abandoned. The reader never infers success from the absence of a
 // terminal event.
 
-import type { AdapterUsage, AuditEvent } from "@chit/core";
+import { type AdapterUsage, type AuditEvent, formatAdapterUsage } from "@chit/core";
 import { AuditStore } from "../audit/store.ts";
 
 export interface AuditIO {
@@ -102,24 +102,6 @@ function summarize(runId: string, events: AuditEvent[]): RunSummary {
 	return summary;
 }
 
-// Render a usage block as a compact one-liner. Cost is labelled "reported cost"
-// because not every provider reports one (Codex does not), so it is a floor.
-function renderUsage(usage: AdapterUsage | undefined): string {
-	if (!usage) return "usage: none reported";
-	const parts: string[] = [];
-	if (usage.inputTokens !== undefined) parts.push(`in ${usage.inputTokens}`);
-	if (usage.outputTokens !== undefined) parts.push(`out ${usage.outputTokens}`);
-	if (usage.cachedInputTokens !== undefined) parts.push(`cached ${usage.cachedInputTokens}`);
-	if (usage.reasoningTokens !== undefined) parts.push(`reasoning ${usage.reasoningTokens}`);
-	if (usage.totalTokens !== undefined) parts.push(`total ${usage.totalTokens}`);
-	const tokens = parts.length > 0 ? `tokens: ${parts.join(", ")}` : "tokens: none";
-	const cost =
-		usage.estimatedCostUsd !== undefined
-			? `; reported cost: $${usage.estimatedCostUsd.toFixed(4)}`
-			: "";
-	return `${tokens}${cost}`;
-}
-
 // Read a run's events, returning [] on any read error so `list` stays robust
 // across a corrupt or mid-write log (show() reads directly so it can report).
 function safeRead(store: AuditStore, runId: string): AuditEvent[] {
@@ -149,7 +131,7 @@ function runList(store: AuditStore, io: AuditIO, json: boolean): number {
 		io.out(
 			`${s.runId}  [${s.surface}] ${s.manifestId}  ${s.status}  steps=${s.stepCount}${loop}\n`,
 		);
-		io.out(`    started ${s.startedAt ?? "?"}  ${renderUsage(s.usage)}\n`);
+		io.out(`    started ${s.startedAt ?? "?"}  ${formatAdapterUsage(s.usage)}\n`);
 	}
 	io.out('\n("incomplete" = no run.completed event: failed, cancelled, or abandoned.)\n');
 	return 0;
@@ -192,7 +174,7 @@ function renderEvent(store: AuditStore, runId: string, e: AuditEvent, blobs: boo
 			break;
 		case "adapter.call.completed":
 			lines.push(
-				`adapter.call.completed  ${e.stepId} ${e.status} ${e.durationMs}ms  ${renderUsage(e.usage)}`,
+				`adapter.call.completed  ${e.stepId} ${e.status} ${e.durationMs}ms  ${formatAdapterUsage(e.usage)}`,
 			);
 			body(e.outputBlob, "output");
 			break;
@@ -244,7 +226,7 @@ function runShow(
 	io.out(
 		`  status: ${s.status}${s.status === "incomplete" ? " (no run.completed: failed, cancelled, or abandoned)" : ""}\n`,
 	);
-	io.out(`  ${renderUsage(s.usage)}\n`);
+	io.out(`  ${formatAdapterUsage(s.usage)}\n`);
 	io.out("\ntimeline:\n");
 	for (const e of events) {
 		for (const line of renderEvent(store, runId, e, opts.blobs)) io.out(`  ${line}\n`);

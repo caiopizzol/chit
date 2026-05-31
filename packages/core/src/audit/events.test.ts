@@ -5,6 +5,7 @@ import {
 	type AdapterEventEvent,
 	type AuditEvent,
 	AuditEventError,
+	formatAdapterUsage,
 	type LoopIterationRecordedEvent,
 	parseAuditLog,
 	type RunCompletedEvent,
@@ -15,6 +16,33 @@ import {
 	serializeAuditEvent,
 	validateAuditEvent,
 } from "./events.ts";
+
+describe("formatAdapterUsage", () => {
+	test("renders all token fields and the reported cost", () => {
+		expect(
+			formatAdapterUsage({
+				inputTokens: 6590,
+				outputTokens: 40,
+				cachedInputTokens: 800,
+				reasoningTokens: 19,
+				estimatedCostUsd: 0.0658,
+			}),
+		).toBe("tokens: in 6590, out 40, cached 800, reasoning 19; reported cost: $0.0658");
+	});
+
+	test("renders a totalTokens-only block (the only signal a provider may give)", () => {
+		expect(formatAdapterUsage({ totalTokens: 1234 })).toBe("tokens: total 1234");
+	});
+
+	test("renders tokens with no cost (Codex reports none)", () => {
+		expect(formatAdapterUsage({ inputTokens: 10, outputTokens: 2 })).toBe("tokens: in 10, out 2");
+	});
+
+	test("reports nothing for undefined or an empty block", () => {
+		expect(formatAdapterUsage(undefined)).toBe("usage: none reported");
+		expect(formatAdapterUsage({})).toBe("usage: none reported");
+	});
+});
 
 const runStarted: RunStartedEvent = {
 	type: "run.started",

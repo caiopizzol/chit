@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
 import { isKnownSurface } from "@chit/core";
 import { Hono } from "hono";
+import { defaultAuditDir, readAuditRun } from "./audit.ts";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
 import { discover } from "./discovery.ts";
 import { buildBootstrap, DocStore } from "./docs.ts";
@@ -134,6 +135,9 @@ interface BuildAppOptions {
 	allowedHosts: Set<string>;
 	clientDistDir: string;
 	lifecycle?: StudioLifecycle;
+	// Audit store base dir (defaults to the local-state dir the CLI writes).
+	// Injected in tests; the loop view's detailsRef points into this store.
+	auditDir?: string;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -259,6 +263,22 @@ export function buildApp(opts: BuildAppOptions) {
 			return new Response(`invalid loop log: ${result.message}`, { status: 422 });
 		}
 		return c.json(result.records);
+	});
+
+	// Audit transcript for one run (docs/audit-v0.md). A loop iteration's
+	// detailsRef ("audit:<runId>") points here. ?blobs=1 also returns the
+	// referenced prompt/output bodies, keyed by ref.
+	app.get("/api/audit/:runId", (c) => {
+		const blobs = c.req.query("blobs") === "1";
+		const result = readAuditRun(opts.auditDir ?? defaultAuditDir(), c.req.param("runId"), blobs);
+		if (result.kind === "not-found") return c.text("not found", 404);
+		if (result.kind === "invalid-id") return new Response("invalid run id", { status: 400 });
+		if (result.kind === "invalid-log") {
+			return new Response(`invalid audit log: ${result.message}`, { status: 422 });
+		}
+		return c.json(
+			blobs ? { events: result.events, blobs: result.blobs } : { events: result.events },
+		);
 	});
 
 	// Lifecycle endpoints. Absent lifecycle (read-only Studio) -> 501. The

@@ -95,6 +95,26 @@ export interface AdapterUsage {
 	estimatedCostUsd?: number;
 }
 
+// One-line usage summary, shared by the CLI audit reader and the Studio audit
+// view so the two never drift. Pure (browser-safe). Cost is labelled a reported
+// floor, since not every provider reports one (Codex does not).
+export function formatAdapterUsage(usage: AdapterUsage | undefined): string {
+	if (!usage) return "usage: none reported";
+	const parts: string[] = [];
+	if (usage.inputTokens !== undefined) parts.push(`in ${usage.inputTokens}`);
+	if (usage.outputTokens !== undefined) parts.push(`out ${usage.outputTokens}`);
+	if (usage.cachedInputTokens !== undefined) parts.push(`cached ${usage.cachedInputTokens}`);
+	if (usage.reasoningTokens !== undefined) parts.push(`reasoning ${usage.reasoningTokens}`);
+	if (usage.totalTokens !== undefined) parts.push(`total ${usage.totalTokens}`);
+	if (parts.length === 0 && usage.estimatedCostUsd === undefined) return "usage: none reported";
+	const tokens = parts.length > 0 ? `tokens: ${parts.join(", ")}` : "tokens: none";
+	const cost =
+		usage.estimatedCostUsd !== undefined
+			? `; reported cost: $${usage.estimatedCostUsd.toFixed(4)}`
+			: "";
+	return `${tokens}${cost}`;
+}
+
 export interface AdapterCallCompletedEvent extends AuditEnvelope {
 	type: "adapter.call.completed";
 	stepId: string;

@@ -4,10 +4,16 @@
 // honest empty/loading/error UI. All data comes from the server routes; the
 // client never reads the filesystem or parses JSONL. Mirrors useInstalled.
 
-import type { LoopRecord } from "@chit/core";
+import type { AuditEvent, LoopRecord } from "@chit/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LoopSummary } from "../server/types.ts";
-import { fetchLoop, fetchLoops, StudioApiError } from "./api.ts";
+import {
+	type AuditRunResponse,
+	fetchAuditRun,
+	fetchLoop,
+	fetchLoops,
+	StudioApiError,
+} from "./api.ts";
 
 function errMessage(e: unknown): string {
 	if (e instanceof StudioApiError) return `${e.status}: ${e.message}`;
@@ -26,12 +32,22 @@ export type LoopDetailState =
 	| { status: "error"; loopId: string; error: string }
 	| { status: "ready"; loopId: string; records: LoopRecord[] };
 
+// Audit transcript for one run, opened from a loop iteration's detailsRef.
+export type AuditDetailState =
+	| { status: "idle" }
+	| { status: "loading"; runId: string }
+	| { status: "error"; runId: string; error: string }
+	| { status: "ready"; runId: string; events: AuditEvent[]; blobs: Record<string, string> };
+
 export interface LoopsState {
 	list: LoopListState;
 	detail: LoopDetailState;
+	audit: AuditDetailState;
 	refresh: () => Promise<void>;
 	select: (loopId: string) => Promise<void>;
 	clearSelection: () => void;
+	selectAudit: (runId: string) => Promise<void>;
+	clearAudit: () => void;
 }
 
 export function useLoops(): LoopsState {
@@ -75,5 +91,26 @@ export function useLoops(): LoopsState {
 		setDetail({ status: "idle" });
 	}, []);
 
-	return { list, detail, refresh, select, clearSelection };
+	const [audit, setAudit] = useState<AuditDetailState>({ status: "idle" });
+	const auditSeq = useRef(0);
+
+	const selectAudit = useCallback(async (runId: string) => {
+		const seq = ++auditSeq.current;
+		setAudit({ status: "loading", runId });
+		try {
+			const res: AuditRunResponse = await fetchAuditRun(runId, true);
+			if (seq === auditSeq.current) {
+				setAudit({ status: "ready", runId, events: res.events, blobs: res.blobs ?? {} });
+			}
+		} catch (e) {
+			if (seq === auditSeq.current) setAudit({ status: "error", runId, error: errMessage(e) });
+		}
+	}, []);
+
+	const clearAudit = useCallback(() => {
+		auditSeq.current++; // invalidate any in-flight selectAudit
+		setAudit({ status: "idle" });
+	}, []);
+
+	return { list, detail, audit, refresh, select, clearSelection, selectAudit, clearAudit };
 }

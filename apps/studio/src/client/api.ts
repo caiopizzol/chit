@@ -3,7 +3,7 @@
 // the client bundle and the API on one port), so no CORS configuration is
 // involved.
 
-import type { LoopRecord } from "@chit/core";
+import type { AuditEvent, LoopRecord } from "@chit/core";
 import type {
 	ConflictResponse,
 	DocumentDetail,
@@ -184,4 +184,24 @@ export async function fetchLoop(loopId: string): Promise<LoopRecord[]> {
 		throw new StudioApiError(res.status, `GET ${url}: ${res.status} ${await res.text()}`);
 	}
 	return (await res.json()) as LoopRecord[];
+}
+
+// --- Audit transcript (read-only) ---
+
+export interface AuditRunResponse {
+	events: AuditEvent[];
+	// Present when fetched with blobs: prompt/output bodies keyed by sha256 ref.
+	blobs?: Record<string, string>;
+}
+
+// Fetch one audit run's events (and, with blobs, the referenced bodies). The
+// runId is the only thing the browser sends; the server resolves the path and
+// reads blobs only by refs present in the validated events.
+export async function fetchAuditRun(runId: string, blobs: boolean): Promise<AuditRunResponse> {
+	const url = `/api/audit/${encodeURIComponent(runId)}${blobs ? "?blobs=1" : ""}`;
+	const res = await fetch(url, { headers: authHeaders() });
+	if (!res.ok) {
+		throw new StudioApiError(res.status, `GET ${url}: ${res.status} ${await res.text()}`);
+	}
+	return (await res.json()) as AuditRunResponse;
 }
