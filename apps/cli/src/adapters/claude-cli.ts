@@ -1,5 +1,10 @@
 import type { AdapterUsage } from "@chit/core";
-import type { AdapterCallRequest, AdapterCallResult, RuntimeAdapter } from "../runtime/types.ts";
+import type {
+	AdapterCallRequest,
+	AdapterCallResult,
+	AdapterEvent,
+	RuntimeAdapter,
+} from "../runtime/types.ts";
 import { findSensitiveValues, sanitize } from "./sanitize.ts";
 import { nonNegInt, nonNegNum } from "./usage.ts";
 
@@ -28,9 +33,10 @@ interface ClaudePrintResult {
 	result?: string;
 	is_error?: boolean;
 	subtype?: string;
-	// Verified shape (claude 2.1.x --print --output-format json): a top-level
-	// `usage` block plus an authoritative `total_cost_usd`. Read tolerantly: the
-	// CLI may add/rename fields across versions, and any absent field is omitted.
+	// Verified shape (claude 2.1.x stream-json): the FINAL `result` event carries
+	// a top-level `usage` block plus an authoritative `total_cost_usd`. Read
+	// tolerantly: the CLI may add/rename fields across versions, and any absent
+	// field is omitted.
 	usage?: {
 		input_tokens?: unknown;
 		output_tokens?: unknown;
@@ -120,6 +126,12 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 					proc.exited,
 				]);
 
+				// Surface the raw Claude stream-json event stream for audit BEFORE any
+				// failure check, so a run that emitted events and then failed (or was
+				// killed) still preserves what it did. Guarded, so an unaudited run does
+				// no work here.
+				if (req.onEvent) emitClaudeEvents(stdoutText, req.onEvent);
+
 				// A killed proc exits non-zero; check abort/timeout first so neither is
 				// misreported as a normal failure. External cancel and timeout both
 				// kill the child but produce distinct errors.
@@ -132,11 +144,9 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 					throw new Error(`claude --print exited ${exitCode}: ${tail.slice(0, 500)}`);
 				}
 
-				let parsed: ClaudePrintResult;
-				try {
-					parsed = JSON.parse(stdoutText.trim()) as ClaudePrintResult;
-				} catch (e) {
-					throw new Error(`claude --print output was not valid JSON: ${(e as Error).message}`);
+				const parsed = parseClaudeResult(stdoutText);
+				if (!parsed) {
+					throw new Error("claude stream produced no result event");
 				}
 
 				if (parsed.is_error || parsed.subtype !== "success") {
@@ -166,7 +176,18 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 	}
 
 	private buildCommand(priorSessionId: string | undefined): string[] {
-		const cmd = ["claude", "--print", "--output-format", "json"];
+		// stream-json requires --verbose alongside --print (verified against the
+		// installed claude). --include-partial-messages surfaces the incremental
+		// stream_event deltas so the audit layer preserves the full observable
+		// event stream, not just the final result event.
+		const cmd = [
+			"claude",
+			"--print",
+			"--verbose",
+			"--output-format",
+			"stream-json",
+			"--include-partial-messages",
+		];
 		// Strict MCP isolation (default on): --strict-mcp-config makes Claude use
 		// ONLY the inline config we pass, ignoring the user's global ~/.claude.json
 		// and project MCP; the empty {"mcpServers":{}} means zero MCP servers. So a
@@ -188,4 +209,45 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 		}
 		return cmd;
 	}
+}
+
+// Surface EVERY parseable JSONL line verbatim as an AdapterEvent (type + raw),
+// so the audit layer preserves the observable Claude stream-json event stream
+// (system, stream_event deltas, assistant, rate_limit_event, result), not just
+// the final answer. Called before the failure checks, so a run that emitted
+// events and then failed still has them preserved. Only invoked on audited runs
+// (caller guards on req.onEvent), so an unaudited run does no work here.
+function emitClaudeEvents(stdout: string, onEvent: (event: AdapterEvent) => void): void {
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let evt: { type?: unknown };
+		try {
+			evt = JSON.parse(trimmed) as { type?: unknown };
+		} catch {
+			continue;
+		}
+		if (typeof evt.type === "string") onEvent({ type: evt.type, raw: trimmed });
+	}
+}
+
+// Scan the JSONL stream for the FINAL `result` event, which carries the same
+// fields the single-JSON mode used to return wholesale (is_error, subtype,
+// result, session_id, usage, total_cost_usd). Returns undefined when no result
+// event is present so the caller can throw a clear error. Unparseable lines are
+// skipped.
+function parseClaudeResult(stdout: string): ClaudePrintResult | undefined {
+	let result: ClaudePrintResult | undefined;
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let evt: { type?: unknown };
+		try {
+			evt = JSON.parse(trimmed) as { type?: unknown };
+		} catch {
+			continue;
+		}
+		if (evt.type === "result") result = evt as ClaudePrintResult;
+	}
+	return result;
 }

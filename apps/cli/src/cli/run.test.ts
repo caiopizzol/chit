@@ -41,10 +41,16 @@ for arg in "$@"; do
   if [ "$arg" = "--resume" ]; then IS_RESUME=1; fi
 done
 cat > /dev/null
+emit_stream() {
+  echo '{"type":"system","subtype":"init","session_id":"'"$1"'"}'
+  echo '{"type":"assistant","message":{"role":"assistant"}}'
+}
 if [ "$IS_RESUME" = "1" ]; then
-  echo '{"session_id":"claude-session-2","result":"CLAUDE_RESUMED: yes","subtype":"success","is_error":false}'
+  emit_stream "claude-session-2"
+  echo '{"type":"result","session_id":"claude-session-2","result":"CLAUDE_RESUMED: yes","subtype":"success","is_error":false}'
 else
-  echo '{"session_id":"claude-session-1","result":"CLAUDE_ANSWER: yes","subtype":"success","is_error":false}'
+  emit_stream "claude-session-1"
+  echo '{"type":"result","session_id":"claude-session-1","result":"CLAUDE_ANSWER: yes","subtype":"success","is_error":false}'
 fi
 `;
 
