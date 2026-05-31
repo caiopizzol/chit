@@ -174,7 +174,7 @@ None of these block the parser. Most are settled for v0 with the working answer 
 
 7. **YAML vs JSON.** JSON for v0: parses everywhere, no dependency. YAML is friendlier for hand-authoring multi-line prompts. Revisit if hand-authoring becomes the dominant path.
 
-8. **Agent registry location and format.** `~/.config/chit/agents.json` (the legacy `~/.config/handoff/agents.json` is read as a fallback for one release). Ships with built-in `codex` and `claude` entries; user config merges on top.
+8. **Agent registry location and format.** `~/.config/chit/agents.json`. Ships with built-in `codex` and `claude` entries; user config merges on top.
 
 ## Verifying the schema against the examples
 

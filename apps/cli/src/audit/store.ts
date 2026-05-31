@@ -64,20 +64,10 @@ export interface PruneOptions {
 	clock?: Clock;
 }
 
-function stateAuditDir(dir: string): string {
-	const xdg = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-	return join(xdg, dir, "audit");
-}
-
-// New default: ~/.local/state/chit/audit. New audited runs are written here.
+// Audited runs are written and read under ~/.local/state/chit/audit.
 export function defaultAuditDir(): string {
-	return stateAuditDir("chit");
-}
-
-// Legacy location, read for one release so existing transcripts stay visible in
-// `chit audit` and Studio. The reader merges both; writers only use the new dir.
-export function legacyAuditDir(): string {
-	return stateAuditDir("handoff");
+	const xdg = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
+	return join(xdg, "chit", "audit");
 }
 
 export class AuditStore {

@@ -28,7 +28,7 @@ import {
 } from "../../runtime/render.ts";
 import type { AdapterMap } from "../../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../../sessions/coordinator.ts";
-import { defaultSessionDir, FileSessionStore, legacySessionDir } from "../../sessions/store.ts";
+import { defaultSessionDir, FileSessionStore } from "../../sessions/store.ts";
 
 export interface StepRecord {
 	stepId: string;
@@ -145,7 +145,7 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 			manifest,
 			opts.registry,
 			opts.scope,
-			new FileSessionStore(defaultSessionDir(), legacySessionDir()),
+			new FileSessionStore(defaultSessionDir()),
 		);
 	}
 

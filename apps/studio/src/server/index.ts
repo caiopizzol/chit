@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
 import { isKnownSurface } from "@chit/core";
 import { Hono } from "hono";
-import { defaultAuditDir, legacyAuditDir, readAuditRun } from "./audit.ts";
+import { defaultAuditDir, readAuditRun } from "./audit.ts";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
 import { discover } from "./discovery.ts";
 import { buildBootstrap, DocStore } from "./docs.ts";
@@ -270,14 +270,7 @@ export function buildApp(opts: BuildAppOptions) {
 	// referenced prompt/output bodies, keyed by ref.
 	app.get("/api/audit/:runId", (c) => {
 		const blobs = c.req.query("blobs") === "1";
-		// On the default store, also read the legacy dir for one release. An
-		// explicit opts.auditDir (tests/config) is taken as-is, no fallback.
-		const result = readAuditRun(
-			opts.auditDir ?? defaultAuditDir(),
-			c.req.param("runId"),
-			blobs,
-			opts.auditDir === undefined ? legacyAuditDir() : undefined,
-		);
+		const result = readAuditRun(opts.auditDir ?? defaultAuditDir(), c.req.param("runId"), blobs);
 		if (result.kind === "not-found") return c.text("not found", 404);
 		if (result.kind === "invalid-id") return new Response("invalid run id", { status: 400 });
 		if (result.kind === "invalid-log") {

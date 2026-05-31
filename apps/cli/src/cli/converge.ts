@@ -39,7 +39,7 @@ import { appendIteration, startLoop, stopLoop } from "../loops/log-store.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
-import { defaultSessionDir, FileSessionStore, legacySessionDir } from "../sessions/store.ts";
+import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import type { SessionStore } from "../sessions/types.ts";
 
 export interface ConvergeIO {
@@ -351,7 +351,7 @@ function buildExecute(
 		registry,
 		scope,
 		cwd,
-		new FileSessionStore(defaultSessionDir(), legacySessionDir()),
+		new FileSessionStore(defaultSessionDir()),
 		new AuditStore(),
 	);
 }

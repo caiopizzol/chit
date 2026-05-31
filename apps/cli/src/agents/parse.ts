@@ -1,5 +1,4 @@
-// File-backed registry loader. Reads ~/.config/chit/agents.json (or the legacy
-// ~/.config/handoff/agents.json as a fallback for one release, or an explicit
+// File-backed registry loader. Reads ~/.config/chit/agents.json (or an explicit
 // path), parses it via the browser-safe registry module, and
 // returns a normalized registry. This is the only module in src/agents/
 // that touches node:fs / node:os / node:path; pure consumers should
@@ -10,20 +9,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { type NormalizedRegistry, parseRegistry, RegistryError } from "@chit/core";
 
-function configPathFor(dir: string): string {
-	const xdg = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-	return join(xdg, dir, "agents.json");
-}
-
-// Prefer ~/.config/chit/agents.json; fall back to the legacy
-// ~/.config/handoff/agents.json for one release so existing setups keep working.
-// Returns the chit path when neither exists (loadRegistry then uses built-ins).
 function defaultConfigPath(): string {
-	const current = configPathFor("chit");
-	if (existsSync(current)) return current;
-	const legacy = configPathFor("handoff");
-	if (existsSync(legacy)) return legacy;
-	return current;
+	const xdg = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+	return join(xdg, "chit", "agents.json");
 }
 
 export function loadRegistry(configPath?: string): NormalizedRegistry {

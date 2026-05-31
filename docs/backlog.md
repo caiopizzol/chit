@@ -36,7 +36,7 @@ What landed:
 
 ### Lifecycle: install marker + `chit list` + safe `chit uninstall`
 
-Operational hygiene for installed skills. The safety boundary is a per-install `.chit-install.json` marker (the legacy `.handoff-install.json` is still recognized for one release); `chit uninstall` refuses to remove a directory without one, so accidental rm-rf of an unrelated same-named skill is impossible.
+Operational hygiene for installed skills. The safety boundary is a per-install `.chit-install.json` marker; `chit uninstall` refuses to remove a directory without one, so accidental rm-rf of an unrelated same-named skill is impossible.
 
 What landed:
 

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterCallCompletedEvent, AuditEvent, RunStartedEvent } from "@chit/core";
-import { AuditStore, AuditStoreError, defaultAuditDir, legacyAuditDir } from "./store.ts";
+import { AuditStore, AuditStoreError, defaultAuditDir } from "./store.ts";
 
 let baseDir: string;
 let store: AuditStore;
@@ -219,12 +219,11 @@ describe("audit store: run ids and listing", () => {
 		expect(store.listRuns().sort()).toEqual(["R1", "R2"]);
 	});
 
-	test("defaultAuditDir lands under chit/audit, legacyAuditDir under handoff (XDG_STATE_HOME)", () => {
+	test("defaultAuditDir lands under chit/audit (XDG_STATE_HOME)", () => {
 		const prev = process.env.XDG_STATE_HOME;
 		process.env.XDG_STATE_HOME = "/tmp/xdg-test";
 		try {
 			expect(defaultAuditDir()).toBe("/tmp/xdg-test/chit/audit");
-			expect(legacyAuditDir()).toBe("/tmp/xdg-test/handoff/audit");
 		} finally {
 			if (prev === undefined) delete process.env.XDG_STATE_HOME;
 			else process.env.XDG_STATE_HOME = prev;

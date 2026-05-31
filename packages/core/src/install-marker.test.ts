@@ -53,10 +53,10 @@ describe("parseInstallMarker", () => {
 
 	test("error carries the file path", () => {
 		try {
-			parseInstallMarker({}, "/some/path/.handoff-install.json");
+			parseInstallMarker({}, "/some/path/.chit-install.json");
 		} catch (e) {
 			if (e instanceof MarkerError) {
-				expect(e.path).toBe("/some/path/.handoff-install.json");
+				expect(e.path).toBe("/some/path/.chit-install.json");
 			}
 		}
 	});

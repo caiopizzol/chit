@@ -350,7 +350,7 @@ describe("loadRegistry", () => {
 	});
 });
 
-describe("loadRegistry: chit/handoff default-path fallback", () => {
+describe("loadRegistry: chit default-path resolution", () => {
 	let XDG: string;
 	let prevXdg: string | undefined;
 	const agentsJson = (id: string) =>
@@ -367,25 +367,20 @@ describe("loadRegistry: chit/handoff default-path fallback", () => {
 		rmSync(XDG, { recursive: true, force: true });
 	});
 
-	test("reads the legacy ~/.config/handoff/agents.json when the chit one is absent", () => {
-		mkdirSync(join(XDG, "handoff"), { recursive: true });
-		writeFileSync(join(XDG, "handoff", "agents.json"), agentsJson("legacy-only"));
-		expect(loadRegistry().agents["legacy-only"]).toBeDefined();
-	});
-
-	test("prefers ~/.config/chit/agents.json over the legacy handoff one", () => {
+	test("reads ~/.config/chit/agents.json", () => {
 		mkdirSync(join(XDG, "chit"), { recursive: true });
-		mkdirSync(join(XDG, "handoff"), { recursive: true });
 		writeFileSync(join(XDG, "chit", "agents.json"), agentsJson("new-one"));
-		writeFileSync(join(XDG, "handoff", "agents.json"), agentsJson("legacy-one"));
-		const reg = loadRegistry();
-		expect(reg.agents["new-one"]).toBeDefined();
-		expect(reg.agents["legacy-one"]).toBeUndefined();
+		expect(loadRegistry().agents["new-one"]).toBeDefined();
 	});
 
-	test("falls back to built-ins when neither path exists", () => {
+	test("falls back to built-ins when ~/.config/chit/agents.json is absent", () => {
 		const reg = loadRegistry();
 		expect(reg.agents.codex).toBeDefined();
-		expect(reg.agents["legacy-only"]).toBeUndefined();
+	});
+
+	test("ignores ~/.config/handoff/agents.json (no legacy fallback)", () => {
+		mkdirSync(join(XDG, "handoff"), { recursive: true });
+		writeFileSync(join(XDG, "handoff", "agents.json"), agentsJson("legacy-only"));
+		expect(loadRegistry().agents["legacy-only"]).toBeUndefined();
 	});
 });

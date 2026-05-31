@@ -16,13 +16,13 @@ import {
 import { AdapterError, buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
-import { AuditStore, legacyAuditDir } from "../audit/store.ts";
+import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { RuntimeError } from "../runtime/render.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
-import { defaultSessionDir, FileSessionStore, legacySessionDir } from "../sessions/store.ts";
+import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import { installClaudeSkill, SurfaceInstallError } from "../surfaces/claude-skill.ts";
 import {
 	defaultSkillsDir,
@@ -302,8 +302,7 @@ list options:
 uninstall options:
   --to <dir>                    Parent directory holding the install. Default:
                                 ~/.claude/skills. Refuses to remove a directory that
-                                does not contain a valid .chit-install.json marker
-                                (the legacy .handoff-install.json is also recognized).
+                                does not contain a valid .chit-install.json marker.
 
 install options:
   --as <surface>                Required. Surface to install for. Today: claude-skill.
@@ -352,11 +351,7 @@ export async function runMain(argv: string[]): Promise<number> {
 	// flags and loop logic in a separate module, same as loop-log.
 	if (argv[0] === "converge") return runConverge(argv.slice(1));
 	// audit reads the persisted audit transcripts; read-only, its own parsing.
-	// Pass the legacy audit store so `chit audit` reads pre-migration transcripts
-	// for one release (io + primary store keep their defaults).
-	if (argv[0] === "audit") {
-		return runAudit(argv.slice(1), undefined, new AuditStore(), new AuditStore(legacyAuditDir()));
-	}
+	if (argv[0] === "audit") return runAudit(argv.slice(1));
 
 	let args: ParsedArgs;
 	try {
@@ -524,7 +519,7 @@ export async function runMain(argv: string[]): Promise<number> {
 		effectiveAdapters = wrapAdaptersWithAudit(effectiveAdapters, recorder);
 	}
 	if (args.scope !== undefined) {
-		const store = new FileSessionStore(defaultSessionDir(), legacySessionDir());
+		const store = new FileSessionStore(defaultSessionDir());
 		effectiveAdapters = wrapAdaptersWithSessions(
 			effectiveAdapters,
 			manifest,

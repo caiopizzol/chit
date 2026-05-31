@@ -373,17 +373,7 @@ describe("chit audit show: recorded participant config", () => {
 	});
 });
 
-describe("chit audit: legacy store read-both (one-release fallback)", () => {
-	let legacyDir: string;
-	let legacyStore: AuditStore;
-	beforeEach(() => {
-		legacyDir = mkdtempSync(join(tmpdir(), "chit-audit-legacy-"));
-		legacyStore = new AuditStore(legacyDir);
-	});
-	afterEach(() => {
-		rmSync(legacyDir, { recursive: true, force: true });
-	});
-
+describe("chit audit: only the configured store is read (no legacy fallback)", () => {
 	function seedRun(s: AuditStore, runId: string, ts: string, manifestId: string): void {
 		s.appendEvent(runId, {
 			type: "run.started",
@@ -402,33 +392,16 @@ describe("chit audit: legacy store read-both (one-release fallback)", () => {
 		});
 	}
 
-	test("list merges the new and legacy stores, newest first", () => {
+	test("list shows only runs in the given store", () => {
 		seedRun(store, "NEW1", "2026-05-31", "m");
-		seedRun(legacyStore, "LEG1", "2026-05-30", "m");
 		const c = capture();
-		runAudit(["list"], c.io, store, legacyStore);
-		const out = c.out();
-		expect(out).toContain("NEW1");
-		expect(out).toContain("LEG1");
-		expect(out.indexOf("NEW1")).toBeLessThan(out.indexOf("LEG1")); // newest first
+		runAudit(["list"], c.io, store);
+		expect(c.out()).toContain("NEW1");
 	});
 
-	test("show finds a run that lives only in the legacy store", () => {
-		seedRun(legacyStore, "LEG2", "2026-05-30", "legm");
+	test("show reports not-found for a run absent from the store", () => {
 		const c = capture();
-		expect(runAudit(["show", "LEG2"], c.io, store, legacyStore)).toBe(0);
-		expect(c.out()).toContain("run LEG2");
-		expect(c.out()).toContain("manifest: legm");
-	});
-
-	test("a runId in both stores is taken from the new store, shown once", () => {
-		seedRun(store, "DUP", "2026-05-31", "newm");
-		seedRun(legacyStore, "DUP", "2026-05-30", "oldm");
-		const c = capture();
-		runAudit(["list"], c.io, store, legacyStore);
-		const out = c.out();
-		expect(out).toContain("newm");
-		expect(out).not.toContain("oldm");
-		expect(out.split("DUP").length - 1).toBe(1); // listed once
+		expect(runAudit(["show", "GONE"], c.io, store)).toBe(1);
+		expect(c.err()).toContain("no audit log");
 	});
 });

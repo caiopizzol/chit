@@ -1,8 +1,7 @@
 // Browser-safe install-marker definition. A `.chit-install.json` file
 // written into each installed skill directory records that the directory
 // was created by chit and carries the metadata `chit list` / `chit uninstall`
-// need to operate on it safely. (The legacy `.handoff-install.json` name is
-// still recognized on read for one release; see lifecycle.ts.)
+// need to operate on it safely.
 //
 // Why a marker: without one, `chit uninstall <name>` would have to
 // infer "is this a chit skill?" by sniffing files like SKILL.md or
@@ -75,16 +74,9 @@ export function parseInstallMarker(raw: unknown, path: string): InstallMarker {
 	};
 }
 
-// New marker filename, written by every install. The legacy name is still
-// RECOGNIZED on read (list/uninstall) for one release so skills installed before
-// the chit rename are not orphaned; nothing writes the legacy name anymore.
+// Marker filename written by every install and required by list/uninstall to
+// recognize a chit-managed skill directory.
 export const INSTALL_MARKER_FILENAME = ".chit-install.json";
-export const LEGACY_INSTALL_MARKER_FILENAME = ".handoff-install.json";
-// Marker names accepted when discovering an installed skill, new first.
-export const INSTALL_MARKER_FILENAMES: readonly string[] = [
-	INSTALL_MARKER_FILENAME,
-	LEGACY_INSTALL_MARKER_FILENAME,
-];
 
 // Single source of truth for what a valid install name looks like across the
 // platform: a kebab-case slug that is also a safe filesystem segment. Used by

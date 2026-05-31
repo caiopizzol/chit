@@ -104,25 +104,10 @@ describe("uninstall", () => {
 		mkdirSync(dir);
 		writeFileSync(join(dir, "SKILL.md"), "(stub)\n");
 		expect(() => uninstall(TMPDIR, "no-marker")).toThrow(
-			/no install marker \(\.chit-install\.json or \.handoff-install\.json\)/,
+			/no install marker \(\.chit-install\.json\)/,
 		);
 		// Directory must still exist after a refused uninstall.
 		expect(existsSync(dir)).toBe(true);
-	});
-
-	test("a skill with the legacy .handoff-install.json marker is still listable and uninstallable", () => {
-		const dir = join(TMPDIR, "legacy-skill");
-		mkdirSync(dir);
-		writeFileSync(join(dir, "SKILL.md"), "(stub)\n");
-		// Pre-migration installs wrote .handoff-install.json; it must still resolve.
-		writeFileSync(
-			join(dir, ".handoff-install.json"),
-			`${JSON.stringify({ ...VALID_MARKER, installName: "legacy-skill" }, null, 2)}\n`,
-		);
-		expect(listInstalled(TMPDIR).map((r) => r.marker.installName)).toContain("legacy-skill");
-		const record = uninstall(TMPDIR, "legacy-skill");
-		expect(record.marker.installName).toBe("legacy-skill");
-		expect(existsSync(dir)).toBe(false);
 	});
 
 	test("refuses when marker is malformed JSON", () => {

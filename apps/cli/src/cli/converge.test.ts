@@ -465,10 +465,10 @@ describe("runConverge (CLI)", () => {
 	});
 
 	test("an invalid registry exits 1 with a clean message", async () => {
-		// An unreadable ~/.config/handoff/agents.json makes loadRegistry throw a
+		// An unreadable ~/.config/chit/agents.json makes loadRegistry throw a
 		// RegistryError; it must surface as a clean `chit converge:` line, not a
 		// raw Bun stack.
-		const configDir = join(cwd, "handoff");
+		const configDir = join(cwd, "chit");
 		mkdirSync(configDir, { recursive: true });
 		writeFileSync(join(configDir, "agents.json"), "{ not valid json");
 

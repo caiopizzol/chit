@@ -13,8 +13,8 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 	const RUN_ID = "auditrun1";
 	const xdg = mkdtempSync(join(tmpdir(), "chit-e2e-xdg-"));
 	try {
-		// Seed the audit run under XDG_STATE_HOME/handoff/audit/runs/<runId>/.
-		const runDir = join(xdg, "handoff", "audit", "runs", RUN_ID);
+		// Seed the audit run under XDG_STATE_HOME/chit/audit/runs/<runId>/.
+		const runDir = join(xdg, "chit", "audit", "runs", RUN_ID);
 		mkdirSync(join(runDir, "blobs"), { recursive: true });
 		const inputRef = "a".repeat(64);
 		const outputRef = "b".repeat(64);
