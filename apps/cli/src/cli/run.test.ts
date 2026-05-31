@@ -950,3 +950,29 @@ describe("handoff run (subprocess)", () => {
 		expect(stdout).toContain("CODEX_ANSWER");
 	});
 });
+
+describe("CLI entrypoint: piped stdout", () => {
+	// Regression for the process.exit() truncation. Piping `chit ... | jq` cut the
+	// output to ~512 bytes, because the entrypoint called process.exit(code)
+	// before the async stdout pipe drained. The truncation only shows through a
+	// real downstream pipe consumer, so the CLI's stdout is routed into `cat`:
+	// Bun's eager Response reader on a direct spawn does NOT reproduce it. `show
+	// --format json` emits ~2.5 KB of deterministic JSON with no state to seed.
+	test("a large JSON payload survives a downstream pipe intact", async () => {
+		const proc = Bun.spawn({
+			cmd: ["sh", "-c", `bun "${RUN_TS}" show "${CONSULT}" --format json | cat`],
+			env: { ...process.env },
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+		expect(code).toBe(0);
+		// The bug truncated piped stdout to ~512 bytes; the full payload is ~2.5 KB,
+		// so a short read means the truncation regressed.
+		expect(stdout.length).toBeGreaterThan(1024);
+		expect(() => JSON.parse(stdout)).not.toThrow();
+		const parsed = JSON.parse(stdout) as Record<string, unknown>;
+		expect(parsed).toHaveProperty("executionOrder");
+		expect(parsed).toHaveProperty("nodes");
+	});
+});

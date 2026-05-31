@@ -825,6 +825,9 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 }
 
 if (import.meta.main) {
-	const exitCode = await runMain(process.argv.slice(2));
-	process.exit(exitCode);
+	// Set the exit code and let the process end naturally. A hard process.exit()
+	// here truncates output still buffered in an async pipe (piping `--format
+	// json` to a consumer dropped most or all of it), because exit does not wait
+	// for stdout to drain. Returning lets the event loop flush stdout/stderr first.
+	process.exitCode = await runMain(process.argv.slice(2));
 }
