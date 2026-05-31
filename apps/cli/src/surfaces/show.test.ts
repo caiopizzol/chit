@@ -26,6 +26,15 @@ describe("renderShow: json", () => {
 		expect(parsed.surface.kind).toBe("claude-skill");
 		expect(parsed.validation.permissions.status).toBe("needs_override");
 	});
+
+	test("includes resolved per-participant config", () => {
+		const parsed = JSON.parse(renderShow(buildConsult(), "json"));
+		// claude-cli surfaces its effective strict-MCP (default-on) and passModelOnResume.
+		expect(parsed.participants.claude.config.strictMcp).toBe(true);
+		expect(parsed.participants.claude.config.passModelOnResume).toBe(false);
+		// codex (no claude-only fields, no pinned model) resolves to an empty config.
+		expect(parsed.participants.codex.config).toEqual({});
+	});
 });
 
 describe("renderShow: ascii", () => {
@@ -42,6 +51,44 @@ describe("renderShow: ascii", () => {
 		expect(out).toContain("level 1");
 		expect(out).toContain("[final]");
 		expect(out).toContain("(output)");
+	});
+
+	test("renders effective participant config, with defaults and claude strict-MCP", () => {
+		const out = renderShow(buildConsult("claude-skill"), "ascii");
+		// Every participant gets a config line; an unset model/effort shows as default
+		// and the no-progress watchdog shows as off.
+		expect(out).toMatch(
+			/config\s+model=default\s+effort=default\s+callTimeout=default\s+noProgress=off/,
+		);
+		// claude-cli surfaces its strict-MCP effective value and passModelOnResume.
+		expect(out).toContain("strictMcp=on");
+		expect(out).toContain("passModelOnResume=no");
+	});
+
+	test("renders an unknown agent's config as unresolved, not defaults", () => {
+		const ghost = buildGraphModel(
+			parseManifest({
+				...CONSULT,
+				participants: {
+					...CONSULT.participants,
+					ghost: { agent: "does-not-exist", role: "test", session: "stateless" },
+				},
+				steps: {
+					...CONSULT.steps,
+					ask_ghost: { call: "ghost", prompt: "{{ inputs.question }}" },
+					out: { format: "## ghost\n{{ steps.ask_ghost.output }}" },
+				},
+			}),
+			REGISTRY,
+		);
+		const ascii = renderShow(ghost, "ascii");
+		expect(ascii).toContain("unresolved (unknown agent)");
+		// HTML shows the same as a warn badge, not default config badges.
+		expect(renderShow(ghost, "html")).toContain("config: unresolved (unknown agent)");
+		// JSON keeps {} since adapter=unknown plus validation carry the structure.
+		const json = JSON.parse(renderShow(ghost, "json"));
+		expect(json.participants.ghost.config).toEqual({});
+		expect(json.participants.ghost.adapter).toBe("unknown");
 	});
 
 	test("omits surface block when no surface provided", () => {
@@ -83,6 +130,13 @@ describe("renderShow: html", () => {
 		expect(out).toContain(">consult<");
 		expect(out).toContain("ask_codex");
 		expect(out).toContain("ask_claude");
+	});
+
+	test("renders participant config as badges", () => {
+		const out = renderShow(buildConsult("claude-skill"), "html");
+		expect(out).toContain('class="participant-config"');
+		expect(out).toContain("model: default");
+		expect(out).toContain("strictMcp: on");
 	});
 
 	test("shows validation block when surface provided and gaps exist", () => {

@@ -78,6 +78,97 @@ describe("buildGraphModel: structural fields", () => {
 	});
 });
 
+describe("buildGraphModel: effective participant config", () => {
+	const CUSTOM_REGISTRY = parseRegistry({
+		agents: {
+			"codex-deep": {
+				adapter: "codex-exec",
+				model: "gpt-5.5",
+				reasoningEffort: "xhigh",
+				callTimeoutMs: 600000,
+				noProgressTimeoutMs: 120000,
+				env: { OPENAI_BASE_URL: "https://example.test" },
+			},
+			"claude-opus": {
+				adapter: "claude-cli",
+				model: "opus",
+				strictMcp: false,
+				passModelOnResume: true,
+			},
+		},
+	});
+	const CFG_MANIFEST = parseManifest({
+		...CONSULT,
+		participants: {
+			reviewer: {
+				agent: "codex-deep",
+				role: "review",
+				session: "per_scope",
+				permissions: { filesystem: "read_only" },
+			},
+			implementer: {
+				agent: "claude-opus",
+				role: "implement",
+				session: "per_scope",
+				permissions: { filesystem: "read_only" },
+			},
+		},
+		steps: {
+			ask_codex: { call: "reviewer", prompt: "{{ inputs.question }}" },
+			ask_claude: { call: "implementer", prompt: "{{ inputs.question }}" },
+			out: { format: "{{ steps.ask_codex.output }} {{ steps.ask_claude.output }}" },
+		},
+	});
+
+	test("codex agent resolves model/effort/timeouts and redacts env to key names", () => {
+		const c = buildGraphModel(CFG_MANIFEST, CUSTOM_REGISTRY).participants.reviewer?.config;
+		expect(c?.model).toBe("gpt-5.5");
+		expect(c?.reasoningEffort).toBe("xhigh");
+		expect(c?.callTimeoutMs).toBe(600000);
+		expect(c?.noProgressTimeoutMs).toBe(120000);
+		// env is redacted: key names only, never the value.
+		expect(c?.envKeys).toEqual(["OPENAI_BASE_URL"]);
+		expect(JSON.stringify(c)).not.toContain("example.test");
+		// strictMcp / passModelOnResume apply only to claude-cli.
+		expect(c?.strictMcp).toBeUndefined();
+		expect(c?.passModelOnResume).toBeUndefined();
+	});
+
+	test("claude agent resolves model plus claude-only strictMcp/passModelOnResume", () => {
+		const c = buildGraphModel(CFG_MANIFEST, CUSTOM_REGISTRY).participants.implementer?.config;
+		expect(c?.model).toBe("opus");
+		expect(c?.reasoningEffort).toBeUndefined(); // CLI default
+		expect(c?.strictMcp).toBe(false); // explicit opt-out
+		expect(c?.passModelOnResume).toBe(true);
+		expect(c?.noProgressTimeoutMs).toBeUndefined(); // watchdog off
+	});
+
+	test("built-in agents resolve to defaults; claude strict-MCP is effectively on", () => {
+		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		expect(model.participants.codex?.config.model).toBeUndefined(); // CLI default
+		expect(model.participants.codex?.config.strictMcp).toBeUndefined(); // not claude-cli
+		expect(model.participants.claude?.config.model).toBeUndefined();
+		expect(model.participants.claude?.config.strictMcp).toBe(true); // default-on
+		expect(model.participants.claude?.config.passModelOnResume).toBe(false);
+	});
+
+	test("an unknown agent yields an empty config", () => {
+		const manifestWithGhost = parseManifest({
+			...CONSULT,
+			participants: {
+				...CONSULT.participants,
+				ghost: { agent: "does-not-exist", role: "test", session: "stateless" },
+			},
+			steps: {
+				...CONSULT.steps,
+				ask_ghost: { call: "ghost", prompt: "{{ inputs.question }}" },
+				out: { format: "{{ steps.ask_ghost.output }}" },
+			},
+		});
+		expect(buildGraphModel(manifestWithGhost, REGISTRY).participants.ghost?.config).toEqual({});
+	});
+});
+
 describe("buildGraphModel: surface and validation", () => {
 	test("without surface, surface and validation are null", () => {
 		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);

@@ -1,5 +1,5 @@
 import { getAdapterDescriptor } from "./agents/registry.ts";
-import type { NormalizedRegistry } from "./agents/types.ts";
+import type { NormalizedAgent, NormalizedRegistry } from "./agents/types.ts";
 import type {
 	FilesystemPermission,
 	InputType,
@@ -88,6 +88,21 @@ export function validationSeverity(v: ValidationReport | null): ValidationSeveri
 	return "ok";
 }
 
+// The effective agent config chit resolved for a participant, from the registry.
+// An undefined field means "the adapter / CLI default applies" (e.g. no model
+// pinned). strictMcp and passModelOnResume are only meaningful for claude-cli and
+// are omitted for other adapters. env is REDACTED to its key names only; values
+// never appear here. So an operator can see exactly what a run will use.
+export interface ParticipantConfig {
+	model?: string;
+	reasoningEffort?: string;
+	strictMcp?: boolean;
+	passModelOnResume?: boolean;
+	callTimeoutMs?: number;
+	noProgressTimeoutMs?: number;
+	envKeys?: string[];
+}
+
 export interface ParticipantInfo {
 	agentId: string;
 	role: string;
@@ -95,6 +110,7 @@ export interface ParticipantInfo {
 	permissions: { filesystem: FilesystemPermission };
 	adapter: string;
 	enforcesReadOnly: boolean;
+	config: ParticipantConfig;
 }
 
 export type GraphNode =
@@ -143,6 +159,7 @@ export function buildGraphModel(
 			permissions: p.permissions,
 			adapter: adapterKind,
 			enforcesReadOnly: desc?.capabilities.enforces_filesystem_read_only ?? false,
+			config: resolveParticipantConfig(agent),
 		};
 	}
 
@@ -250,6 +267,33 @@ export function buildGraphModel(
 			effective: { ...manifest.requires },
 		},
 	};
+}
+
+// Resolve the effective config chit will run a participant's agent with, for
+// display. Undefined fields mean the adapter / CLI default applies. strictMcp and
+// passModelOnResume only apply to claude-cli (omitted otherwise, mirroring the
+// adapter and fingerprint rules). env is redacted to sorted key names, never
+// values. An unknown agent (not in the registry) yields an empty config.
+function resolveParticipantConfig(agent: NormalizedAgent | undefined): ParticipantConfig {
+	if (!agent) return {};
+	const config: ParticipantConfig = {};
+	if (agent.model !== undefined) config.model = agent.model;
+	if (agent.reasoningEffort !== undefined) config.reasoningEffort = agent.reasoningEffort;
+	if (agent.adapter === "claude-cli") {
+		// Effective on/off: undefined and true both mean strict-on; only an explicit
+		// false is off. Matches the adapter default and the fingerprint's treatment.
+		config.strictMcp = agent.strictMcp !== false;
+		config.passModelOnResume = agent.passModelOnResume;
+	}
+	if (agent.callTimeoutMs !== undefined) config.callTimeoutMs = agent.callTimeoutMs;
+	if (agent.noProgressTimeoutMs !== undefined) {
+		config.noProgressTimeoutMs = agent.noProgressTimeoutMs;
+	}
+	if (agent.env !== undefined) {
+		const keys = Object.keys(agent.env).sort();
+		if (keys.length > 0) config.envKeys = keys;
+	}
+	return config;
 }
 
 function refToNodeId(ref: { kind: "input" | "step_output"; name: string }): string {

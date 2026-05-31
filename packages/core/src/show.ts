@@ -1,7 +1,27 @@
-import type { GraphEdge, GraphModel, GraphNode } from "./graph-model.ts";
+import type { GraphEdge, GraphModel, GraphNode, ParticipantConfig } from "./graph-model.ts";
 import { validationSeverity } from "./graph-model.ts";
 
 export type ShowFormat = "json" | "ascii" | "mermaid" | "html";
+
+// Effective participant config as ordered label/value pairs, shared by the ASCII
+// and HTML renderers so the two never drift. "default" means the adapter/CLI
+// default applies; "off" means the no-progress watchdog is disabled. strictMcp
+// and passModelOnResume appear only when set (claude-cli). env shows redacted key
+// names only.
+function configPairs(c: ParticipantConfig): Array<[string, string]> {
+	const pairs: Array<[string, string]> = [
+		["model", c.model ?? "default"],
+		["effort", c.reasoningEffort ?? "default"],
+		["callTimeout", c.callTimeoutMs !== undefined ? `${c.callTimeoutMs}ms` : "default"],
+		["noProgress", c.noProgressTimeoutMs !== undefined ? `${c.noProgressTimeoutMs}ms` : "off"],
+	];
+	if (c.strictMcp !== undefined) pairs.push(["strictMcp", c.strictMcp ? "on" : "off"]);
+	if (c.passModelOnResume !== undefined) {
+		pairs.push(["passModelOnResume", c.passModelOnResume ? "yes" : "no"]);
+	}
+	if (c.envKeys && c.envKeys.length > 0) pairs.push(["env", `[${c.envKeys.join(", ")}]`]);
+	return pairs;
+}
 
 export function renderShow(model: GraphModel, format: ShowFormat): string {
 	switch (format) {
@@ -72,6 +92,17 @@ function renderAscii(m: GraphModel): string {
 		out.push(
 			`  ${pid}  agent=${p.agentId}  session=${p.session}  permissions=${p.permissions.filesystem}  adapter=${p.adapter}  ${enforces}`,
 		);
+		// An unknown agent has no resolvable config; rendering default/off labels
+		// would read like a runnable agent, so say it is unresolved instead.
+		if (p.adapter === "unknown") {
+			out.push("    config  unresolved (unknown agent)");
+		} else {
+			out.push(
+				`    config  ${configPairs(p.config)
+					.map(([k, v]) => `${k}=${v}`)
+					.join("  ")}`,
+			);
+		}
 	}
 	out.push("");
 
@@ -185,6 +216,14 @@ function renderHtml(m: GraphModel): string {
 			const enforceBadge = p.enforcesReadOnly
 				? '<span class="badge ok">enforces read-only</span>'
 				: '<span class="badge warn">does not enforce</span>';
+			// An unknown agent has no resolvable config; show it as unresolved rather
+			// than default/off labels that would read like a runnable agent.
+			const configBadges =
+				p.adapter === "unknown"
+					? '<span class="badge warn">config: unresolved (unknown agent)</span>'
+					: configPairs(p.config)
+							.map(([k, v]) => `<span class="badge info">${escapeHtml(k)}: ${escapeHtml(v)}</span>`)
+							.join("\n    ");
 			return `<div class="participant">
   <h3>${escapeHtml(pid)}</h3>
   <div class="participant-meta">
@@ -193,6 +232,9 @@ function renderHtml(m: GraphModel): string {
     <span class="badge info">session: ${escapeHtml(p.session)}</span>
     <span class="badge info">filesystem: ${escapeHtml(p.permissions.filesystem)}</span>
     ${enforceBadge}
+  </div>
+  <div class="participant-config">
+    ${configBadges}
   </div>
   <p class="role">${escapeHtml(p.role)}</p>
 </div>`;
@@ -248,6 +290,7 @@ function renderHtml(m: GraphModel): string {
   .participant { background: #f6f8fa; padding: 12px 14px; border-radius: 6px; }
   .participant h3 { margin: 0 0 6px 0; font-size: 14px; }
   .participant-meta { margin-bottom: 6px; }
+  .participant-config { margin-bottom: 6px; }
   .role { margin: 0; font-size: 12px; color: #57606a; }
   .requires-list { font-family: ui-monospace, monospace; font-size: 12px; color: #57606a; }
 </style>
