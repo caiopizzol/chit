@@ -825,4 +825,32 @@ describe("converge: makeAuditedExecute (audit wiring)", () => {
 		expect(result.ok).toBe(true); // audit is best-effort: the run still succeeds
 		expect(result.auditRunId).toBeUndefined(); // but no link to a missing transcript
 	});
+
+	test("prunes old audit runs after a run, but never the just-written run", async () => {
+		const auditStore = new AuditStore(join(cwd, "audit"));
+		// A run whose last activity is 40 days ago: beyond the 30-day default maxAge.
+		const oldTs = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+		auditStore.appendEvent("OLD", {
+			type: "run.started",
+			runId: "OLD",
+			ts: oldTs,
+			manifestId: "m",
+			cwd,
+			surface: "converge",
+		});
+		const execute = makeAuditedExecute(
+			mini,
+			fakeAdapters(),
+			emptyRegistry,
+			"s",
+			cwd,
+			new FileSessionStore(join(cwd, "sess")),
+			auditStore,
+		);
+		const result = await execute({ task: "x", prior_review: "" }, { loopId: "L1", iteration: 1 });
+		expect(result.auditRunId).toBeDefined();
+		const runs = auditStore.listRuns();
+		expect(runs).not.toContain("OLD"); // pruned by the default 30-day maxAge
+		expect(runs).toContain(result.auditRunId as string); // the just-written run is kept
+	});
 });

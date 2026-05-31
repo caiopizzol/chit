@@ -57,6 +57,10 @@ export interface PruneOptions {
 	maxAgeMs?: number; // drop runs whose newest activity is older than now - maxAgeMs
 	maxRuns?: number; // keep at most this many newest runs
 	maxTotalBytes?: number; // keep newest runs whose cumulative size fits under this
+	// Run ids that must NEVER be pruned, even if a cap selects them. The caller
+	// uses this to protect the run it just wrote (whose own size could exceed
+	// maxTotalBytes, or which a misconfigured cap could otherwise delete).
+	keep?: readonly string[];
 	clock?: Clock;
 }
 
@@ -234,7 +238,8 @@ export class AuditStore {
 			}
 		}
 
-		const pruned = runs.filter((r) => doomed.has(r.id)).map((r) => r.id);
+		const keep = new Set(opts.keep ?? []);
+		const pruned = runs.filter((r) => doomed.has(r.id) && !keep.has(r.id)).map((r) => r.id);
 		for (const id of pruned) rmSync(this.runDir(id), { recursive: true, force: true });
 		return pruned;
 	}

@@ -556,6 +556,7 @@ export async function runMain(argv: string[]): Promise<number> {
 		});
 	} catch (e) {
 		recorder?.runCompleted("failed", Date.now() - startedAt);
+		recorder?.prune();
 		reportAudit();
 		if (e instanceof RuntimeError) {
 			process.stderr.write(`chit: ${e.message}\n`);
@@ -565,6 +566,7 @@ export async function runMain(argv: string[]): Promise<number> {
 	}
 
 	recorder?.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
+	recorder?.prune();
 	reportAudit();
 
 	if (result.ok) {

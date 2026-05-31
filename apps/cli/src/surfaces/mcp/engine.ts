@@ -326,6 +326,9 @@ export async function runStep(
 		// failed or abandoned run has no run.completed (its step.failed is the signal).
 		if (run.recorder && isComplete(run)) {
 			run.recorder.runCompleted("ok", Math.max(0, Date.now() - run.startedAtMs));
+			// Terminal point: the run is fully done, so retention is safe here (no
+			// step can still append). Never prunes this run.
+			run.recorder.prune();
 		}
 		return rec;
 	} catch (e) {

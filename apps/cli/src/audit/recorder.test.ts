@@ -243,3 +243,39 @@ describe("audit integration via executeManifest", () => {
 		expect(rec.lastError).toBeUndefined();
 	});
 });
+
+describe("AuditRecorder.prune", () => {
+	test("keeps this run and removes a run a cap selects", () => {
+		// An older run already in the store.
+		store.appendEvent("OLD", {
+			type: "run.started",
+			runId: "OLD",
+			ts: new Date(1_000_000).toISOString(),
+			manifestId: "m",
+			cwd: "/c",
+			surface: "converge",
+		});
+		const rec = recorder("CUR");
+		rec.runStarted();
+		rec.runCompleted("ok", 5);
+		rec.prune({ maxRuns: 1 }); // keep newest; keep:[CUR] also protects CUR
+		expect(store.listRuns()).toEqual(["CUR"]);
+		expect(rec.lastError).toBeUndefined();
+	});
+
+	test("is best-effort: a failing prune never throws and never sets lastError", () => {
+		const brokenPrune = {
+			prune() {
+				throw new Error("prune boom");
+			},
+		} as unknown as AuditStore;
+		const rec = new AuditRecorder(brokenPrune, "X", {
+			manifestId: "m",
+			cwd: "/c",
+			surface: "converge",
+		});
+		expect(() => rec.prune()).not.toThrow();
+		// lastError gates the run<->audit link; a retention failure must not touch it.
+		expect(rec.lastError).toBeUndefined();
+	});
+});

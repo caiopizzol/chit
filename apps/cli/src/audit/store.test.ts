@@ -169,6 +169,16 @@ describe("audit store: prune (retention)", () => {
 		expect(store.listRuns()).toEqual(["r3"]);
 	});
 
+	test("keep protects a run a cap would otherwise prune", () => {
+		seedRun("r1", 1_000_000);
+		seedRun("r2", 2_000_000);
+		seedRun("r3", 3_000_000);
+		// maxRuns:1 would keep only r3 (newest) and prune r1+r2; keep r1 protects it.
+		const pruned = store.prune({ maxRuns: 1, keep: ["r1"] });
+		expect(pruned).toEqual(["r2"]);
+		expect(store.listRuns().sort()).toEqual(["r1", "r3"]);
+	});
+
 	test("rejects invalid caps before deleting anything", () => {
 		seedRun("r1", 1_000_000);
 		seedRun("r2", 2_000_000);

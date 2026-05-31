@@ -375,12 +375,14 @@ describe("mcp engine: audit", () => {
 		auditStore: AuditStore = store,
 	): Run {
 		const manifest = parseManifest(raw);
-		const recorder = new AuditRecorder(
-			auditStore,
-			runId,
-			{ manifestId: manifest.id, cwd: "/tmp", surface: "mcp" },
-			() => 1_700_000_000_000,
-		);
+		// Real clock (default) so a run's recency is "now" — the prune test relies
+		// on the current run being newer than the default retention cutoff. The
+		// other audit tests assert event types/blobs/status, not timestamps.
+		const recorder = new AuditRecorder(auditStore, runId, {
+			manifestId: manifest.id,
+			cwd: "/tmp",
+			surface: "mcp",
+		});
 		recorder.runStarted();
 		const run = makeRun(raw, inputs, wrapAdaptersWithAudit(baseAdapters, recorder));
 		run.runId = runId;
@@ -555,5 +557,24 @@ describe("mcp engine: audit", () => {
 		expect(run.records.b?.status).toBe("done"); // run succeeded
 		expect(run.outputs.b).toBe("OUT");
 		expect(run.recorder?.lastError?.message).toMatch(/disk full/);
+	});
+
+	test("on run.completed, old audit runs are pruned but the current run is kept", async () => {
+		// A run whose last activity is 40 days ago: beyond the 30-day default maxAge.
+		const oldTs = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+		store.appendEvent("OLD", {
+			type: "run.started",
+			runId: "OLD",
+			ts: oldTs,
+			manifestId: "m",
+			cwd: "/tmp",
+			surface: "mcp",
+		});
+		const run = auditedRun(CHAIN, { x: "hi" }, immediate("OUT"), "CUR");
+		await runStep(run, "a", () => {});
+		await runStep(run, "b", () => {}); // completes the run -> run.completed -> prune
+		const runs = store.listRuns();
+		expect(runs).not.toContain("OLD"); // pruned by the default 30-day maxAge
+		expect(runs).toContain("CUR"); // the just-finished run is kept
 	});
 });

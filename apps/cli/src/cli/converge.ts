@@ -399,10 +399,12 @@ export function makeAuditedExecute(
 				onTrace: (e) => recorder.fromTrace(e),
 			});
 			recorder.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
+			recorder.prune(); // opportunistic retention; never prunes this run
 			// Link only when the whole audit run was written cleanly.
 			return recorder.lastError === undefined ? { ...result, auditRunId: runId } : result;
 		} catch (e) {
 			recorder.runCompleted("failed", Date.now() - startedAt);
+			recorder.prune();
 			throw e;
 		}
 	};

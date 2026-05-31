@@ -22,7 +22,17 @@ import type {
 	StepStartedEvent,
 } from "@chit/core";
 import type { AdapterCallRequest, AdapterCallResult, TraceEvent } from "../runtime/types.ts";
-import type { AuditStore } from "./store.ts";
+import type { AuditStore, PruneOptions } from "./store.ts";
+
+// Conservative default retention, applied opportunistically after an audited run
+// completes. Audit transcripts hold full prompts/outputs (and can hold secrets),
+// so they should not accumulate unbounded. A run is dropped if it exceeds ANY
+// cap; the run just written is always kept (see AuditRecorder.prune).
+export const DEFAULT_AUDIT_RETENTION: PruneOptions = {
+	maxAgeMs: 30 * 24 * 60 * 60 * 1000, // 30 days
+	maxTotalBytes: 1024 * 1024 * 1024, // 1 GiB
+	maxRuns: 1000,
+};
 
 export interface RunMeta {
 	manifestId: string;
@@ -218,5 +228,19 @@ export class AuditRecorder {
 				durationMs,
 			});
 		});
+	}
+
+	// Opportunistic retention: bound the audit store after THIS run is fully
+	// written. Always keeps this run (a fresh run can be the newest yet larger
+	// than maxTotalBytes). Best-effort and INDEPENDENT of audit-write success: it
+	// must not touch lastError (which gates the run<->audit link), so a prune
+	// failure never withholds a link to a transcript that was actually written.
+	// Call only at a terminal point, never while steps may still append.
+	prune(config: PruneOptions = DEFAULT_AUDIT_RETENTION): void {
+		try {
+			this.store.prune({ ...config, keep: [this.runId] });
+		} catch {
+			// retention is hygiene, not correctness; swallow.
+		}
 	}
 }
