@@ -14,6 +14,7 @@ import type {
 	AdapterCallCompletedEvent,
 	AdapterCallStartedEvent,
 	AdapterCallStatus,
+	AdapterEventEvent,
 	AuditSurface,
 	RunStartedEvent,
 	RunStatus,
@@ -21,7 +22,12 @@ import type {
 	StepKind,
 	StepStartedEvent,
 } from "@chit/core";
-import type { AdapterCallRequest, AdapterCallResult, TraceEvent } from "../runtime/types.ts";
+import type {
+	AdapterCallRequest,
+	AdapterCallResult,
+	AdapterEvent,
+	TraceEvent,
+} from "../runtime/types.ts";
 import type { AuditStore, PruneOptions } from "./store.ts";
 
 // Conservative default retention, applied opportunistically after an audited run
@@ -186,6 +192,24 @@ export class AuditRecorder {
 			};
 			const prior = sessionRef(req.session);
 			if (prior !== undefined) ev.priorSessionRef = prior;
+			this.store.appendEvent(this.runId, ev);
+		});
+	}
+
+	// One intra-call adapter event (a raw CLI event line, e.g. Codex JSONL). The
+	// raw body is blobbed; the event line carries only the eventType + a ref, so
+	// the stream stays inspectable without bloating events.jsonl.
+	adapterEvent(stepId: string, event: AdapterEvent): void {
+		this.safe(() => {
+			const rawBlob = this.store.writeBlob(this.runId, event.raw);
+			const ev: AdapterEventEvent = {
+				type: "adapter.event",
+				runId: this.runId,
+				ts: this.ts(),
+				stepId,
+				eventType: event.type,
+				rawBlob,
+			};
 			this.store.appendEvent(this.runId, ev);
 		});
 	}

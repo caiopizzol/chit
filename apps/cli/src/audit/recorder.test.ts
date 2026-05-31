@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	type AdapterCallCompletedEvent,
 	type AdapterCallStartedEvent,
+	type AdapterEventEvent,
 	parseManifest,
 	type StepCompletedEvent,
 } from "@chit/core";
@@ -191,6 +192,47 @@ describe("wrapAdaptersWithAudit", () => {
 		const wrapped = wrapAdaptersWithAudit({ a: fake }, rec);
 		await expect(wrapped.a?.call(req({ signal: ac.signal }))).rejects.toThrow();
 		expect(completed("R1")?.status).toBe("cancelled");
+	});
+
+	test("records an adapter.event for each event the adapter emits, between started and completed", async () => {
+		const rec = recorder();
+		rec.runStarted();
+		const fake: RuntimeAdapter = {
+			call: async (r) => {
+				r.onEvent?.({ type: "thread.started", raw: '{"type":"thread.started"}' });
+				r.onEvent?.({ type: "item.completed", raw: '{"type":"item.completed"}' });
+				return { output: "OK" };
+			},
+		};
+		const wrapped = wrapAdaptersWithAudit({ a: fake }, rec);
+		await wrapped.a?.call(req());
+		const events = store.readEvents("R1");
+		expect(events.map((e) => e.type)).toEqual([
+			"run.started",
+			"adapter.call.started",
+			"adapter.event",
+			"adapter.event",
+			"adapter.call.completed",
+		]);
+		const first = events.find((e): e is AdapterEventEvent => e.type === "adapter.event");
+		expect(first?.eventType).toBe("thread.started");
+		expect(store.readBlob("R1", first?.rawBlob ?? "")).toBe('{"type":"thread.started"}');
+	});
+
+	test("forwards to a pre-existing onEvent (composes, does not replace)", async () => {
+		const rec = recorder();
+		rec.runStarted();
+		const seen: string[] = [];
+		const fake: RuntimeAdapter = {
+			call: async (r) => {
+				r.onEvent?.({ type: "x", raw: "{}" });
+				return { output: "OK" };
+			},
+		};
+		const wrapped = wrapAdaptersWithAudit({ a: fake }, rec);
+		await wrapped.a?.call(req({ onEvent: (e) => seen.push(e.type) }));
+		expect(seen).toEqual(["x"]); // the caller's onEvent still fired
+		expect(store.readEvents("R1").some((e) => e.type === "adapter.event")).toBe(true);
 	});
 });
 

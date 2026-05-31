@@ -1,5 +1,10 @@
 import type { AdapterUsage } from "@chit/core";
-import type { AdapterCallRequest, AdapterCallResult, RuntimeAdapter } from "../runtime/types.ts";
+import type {
+	AdapterCallRequest,
+	AdapterCallResult,
+	AdapterEvent,
+	RuntimeAdapter,
+} from "../runtime/types.ts";
 import { findSensitiveValues, sanitize } from "./sanitize.ts";
 import { nonNegInt } from "./usage.ts";
 
@@ -85,6 +90,11 @@ export class CodexExecAdapter implements RuntimeAdapter {
 					proc.exited,
 				]);
 
+				// Surface the raw Codex event stream for audit BEFORE any failure check,
+				// so a run that emitted JSONL and then failed (or was killed) still
+				// preserves what it did. Guarded, so an unaudited run does no work here.
+				if (req.onEvent) emitCodexEvents(stdoutText, req.onEvent);
+
 				// A killed proc exits non-zero; check abort/timeout first so neither is
 				// misreported as a normal failure. External cancel and timeout both
 				// kill the child but produce distinct errors.
@@ -138,6 +148,26 @@ export class CodexExecAdapter implements RuntimeAdapter {
 		}
 		cmd.push("--sandbox", "read-only", "--skip-git-repo-check", "-");
 		return cmd;
+	}
+}
+
+// Surface EVERY parseable JSONL line verbatim as an AdapterEvent (type + raw),
+// so the audit layer preserves the observable Codex event stream (tool calls,
+// command executions, reasoning summaries), not just the final answer. Called
+// before the failure checks, so a run that emitted JSONL and then failed still
+// has its events preserved. Only invoked on audited runs (caller guards on
+// req.onEvent), so an unaudited run does no work here.
+function emitCodexEvents(stdout: string, onEvent: (event: AdapterEvent) => void): void {
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let evt: { type?: unknown };
+		try {
+			evt = JSON.parse(trimmed) as { type?: unknown };
+		} catch {
+			continue;
+		}
+		if (typeof evt.type === "string") onEvent({ type: evt.type, raw: trimmed });
 	}
 }
 

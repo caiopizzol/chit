@@ -18,6 +18,7 @@ afterEach(() => {
 
 const INPUT_REF = "a".repeat(64);
 const OUTPUT_REF = "b".repeat(64);
+const RAW_REF = "c".repeat(64);
 
 // Seed a run dir: events.jsonl + the two referenced blobs.
 function seed(runId: string): void {
@@ -43,6 +44,14 @@ function seed(runId: string): void {
 			inputBlob: INPUT_REF,
 		},
 		{
+			type: "adapter.event",
+			runId,
+			ts: "2026-05-31T10:00:05.000Z",
+			stepId: "a",
+			eventType: "item.completed",
+			rawBlob: RAW_REF,
+		},
+		{
 			type: "adapter.call.completed",
 			runId,
 			ts: "2026-05-31T10:00:10.000Z",
@@ -66,6 +75,7 @@ function seed(runId: string): void {
 	);
 	writeFileSync(join(runDir, "blobs", INPUT_REF), "THE PROMPT");
 	writeFileSync(join(runDir, "blobs", OUTPUT_REF), "THE OUTPUT");
+	writeFileSync(join(runDir, "blobs", RAW_REF), "THE RAW CODEX EVENT");
 }
 
 describe("studio audit loader: readAuditRun", () => {
@@ -77,6 +87,7 @@ describe("studio audit loader: readAuditRun", () => {
 			expect(noBlobs.events.map((e) => e.type)).toEqual([
 				"run.started",
 				"adapter.call.started",
+				"adapter.event",
 				"adapter.call.completed",
 				"run.completed",
 			]);
@@ -86,6 +97,7 @@ describe("studio audit loader: readAuditRun", () => {
 		if (withBlobs.kind === "ok") {
 			expect(withBlobs.blobs?.[INPUT_REF]).toBe("THE PROMPT");
 			expect(withBlobs.blobs?.[OUTPUT_REF]).toBe("THE OUTPUT");
+			expect(withBlobs.blobs?.[RAW_REF]).toBe("THE RAW CODEX EVENT"); // adapter.event raw resolves
 		}
 	});
 

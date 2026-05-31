@@ -10,7 +10,7 @@
 // unchanged and rethrows the inner error, so execution is identical with or
 // without audit.
 
-import type { AdapterCallRequest, AdapterMap } from "../runtime/types.ts";
+import type { AdapterCallRequest, AdapterEvent, AdapterMap } from "../runtime/types.ts";
 import type { AuditRecorder } from "./recorder.ts";
 
 export function wrapAdaptersWithAudit(adapters: AdapterMap, recorder: AuditRecorder): AdapterMap {
@@ -20,8 +20,16 @@ export function wrapAdaptersWithAudit(adapters: AdapterMap, recorder: AuditRecor
 			async call(req: AdapterCallRequest) {
 				recorder.adapterCallStarted(req);
 				const startedAt = Date.now();
+				// Record each intra-call adapter event (e.g. Codex JSONL lines) as an
+				// adapter.event, forwarding any onEvent the caller already set. An
+				// adapter that surfaces no events (claude --print) simply never calls it.
+				const existing = req.onEvent;
+				const onEvent = (event: AdapterEvent) => {
+					recorder.adapterEvent(req.stepId, event);
+					existing?.(event);
+				};
 				try {
-					const result = await adapter.call(req);
+					const result = await adapter.call({ ...req, onEvent });
 					// A call that RETURNS after its signal was aborted was still
 					// cancelled (the caller discards the output), so record it cancelled
 					// to match how the run treats it. Surfaces that pass no signal

@@ -154,6 +154,38 @@ describe("chit audit show", () => {
 		expect(c.out()).toContain("THE OUTPUT");
 	});
 
+	test("renders a preserved adapter.event and its raw body with --blobs", () => {
+		const raw = '{"type":"item.completed","item":{"type":"command_execution"}}';
+		store.appendEvent("EV1", {
+			type: "run.started",
+			runId: "EV1",
+			ts: "2026-05-31T10:00:00.000Z",
+			manifestId: "m",
+			cwd: "/c",
+			surface: "converge",
+		});
+		const rawBlob = store.writeBlob("EV1", raw);
+		store.appendEvent("EV1", {
+			type: "adapter.event",
+			runId: "EV1",
+			ts: "2026-05-31T10:00:01.000Z",
+			stepId: "a",
+			eventType: "item.completed",
+			rawBlob,
+		});
+		store.appendEvent("EV1", {
+			type: "run.completed",
+			runId: "EV1",
+			ts: "2026-05-31T10:00:02.000Z",
+			status: "ok",
+			durationMs: 10,
+		});
+		const c = capture();
+		runAudit(["show", "EV1", "--blobs"], c.io, store);
+		expect(c.out()).toMatch(/adapter\.event\s+a item\.completed/);
+		expect(c.out()).toContain("command_execution"); // raw body printed
+	});
+
 	test("--json emits the raw events", () => {
 		seedComplete("R1", "2026-05-29");
 		const c = capture();

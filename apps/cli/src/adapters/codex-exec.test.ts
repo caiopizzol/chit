@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AdapterEvent } from "../runtime/types.ts";
 import { CodexExecAdapter } from "./codex-exec.ts";
 
 // Fake codex shell script. Behavior gates via env vars:
@@ -27,6 +28,12 @@ if [ -n "$HANDOFF_TEST_FAKE_EXIT" ] && [ "$HANDOFF_TEST_FAKE_EXIT" != "0" ]; the
   cat > /dev/null
   echo "boom: codex error" >&2
   exit "$HANDOFF_TEST_FAKE_EXIT"
+fi
+if [ -n "$HANDOFF_TEST_EMIT_THEN_FAIL" ]; then
+  cat > /dev/null
+  echo '{"type":"thread.started","thread_id":"fail-1"}'
+  echo "boom: codex error" >&2
+  exit 3
 fi
 if [ -n "$HANDOFF_TEST_LAST_INPUT" ]; then
   cat > "$HANDOFF_TEST_LAST_INPUT"
@@ -157,6 +164,58 @@ describe("CodexExecAdapter: stdin and parsing", () => {
 			).rejects.toThrow(/no agent_message/);
 		} finally {
 			delete process.env.HANDOFF_TEST_NO_AGENT_MSG;
+		}
+	});
+});
+
+describe("CodexExecAdapter: onEvent (raw JSONL preservation)", () => {
+	test("surfaces each parseable JSONL line to onEvent, output unchanged", async () => {
+		const events: AdapterEvent[] = [];
+		const result = await new CodexExecAdapter({}).call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+			onEvent: (e) => events.push(e),
+		});
+		// The final output/session are unchanged by event surfacing.
+		expect(result.output).toBe("OK: prompt received");
+		// Every parseable line is surfaced verbatim, in order.
+		expect(events.map((e) => e.type)).toEqual(["thread.started", "item.completed"]);
+		const started = events.find((e) => e.type === "thread.started");
+		expect(JSON.parse(started?.raw ?? "{}").thread_id).toBe("fake-1");
+	});
+
+	test("works with no onEvent (unaudited path), output unchanged", async () => {
+		const result = await new CodexExecAdapter({}).call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+		});
+		expect(result.output).toBe("OK: prompt received");
+	});
+
+	test("surfaces JSONL emitted before a non-zero exit, and still throws", async () => {
+		process.env.HANDOFF_TEST_EMIT_THEN_FAIL = "1";
+		const events: AdapterEvent[] = [];
+		try {
+			await expect(
+				new CodexExecAdapter({}).call({
+					participantId: "codex",
+					agentId: "codex",
+					stepId: "ask",
+					input: "x",
+					cwd: TMPDIR,
+					onEvent: (e) => events.push(e),
+				}),
+			).rejects.toThrow(/exited 3/);
+			// The events Codex wrote before failing are preserved for the audit.
+			expect(events.map((e) => e.type)).toEqual(["thread.started"]);
+		} finally {
+			delete process.env.HANDOFF_TEST_EMIT_THEN_FAIL;
 		}
 	});
 });
