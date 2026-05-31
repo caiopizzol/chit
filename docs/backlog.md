@@ -77,13 +77,12 @@ What landed:
 
 ### Adapter event streaming
 
-The audit log shipped (`docs/audit-v0.md`): a per-run store under `~/.local/state/handoff/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view.
+Shipped (`docs/audit-v0.md`): a per-run audit store under `~/.local/state/handoff/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view. Both adapters now surface their raw event stream through the `onEvent` channel, recorded as `adapter.event` with the raw body blobbed:
 
-The `onEvent` adapter channel and the `adapter.event` schema are in place.
+- **Codex raw JSONL.** `codex-exec` surfaces every parseable JSONL line, emitted before the failure checks so a run that failed still preserves what it did.
+- **Claude stream-json.** `claude-cli` runs `--print --verbose --output-format stream-json --include-partial-messages` and surfaces each JSONL event the same way; the final `result` event preserves the same output/session/usage and failure semantics (`is_error` / non-success subtype / nonzero exit) the single-JSON mode had.
 
-- **Codex raw JSONL.** Shipped. `codex-exec` surfaces every parseable JSONL line through `onEvent`, and the audit wrapper records each as an `adapter.event` with the raw body blobbed, on audited runs. Emitted before the failure checks, so a run that failed still preserves what it did.
-- **Claude stream-json (higher risk, its own slice).** Not shipped. `claude` still runs in `--output-format json` (final result only). Switch to `--output-format stream-json --verbose --include-partial-messages` so observable tool/event messages can be captured, and treat `result.is_error` and a nonzero exit as failure.
-- Two honest limits: events are preserved after the call completes (the adapter buffers stdout), not live per-event; and this is the observable CLI event stream (tool events, command executions, reasoning summaries the CLI emits), never hidden model chain-of-thought.
+Two honest limits hold for both: events are preserved after the call completes (the adapters buffer stdout), not live per-event; and this is the observable CLI event stream (tool events, command executions, reasoning summaries the CLIs emit), never hidden model chain-of-thought. A possible future slice is true live per-event streaming.
 
 ## Tracked follow-ups
 

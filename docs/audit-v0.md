@@ -9,11 +9,12 @@ output, in what order. The bodies are kept too, but they are opt-in to read.
 Status: shipped are the event schema (`@chit/core`), the node store, audit on all
 three run surfaces, retention, the `chit audit` reader, the Studio audit view
 (open a run from a loop's detailsRef in the Loops drawer), and preservation of
-Codex's observable event stream as `adapter.event` records on audited runs (the
-raw JSONL Codex emits: tool events, command executions, reasoning summaries).
-Not yet shipped: Claude's event stream (`claude` runs in final-JSON mode, not
-stream-json). Note: events are preserved after the call completes (the adapter
-buffers stdout), not live per-event, and never hidden model reasoning.
+both adapters' observable event streams as `adapter.event` records on audited
+runs: the raw JSONL Codex emits, and the Claude stream-json stream (system,
+stream_event deltas, assistant, result) - tool events, command executions, and
+reasoning summaries the CLIs emit. Note: events are preserved after the call
+completes (the adapters buffer stdout), not live per-event, and never hidden
+model reasoning.
 Source: `packages/core/src/audit/events.ts` (schema),
 `apps/cli/src/audit/` (store, recorder, wrapper), `apps/cli/src/cli/audit.ts`
 (reader).

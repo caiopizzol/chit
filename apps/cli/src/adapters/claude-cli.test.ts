@@ -34,6 +34,16 @@ if [ -n "$HANDOFF_TEST_FAKE_EXIT" ] && [ "$HANDOFF_TEST_FAKE_EXIT" != "0" ]; the
   echo "boom: claude error" >&2
   exit "$HANDOFF_TEST_FAKE_EXIT"
 fi
+# Emit a full stream-json prefix (system/stream_event/assistant, no result) and
+# THEN exit non-zero, standing in for a claude that streamed observable work and
+# then crashed. The adapter must still surface those events to onEvent before it
+# throws on the non-zero exit code.
+if [ -n "$HANDOFF_TEST_CLAUDE_EMIT_THEN_FAIL" ]; then
+  cat > /dev/null
+  emit_stream "fake-claude-session"
+  echo "boom: claude crashed mid-stream" >&2
+  exit 7
+fi
 if [ -n "$HANDOFF_TEST_CLAUDE_ENV_FILE" ]; then
   printf 'CLAUDECODE=%s\\n' "$CLAUDECODE" > "$HANDOFF_TEST_CLAUDE_ENV_FILE"
 fi
@@ -576,6 +586,30 @@ describe("ClaudeCliAdapter: raw event stream (onEvent)", () => {
 			expect(events.map((e) => e.type)).toEqual(["system", "stream_event", "assistant", "result"]);
 		} finally {
 			delete process.env.HANDOFF_TEST_CLAUDE_IS_ERROR;
+		}
+	});
+
+	test("emits the events that streamed before a non-zero process exit", async () => {
+		// Distinct from the is_error case above: here claude streams events and the
+		// PROCESS exits non-zero (no result event at all). The exit-code check is the
+		// first failure branch, so this pins that events are surfaced even before it.
+		process.env.HANDOFF_TEST_CLAUDE_EMIT_THEN_FAIL = "1";
+		const events: { type: string; raw: string }[] = [];
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await expect(
+				adapter.call({
+					participantId: "claude",
+					agentId: "claude",
+					stepId: "ask",
+					input: "x",
+					cwd: TMPDIR,
+					onEvent: (e) => events.push(e),
+				}),
+			).rejects.toThrow(/claude --print exited 7/);
+			expect(events.map((e) => e.type)).toEqual(["system", "stream_event", "assistant"]);
+		} finally {
+			delete process.env.HANDOFF_TEST_CLAUDE_EMIT_THEN_FAIL;
 		}
 	});
 

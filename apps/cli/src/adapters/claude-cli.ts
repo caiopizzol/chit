@@ -21,10 +21,13 @@ export interface ClaudeCliConfig {
 	// the call rejects with a timeout error. Unset means DEFAULT_CALL_TIMEOUT_MS.
 	callTimeoutMs?: number;
 	// Strict MCP isolation: by default the spawned `claude --print` is launched
-	// with --strict-mcp-config and an empty MCP config so it loads NONE of the
-	// user's global MCP servers/tools/hooks. This is a safety boundary now that
-	// `chit converge` lets Claude edit autonomously. Opt out (set false) only for
-	// a user-defined advisor that genuinely needs MCP.
+	// with --strict-mcp-config and an empty MCP config, so it loads NONE of the
+	// user's global MCP servers (the session reports mcp_servers: []). This does
+	// NOT disable Claude's built-in tools, and it does NOT stop the user's local
+	// hooks/skills/plugins (a live stream-json probe still shows hook events) -
+	// only MCP server config is isolated. A safety boundary now that `chit
+	// converge` lets Claude edit autonomously. Opt out (set false) only for a
+	// user-defined advisor that genuinely needs MCP.
 	strictMcp?: boolean;
 }
 
@@ -190,9 +193,10 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 		];
 		// Strict MCP isolation (default on): --strict-mcp-config makes Claude use
 		// ONLY the inline config we pass, ignoring the user's global ~/.claude.json
-		// and project MCP; the empty {"mcpServers":{}} means zero MCP servers. So a
-		// chit-spawned autonomous Claude inherits none of the user's MCP
-		// servers/tools/hooks. Opt out via strictMcp:false.
+		// and project MCP; the empty {"mcpServers":{}} means zero MCP servers. This
+		// isolates MCP servers only: Claude's built-in tools still work, and the
+		// user's local hooks/skills/plugins still fire (a stream-json probe shows
+		// hook events even under strict MCP). Opt out via strictMcp:false.
 		if (this.config.strictMcp !== false) {
 			cmd.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
 		}
