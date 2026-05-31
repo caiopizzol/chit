@@ -75,15 +75,15 @@ What landed:
 
 ## Up next
 
-### Adapter event streaming (raw per-tool transcript)
+### Adapter event streaming
 
 The audit log shipped (`docs/audit-v0.md`): a per-run store under `~/.local/state/handoff/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view.
 
-What remains is the raw per-tool event stream from each adapter. The adapter `onEvent` channel and the `adapter.event` schema are in place; nothing emits them yet.
+The `onEvent` adapter channel and the `adapter.event` schema are in place.
 
-- **Codex raw JSONL (lower risk, first).** The adapter already receives the JSONL but discards all but the final `agent_message`, thread id, and usage. Preserve the rest as `adapter.event`.
-- **Claude stream-json (higher risk, its own slice).** Switch from `--output-format json` to `--output-format stream-json --verbose --include-partial-messages` so observable tool/event messages can be captured. Treat `result.is_error` and a nonzero exit as failure.
-- Frame it as observable events / tool transcript, never "thinking": chit captures observable CLI events, not hidden model chain-of-thought.
+- **Codex raw JSONL.** Shipped. `codex-exec` surfaces every parseable JSONL line through `onEvent`, and the audit wrapper records each as an `adapter.event` with the raw body blobbed, on audited runs. Emitted before the failure checks, so a run that failed still preserves what it did.
+- **Claude stream-json (higher risk, its own slice).** Not shipped. `claude` still runs in `--output-format json` (final result only). Switch to `--output-format stream-json --verbose --include-partial-messages` so observable tool/event messages can be captured, and treat `result.is_error` and a nonzero exit as failure.
+- Two honest limits: events are preserved after the call completes (the adapter buffers stdout), not live per-event; and this is the observable CLI event stream (tool events, command executions, reasoning summaries the CLI emits), never hidden model chain-of-thought.
 
 ## Tracked follow-ups
 

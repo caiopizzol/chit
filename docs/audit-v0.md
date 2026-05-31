@@ -7,9 +7,13 @@ the run is over. It is the receipt layer: which agent, with what input, what
 output, in what order. The bodies are kept too, but they are opt-in to read.
 
 Status: shipped are the event schema (`@chit/core`), the node store, audit on all
-three run surfaces, retention, the `chit audit` reader, and the Studio audit
-view (open a run from a loop's detailsRef in the Loops drawer). Not yet shipped:
-the raw per-tool event stream from each adapter (Codex JSONL, Claude stream-json).
+three run surfaces, retention, the `chit audit` reader, the Studio audit view
+(open a run from a loop's detailsRef in the Loops drawer), and preservation of
+Codex's observable event stream as `adapter.event` records on audited runs (the
+raw JSONL Codex emits: tool events, command executions, reasoning summaries).
+Not yet shipped: Claude's event stream (`claude` runs in final-JSON mode, not
+stream-json). Note: events are preserved after the call completes (the adapter
+buffers stdout), not live per-event, and never hidden model reasoning.
 Source: `packages/core/src/audit/events.ts` (schema),
 `apps/cli/src/audit/` (store, recorder, wrapper), `apps/cli/src/cli/audit.ts`
 (reader).
