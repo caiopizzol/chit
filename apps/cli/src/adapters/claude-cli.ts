@@ -15,6 +15,11 @@ const DEFAULT_CALL_TIMEOUT_MS = 15 * 60_000;
 
 export interface ClaudeCliConfig {
 	model?: string;
+	// Maps to claude's `--effort <level>` flag. Named reasoningEffort to match the
+	// registry field and CodexExecConfig (codex spells the same idea
+	// model_reasoning_effort). The valid level set varies by claude version, so the
+	// value is passed through unvalidated; the CLI rejects an unknown level clearly.
+	reasoningEffort?: string;
 	passModelOnResume?: boolean;
 	env?: Record<string, string>;
 	// Hard per-call ceiling in ms. When the timer fires the child is killed and
@@ -199,6 +204,13 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 		// hook events even under strict MCP). Opt out via strictMcp:false.
 		if (this.config.strictMcp !== false) {
 			cmd.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
+		}
+		// claude's --effort is per-invocation ("for the current session"), so unlike
+		// codex (which drops -m/-c on resume) it is passed on EVERY call, resume
+		// included (verified: --effort is accepted alongside --resume). The level is
+		// passed through; the CLI validates it and errors clearly on an unknown one.
+		if (this.config.reasoningEffort) {
+			cmd.push("--effort", this.config.reasoningEffort);
 		}
 		if (priorSessionId) {
 			cmd.push("--resume", priorSessionId);

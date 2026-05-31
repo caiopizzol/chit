@@ -22,6 +22,7 @@ export function buildAdapter(agent: NormalizedAgent): RuntimeAdapter {
 		case "claude-cli":
 			return new ClaudeCliAdapter({
 				model: agent.model,
+				reasoningEffort: agent.reasoningEffort,
 				passModelOnResume: agent.passModelOnResume,
 				env: agent.env,
 				strictMcp: agent.strictMcp,

@@ -121,14 +121,14 @@ The fingerprint hashes enough of the `(agent, participant)` pair that a meaningf
 
 Fingerprint inputs (SHA-256, first 16 hex chars):
 
-- Agent registry config: `id`, `adapter` kind, `model`, `reasoningEffort`, base URL (from `env.ANTHROPIC_BASE_URL` / `env.OPENAI_BASE_URL` / `env.OLLAMA_HOST`), `passModelOnResume`, `strictMcp` (claude-cli only; hashed as its effective on/off value, so `undefined` and `true` match).
+- Agent registry config: `id`, `adapter` kind, `model`, `reasoningEffort` (effective on both adapters: codex `model_reasoning_effort`, claude `--effort`), and base URL (from `env.ANTHROPIC_BASE_URL` / `env.OPENAI_BASE_URL` / `env.OLLAMA_HOST`). `passModelOnResume` and `strictMcp` are hashed only for claude-cli, where they have runtime effect (on other adapters they hash as null, so toggling one does not fork the session); `strictMcp` is hashed as its effective on/off value, so `undefined` and `true` match.
 - Participant `role` text.
 - Participant `session` policy.
 - Participant `permissions`.
 
 Sensitive env values (API keys, tokens) are deliberately NOT in the fingerprint material.
 
-`strictMcp` defaults to on: a chit-spawned `claude` runs with `--strict-mcp-config` and an empty MCP config, so it inherits none of the user's global MCP servers/tools/hooks. This is a safety boundary now that an autonomous loop can let claude edit. Setting `strictMcp: false` on a claude-cli agent is an advanced opt-out for an advisor that genuinely needs MCP; because it changes which servers the spawned claude sees, toggling it forks the session.
+`strictMcp` defaults to on: a chit-spawned `claude` runs with `--strict-mcp-config` and an empty MCP config, so it loads none of the user's global MCP servers (the session reports `mcp_servers: []`). It isolates MCP servers only: claude's built-in tools still work, and local hooks/skills/plugins still fire (a stream-json probe shows hook events even under strict MCP). This is a safety boundary now that an autonomous loop can let claude edit. Setting `strictMcp: false` on a claude-cli agent is an advanced opt-out for an advisor that genuinely needs MCP; because it changes which servers the spawned claude sees, toggling it forks the session.
 
 `callTimeoutMs` is another operator-facing agents.json field (both adapters): a hard per-call timeout in milliseconds (positive integer; defaults to 15 minutes / `900000`) after which the adapter kills the child agent and fails with a distinct timeout error. Unlike `strictMcp` it is deliberately NOT fingerprint material - it is execution governance, not session identity or context, so changing it does not fork a resumed session.
 

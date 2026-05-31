@@ -403,6 +403,74 @@ describe("ClaudeCliAdapter: env and command construction", () => {
 			writeFakeBin("claude", FAKE_CLAUDE);
 		}
 	});
+
+	test("passes --effort <level> when reasoningEffort is configured", async () => {
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-effort.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({ reasoningEffort: "high" });
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			// The level sits immediately after --effort, passed through verbatim.
+			expect(argv).toContain("--effort");
+			expect(argv[argv.indexOf("--effort") + 1]).toBe("high");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("passes --effort on resume too (effort is per-invocation, re-asserted)", async () => {
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-effort-resume.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({ reasoningEffort: "max" });
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				session: { sessionId: "prior" },
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("--resume");
+			expect(argv).toContain("--effort");
+			expect(argv[argv.indexOf("--effort") + 1]).toBe("max");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
+
+	test("omits --effort when reasoningEffort is unset", async () => {
+		writeFakeBin("claude", FAKE_CLAUDE_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-no-effort.txt");
+		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			await adapter.call({
+				participantId: "claude",
+				agentId: "claude",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).not.toContain("--effort");
+		} finally {
+			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			writeFakeBin("claude", FAKE_CLAUDE);
+		}
+	});
 });
 
 describe("ClaudeCliAdapter: session resume", () => {

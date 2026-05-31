@@ -72,16 +72,53 @@ describe("computeFingerprint", () => {
 		expect(a).not.toBe(b);
 	});
 
-	test("different passModelOnResume produces different fingerprint", () => {
+	test("different passModelOnResume forks the fingerprint on claude-cli", () => {
 		const a = computeFingerprint({
-			agent: agent({ passModelOnResume: false }),
+			agent: agent({ adapter: "claude-cli", passModelOnResume: false }),
 			participant: participant(),
 		});
 		const b = computeFingerprint({
-			agent: agent({ passModelOnResume: true }),
+			agent: agent({ adapter: "claude-cli", passModelOnResume: true }),
 			participant: participant(),
 		});
 		expect(a).not.toBe(b);
+	});
+
+	test("passModelOnResume has no fingerprint effect on a non-claude-cli adapter", () => {
+		// It only changes claude-cli's resume behavior, so toggling it on a codex
+		// agent must not spuriously fork the session.
+		const a = computeFingerprint({
+			agent: agent({ adapter: "codex-exec", passModelOnResume: false }),
+			participant: participant(),
+		});
+		const b = computeFingerprint({
+			agent: agent({ adapter: "codex-exec", passModelOnResume: true }),
+			participant: participant(),
+		});
+		expect(a).toBe(b);
+	});
+
+	test("different reasoningEffort forks the fingerprint (effective on both adapters)", () => {
+		// codex maps it to model_reasoning_effort, claude to --effort, so changing it
+		// is a real behavior change on either adapter and must fork the session.
+		const claudeLow = computeFingerprint({
+			agent: agent({ adapter: "claude-cli", reasoningEffort: "low" }),
+			participant: participant(),
+		});
+		const claudeHigh = computeFingerprint({
+			agent: agent({ adapter: "claude-cli", reasoningEffort: "high" }),
+			participant: participant(),
+		});
+		expect(claudeLow).not.toBe(claudeHigh);
+		const codexLow = computeFingerprint({
+			agent: agent({ adapter: "codex-exec", reasoningEffort: "low" }),
+			participant: participant(),
+		});
+		const codexHigh = computeFingerprint({
+			agent: agent({ adapter: "codex-exec", reasoningEffort: "high" }),
+			participant: participant(),
+		});
+		expect(codexLow).not.toBe(codexHigh);
 	});
 
 	test("strictMcp undefined and true hash the same (both strict-on)", () => {

@@ -49,4 +49,15 @@ describe("buildAdapter", () => {
 		const config = (adapter as unknown as { config: { callTimeoutMs?: number } }).config;
 		expect(config.callTimeoutMs).toBe(5678);
 	});
+
+	test("forwards agent.reasoningEffort into the ClaudeCliAdapter config", () => {
+		// Without this mapping, effort set on a claude agent in the registry would be
+		// silently dropped (the footgun this slice fixes); the adapter then turns it
+		// into --effort.
+		const adapter = buildAdapter(
+			agent({ adapter: "claude-cli", id: "claude", reasoningEffort: "high" }),
+		);
+		const config = (adapter as unknown as { config: { reasoningEffort?: string } }).config;
+		expect(config.reasoningEffort).toBe("high");
+	});
 });
