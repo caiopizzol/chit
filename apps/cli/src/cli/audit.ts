@@ -36,7 +36,8 @@ show options:
   --blobs, --include-bodies  Print blob bodies (rendered prompts, outputs).
 
 Audited runs live under the local state dir (XDG_STATE_HOME or ~/.local/state,
-then handoff/audit). A run with no run.completed event is shown as INCOMPLETE.
+then chit/audit; the legacy handoff/audit is also read for one release). A run
+with no run.completed event is shown as INCOMPLETE.
 `;
 
 class UsageError extends Error {}
@@ -174,11 +175,25 @@ function safeRead(store: AuditStore, runId: string): AuditEvent[] {
 	}
 }
 
-function runList(store: AuditStore, io: AuditIO, json: boolean): number {
-	const summaries = store
-		.listRuns()
-		.map((runId) => summarize(runId, safeRead(store, runId)))
-		.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+function runList(
+	store: AuditStore,
+	legacyStore: AuditStore | undefined,
+	io: AuditIO,
+	json: boolean,
+): number {
+	// Merge the new store with the legacy one (for one release), newest first. A
+	// runId present in both is taken from the new store (visited first), so a
+	// migrated run is not shown twice.
+	const seen = new Set<string>();
+	const summaries: RunSummary[] = [];
+	for (const s of legacyStore ? [store, legacyStore] : [store]) {
+		for (const runId of s.listRuns()) {
+			if (seen.has(runId)) continue;
+			seen.add(runId);
+			summaries.push(summarize(runId, safeRead(s, runId)));
+		}
+	}
+	summaries.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
 
 	if (json) {
 		io.out(`${JSON.stringify(summaries, null, 2)}\n`);
@@ -264,16 +279,30 @@ function renderEvent(store: AuditStore, runId: string, e: AuditEvent, blobs: boo
 
 function runShow(
 	store: AuditStore,
+	legacyStore: AuditStore | undefined,
 	runId: string,
 	io: AuditIO,
 	opts: { json: boolean; blobs: boolean },
 ): number {
+	// The run may live in the new store or, for one release, the legacy one.
+	// Resolve which store holds it and read events + blobs from that same store.
 	let events: AuditEvent[];
+	let owning = store;
 	try {
 		events = store.readEvents(runId);
 	} catch (e) {
-		io.err(`chit audit: ${(e as Error).message}\n`);
-		return 1;
+		if (legacyStore !== undefined) {
+			try {
+				events = legacyStore.readEvents(runId);
+				owning = legacyStore;
+			} catch {
+				io.err(`chit audit: ${(e as Error).message}\n`);
+				return 1;
+			}
+		} else {
+			io.err(`chit audit: ${(e as Error).message}\n`);
+			return 1;
+		}
 	}
 
 	if (opts.json) {
@@ -318,7 +347,7 @@ function runShow(
 
 	io.out("\ntimeline:\n");
 	for (const e of events) {
-		for (const line of renderEvent(store, runId, e, opts.blobs)) io.out(`  ${line}\n`);
+		for (const line of renderEvent(owning, runId, e, opts.blobs)) io.out(`  ${line}\n`);
 	}
 	return 0;
 }
@@ -361,6 +390,10 @@ export function runAudit(
 	argv: string[],
 	io: AuditIO = defaultIO,
 	store: AuditStore = new AuditStore(),
+	// Read for one release so transcripts written before the chit-path migration
+	// stay visible. Optional and default-absent so injected-store tests stay
+	// isolated; the production entrypoint (run.ts) wires the real legacy store.
+	legacyStore?: AuditStore,
 ): number {
 	if (argv[0] === "-h" || argv[0] === "--help" || argv.length === 0) {
 		io.out(AUDIT_HELP);
@@ -376,6 +409,9 @@ export function runAudit(
 		}
 		throw e;
 	}
-	if (parsed.command === "list") return runList(store, io, parsed.json);
-	return runShow(store, parsed.runId as string, io, { json: parsed.json, blobs: parsed.blobs });
+	if (parsed.command === "list") return runList(store, legacyStore, io, parsed.json);
+	return runShow(store, legacyStore, parsed.runId as string, io, {
+		json: parsed.json,
+		blobs: parsed.blobs,
+	});
 }

@@ -178,7 +178,7 @@ describe("installClaudeSkill: file generation", () => {
 		expect(body).toContain("--input-stdin question");
 		// Heredoc delimiter is randomized per install (16 hex chars of entropy),
 		// to make accidental collision with user input astronomically unlikely.
-		expect(body).toMatch(/<<'HANDOFF_INPUT_[0-9A-F]{16}_EOF'/);
+		expect(body).toMatch(/<<'CHIT_INPUT_[0-9A-F]{16}_EOF'/);
 		// Body is wrapped in `{ ... } 2>&1` so stderr (the unenforced-permission
 		// WARNING and any runtime errors) reaches the captured output that
 		// Claude sees in place of the fenced block.
@@ -220,8 +220,8 @@ describe("installClaudeSkill: file generation", () => {
 			runtimePath: PROJECT_ROOT,
 			allowUnenforcedPermissions: true,
 		});
-		const m1 = /HANDOFF_INPUT_([0-9A-F]{16})_EOF/.exec(readFileSync(r1.skillMdPath, "utf-8"));
-		const m2 = /HANDOFF_INPUT_([0-9A-F]{16})_EOF/.exec(readFileSync(r2.skillMdPath, "utf-8"));
+		const m1 = /CHIT_INPUT_([0-9A-F]{16})_EOF/.exec(readFileSync(r1.skillMdPath, "utf-8"));
+		const m2 = /CHIT_INPUT_([0-9A-F]{16})_EOF/.exec(readFileSync(r2.skillMdPath, "utf-8"));
 		expect(m1).not.toBeNull();
 		expect(m2).not.toBeNull();
 		expect(m1?.[1]).not.toBe(m2?.[1]);
@@ -273,7 +273,7 @@ describe("installClaudeSkill: file generation", () => {
 });
 
 describe("installClaudeSkill: install marker", () => {
-	test("writes .handoff-install.json with provenance fields", () => {
+	test("writes .chit-install.json with provenance fields", () => {
 		const manifestPath = CONSULT_PATH;
 		const out = mkdtempSync(join(TMPDIR, "install-"));
 		const r = installClaudeSkill({
@@ -557,8 +557,8 @@ describe("installClaudeSkill: acceptance round-trip", () => {
 		expect(r1.stdout).toContain("WARNING");
 		expect(r1.stdout).toContain("unenforced permissions");
 
-		// Session file is written under the temp XDG_STATE_HOME.
-		const sessionsDir = join(stateDir, "handoff", "sessions");
+		// Session file is written under the temp XDG_STATE_HOME (new chit path).
+		const sessionsDir = join(stateDir, "chit", "sessions");
 		expect(existsSync(sessionsDir)).toBe(true);
 		const files = readdirSync(sessionsDir);
 		expect(files.length).toBe(1);

@@ -25,7 +25,7 @@ Source: `packages/core/src/audit/events.ts` (schema),
 Each audited run is a directory under the local state dir:
 
 ```text
-~/.local/state/handoff/audit/runs/<runId>/
+~/.local/state/chit/audit/runs/<runId>/
   events.jsonl        append-only, one event per line
   blobs/<sha256>      content-addressed bodies (prompts, outputs, raw events)
 ```

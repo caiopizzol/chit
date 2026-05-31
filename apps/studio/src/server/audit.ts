@@ -18,9 +18,20 @@ import { type AuditEvent, AuditEventError, parseAuditLog } from "@chit/core";
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
-export function defaultAuditDir(): string {
+function stateAuditDir(dir: string): string {
 	const xdg = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-	return join(xdg, "handoff", "audit");
+	return join(xdg, dir, "audit");
+}
+
+// New default: ~/.local/state/chit/audit. Mirrors apps/cli/src/audit/store.ts.
+export function defaultAuditDir(): string {
+	return stateAuditDir("chit");
+}
+
+// Legacy location, read as a fallback for one release so transcripts written
+// before the chit rename still open in Studio. Mirrors the CLI reader.
+export function legacyAuditDir(): string {
+	return stateAuditDir("handoff");
 }
 
 // The blob refs a single event references (prompt, output, raw stream).
@@ -53,8 +64,19 @@ export function readAuditRun(
 	auditDir: string,
 	runId: string,
 	includeBlobs: boolean,
+	legacyAuditDir?: string,
 ): ReadAuditResult {
 	if (!SAFE_RUN_ID.test(runId)) return { kind: "invalid-id" };
+	const primary = readAuditRunFrom(auditDir, runId, includeBlobs);
+	// A run not in the new dir may live in the legacy dir (one-release fallback).
+	// Only not-found falls through; a corrupt log in the primary is reported.
+	if (primary.kind === "not-found" && legacyAuditDir !== undefined) {
+		return readAuditRunFrom(legacyAuditDir, runId, includeBlobs);
+	}
+	return primary;
+}
+
+function readAuditRunFrom(auditDir: string, runId: string, includeBlobs: boolean): ReadAuditResult {
 	const runDir = join(auditDir, "runs", runId);
 	const eventsPath = join(runDir, "events.jsonl");
 	if (!existsSync(eventsPath)) return { kind: "not-found" };

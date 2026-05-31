@@ -3,13 +3,25 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	INSTALL_MARKER_FILENAME,
+	INSTALL_MARKER_FILENAMES,
 	type InstallMarker,
 	MarkerError,
 	parseInstallMarker,
 	VALID_INSTALL_NAME_RE,
 } from "@chit/core";
 
-// Where the CLI looks by default. Mirrors `handoff install --to`'s default.
+// Resolve a skill directory's install marker, preferring the current name and
+// falling back to the legacy one, so a skill installed before the chit rename is
+// still listable and uninstallable. Returns undefined when neither is present.
+function resolveMarkerPath(skillDir: string): string | undefined {
+	for (const name of INSTALL_MARKER_FILENAMES) {
+		const p = join(skillDir, name);
+		if (existsSync(p)) return p;
+	}
+	return undefined;
+}
+
+// Where the CLI looks by default. Mirrors `chit install --to`'s default.
 export function defaultSkillsDir(): string {
 	return join(homedir(), ".claude", "skills");
 }
@@ -27,7 +39,8 @@ export class LifecycleError extends Error {
 	}
 }
 
-// Walk the parent directory looking for `<dir>/<name>/.handoff-install.json`.
+// Walk the parent directory looking for an install marker under `<dir>/<name>/`
+// (`.chit-install.json`, or the legacy `.handoff-install.json`).
 // Directories without a marker are silently skipped (they belong to someone
 // else - e.g., a foreign tool's same-named skill folder). Markers that are
 // malformed JSON or shape-mismatched are also silently skipped so `chit list`
@@ -47,14 +60,14 @@ export function listInstalled(parentDir: string): InstalledRecord[] {
 			continue;
 		}
 		if (!stat.isDirectory()) continue;
-		const markerPath = join(skillDir, INSTALL_MARKER_FILENAME);
-		if (!existsSync(markerPath)) continue;
+		const markerPath = resolveMarkerPath(skillDir);
+		if (markerPath === undefined) continue;
 		let raw: unknown;
 		try {
 			raw = JSON.parse(readFileSync(markerPath, "utf-8"));
 		} catch {
 			// Malformed JSON. Skip silently in v0; future: include in result
-			// as an `errors` array so `handoff list` can flag it.
+			// as an `errors` array so `chit list` can flag it.
 			continue;
 		}
 		try {
@@ -68,14 +81,15 @@ export function listInstalled(parentDir: string): InstalledRecord[] {
 }
 
 // Remove the install at <parentDir>/<name>. Refuses unless the directory
-// contains a valid `.handoff-install.json`. This is the safety boundary:
+// contains a valid install marker (`.chit-install.json`, or the legacy
+// `.handoff-install.json`). This is the safety boundary:
 // without a marker, we don't know we put the directory there, and we don't
 // rm someone else's data.
 //
 // The `name` is validated against the platform-wide kebab-case rule BEFORE
 // any path join, mirroring install. Without this check, a name like
 // "../sibling" would let `join(parentDir, name)` resolve to a directory
-// outside parentDir; if that location happened to contain a valid handoff
+// outside parentDir; if that location happened to contain a valid chit
 // marker (e.g., a legitimate install in another `--to` location), uninstall
 // would rm-rf it. The marker check alone is not sufficient: an attacker (or
 // a fat-fingered user with two `--to` locations) can satisfy both gates.
@@ -92,11 +106,11 @@ export function uninstall(parentDir: string, name: string): InstalledRecord {
 	if (!statSync(skillDir).isDirectory()) {
 		throw new LifecycleError(`${skillDir} is not a directory`);
 	}
-	const markerPath = join(skillDir, INSTALL_MARKER_FILENAME);
-	if (!existsSync(markerPath)) {
+	const markerPath = resolveMarkerPath(skillDir);
+	if (markerPath === undefined) {
 		throw new LifecycleError(
-			`refusing to uninstall ${skillDir}: no ${INSTALL_MARKER_FILENAME} marker present. ` +
-				`This directory was not created by handoff (or was created by a pre-marker version). ` +
+			`refusing to uninstall ${skillDir}: no install marker (${INSTALL_MARKER_FILENAMES.join(" or ")}) present. ` +
+				`This directory was not created by chit (or was created by a pre-marker version). ` +
 				`If you're sure this is yours, remove it manually with rm -rf.`,
 		);
 	}

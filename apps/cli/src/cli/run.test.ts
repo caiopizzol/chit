@@ -284,7 +284,7 @@ describe("handoff run (subprocess)", () => {
 			expect(stdout).toContain("CODEX_ANSWER: 42"); // output unchanged by audit
 			expect(stderr).toMatch(/audit run /); // run id surfaced on stderr
 
-			const store = new AuditStore(join(stateDir, "handoff", "audit"));
+			const store = new AuditStore(join(stateDir, "chit", "audit"));
 			const runs = store.listRuns();
 			expect(runs.length).toBe(1);
 			const events = store.readEvents(runs[0] as string);
@@ -317,7 +317,7 @@ describe("handoff run (subprocess)", () => {
 				XDG_STATE_HOME: stateDir,
 			});
 			expect(code).toBe(0);
-			expect(new AuditStore(join(stateDir, "handoff", "audit")).listRuns()).toEqual([]);
+			expect(new AuditStore(join(stateDir, "chit", "audit")).listRuns()).toEqual([]);
 		} finally {
 			rmSync(stateDir, { recursive: true, force: true });
 		}
@@ -333,7 +333,7 @@ describe("handoff run (subprocess)", () => {
 			});
 			expect(code).toBe(2);
 			expect(stderr).toMatch(/audit run /);
-			const store = new AuditStore(join(stateDir, "handoff", "audit"));
+			const store = new AuditStore(join(stateDir, "chit", "audit"));
 			const runs = store.listRuns();
 			expect(runs.length).toBe(1);
 			const events = store.readEvents(runs[0] as string);
@@ -458,8 +458,8 @@ describe("handoff run (subprocess)", () => {
 		expect(first.stdout).toContain("CODEX_ANSWER");
 		expect(first.stdout).toContain("CLAUDE_ANSWER");
 
-		// Session file exists with payloads for both participants.
-		const sessionsDir = join(TMPDIR, "handoff", "sessions");
+		// Session file exists with payloads for both participants (new chit path).
+		const sessionsDir = join(TMPDIR, "chit", "sessions");
 		expect(existsSync(sessionsDir)).toBe(true);
 		const files = readdirSync(sessionsDir);
 		const file = files.find((f) => f.startsWith("round-trip--consult--"));
@@ -896,7 +896,7 @@ describe("handoff run (subprocess)", () => {
 		const { stderr, code } = await runCLI(["uninstall", "foreign", "--to", target]);
 		expect(code).toBe(2);
 		expect(stderr).toContain("refusing to uninstall");
-		expect(stderr).toContain(".handoff-install.json");
+		expect(stderr).toContain(".chit-install.json");
 		// Directory must still exist after a refused uninstall.
 		expect(existsSync(foreign)).toBe(true);
 	});

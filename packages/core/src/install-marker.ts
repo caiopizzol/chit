@@ -1,12 +1,13 @@
-// Browser-safe install-marker definition. A `.handoff-install.json` file
+// Browser-safe install-marker definition. A `.chit-install.json` file
 // written into each installed skill directory records that the directory
-// was created by handoff and carries the metadata `handoff list` /
-// `handoff uninstall` need to operate on it safely.
+// was created by chit and carries the metadata `chit list` / `chit uninstall`
+// need to operate on it safely. (The legacy `.handoff-install.json` name is
+// still recognized on read for one release; see lifecycle.ts.)
 //
-// Why a marker: without one, `handoff uninstall <name>` would have to
-// infer "is this a handoff skill?" by sniffing files like SKILL.md or
+// Why a marker: without one, `chit uninstall <name>` would have to
+// infer "is this a chit skill?" by sniffing files like SKILL.md or
 // manifest.json — both of which an unrelated skill could legitimately
-// have. The marker is a deliberate "yes, handoff put this here" signal
+// have. The marker is a deliberate "yes, chit put this here" signal
 // that prevents accidental rm -rf of someone else's directory.
 
 export interface InstallMarker {
@@ -18,7 +19,7 @@ export interface InstallMarker {
 	installName: string;
 	// The manifest's own id, from the source manifest.json.
 	manifestId: string;
-	// Absolute path to the handoff project root baked into SKILL.md.
+	// Absolute path to the chit project root baked into SKILL.md.
 	runtimePath: string;
 	// ISO-8601 timestamp of when this install happened.
 	installedAt: string;
@@ -74,7 +75,16 @@ export function parseInstallMarker(raw: unknown, path: string): InstallMarker {
 	};
 }
 
-export const INSTALL_MARKER_FILENAME = ".handoff-install.json";
+// New marker filename, written by every install. The legacy name is still
+// RECOGNIZED on read (list/uninstall) for one release so skills installed before
+// the chit rename are not orphaned; nothing writes the legacy name anymore.
+export const INSTALL_MARKER_FILENAME = ".chit-install.json";
+export const LEGACY_INSTALL_MARKER_FILENAME = ".handoff-install.json";
+// Marker names accepted when discovering an installed skill, new first.
+export const INSTALL_MARKER_FILENAMES: readonly string[] = [
+	INSTALL_MARKER_FILENAME,
+	LEGACY_INSTALL_MARKER_FILENAME,
+];
 
 // Single source of truth for what a valid install name looks like across the
 // platform: a kebab-case slug that is also a safe filesystem segment. Used by

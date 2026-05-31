@@ -1,5 +1,5 @@
 // Node-backed audit store. Persists one run's audit events and their large
-// bodies under ~/.local/state/handoff/audit/runs/<runId>/. The browser-safe
+// bodies under ~/.local/state/chit/audit/runs/<runId>/. The browser-safe
 // event schema + validation live in @chit/core (audit/events.ts); this adds the
 // filesystem:
 //
@@ -64,9 +64,20 @@ export interface PruneOptions {
 	clock?: Clock;
 }
 
-export function defaultAuditDir(): string {
+function stateAuditDir(dir: string): string {
 	const xdg = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-	return join(xdg, "handoff", "audit");
+	return join(xdg, dir, "audit");
+}
+
+// New default: ~/.local/state/chit/audit. New audited runs are written here.
+export function defaultAuditDir(): string {
+	return stateAuditDir("chit");
+}
+
+// Legacy location, read for one release so existing transcripts stay visible in
+// `chit audit` and Studio. The reader merges both; writers only use the new dir.
+export function legacyAuditDir(): string {
+	return stateAuditDir("handoff");
 }
 
 export class AuditStore {

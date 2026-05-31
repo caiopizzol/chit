@@ -80,7 +80,7 @@ check, or for watching and cancelling one long handoff.
   change. The reviewer reads files from disk, so reviews stay current; runs
   through the adapter do not.
 - **Agent profiles.** Set model, reasoning effort, and timeouts on named agents
-  in `~/.config/handoff/agents.json` and reference them from the converge
+  in `~/.config/chit/agents.json` and reference them from the converge
   manifest. `chit show` and `chit audit show` report the effective config so you
   can see what a run used.
 - **Worktrees.** Run converge in a worktree; clean it up when the slice lands. A

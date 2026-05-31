@@ -16,7 +16,7 @@ import {
 } from "./shared.ts";
 
 // Surface capability declarations are constants here (not derived from
-// runtime args) because `handoff show` is a design-time inspector: the user
+// runtime args) because `chit show` is a design-time inspector: the user
 // names a surface by kind and we tell them whether the manifest installs.
 // Runtime variations (e.g., CLI's --scope) are surfaced via SURFACE_NOTES.
 const SURFACE_CAPABILITIES: Readonly<Record<string, ReadonlySet<string>>> = {

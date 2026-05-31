@@ -2,7 +2,7 @@
 // registry: built-in agents, adapter capability descriptors, validation,
 // and the in-memory parseRegistry. NO node imports, NO file IO.
 //
-// File-backed loading (reading ~/.config/handoff/agents.json) lives in
+// File-backed loading (reading ~/.config/chit/agents.json) lives in
 // src/agents/parse.ts so consumers that only need metadata (graph-model,
 // shared validators, future Studio web UI) don't transitively pull
 // node:fs/os/path into a browser bundle.
@@ -41,7 +41,7 @@ const BUILT_IN_AGENTS: Readonly<Record<string, NormalizedAgent>> = {
 	// defer to the user's local CLI default so smoke runs stay fast and
 	// resume calls inherit the original session config. Users wanting a
 	// specific profile (e.g., gpt-5.3-codex + xhigh) add a custom agent
-	// like `codex-deep` in ~/.config/handoff/agents.json and reference
+	// like `codex-deep` in ~/.config/chit/agents.json and reference
 	// that id from their manifests.
 	codex: {
 		id: "codex",

@@ -39,7 +39,7 @@ import { appendIteration, startLoop, stopLoop } from "../loops/log-store.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
-import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
+import { defaultSessionDir, FileSessionStore, legacySessionDir } from "../sessions/store.ts";
 import type { SessionStore } from "../sessions/types.ts";
 
 export interface ConvergeIO {
@@ -351,7 +351,7 @@ function buildExecute(
 		registry,
 		scope,
 		cwd,
-		new FileSessionStore(defaultSessionDir()),
+		new FileSessionStore(defaultSessionDir(), legacySessionDir()),
 		new AuditStore(),
 	);
 }
@@ -554,7 +554,7 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 	try {
 		registry = loadRegistry();
 	} catch (e) {
-		// e.g. an invalid ~/.config/handoff/agents.json (RegistryError). Surface it
+		// e.g. an invalid ~/.config/chit/agents.json (RegistryError). Surface it
 		// cleanly rather than as a raw stack, matching the rest of this command.
 		io.err(`chit converge: ${(e as Error).message}\n`);
 		return 1;

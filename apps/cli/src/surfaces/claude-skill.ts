@@ -43,7 +43,7 @@ export interface InstallOptions {
 	// Directory where the skill folder will be created. The folder name is the
 	// installed name (defaults to manifest.id, or overrideName if set).
 	outputDir: string;
-	// Absolute path to the handoff runtime (the project root that contains
+	// Absolute path to the chit runtime (the project root that contains
 	// `src/cli/run.ts`). Baked into the generated SKILL.md.
 	runtimePath: string;
 	// Optional override for the install name. Affects both the folder name
@@ -200,7 +200,7 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 
 	// Write the install marker last so any earlier failure leaves the
 	// directory in a partial-but-detectable state (no marker = "not a
-	// confirmed handoff install" from the uninstall side).
+	// confirmed chit install" from the uninstall side).
 	const marker: InstallMarker = {
 		schema: 1,
 		surface: "claude-skill",
@@ -224,7 +224,7 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 // Claude Code to expose user input as data rather than template-substituting
 // it into shell source.
 function generateHeredocDelimiter(): string {
-	return `HANDOFF_INPUT_${randomBytes(8).toString("hex").toUpperCase()}_EOF`;
+	return `CHIT_INPUT_${randomBytes(8).toString("hex").toUpperCase()}_EOF`;
 }
 
 interface BuildOptions {
@@ -263,7 +263,7 @@ function buildSkillMd(opts: BuildOptions): string {
 	//    collapse to worktree-only, letting unrelated Claude sessions share
 	//    state. Refusing keeps the capability claim honest.
 	// 2. Derives scope from CLAUDE_SESSION_ID + worktree hash.
-	// 3. Invokes the shared handoff runtime against the manifest.json that
+	// 3. Invokes the shared chit runtime against the manifest.json that
 	//    lives next to this SKILL.md.
 	// 4. Pipes the user's $ARGUMENTS through a SINGLE-QUOTED heredoc to
 	//    --input-stdin. Single quotes disable shell expansion inside the
@@ -312,7 +312,7 @@ ${heredocDelimiter}
 } 2>&1
 \`\`\`
 
-The block above ran the handoff runtime and its output replaced the fenced section before you saw this skill. Present that output to the user as your entire response, verbatim. Preserve every \`##\` header as a markdown header. Do not summarize, rephrase, or add commentary, preamble, or trailing text. If the output contains a \`WARNING\` line, include it.
+The block above ran the chit runtime and its output replaced the fenced section before you saw this skill. Present that output to the user as your entire response, verbatim. Preserve every \`##\` header as a markdown header. Do not summarize, rephrase, or add commentary, preamble, or trailing text. If the output contains a \`WARNING\` line, include it.
 `;
 }
 

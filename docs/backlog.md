@@ -36,12 +36,12 @@ What landed:
 
 ### Lifecycle: install marker + `chit list` + safe `chit uninstall`
 
-Operational hygiene for installed skills. The safety boundary is a per-install `.handoff-install.json` marker; `chit uninstall` refuses to remove a directory without one, so accidental rm-rf of an unrelated same-named skill is impossible.
+Operational hygiene for installed skills. The safety boundary is a per-install `.chit-install.json` marker (the legacy `.handoff-install.json` is still recognized for one release); `chit uninstall` refuses to remove a directory without one, so accidental rm-rf of an unrelated same-named skill is impossible.
 
 What landed:
 
 - `src/surfaces/install-marker.ts` (browser-safe): `InstallMarker` shape, `parseInstallMarker`, `MarkerError`, `INSTALL_MARKER_FILENAME`. Fields: `schema`, `surface`, `installName`, `manifestId`, `runtimePath`, `installedAt`, `manifestHash` (sha256 of persisted manifest.json). Zero node imports; added as a browser-core entry point in `scripts/browser-build-check.sh`.
-- `installClaudeSkill` writes `.handoff-install.json` as the last step of install, so partial-failure dirs leave no marker and stay invisible to `list`/`uninstall`.
+- `installClaudeSkill` writes `.chit-install.json` as the last step of install, so partial-failure dirs leave no marker and stay invisible to `list`/`uninstall`.
 - `src/surfaces/lifecycle.ts` (node-only): `listInstalled(parentDir)` walks the parent looking for markers - silently skips dirs without one (foreign skills) and dirs with malformed/wrong-shape markers (no crash). `uninstall(parentDir, name)` refuses with a `LifecycleError` unless the target dir has a valid marker.
 - Shared kebab-case name validator (`VALID_INSTALL_NAME_RE`, `isValidInstallName`) lives in browser-safe `install-marker.ts` and is enforced by both install and uninstall. Without it, `chit uninstall ../sibling-install` against parent A could rm-rf a legitimately-marked install in parent B (the traversed path satisfies the marker check). Empirically reproduced before adding the guard.
 - `chit list [--to <dir>] [--json]` - text table by default, structured JSON with `--json`.
@@ -77,7 +77,7 @@ What landed:
 
 ### Adapter event streaming
 
-Shipped (`docs/audit-v0.md`): a per-run audit store under `~/.local/state/handoff/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view. Both adapters now surface their raw event stream through the `onEvent` channel, recorded as `adapter.event` with the raw body blobbed:
+Shipped (`docs/audit-v0.md`): a per-run audit store under `~/.local/state/chit/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view. Both adapters now surface their raw event stream through the `onEvent` channel, recorded as `adapter.event` with the raw body blobbed:
 
 - **Codex raw JSONL.** `codex-exec` surfaces every parseable JSONL line, emitted before the failure checks so a run that failed still preserves what it did.
 - **Claude stream-json.** `claude-cli` runs `--print --verbose --output-format stream-json --include-partial-messages` and surfaces each JSONL event the same way; the final `result` event preserves the same output/session/usage and failure semantics (`is_error` / non-success subtype / nonzero exit) the single-JSON mode had.

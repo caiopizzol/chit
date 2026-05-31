@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAdapterDescriptor, isBuiltInAgent, parseRegistry, RegistryError } from "@chit/core";
@@ -347,5 +347,45 @@ describe("loadRegistry", () => {
 				throw e;
 			}
 		}
+	});
+});
+
+describe("loadRegistry: chit/handoff default-path fallback", () => {
+	let XDG: string;
+	let prevXdg: string | undefined;
+	const agentsJson = (id: string) =>
+		JSON.stringify({ agents: { [id]: { adapter: "codex-exec" } } });
+
+	beforeEach(() => {
+		XDG = mkdtempSync(join(tmpdir(), "chit-cfg-"));
+		prevXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = XDG;
+	});
+	afterEach(() => {
+		if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+		else process.env.XDG_CONFIG_HOME = prevXdg;
+		rmSync(XDG, { recursive: true, force: true });
+	});
+
+	test("reads the legacy ~/.config/handoff/agents.json when the chit one is absent", () => {
+		mkdirSync(join(XDG, "handoff"), { recursive: true });
+		writeFileSync(join(XDG, "handoff", "agents.json"), agentsJson("legacy-only"));
+		expect(loadRegistry().agents["legacy-only"]).toBeDefined();
+	});
+
+	test("prefers ~/.config/chit/agents.json over the legacy handoff one", () => {
+		mkdirSync(join(XDG, "chit"), { recursive: true });
+		mkdirSync(join(XDG, "handoff"), { recursive: true });
+		writeFileSync(join(XDG, "chit", "agents.json"), agentsJson("new-one"));
+		writeFileSync(join(XDG, "handoff", "agents.json"), agentsJson("legacy-one"));
+		const reg = loadRegistry();
+		expect(reg.agents["new-one"]).toBeDefined();
+		expect(reg.agents["legacy-one"]).toBeUndefined();
+	});
+
+	test("falls back to built-ins when neither path exists", () => {
+		const reg = loadRegistry();
+		expect(reg.agents.codex).toBeDefined();
+		expect(reg.agents["legacy-only"]).toBeUndefined();
 	});
 });
