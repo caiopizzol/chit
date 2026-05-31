@@ -25,16 +25,17 @@ Each audited run is a directory under the local state dir:
 ```text
 ~/.local/state/handoff/audit/runs/<runId>/
   events.jsonl        append-only, one event per line
-  blobs/<sha256>      content-addressed bodies (prompts, outputs)
+  blobs/<sha256>      content-addressed bodies (prompts, outputs, raw events)
 ```
 
 The events are a run timeline: `run.started`, then per step `step.started` and
 `step.completed` (or `step.failed`), per agent call `adapter.call.started` and
-`adapter.call.completed`, and finally `run.completed`. Large bodies are not
-inlined. A rendered prompt, a step output, and an agent's returned text are
-written to `blobs/` and referenced by their sha256, so the same content is stored
-once. Every step's output is captured, including format steps that have no agent
-call, so a run can be read back in full.
+`adapter.call.completed`, an `adapter.event` for each raw event the adapter
+surfaced during the call (Codex JSONL today), and finally `run.completed`. Large
+bodies are not inlined. A rendered prompt, a step output, an agent's returned
+text, and each raw event body are written to `blobs/` and referenced by their
+sha256, so the same content is stored once. Every step's output is captured,
+including format steps that have no agent call, so a run can be read back in full.
 
 `adapter.call.completed` carries token usage when the CLI reports it. claude
 reports input/output/cache tokens and a cost. codex reports tokens and no cost, so
@@ -64,8 +65,9 @@ chit audit show <runId>
 
 `list` prints the runs, newest first, with status and a usage summary. `show`
 prints one run's timeline and a usage summary. Both take `--json`. `show` takes
-`--blobs` (alias `--include-bodies`) to print the rendered prompts and outputs;
-without it, only the event timeline is shown.
+`--blobs` (alias `--include-bodies`) to print the blob bodies (rendered prompts,
+outputs, and raw adapter event bodies); without it, only the event timeline is
+shown.
 
 ```text
 chit audit show 9b41-...
