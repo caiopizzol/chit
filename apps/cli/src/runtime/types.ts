@@ -1,10 +1,9 @@
 import type { AdapterUsage } from "@chit/core";
 
-// One intra-call event from the underlying CLI stream. NOT emitted yet: the
-// streaming adapter redesign (a later slice) will call AdapterCallRequest.onEvent
-// per event so the audit wrapper can preserve them (Codex JSONL, Claude
-// stream-json). Declared now so adapters, the runtime, and the audit wrapper
-// share one contract instead of churning it when streaming lands.
+// One intra-call event from the underlying CLI stream. Both adapters emit these
+// live: each reads stdout incrementally and calls AdapterCallRequest.onEvent per
+// parsed line as it arrives (Codex JSONL, Claude stream-json), so the audit
+// wrapper preserves them with real arrival timestamps.
 export interface AdapterEvent {
 	// The raw event type reported by the CLI (e.g. Codex "item.completed", a
 	// Claude stream-json event subtype).
@@ -30,9 +29,10 @@ export interface AdapterCallRequest {
 	// so its behavior is unchanged. Used by the MCP stepwise surface to make a
 	// running step cancellable.
 	signal?: AbortSignal;
-	// Reserved for the streaming slice: an adapter that can surface intra-call
-	// events calls this per event. Optional and currently unused by every
-	// adapter, so behavior is unchanged until streaming is wired.
+	// An adapter that surfaces intra-call events calls this per event, live, as
+	// each line is read. Optional: the CLI runtime passes none (so a plain run
+	// does no per-event work), while the audit wrapper sets it to record
+	// adapter.event. Both adapters implement it.
 	onEvent?: (event: AdapterEvent) => void;
 }
 

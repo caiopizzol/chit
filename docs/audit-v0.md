@@ -12,9 +12,10 @@ three run surfaces, retention, the `chit audit` reader, the Studio audit view
 both adapters' observable event streams as `adapter.event` records on audited
 runs: the raw JSONL Codex emits, and the Claude stream-json stream (system,
 stream_event deltas, assistant, result) - tool events, command executions, and
-reasoning summaries the CLIs emit. Note: events are preserved after the call
-completes (the adapters buffer stdout), not live per-event, and never hidden
-model reasoning.
+reasoning summaries the CLIs emit. Note: events are surfaced live as they arrive
+(each line is read incrementally and recorded with a real arrival timestamp), not
+buffered until the call completes; they are the observable CLI event stream,
+never hidden model reasoning.
 Source: `packages/core/src/audit/events.ts` (schema),
 `apps/cli/src/audit/` (store, recorder, wrapper), `apps/cli/src/cli/audit.ts`
 (reader).
@@ -32,7 +33,8 @@ Each audited run is a directory under the local state dir:
 The events are a run timeline: `run.started`, then per step `step.started` and
 `step.completed` (or `step.failed`), per agent call `adapter.call.started` and
 `adapter.call.completed`, an `adapter.event` for each raw event the adapter
-surfaced during the call (Codex JSONL today), and finally `run.completed`. Large
+surfaced live during the call (Codex JSONL and Claude stream-json), and finally
+`run.completed`. Large
 bodies are not inlined. A rendered prompt, a step output, an agent's returned
 text, and each raw event body are written to `blobs/` and referenced by their
 sha256, so the same content is stored once. Every step's output is captured,

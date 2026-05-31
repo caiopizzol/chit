@@ -82,7 +82,7 @@ Shipped (`docs/audit-v0.md`): a per-run audit store under `~/.local/state/handof
 - **Codex raw JSONL.** `codex-exec` surfaces every parseable JSONL line, emitted before the failure checks so a run that failed still preserves what it did.
 - **Claude stream-json.** `claude-cli` runs `--print --verbose --output-format stream-json --include-partial-messages` and surfaces each JSONL event the same way; the final `result` event preserves the same output/session/usage and failure semantics (`is_error` / non-success subtype / nonzero exit) the single-JSON mode had.
 
-Two honest limits hold for both: events are preserved after the call completes (the adapters buffer stdout), not live per-event; and this is the observable CLI event stream (tool events, command executions, reasoning summaries the CLIs emit), never hidden model chain-of-thought. A possible future slice is true live per-event streaming.
+Both adapters surface events LIVE as they arrive: each reads stdout incrementally and records each line with a real arrival timestamp, not buffered until the call completes (a run that fails mid-stream still preserves what it emitted). One honest limit remains: this is the observable CLI event stream (tool events, command executions, reasoning summaries the CLIs emit), never hidden model chain-of-thought.
 
 ## Tracked follow-ups
 

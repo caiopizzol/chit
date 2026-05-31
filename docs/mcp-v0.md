@@ -82,8 +82,11 @@ notification (with `progressToken`) and a logging notification carrying the same
 latest-state text: `"<step> · <participant> (<agent>) still running · Ns
 elapsed"`. Claude Code renders the latest heartbeat live in the collapsed tool
 call (verified, receipt 0004); the full transcript is `chit_trace`. There is no
-within-step streaming of the agent's own intermediate output (the adapter keeps
-only the final answer) — latest-state text, not a token stream.
+within-step streaming of the agent's output to the MCP client: the heartbeat is
+latest-state text, not a token stream, and `chit_run_step` returns only the
+step's final output. On an audited run the adapter does capture the agent's live
+event stream as `adapter.event` records, but that feeds the audit log, not the
+MCP client.
 
 ## Cancellation
 
@@ -124,11 +127,13 @@ probe (start a long step, Esc after the first heartbeat, record what happens):
 - `inputs` are string→string; `file[]` inputs are not expressible via MCP.
 - Concurrent `per_scope` steps would hit the session store's read-modify-write
   race (`docs/backlog.md`).
-- No within-step agent-output streaming (heartbeat is latest-state text).
+- No within-step agent-output streaming to the MCP client (heartbeat is latest-state text; the adapter's live event capture feeds the audit log, not the client).
 
 ## What is deliberately NOT next
 
-Richer adapter event-streaming. The heartbeat is good enough for v0; the larger
-risk now is product/contract drift, so this spec captures the contract before
-more features accrete. Streaming is reconsidered only after the open question
-above is settled.
+MCP client-facing output streaming (a live token stream to the client). The
+heartbeat is good enough for v0; the larger risk now is product/contract drift,
+so this spec captures the contract before more features accrete. Client-facing
+streaming is reconsidered only after the open question above is settled. (Live
+adapter event capture for the audit log has since shipped; it is separate from
+streaming output to the MCP client.)
