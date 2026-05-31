@@ -75,14 +75,15 @@ What landed:
 
 ## Up next
 
-### Audit log + trace replay
+### Adapter event streaming (raw per-tool transcript)
 
-Bigger lift: extend trace data and add a per-run audit store.
+The audit log shipped (`docs/audit-v0.md`): a per-run store under `~/.local/state/handoff/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view.
 
-- Extend `TraceEvent` with `step.adapter.requested` / `step.adapter.completed` carrying the rendered prompt and the adapter output.
-- Add a per-run audit log under `~/.local/state/handoff/runs/<runId>.json`.
-- `chit show <run-id>` or similar inspector for replaying a past run.
-- Unlocks the v2 inspector replay view in the visual UI.
+What remains is the raw per-tool event stream from each adapter. The adapter `onEvent` channel and the `adapter.event` schema are in place; nothing emits them yet.
+
+- **Codex raw JSONL (lower risk, first).** The adapter already receives the JSONL but discards all but the final `agent_message`, thread id, and usage. Preserve the rest as `adapter.event`.
+- **Claude stream-json (higher risk, its own slice).** Switch from `--output-format json` to `--output-format stream-json --verbose --include-partial-messages` so observable tool/event messages can be captured. Treat `result.is_error` and a nonzero exit as failure.
+- Frame it as observable events / tool transcript, never "thinking": chit captures observable CLI events, not hidden model chain-of-thought.
 
 ## Tracked follow-ups
 
@@ -104,7 +105,7 @@ Improvements to the existing static-output inspector. Separate from the Studio w
 - **Interactive edge inspector in HTML output.** The graph model already carries `nodes[].refs` and `nodes[].promptTemplate`. Currently the HTML just lists refs as text. Click-to-expand panel with the prompt template and source step output type would help debugging.
 - **Validation styling in Mermaid.** Nodes with permission gaps or missing capabilities should be styled red. Mermaid supports `classDef`.
 - **`chit show` rendering for multi-input manifests.** Today `show` works fine but the `claude-skill` install surface only supports one input. When the install surface gains multi-input support, `show`'s inspection should mark which inputs flow to which step.
-- **Trace replay view in HTML inspector.** v2 after the audit-log slice ships.
+- **Trace replay view in HTML inspector.** Lower priority now: the audit log shipped and the Studio audit view covers per-run replay (`docs/audit-v0.md`). A static-HTML replay would only matter where Studio is not available.
 
 ## Studio / Web UI
 
@@ -124,7 +125,7 @@ Earlier "Slice A / Slice B" framing in this backlog is superseded by the spec.
 
 ## Deferred by design (recorded with rationale)
 
-These have explicit answers — we know what we'd do — but don't ship until a real recipe demands them.
+These have explicit answers (we know what we'd do) but don't ship until a real recipe demands them.
 
 - **Loops, dynamic orchestrator, agent-decided handoffs.** `/converge` history (commit `6933109`) is the warning. v1 ships static DAGs only. Adding dynamic handoffs means structured agent output + dispatch, which is the LangGraph cliff.
 - **Named artifacts as a separate object model.** Today steps reference each other by id (`{{ steps.X.output }}`). Recipes work without a separate artifact concept; add only when one demands it.
@@ -135,7 +136,7 @@ These have explicit answers — we know what we'd do — but don't ship until a 
 
 ## Open schema questions
 
-From `docs/schema-v0.md` "Deferred details" — answers documented inline, but worth tracking here so they don't get lost:
+From `docs/schema-v0.md` "Deferred details": answers documented inline, but worth tracking here so they don't get lost:
 
 - Template engine choice (custom regex over `{{ x.y.z }}` for v0; defer Mustache)
 - Per-surface scope derivation (claude-skill: session+worktree; CLI: --scope; MCP: TBD)

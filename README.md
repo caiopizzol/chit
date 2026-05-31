@@ -24,10 +24,10 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (Claude Cod
 
 ## Surfaces
 
-- **CLI.** `chit run | show | install | list | uninstall | studio | loop-log`.
+- **CLI.** `chit run | show | install | list | uninstall | studio | loop-log | converge | audit`.
 - **Claude Code skill.** Install a chit as a slash-invocable skill.
 - **MCP (stepwise).** `chit_start`, then `chit_run_step` per step with a live heartbeat, so each handoff is a separate visible tool call you can watch and cancel. See `docs/mcp-v0.md`.
-- **Studio.** A local web editor for chits (graph view + inspector) plus a read-only Loops drawer that renders convergence-log runs. `chit studio [path]`. Early.
+- **Studio.** A local web editor for chits (graph view + inspector) plus a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. `chit studio [path]`. Early.
 
 ## The implement/check loop
 
@@ -37,6 +37,8 @@ chit runs the recurring routine of "one agent implements, another reviews, repea
 - **Autonomous.** chit runs both agents: a write-capable Claude implements, a read-only Codex reviews (`apps/cli/examples/converge.json`), driven one iteration per `chit_start` from the MCP. You sequence and checkpoint; run it against a git worktree. Manifests cannot loop, so the iteration lives in the orchestrator, not the chit.
 
 A run can record a convergence log (`chit loop-log`, written to `.chit/loops/<id>.jsonl`) that Studio's Loops drawer renders.
+
+An audited run also records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. `chit converge` audits by default; `chit run --audit` and the MCP `chit_start audit:true` are opt-in (blobs can hold secrets). Read it with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. Retention is bounded by default. See `docs/audit-v0.md`.
 
 ## Repository layout
 
@@ -55,7 +57,7 @@ Bun workspace monorepo.
 
 ## Status
 
-Early, and honest about it. Shipped: the runtime; the CLI (`run` / `install` / `show` / `list` / `uninstall` / `studio` / `loop-log`); the Claude Code skill surface; the MCP stepwise surface; the inspector (ASCII / JSON / Mermaid / HTML); Studio (graph editor + read-only Loops view); the convergence log; supervised and autonomous implement/check loops; the install marker and safe lifecycle; the browser-safe core boundary. Not shipped: a full audit log / trace replay; declared human-checkpoint or loop steps inside manifests (static DAGs, by design); recording which manifest a loop ran.
+Early, and honest about it. Shipped: the runtime; the CLI (`run` / `install` / `show` / `list` / `uninstall` / `studio` / `loop-log` / `converge` / `audit`); the Claude Code skill surface; the MCP stepwise surface; the inspector (ASCII / JSON / Mermaid / HTML); Studio (graph editor + read-only Loops view + audit transcript view); the convergence log; supervised and autonomous implement/check loops; the audit log (full prompt/output transcripts on all three run surfaces, with retention, readable via `chit audit` and Studio); the install marker and safe lifecycle; the browser-safe core boundary. Not shipped: raw per-tool adapter event streams (Codex JSONL, Claude stream-json); declared human-checkpoint or loop steps inside manifests (static DAGs, by design); recording which manifest a loop ran.
 
 Canonical manifests in `apps/cli/examples/`:
 

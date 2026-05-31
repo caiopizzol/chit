@@ -298,7 +298,7 @@ Visual editor for the user registry file (path subject to the pending v0 state-p
 
 ### Slice 6+: run-from-Studio
 
-Out of scope until audit log, trace, and cancellation ship in the runtime. Streaming uses `fetch` + `ReadableStream` per the decision above.
+Still out of scope. The audit log has shipped (runs are recorded and inspectable in Studio after the fact, see `docs/audit-v0.md`), but live run-from-Studio also wants per-run streaming and cancellation, which are not wired to a Studio-launched run yet. Streaming uses `fetch` + `ReadableStream` per the decision above.
 
 ## What this spec does not cover
 

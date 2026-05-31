@@ -196,7 +196,7 @@ Held back is the way the line stays sharp. Repeated everywhere, it becomes wallp
 - "Declare the routine. Read the chit." (How-it-works mode.)
 - "Inside your session. Not in your clipboard." (Anti-SaaS positioning.)
 - "Read the chit before it fires." (Inspector explainer.)
-- "One chit. Many surfaces." (CLI, Claude Code skill, future MCP tool.)
+- "One chit. Many surfaces." (CLI, Claude Code skill, MCP.)
 - "Multi-vendor by contract." (Adapter story.)
 - "Static by design." (Anti-dynamic-dispatch positioning.)
 - "Receipts, not transcripts." (Audit-log mode. Secondary. Never headline.)
@@ -260,7 +260,7 @@ End note.
 
 **Marker-based lifecycle.** Every install writes a sealed marker. Lifecycle commands operate only on marked installs. Removing a directory placed there by a different tool is not possible.
 
-**Receipts at the end (Track B).** Not shipped today. When the audit log lands, runs will leave a structured trail: which agent, with what input, what output, in what order. Diffable against last week's. Evidence, not law.
+**Receipts at the end.** Shipped. An audited run leaves a structured trail: which agent, with what input, what output, in what order, with token usage. Readable via `chit audit` and the Studio audit view. Evidence, not law.
 
 **Chit, not chat.** Chat is one agent at a time with you in the middle. A chit takes the middle out. Strategic spine; use sparingly.
 
@@ -306,7 +306,7 @@ Do not turn the product into a chit-themed joke set. If the metaphor competes wi
 
 ### Interface Feedback
 
-Every surface uses the same feedback grammar: CLI, Claude Code skill output, Studio chrome, future MCP tool, future audit log. The surface can change. The message should not.
+Every surface uses the same feedback grammar: CLI, Claude Code skill output, Studio chrome, the MCP surface, the audit log. The surface can change. The message should not.
 
 **CLI verbs (plain).** The CLI uses plain English. Brand vocabulary lives in docs, the inspector, the Studio, and the README. It does not live in the verbs the user types.
 
@@ -320,12 +320,12 @@ The CLI must not use the verbs "fire", "send", "drop", "stamp", or "sign". Those
 
 **Default output structure.**
 
-Items 1-3 ship today. Items 4-5 describe the receipt and audit-log grammar that lands with Track B (audit log). Until Track B ships, treat them as the target shape, not the current behavior, and do not write public copy that depends on a receipt.
+Items 1-3 describe the run-feedback grammar. Item 4, the receipt, is recorded to the audit log and read with `chit audit` or the Studio audit view; it is not printed inline by `chit run`. Item 5 is the target shape: a failed run names the failed step and the error today, not yet a one-line next action.
 
 1. Command and scope (manifest, surface, scope where relevant).
 2. Validation result.
 3. Step-by-step run output, in declared order.
-4. Receipt: which agent, what input size, what output size, what status. *(Track B. Not shipped today.)*
+4. Receipt: which agent, with what input, what output, what status, with token usage. *(Recorded to the audit log; read via `chit audit`, not inline.)*
 5. One next-action sentence on failure.
 
 **Status labels (consistent across surfaces).** Use the same word for the same state on the CLI, in the Studio, and in the audit log.
@@ -586,4 +586,4 @@ Migration status:
 
 **Pickled** is a sibling brand. Same founder, same voice register, different product (agent legibility testing) and different metaphor (preservation). They should read as *two opinionated dev tools by the same person*, not as a themed series. Do not borrow Pickled's pickle vocabulary in chit copy. Do not borrow chit's paper-and-ink palette in Pickled copy.
 
-**Status.** Pre-v0. The runtime, CLI, Claude Code skill surface, inspector (ASCII / JSON / Mermaid / HTML), install marker, and safe lifecycle are shipped. The Studio inspector is in Track A. Audit log, MCP surface, and declared human-checkpoint steps are not shipped. Brand copy must match what is shipped. Do not promise what is not.
+**Status.** Pre-v0. Shipped: the runtime, CLI, Claude Code skill surface, MCP stepwise surface, inspector (ASCII / JSON / Mermaid / HTML), Studio (graph editor + read-only Loops view + audit transcript view), the convergence log, the supervised and autonomous implement/check loops, the audit log (full prompt/output transcripts on all three run surfaces, with retention, readable via `chit audit` and Studio), the install marker, and safe lifecycle. Not shipped: raw per-tool adapter event streams (Codex JSONL, Claude stream-json) and declared human-checkpoint or loop steps inside manifests. Brand copy must match what is shipped. Do not promise what is not.
