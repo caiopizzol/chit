@@ -92,6 +92,45 @@ function seedIncomplete(runId: string, ts: string): void {
 	});
 }
 
+// An incomplete run killed WHILE a call was in flight: adapter.call.started with
+// no matching adapter.call.completed (the wedge/kill case the 78bebdfe run hit).
+function seedOpenCall(runId: string, ts: string): void {
+	store.appendEvent(runId, {
+		type: "run.started",
+		runId,
+		ts: `${ts}T10:00:00.000Z`,
+		manifestId: "m3",
+		cwd: "/c",
+		surface: "converge",
+		loopId: "L",
+		iteration: 1,
+	});
+	const inBlob = store.writeBlob(runId, "REVIEW PROMPT");
+	store.appendEvent(runId, {
+		type: "adapter.call.started",
+		runId,
+		ts: `${ts}T10:00:01.500Z`,
+		stepId: "review",
+		participantId: "reviewer",
+		agentId: "codex",
+		cwd: "/c",
+		inputBlob: inBlob,
+	});
+}
+
+// An incomplete run abandoned with no failed step and no open call: just
+// run.started, then nothing terminal.
+function seedAbandoned(runId: string, ts: string): void {
+	store.appendEvent(runId, {
+		type: "run.started",
+		runId,
+		ts: `${ts}T10:00:00.000Z`,
+		manifestId: "m4",
+		cwd: "/c",
+		surface: "mcp",
+	});
+}
+
 describe("chit audit list", () => {
 	test("reports no runs for an empty store", () => {
 		const c = capture();
@@ -111,13 +150,25 @@ describe("chit audit list", () => {
 		expect(out).toMatch(/reported cost: \$0\.0500/);
 	});
 
+	test("names an open call inline so it is diagnosable without a show", () => {
+		seedOpenCall("R3", "2026-05-30");
+		const c = capture();
+		expect(runAudit(["list"], c.io, store)).toBe(0);
+		expect(c.out()).toMatch(/R3.*incomplete open=review\/codex/s);
+	});
+
 	test("--json emits the run summaries", () => {
 		seedComplete("R1", "2026-05-29");
+		seedOpenCall("R3", "2026-05-30");
 		const c = capture();
 		runAudit(["list", "--json"], c.io, store);
 		const parsed = JSON.parse(c.out());
-		expect(parsed).toHaveLength(1);
-		expect(parsed[0]).toMatchObject({ runId: "R1", surface: "converge", status: "ok" });
+		expect(parsed).toHaveLength(2);
+		const complete = parsed.find((p: { runId: string }) => p.runId === "R1");
+		const open = parsed.find((p: { runId: string }) => p.runId === "R3");
+		expect(complete).toMatchObject({ runId: "R1", surface: "converge", status: "ok" });
+		expect(complete.openCall).toBeUndefined();
+		expect(open.openCall).toMatchObject({ stepId: "review", agentId: "codex" });
 	});
 });
 
@@ -138,12 +189,75 @@ describe("chit audit show", () => {
 		expect(out).not.toContain("THE PROMPT");
 	});
 
-	test("labels an incomplete run (no run.completed)", () => {
+	test("a failed-step incomplete run names the failed step", () => {
 		seedIncomplete("R2", "2026-05-30");
 		const c = capture();
 		runAudit(["show", "R2"], c.io, store);
-		expect(c.out()).toMatch(/status: incomplete \(no run\.completed/);
+		expect(c.out()).toMatch(/status: incomplete \(failed step: a: boom\)/);
 		expect(c.out()).toMatch(/step\.failed\s+a 50ms\s+boom/);
+	});
+
+	test("an open-call incomplete run names the open call, agent, and start time", () => {
+		seedOpenCall("R3", "2026-05-30");
+		const c = capture();
+		runAudit(["show", "R3"], c.io, store);
+		expect(c.out()).toMatch(
+			/status: incomplete \(open call: review reviewer\/codex since 2026-05-30T10:00:01\.500Z; no adapter\.call\.completed\)/,
+		);
+	});
+
+	test("an abandoned incomplete run (no open call, no failed step) says so", () => {
+		seedAbandoned("R4", "2026-05-30");
+		const c = capture();
+		runAudit(["show", "R4"], c.io, store);
+		expect(c.out()).toMatch(/status: incomplete \(abandoned before terminal run\.completed\)/);
+	});
+
+	test("a cancelled call that recorded completed is a failed step, not an open call", () => {
+		// The MCP cancel path records adapter.call.completed (status cancelled) AND
+		// step.failed, so the call is matched. That is a failed step, distinct from a
+		// call killed mid-flight (started, never completed).
+		store.appendEvent("R5", {
+			type: "run.started",
+			runId: "R5",
+			ts: "2026-05-30T10:00:00.000Z",
+			manifestId: "m",
+			cwd: "/c",
+			surface: "mcp",
+		});
+		const inBlob = store.writeBlob("R5", "P");
+		store.appendEvent("R5", {
+			type: "adapter.call.started",
+			runId: "R5",
+			ts: "2026-05-30T10:00:01.000Z",
+			stepId: "x",
+			participantId: "p",
+			agentId: "ag",
+			cwd: "/c",
+			inputBlob: inBlob,
+		});
+		const outBlob = store.writeBlob("R5", "aborted by client");
+		store.appendEvent("R5", {
+			type: "adapter.call.completed",
+			runId: "R5",
+			ts: "2026-05-30T10:00:02.000Z",
+			stepId: "x",
+			outputBlob: outBlob,
+			durationMs: 1000,
+			status: "cancelled",
+		});
+		store.appendEvent("R5", {
+			type: "step.failed",
+			runId: "R5",
+			ts: "2026-05-30T10:00:02.100Z",
+			stepId: "x",
+			error: "aborted by client",
+			durationMs: 1000,
+		});
+		const c = capture();
+		runAudit(["show", "R5"], c.io, store);
+		expect(c.out()).toMatch(/status: incomplete \(failed step: x: aborted by client\)/);
+		expect(c.out()).not.toContain("open call");
 	});
 
 	test("--blobs prints the prompt and output bodies", () => {
