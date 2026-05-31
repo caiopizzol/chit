@@ -22,7 +22,12 @@ export function wrapAdaptersWithAudit(adapters: AdapterMap, recorder: AuditRecor
 				const startedAt = Date.now();
 				try {
 					const result = await adapter.call(req);
-					recorder.adapterCallCompleted(req, result, Date.now() - startedAt, "ok", result.output);
+					// A call that RETURNS after its signal was aborted was still
+					// cancelled (the caller discards the output), so record it cancelled
+					// to match how the run treats it. Surfaces that pass no signal
+					// (converge, chit run) always see "ok" here.
+					const status = req.signal?.aborted ? "cancelled" : "ok";
+					recorder.adapterCallCompleted(req, result, Date.now() - startedAt, status, result.output);
 					return result;
 				} catch (e) {
 					// A client-aborted call is a cancellation, not a failure; otherwise

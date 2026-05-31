@@ -15,6 +15,9 @@ import {
 	parseManifest,
 } from "@chit/core";
 import { buildAdapter } from "../../adapters/factory.ts";
+import { AuditRecorder } from "../../audit/recorder.ts";
+import { AuditStore } from "../../audit/store.ts";
+import { wrapAdaptersWithAudit } from "../../audit/wrap.ts";
 import { buildAgentInput } from "../../runtime/execute.ts";
 import {
 	type PreparedInputs,
@@ -46,6 +49,12 @@ export interface Run {
 	invocationCwd: string;
 	outputs: Record<string, string>;
 	records: Record<string, StepRecord>;
+	// Set when chit_start was called with audit:true and the run started cleanly.
+	// runStep drives it (step.* + run.completed); adapter.call.* come from the
+	// audit-wrapped adapters. Absent = unaudited run.
+	recorder?: AuditRecorder;
+	// Wall-clock start, for the run.completed duration. Always set.
+	startedAtMs: number;
 }
 
 export type Heartbeat = (message: string) => void;
@@ -57,6 +66,13 @@ export interface StartRunOptions {
 	scope?: string;
 	invocationCwd: string;
 	allowUnenforcedPermissions: boolean;
+	// Opt-in audit: persist a full run (prompts/outputs/usage as blobs) to the
+	// audit store, keyed by this run's id. Off by default. auditStore is
+	// injectable for tests; defaults to the real local-state store.
+	audit?: boolean;
+	auditStore?: AuditStore;
+	// Wall-clock now, injectable for deterministic tests. Defaults to Date.now.
+	now?: () => number;
 }
 
 export function startRun(runId: string, opts: StartRunOptions): Run {
@@ -94,18 +110,42 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 			baseAdapters[p.agent] = buildAdapter(agent);
 		}
 	}
-	const adapters =
-		opts.scope !== undefined
-			? wrapAdaptersWithSessions(
-					baseAdapters,
-					manifest,
-					opts.registry,
-					opts.scope,
-					new FileSessionStore(defaultSessionDir()),
-				)
-			: baseAdapters;
 
+	// Prepare inputs BEFORE starting audit: prepareInputs throws on unknown /
+	// missing / wrong-type / missing-file inputs, and a chit_start that fails
+	// validation must not leave an orphan run.started in the audit log.
 	const preparedInputs = prepareInputs(manifest.inputs, opts.inputs, opts.invocationCwd);
+
+	// Opt-in audit: only reached after all validation above, so run.started is
+	// emitted for a viable run, not a rejected chit_start. The audit wrapper sits
+	// BENEATH the session wrapper so the recorder sees injected/returned sessions.
+	// The audit runId reuses this run's id, so MCP run_id == audit run.
+	let recorder: AuditRecorder | undefined;
+	let adapters = baseAdapters;
+	if (opts.audit) {
+		recorder = new AuditRecorder(
+			opts.auditStore ?? new AuditStore(),
+			runId,
+			{
+				manifestId: manifest.id,
+				cwd: opts.invocationCwd,
+				surface: "mcp",
+				...(opts.scope !== undefined && { scope: opts.scope }),
+			},
+			opts.now,
+		);
+		recorder.runStarted();
+		adapters = wrapAdaptersWithAudit(adapters, recorder);
+	}
+	if (opts.scope !== undefined) {
+		adapters = wrapAdaptersWithSessions(
+			adapters,
+			manifest,
+			opts.registry,
+			opts.scope,
+			new FileSessionStore(defaultSessionDir()),
+		);
+	}
 
 	const records: Record<string, StepRecord> = {};
 	for (const [stepId, step] of Object.entries(manifest.steps)) {
@@ -132,6 +172,8 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 		invocationCwd: opts.invocationCwd,
 		outputs: {},
 		records,
+		recorder,
+		startedAtMs: (opts.now ?? Date.now)(),
 	};
 }
 
@@ -227,6 +269,14 @@ export async function runStep(
 	const key = controllerKey(run.runId, stepId);
 	if (controller && controllers) controllers.set(key, controller);
 	const startedAt = Date.now();
+	// Audit (best-effort, swallowed): the step is now officially running. Paired
+	// with the stepCompleted/stepFailed below on settle. adapter.call.* events
+	// come from the audit-wrapped adapter during the call itself.
+	run.recorder?.stepStarted(stepId, rec.kind, {
+		participantId: rec.participantId,
+		agentId: rec.agentId,
+		session: rec.session,
+	});
 	try {
 		// Cancel may have landed between readiness and here.
 		if (signal?.aborted) throw new RuntimeError(`step "${stepId}" cancelled before start`);
@@ -270,6 +320,13 @@ export async function runStep(
 		rec.durationMs = Date.now() - startedAt;
 		rec.output = output;
 		run.outputs[stepId] = output;
+		run.recorder?.stepCompleted(stepId, rec.durationMs, output);
+		// The whole run is complete only when EVERY step is done. A failed/cancelled
+		// step never reaches this, so run.completed marks a fully successful run; a
+		// failed or abandoned run has no run.completed (its step.failed is the signal).
+		if (run.recorder && isComplete(run)) {
+			run.recorder.runCompleted("ok", Math.max(0, Date.now() - run.startedAtMs));
+		}
 		return rec;
 	} catch (e) {
 		// Discriminate on the signal, not the error shape: an aborted call is a
@@ -277,6 +334,9 @@ export async function runStep(
 		rec.status = signal?.aborted ? "cancelled" : "failed";
 		rec.durationMs = Date.now() - startedAt;
 		rec.error = e instanceof Error ? e.message : String(e);
+		// Audit the terminal step: a cancelled step is recorded as step.failed with
+		// its cancellation reason (the schema has no step.cancelled).
+		run.recorder?.stepFailed(stepId, rec.error, rec.durationMs);
 		throw e;
 	} finally {
 		// Unregister, but only if we still own the slot. The lock prevents another

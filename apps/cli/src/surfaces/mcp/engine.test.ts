@@ -1,6 +1,12 @@
-import { describe, expect, test } from "bun:test";
-import { parseManifest } from "@chit/core";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type AdapterCallCompletedEvent, type NormalizedRegistry, parseManifest } from "@chit/core";
 import { loadRegistry } from "../../agents/parse.ts";
+import { AuditRecorder } from "../../audit/recorder.ts";
+import { AuditStore } from "../../audit/store.ts";
+import { wrapAdaptersWithAudit } from "../../audit/wrap.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import type { AdapterCallResult, AdapterMap, RuntimeAdapter } from "../../runtime/types.ts";
 import {
@@ -54,6 +60,7 @@ function makeRun(raw: unknown, inputs: Record<string, unknown>, adapters: Adapte
 		invocationCwd: "/tmp",
 		outputs: {},
 		records,
+		startedAtMs: 0,
 	};
 }
 
@@ -342,5 +349,211 @@ describe("mcp engine: failure is terminal", () => {
 		expect(readySteps(run)).toEqual([]);
 		// Terminal: an explicit re-run is refused rather than spawning again.
 		await expect(runStep(run, "a", () => {})).rejects.toThrow(/previously failed/);
+	});
+});
+
+describe("mcp engine: audit", () => {
+	let auditDir: string;
+	let store: AuditStore;
+
+	beforeEach(() => {
+		auditDir = mkdtempSync(join(tmpdir(), "chit-mcp-audit-"));
+		store = new AuditStore(auditDir);
+	});
+	afterEach(() => {
+		rmSync(auditDir, { recursive: true, force: true });
+	});
+
+	// Build a Run audited by `store`, mirroring startRun's audit wiring (recorder +
+	// run.started + audit-wrapped adapters), so runStep's step.* / run.completed and
+	// the adapter.call.* from the wrapper can be asserted with a fake adapter.
+	function auditedRun(
+		raw: unknown,
+		inputs: Record<string, unknown>,
+		baseAdapters: AdapterMap,
+		runId = "AR",
+		auditStore: AuditStore = store,
+	): Run {
+		const manifest = parseManifest(raw);
+		const recorder = new AuditRecorder(
+			auditStore,
+			runId,
+			{ manifestId: manifest.id, cwd: "/tmp", surface: "mcp" },
+			() => 1_700_000_000_000,
+		);
+		recorder.runStarted();
+		const run = makeRun(raw, inputs, wrapAdaptersWithAudit(baseAdapters, recorder));
+		run.runId = runId;
+		run.recorder = recorder;
+		return run;
+	}
+
+	// A registry whose "fake" agent builds a (codex) adapter without spawning, so
+	// startRun can wire audit without the run actually calling out.
+	const fakeRegistry = {
+		agents: {
+			fake: {
+				id: "fake",
+				adapter: "codex-exec",
+				model: "m",
+				passModelOnResume: false,
+				builtIn: false,
+			},
+		},
+	} as unknown as NormalizedRegistry;
+
+	test("startRun with audit creates a recorder, reuses the run id, and writes run.started", () => {
+		const run = startRun("RUN-1", {
+			rawManifest: CHAIN,
+			inputs: { x: "hi" },
+			registry: fakeRegistry,
+			invocationCwd: "/tmp",
+			allowUnenforcedPermissions: true,
+			audit: true,
+			auditStore: store,
+			now: () => 1_700_000_000_000,
+		});
+		expect(run.recorder).toBeDefined();
+		expect(run.runId).toBe("RUN-1"); // audit runId == MCP run_id
+		expect(store.readEvents("RUN-1")[0]).toMatchObject({
+			type: "run.started",
+			surface: "mcp",
+			manifestId: "chain",
+		});
+	});
+
+	test("audit defaults off: startRun without audit makes no recorder and writes nothing", () => {
+		const run = startRun("RUN-2", {
+			rawManifest: CHAIN,
+			inputs: { x: "hi" },
+			registry: fakeRegistry,
+			invocationCwd: "/tmp",
+			allowUnenforcedPermissions: true,
+			auditStore: store,
+		});
+		expect(run.recorder).toBeUndefined();
+		expect(store.listRuns()).toEqual([]);
+	});
+
+	test("success: a full audited run records run/step/adapter-call events ending in run.completed", async () => {
+		const run = auditedRun(CHAIN, { x: "hi" }, immediate("OUT"));
+		await runStep(run, "a", () => {});
+		await runStep(run, "b", () => {});
+		const events = store.readEvents("AR");
+		expect(events[0]?.type).toBe("run.started");
+		expect(events.at(-1)?.type).toBe("run.completed");
+		expect(events.filter((e) => e.type === "adapter.call.completed").length).toBe(2);
+		expect(events.filter((e) => e.type === "step.completed").length).toBe(2);
+		expect(run.recorder?.lastError).toBeUndefined();
+	});
+
+	test("failed step: records step.failed and adapter error, and NO run.completed", async () => {
+		const failing: AdapterMap = {
+			fake: {
+				call: async () => {
+					throw new Error("kaboom");
+				},
+			},
+		};
+		const run = auditedRun(CHAIN, { x: "hi" }, failing);
+		await expect(runStep(run, "a", () => {})).rejects.toThrow("kaboom");
+		const events = store.readEvents("AR");
+		expect(events.some((e) => e.type === "step.failed")).toBe(true);
+		const call = events.find(
+			(e): e is AdapterCallCompletedEvent => e.type === "adapter.call.completed",
+		);
+		expect(call?.status).toBe("error");
+		expect(events.some((e) => e.type === "run.completed")).toBe(false);
+	});
+
+	test("cancelled step: adapter call is recorded cancelled and the step is recorded failed", async () => {
+		const blockUntilAbort: AdapterMap = {
+			fake: {
+				call: (req) =>
+					new Promise<AdapterCallResult>((_resolve, reject) => {
+						req.signal?.addEventListener("abort", () => reject(new Error("aborted by client")), {
+							once: true,
+						});
+					}),
+			},
+		};
+		const run = auditedRun(CHAIN, { x: "hi" }, blockUntilAbort);
+		const controller = new AbortController();
+		const controllers: StepControllers = new Map();
+		const p = runStep(run, "a", () => {}, controller, controllers);
+		controller.abort(); // lands while the adapter call is in flight
+		await expect(p).rejects.toThrow();
+		const events = store.readEvents("AR");
+		const call = events.find(
+			(e): e is AdapterCallCompletedEvent => e.type === "adapter.call.completed",
+		);
+		expect(call?.status).toBe("cancelled");
+		expect(events.some((e) => e.type === "step.failed")).toBe(true);
+		expect(events.some((e) => e.type === "run.completed")).toBe(false);
+	});
+
+	test("a call that RETURNS after the abort is recorded cancelled, not ok", async () => {
+		// An adapter that ignores the signal and returns normally. The signal is
+		// aborted while the call is in flight, so the run discards the output and
+		// the audit must mark the call cancelled, not ok.
+		const returnsAfterAbort: AdapterMap = {
+			fake: { call: async () => ({ output: "late" }) },
+		};
+		const run = auditedRun(CHAIN, { x: "hi" }, returnsAfterAbort);
+		const controller = new AbortController();
+		const controllers: StepControllers = new Map();
+		const p = runStep(run, "a", () => {}, controller, controllers);
+		controller.abort(); // lands before the (already in-flight) call resolves
+		await expect(p).rejects.toThrow();
+		const call = store
+			.readEvents("AR")
+			.find((e): e is AdapterCallCompletedEvent => e.type === "adapter.call.completed");
+		expect(call?.status).toBe("cancelled");
+		expect(run.records.a?.status).toBe("cancelled");
+		expect(store.readEvents("AR").some((e) => e.type === "run.completed")).toBe(false);
+	});
+
+	test("a chit_start that fails input validation writes NO audit run", () => {
+		expect(() =>
+			startRun("RUN-3", {
+				rawManifest: CHAIN,
+				inputs: {}, // missing required input "x"
+				registry: fakeRegistry,
+				invocationCwd: "/tmp",
+				allowUnenforcedPermissions: true,
+				audit: true,
+				auditStore: store,
+			}),
+		).toThrow(/required input/);
+		expect(store.listRuns()).toEqual([]); // no orphan run.started
+	});
+
+	test("duplicate run_step rejection does not corrupt the audit log", async () => {
+		const run = auditedRun(CHAIN, { x: "hi" }, immediate("OUT"));
+		await runStep(run, "a", () => {});
+		const before = store.readEvents("AR").length;
+		// Re-running a done step is rejected BEFORE any audit event is emitted.
+		await expect(runStep(run, "a", () => {})).rejects.toThrow(/already ran/);
+		expect(store.readEvents("AR").length).toBe(before);
+	});
+
+	test("a broken audit store never breaks the run (best-effort)", async () => {
+		const broken = {
+			openRun() {
+				throw new Error("disk full");
+			},
+			writeBlob() {
+				throw new Error("disk full");
+			},
+			appendEvent() {
+				throw new Error("disk full");
+			},
+		} as unknown as AuditStore;
+		const run = auditedRun(CHAIN, { x: "hi" }, immediate("OUT"), "AR2", broken);
+		await runStep(run, "a", () => {});
+		await runStep(run, "b", () => {});
+		expect(run.records.b?.status).toBe("done"); // run succeeded
+		expect(run.outputs.b).toBe("OUT");
+		expect(run.recorder?.lastError?.message).toMatch(/disk full/);
 	});
 });

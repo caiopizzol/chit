@@ -68,6 +68,10 @@ function describeRun(run: Run) {
 		complete,
 		ready: complete ? [] : readySummary(run),
 		output: complete ? finalOutput(run) : undefined,
+		// Surface the audit run only when it was written cleanly (no swallowed
+		// store error), so the client never gets a pointer to a missing transcript.
+		// Absent for an unaudited run or one whose audit writes failed.
+		audit: run.recorder && run.recorder.lastError === undefined ? { runId: run.runId } : undefined,
 	};
 }
 
@@ -95,9 +99,15 @@ server.registerTool(
 				.describe(
 					"Proceed when an adapter can't enforce a declared permission (e.g. claude read_only)",
 				),
+			audit: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Persist a full audit run (prompts/outputs/usage as blobs) under the local state dir, keyed by this run_id. Off by default: blobs can contain secrets.",
+				),
 		},
 	},
-	async ({ manifest_path, inputs, scope, cwd, allow_unenforced_permissions }) => {
+	async ({ manifest_path, inputs, scope, cwd, allow_unenforced_permissions, audit }) => {
 		// Opportunistic idle cleanup on every chit_start request, before the work,
 		// so cleanup still happens when this start fails (bad manifest, etc.).
 		runs.sweep(Date.now());
@@ -117,6 +127,7 @@ server.registerTool(
 				scope,
 				invocationCwd: cwd ?? process.cwd(),
 				allowUnenforcedPermissions: allow_unenforced_permissions,
+				audit,
 			});
 		} catch (e) {
 			return errorResult((e as Error).message);

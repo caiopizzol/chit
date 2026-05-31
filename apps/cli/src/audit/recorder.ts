@@ -18,6 +18,7 @@ import type {
 	RunStartedEvent,
 	RunStatus,
 	StepCompletedEvent,
+	StepKind,
 	StepStartedEvent,
 } from "@chit/core";
 import type { AdapterCallRequest, AdapterCallResult, TraceEvent } from "../runtime/types.ts";
@@ -89,46 +90,75 @@ export class AuditRecorder {
 		});
 	}
 
-	// Map a runtime TraceEvent to its audit step.* counterpart. step.* carry only
-	// framing/timing; the heavy prompt/output blobs live on the adapter.call.*
-	// events (a call step's prompt is its adapter input).
-	fromTrace(e: TraceEvent): void {
+	// Step lifecycle. Called either from a runtime TraceEvent (executeManifest,
+	// via fromTrace) or directly (the MCP stepwise engine, which has StepRecords,
+	// not TraceEvents). step.* carry framing/timing + the step's output blob; the
+	// prompt/input blob lives on the adapter.call.* events.
+	stepStarted(
+		stepId: string,
+		kind: StepKind,
+		opts: { participantId?: string; agentId?: string; session?: string } = {},
+	): void {
 		this.safe(() => {
-			if (e.type === "step.started") {
-				const ev: StepStartedEvent = {
-					type: "step.started",
-					runId: this.runId,
-					ts: this.ts(),
-					stepId: e.stepId,
-					kind: e.kind,
-				};
-				if (e.participantId !== undefined) ev.participantId = e.participantId;
-				if (e.agentId !== undefined) ev.agentId = e.agentId;
-				if (e.session !== undefined) ev.session = e.session;
-				this.store.appendEvent(this.runId, ev);
-			} else if (e.type === "step.completed") {
-				const ev: StepCompletedEvent = {
-					type: "step.completed",
-					runId: this.runId,
-					ts: this.ts(),
-					stepId: e.stepId,
-					durationMs: e.durationMs,
-				};
-				// Capture the step's output verbatim. Content-addressed, so a call
-				// step's output shares the blob its adapter.call.completed wrote.
-				ev.outputBlob = this.store.writeBlob(this.runId, e.output);
-				this.store.appendEvent(this.runId, ev);
-			} else if (e.type === "step.failed") {
-				this.store.appendEvent(this.runId, {
-					type: "step.failed",
-					runId: this.runId,
-					ts: this.ts(),
-					stepId: e.stepId,
-					error: e.error,
-					durationMs: e.durationMs,
-				});
-			}
+			const ev: StepStartedEvent = {
+				type: "step.started",
+				runId: this.runId,
+				ts: this.ts(),
+				stepId,
+				kind,
+			};
+			if (opts.participantId !== undefined) ev.participantId = opts.participantId;
+			if (opts.agentId !== undefined) ev.agentId = opts.agentId;
+			if (opts.session !== undefined) ev.session = opts.session;
+			this.store.appendEvent(this.runId, ev);
 		});
+	}
+
+	// output is captured verbatim as a content-addressed blob (a call step's
+	// output shares the blob its adapter.call.completed already wrote).
+	stepCompleted(stepId: string, durationMs: number, output: string): void {
+		this.safe(() => {
+			const ev: StepCompletedEvent = {
+				type: "step.completed",
+				runId: this.runId,
+				ts: this.ts(),
+				stepId,
+				durationMs,
+				outputBlob: this.store.writeBlob(this.runId, output),
+			};
+			this.store.appendEvent(this.runId, ev);
+		});
+	}
+
+	// A cancelled step is recorded as step.failed with its cancellation reason:
+	// the schema has no distinct step.cancelled, and the adapter.call.completed
+	// for a cancelled call separately carries status "cancelled".
+	stepFailed(stepId: string, error: string, durationMs: number): void {
+		this.safe(() => {
+			this.store.appendEvent(this.runId, {
+				type: "step.failed",
+				runId: this.runId,
+				ts: this.ts(),
+				stepId,
+				error,
+				durationMs,
+			});
+		});
+	}
+
+	// Map a runtime TraceEvent to the step.* methods (executeManifest path).
+	fromTrace(e: TraceEvent): void {
+		if (e.type === "step.started") {
+			this.stepStarted(e.stepId, e.kind, {
+				participantId: e.participantId,
+				agentId: e.agentId,
+				session: e.session,
+			});
+		} else if (e.type === "step.completed") {
+			this.stepCompleted(e.stepId, e.durationMs, e.output);
+		} else if (e.type === "step.failed") {
+			this.stepFailed(e.stepId, e.error, e.durationMs);
+		}
 	}
 
 	adapterCallStarted(req: AdapterCallRequest): void {
