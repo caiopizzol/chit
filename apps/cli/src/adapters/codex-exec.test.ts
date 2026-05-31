@@ -35,6 +35,18 @@ if [ -n "$HANDOFF_TEST_EMIT_THEN_FAIL" ]; then
   echo "boom: codex error" >&2
   exit 3
 fi
+# Liveness gate: emit thread.started, then BLOCK until the test creates the wait
+# file. The test only creates it from inside onEvent, so the process can finish
+# only if thread.started was surfaced to onEvent WHILE this process was still
+# running. A buffered (post-exit) reader would deadlock here.
+if [ -n "$HANDOFF_TEST_WAIT_FILE" ]; then
+  cat > /dev/null
+  echo '{"type":"thread.started","thread_id":"live-1"}'
+  while [ ! -f "$HANDOFF_TEST_WAIT_FILE" ]; do sleep 0.02; done
+  echo '{"type":"item.completed","item":{"type":"agent_message","text":"LIVE: done"}}'
+  echo '{"type":"turn.completed"}'
+  exit 0
+fi
 if [ -n "$HANDOFF_TEST_LAST_INPUT" ]; then
   cat > "$HANDOFF_TEST_LAST_INPUT"
 else
@@ -218,6 +230,56 @@ describe("CodexExecAdapter: onEvent (raw JSONL preservation)", () => {
 			delete process.env.HANDOFF_TEST_EMIT_THEN_FAIL;
 		}
 	});
+
+	test("a throwing onEvent does not abort the drain or fail the call", async () => {
+		// onEvent is observational: a handler that throws must not break the stdout
+		// drain, the parse, or the run. With live reading this matters more than with
+		// the old post-read pass, so it is pinned.
+		const result = await new CodexExecAdapter({}).call({
+			participantId: "codex",
+			agentId: "codex",
+			stepId: "ask",
+			input: "x",
+			cwd: TMPDIR,
+			onEvent: () => {
+				throw new Error("handler boom");
+			},
+		});
+		expect(result.output).toBe("OK: prompt received");
+	});
+
+	test("surfaces an event to onEvent BEFORE the process completes (live, not post-exit)", async () => {
+		// The fake emits thread.started, then blocks until a wait file exists. We
+		// create that file only from inside onEvent, so the call can complete only if
+		// thread.started reached onEvent while the child was still running. A buffered
+		// (read-all-then-emit) implementation would deadlock and time out here.
+		const waitFile = join(TMPDIR, "live-go.txt");
+		rmSync(waitFile, { force: true });
+		process.env.HANDOFF_TEST_WAIT_FILE = waitFile;
+		const events: AdapterEvent[] = [];
+		try {
+			const result = await new CodexExecAdapter({}).call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				onEvent: (e) => {
+					events.push(e);
+					if (e.type === "thread.started") writeFileSync(waitFile, "go");
+				},
+			});
+			expect(result.output).toBe("LIVE: done");
+			expect(events.map((e) => e.type)).toEqual([
+				"thread.started",
+				"item.completed",
+				"turn.completed",
+			]);
+		} finally {
+			delete process.env.HANDOFF_TEST_WAIT_FILE;
+			rmSync(waitFile, { force: true });
+		}
+	}, 15000);
 });
 
 describe("CodexExecAdapter: usage extraction", () => {
