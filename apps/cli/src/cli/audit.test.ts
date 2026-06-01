@@ -359,6 +359,14 @@ describe("chit audit show: recorded participant config", () => {
 			cwd: "/c",
 			surface: "converge",
 			participants: {
+				implementer: {
+					agentId: "codex",
+					adapter: "codex-exec",
+					session: "per_scope",
+					permissions: { filesystem: "write" },
+					enforcesReadOnly: true,
+					config: { model: "gpt-5", reasoningEffort: "high" },
+				},
 				reviewer: {
 					agentId: "codex-deep",
 					adapter: "codex-exec",
@@ -372,7 +380,12 @@ describe("chit audit show: recorded participant config", () => {
 		const c = capture();
 		runAudit(["show", "RC"], c.io, store);
 		expect(c.out()).toMatch(/participants \(recorded config\):/);
+		expect(c.out()).toMatch(
+			/implementer\s+agent=codex.*filesystem=write\s+read_only_enforcement=not requested \(adapter supports\).*adapter=codex-exec/,
+		);
 		expect(c.out()).toMatch(/reviewer\s+agent=codex-deep.*adapter=codex-exec/);
+		expect(c.out()).toContain("filesystem=read_only  read_only_enforcement=enforced");
+		expect(c.out()).not.toContain("enforces=yes");
 		expect(c.out()).toContain("model=gpt-5.5");
 		expect(c.out()).toContain("effort=xhigh");
 	});

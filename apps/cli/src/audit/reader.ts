@@ -10,12 +10,26 @@
 // validated events (inputBlob/outputBlob/rawBlob), never from caller-supplied
 // paths, so reading bodies can never serve an arbitrary file.
 
-import type { AdapterUsage, AuditEvent } from "@chit-run/core";
+import {
+	type AdapterUsage,
+	type AuditEvent,
+	type AuditParticipantSnapshot,
+	participantPermissionDisplay,
+} from "@chit-run/core";
 import type { AuditStore } from "./store.ts";
 
 // The recorded participant snapshot map, as carried by a run.started event.
 // Derived from the event union so reader.ts need not import the snapshot type.
 type ParticipantSnapshots = Extract<AuditEvent, { type: "run.started" }>["participants"];
+
+export interface AuditParticipantReceipt {
+	agentId: string;
+	adapter: string;
+	session: AuditParticipantSnapshot["session"];
+	filesystem: AuditParticipantSnapshot["permissions"]["filesystem"];
+	readOnlyEnforcement: string;
+	config: AuditParticipantSnapshot["config"];
+}
 
 // An adapter call that started but has no matching adapter.call.completed: the
 // process was killed or abandoned WHILE the call was in flight. The audit wrapper
@@ -164,6 +178,34 @@ export type TimelineEntry = AuditEvent & {
 	raw?: string;
 };
 
+function receiptTimelineEvent(e: AuditEvent): AuditEvent {
+	if (e.type !== "run.started") return e;
+	const { participants: _participants, ...rest } = e;
+	return rest as AuditEvent;
+}
+
+function participantReceipts(
+	snapshots: ParticipantSnapshots,
+): Record<string, AuditParticipantReceipt> | undefined {
+	if (snapshots === undefined) return undefined;
+	return Object.fromEntries(
+		Object.entries(snapshots).map(([pid, p]) => {
+			const permission = participantPermissionDisplay(p);
+			return [
+				pid,
+				{
+					agentId: p.agentId,
+					adapter: p.adapter,
+					session: p.session,
+					filesystem: permission.filesystem,
+					readOnlyEnforcement: permission.readOnlyEnforcement,
+					config: p.config,
+				},
+			];
+		}),
+	);
+}
+
 // Two orthogonal knobs control how much a timeline shows. They are separate
 // concerns and compose:
 //   verbose       - include the raw `adapter.event` rows (the per-call CLI event
@@ -212,20 +254,21 @@ export function auditTimeline(
 ): TimelineEntry[] {
 	const rows = opts.verbose ? events : events.filter(isReceiptEvent);
 	return rows.map((e): TimelineEntry => {
-		if (!opts.includeBodies) return e;
+		const row = receiptTimelineEvent(e);
+		if (!opts.includeBodies) return row;
 		if (e.type === "adapter.call.started") {
-			return { ...e, input: readBody(store, runId, e.inputBlob) };
+			return { ...row, input: readBody(store, runId, e.inputBlob) };
 		}
 		if (e.type === "adapter.event" && e.rawBlob !== undefined) {
-			return { ...e, raw: readBody(store, runId, e.rawBlob) };
+			return { ...row, raw: readBody(store, runId, e.rawBlob) };
 		}
 		if (e.type === "adapter.call.completed") {
-			return { ...e, output: readBody(store, runId, e.outputBlob) };
+			return { ...row, output: readBody(store, runId, e.outputBlob) };
 		}
 		if (e.type === "step.completed" && e.outputBlob !== undefined) {
-			return { ...e, output: readBody(store, runId, e.outputBlob) };
+			return { ...row, output: readBody(store, runId, e.outputBlob) };
 		}
-		return e;
+		return row;
 	});
 }
 
@@ -233,8 +276,8 @@ export interface AuditShow {
 	summary: RunSummary;
 	// Present only when the run is incomplete: why it ended where it did.
 	incompleteReason?: string;
-	// The participant config recorded at run.started (an older run may lack it).
-	participants?: ParticipantSnapshots;
+	// Receipt-safe participant config derived from run.started. Older runs may lack it.
+	participants?: Record<string, AuditParticipantReceipt>;
 	timeline: TimelineEntry[];
 	// Set when the default receipt view hid raw adapter.event rows: how many, and
 	// how to see them. Absent under verbose, or when the run had no such rows.
@@ -256,7 +299,7 @@ export function showAudit(store: AuditStore, runId: string, opts: TimelineOption
 	if (summary.status === "incomplete") out.incompleteReason = describeIncomplete(summary, events);
 	const started = events.find((e) => e.type === "run.started");
 	if (started?.type === "run.started" && started.participants !== undefined) {
-		out.participants = started.participants;
+		out.participants = participantReceipts(started.participants);
 	}
 	if (!opts.verbose) {
 		const hidden = hiddenAdapterEventCount(events);

@@ -290,6 +290,53 @@ describe("showAudit", () => {
 		expect(show.note).toMatch(/1 raw adapter events hidden/);
 	});
 
+	test("participant receipt distinguishes active write mode from read-only enforcement capability", () => {
+		store.openRun("snap");
+		store.appendEvent(
+			"snap",
+			ev("snap", {
+				type: "run.started",
+				manifestId: "m",
+				cwd: "/x",
+				surface: "mcp",
+				participants: {
+					implementer: {
+						agentId: "codex",
+						adapter: "codex-exec",
+						session: "per_scope",
+						permissions: { filesystem: "write" },
+						enforcesReadOnly: true,
+						config: {},
+					},
+					reviewer: {
+						agentId: "codex",
+						adapter: "codex-exec",
+						session: "per_scope",
+						permissions: { filesystem: "read_only" },
+						enforcesReadOnly: true,
+						config: {},
+					},
+				},
+			}),
+		);
+
+		const show = showAudit(store, "snap", RECEIPT);
+		expect(show.participants?.implementer).toMatchObject({
+			agentId: "codex",
+			filesystem: "write",
+			readOnlyEnforcement: "not requested (adapter supports)",
+		});
+		expect(show.participants?.reviewer).toMatchObject({
+			filesystem: "read_only",
+			readOnlyEnforcement: "enforced",
+		});
+		const implementer = show.participants?.implementer;
+		expect(implementer !== undefined && "enforcesReadOnly" in implementer).toBe(false);
+		const started = show.timeline.find((e) => e.type === "run.started");
+		expect(started?.type).toBe("run.started");
+		expect(started !== undefined && "participants" in started).toBe(false);
+	});
+
 	test("verbose shows event rows and drops the note", () => {
 		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
 		const show = showAudit(store, "r", { includeBodies: false, verbose: true });

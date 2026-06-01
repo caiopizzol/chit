@@ -30,6 +30,18 @@ const ASK_CODEX = {
 	},
 	output: "out",
 };
+const WRITE_CODEX = {
+	...ASK_CODEX,
+	id: "write-codex",
+	participants: {
+		codex: {
+			agent: "codex",
+			role: "Edit the workspace.",
+			session: "stateless",
+			permissions: { filesystem: "write" },
+		},
+	},
+};
 const FILE_INPUT_MANIFEST = {
 	schema: 1,
 	id: "file-input-check",
@@ -165,6 +177,16 @@ describe("renderShow: ascii", () => {
 		expect(out).toContain("OK");
 		expect(out).not.toContain("NEEDS OVERRIDE");
 	});
+
+	test("write-capable participant shows active filesystem mode and not-requested enforcement", () => {
+		const m = buildGraphModel(parseManifest(WRITE_CODEX), REGISTRY, "cli");
+		const out = renderShow(m, "ascii");
+		expect(out).toMatch(
+			/codex\s+agent=codex\s+session=stateless\s+filesystem=write\s+read_only_enforcement=not requested \(adapter supports\)\s+adapter=codex-exec/,
+		);
+		expect(out).not.toContain("permissions=write");
+		expect(out).not.toContain("enforces=yes");
+	});
 });
 
 describe("renderShow: mermaid", () => {
@@ -199,6 +221,14 @@ describe("renderShow: html", () => {
 		expect(out).toContain('class="participant-config"');
 		expect(out).toContain("model: default");
 		expect(out).toContain("strictMcp: on");
+	});
+
+	test("write-capable participant does not get an active read-only badge", () => {
+		const m = buildGraphModel(parseManifest(WRITE_CODEX), REGISTRY, "cli");
+		const out = renderShow(m, "html");
+		expect(out).toContain("filesystem: write");
+		expect(out).toContain("read_only enforcement: not requested (adapter supports)");
+		expect(out).not.toContain("enforces read-only");
 	});
 
 	test("consult validates with Permissions OK (both adapters enforce)", () => {

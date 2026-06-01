@@ -1,8 +1,43 @@
 import type { ParticipantConfig } from "./agents/types.ts";
 import type { GraphEdge, GraphModel, GraphNode } from "./graph-model.ts";
 import { validationSeverity } from "./graph-model.ts";
+import type { FilesystemPermission } from "./manifest/types.ts";
 
 export type ShowFormat = "json" | "ascii" | "mermaid" | "html";
+
+export interface ParticipantPermissionDisplay {
+	filesystem: FilesystemPermission;
+	readOnlyEnforcement: string;
+	readOnlyEnforcementClass: "info" | "ok" | "warn";
+}
+
+export function participantPermissionDisplay(p: {
+	permissions: { filesystem: FilesystemPermission };
+	enforcesReadOnly: boolean;
+}): ParticipantPermissionDisplay {
+	if (p.permissions.filesystem === "read_only") {
+		return {
+			filesystem: "read_only",
+			readOnlyEnforcement: p.enforcesReadOnly ? "enforced" : "NOT ENFORCED",
+			readOnlyEnforcementClass: p.enforcesReadOnly ? "ok" : "warn",
+		};
+	}
+	return {
+		filesystem: "write",
+		readOnlyEnforcement: p.enforcesReadOnly
+			? "not requested (adapter supports)"
+			: "not requested (adapter cannot enforce)",
+		readOnlyEnforcementClass: "info",
+	};
+}
+
+export function participantPermissionText(p: {
+	permissions: { filesystem: FilesystemPermission };
+	enforcesReadOnly: boolean;
+}): string {
+	const display = participantPermissionDisplay(p);
+	return `filesystem=${display.filesystem}  read_only_enforcement=${display.readOnlyEnforcement}`;
+}
 
 // Effective participant config as ordered label/value pairs, shared by the ASCII
 // and HTML renderers so the two never drift. "default" means the adapter/CLI
@@ -89,9 +124,8 @@ function renderAscii(m: GraphModel): string {
 
 	out.push("participants:");
 	for (const [pid, p] of Object.entries(m.participants)) {
-		const enforces = p.enforcesReadOnly ? "enforces=yes" : "enforces=NO";
 		out.push(
-			`  ${pid}  agent=${p.agentId}  session=${p.session}  permissions=${p.permissions.filesystem}  adapter=${p.adapter}  ${enforces}`,
+			`  ${pid}  agent=${p.agentId}  session=${p.session}  ${participantPermissionText(p)}  adapter=${p.adapter}`,
 		);
 		// An unknown agent has no resolvable config; rendering default/off labels
 		// would read like a runnable agent, so say it is unresolved instead.
@@ -214,9 +248,7 @@ function renderHtml(m: GraphModel): string {
 
 	const participantsSection = Object.entries(m.participants)
 		.map(([pid, p]) => {
-			const enforceBadge = p.enforcesReadOnly
-				? '<span class="badge ok">enforces read-only</span>'
-				: '<span class="badge warn">does not enforce</span>';
+			const permission = participantPermissionDisplay(p);
 			// An unknown agent has no resolvable config; show it as unresolved rather
 			// than default/off labels that would read like a runnable agent.
 			const configBadges =
@@ -231,8 +263,8 @@ function renderHtml(m: GraphModel): string {
     <span class="badge info">agent: ${escapeHtml(p.agentId)}</span>
     <span class="badge info">adapter: ${escapeHtml(p.adapter)}</span>
     <span class="badge info">session: ${escapeHtml(p.session)}</span>
-    <span class="badge info">filesystem: ${escapeHtml(p.permissions.filesystem)}</span>
-    ${enforceBadge}
+    <span class="badge info">filesystem: ${escapeHtml(permission.filesystem)}</span>
+    <span class="badge ${permission.readOnlyEnforcementClass}">read_only enforcement: ${escapeHtml(permission.readOnlyEnforcement)}</span>
   </div>
   <div class="participant-config">
     ${configBadges}

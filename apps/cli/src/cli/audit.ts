@@ -10,7 +10,12 @@
 // run with no terminal marker. The reader never infers success from the absence
 // of a terminal event.
 
-import { type AuditEvent, configPairs, formatAdapterUsage } from "@chit-run/core";
+import {
+	type AuditEvent,
+	configPairs,
+	formatAdapterUsage,
+	participantPermissionText,
+} from "@chit-run/core";
 import {
 	describeIncomplete,
 	hiddenAdapterEventCount,
@@ -179,9 +184,8 @@ function runShow(
 		io.out("  recorded config unavailable (older audit run)\n");
 	} else {
 		for (const [pid, p] of Object.entries(snapshots)) {
-			const enforces = p.enforcesReadOnly ? "enforces=yes" : "enforces=NO";
 			io.out(
-				`  ${pid}  agent=${p.agentId}  session=${p.session}  permissions=${p.permissions.filesystem}  adapter=${p.adapter}  ${enforces}\n`,
+				`  ${pid}  agent=${p.agentId}  session=${p.session}  ${participantPermissionText(p)}  adapter=${p.adapter}\n`,
 			);
 			const pairs =
 				p.adapter === "unknown"
