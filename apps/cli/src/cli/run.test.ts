@@ -58,7 +58,7 @@ let TMPDIR: string;
 let FAKE_BIN_DIR: string;
 
 beforeAll(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-cli-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-cli-"));
 	FAKE_BIN_DIR = join(TMPDIR, "bin");
 	mkdirSync(FAKE_BIN_DIR, { recursive: true });
 	const codexPath = join(FAKE_BIN_DIR, "codex");
@@ -112,6 +112,12 @@ describe("parseArgs", () => {
 		expect(parseArgs(["--help"]).command).toBe("help");
 	});
 
+	test("--help after a subcommand yields help, not a manifest named --help", () => {
+		expect(parseArgs(["run", "--help"]).command).toBe("help");
+		expect(parseArgs(["show", "-h"]).command).toBe("help");
+		expect(parseArgs(["install", "--help"]).command).toBe("help");
+	});
+
 	test("run requires a manifest path", () => {
 		expect(() => parseArgs(["run"])).toThrow(/manifest path/);
 	});
@@ -163,7 +169,7 @@ describe("parseArgs", () => {
 			"--to",
 			"/tmp/skills",
 			"--runtime-path",
-			"/proj/handoff",
+			"/proj/chit",
 			"--name",
 			"my-skill",
 			"--force",
@@ -173,7 +179,7 @@ describe("parseArgs", () => {
 		expect(args.manifestPath).toBe("m.json");
 		expect(args.installAs).toBe("claude-skill");
 		expect(args.outputDir).toBe("/tmp/skills");
-		expect(args.runtimePath).toBe("/proj/handoff");
+		expect(args.runtimePath).toBe("/proj/chit");
 		expect(args.overrideName).toBe("my-skill");
 		expect(args.force).toBe(true);
 		expect(args.allowUnenforcedPermissions).toBe(true);
@@ -260,7 +266,7 @@ describe("parseArgs", () => {
 	});
 });
 
-describe("handoff run (subprocess)", () => {
+describe("chit run (subprocess)", () => {
 	test("ask-codex.json end-to-end with fake codex", async () => {
 		const { stdout, code } = await runCLI([
 			"run",
@@ -473,7 +479,7 @@ describe("handoff run (subprocess)", () => {
 	});
 
 	test("errors on missing manifest file", async () => {
-		const { stderr, code } = await runCLI(["run", "/tmp/does-not-exist-handoff.json"]);
+		const { stderr, code } = await runCLI(["run", "/tmp/does-not-exist-chit.json"]);
 		expect(code).toBe(2);
 		expect(stderr).toContain("failed to read manifest");
 	});
@@ -612,12 +618,12 @@ describe("handoff run (subprocess)", () => {
 			"--runtime-path",
 			PROJECT_ROOT,
 			"--name",
-			"handoff-ask",
+			"chit-ask",
 		]);
 		expect(code).toBe(0);
-		expect(existsSync(join(target, "handoff-ask", "SKILL.md"))).toBe(true);
-		const md = readFileSync(join(target, "handoff-ask", "SKILL.md"), "utf-8");
-		expect(md).toContain("name: handoff-ask");
+		expect(existsSync(join(target, "chit-ask", "SKILL.md"))).toBe(true);
+		const md = readFileSync(join(target, "chit-ask", "SKILL.md"), "utf-8");
+		expect(md).toContain("name: chit-ask");
 	});
 
 	test("install requires --as", async () => {
@@ -904,13 +910,13 @@ describe("handoff run (subprocess)", () => {
 	});
 
 	test("uninstall rejects path-traversal name (sibling install protection)", async () => {
-		// Two parent dirs, both legitimate handoff `--to` locations. Without
+		// Two parent dirs, both legitimate chit `--to` locations. Without
 		// the kebab-case check in lifecycle.uninstall, `uninstall ../sensitive`
 		// against parent A could rm-rf the install in parent B (the sibling
 		// path resolves outside A but happens to carry a valid marker).
 		const intended = mkdtempSync(join(TMPDIR, "uninstall-intended-"));
 		const sensitive = mkdtempSync(join(TMPDIR, "uninstall-sensitive-"));
-		// Install a real handoff skill into the "sensitive" location.
+		// Install a real chit skill into the "sensitive" location.
 		await runCLI([
 			"install",
 			ASK_CODEX,
