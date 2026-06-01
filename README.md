@@ -1,4 +1,4 @@
-# chit
+# <img src="apps/site/app/icon.svg" alt="" width="28" height="28"> chit
 
 [![release](https://img.shields.io/npm/v/%40chit-run%2Fcli?label=release)](https://www.npmjs.com/package/@chit-run/cli)
 
