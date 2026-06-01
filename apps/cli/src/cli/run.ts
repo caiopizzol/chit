@@ -762,10 +762,10 @@ function runUninstall(args: ParsedArgs): number {
 
 // Lifecycle adapter injected into Studio so its install/list/uninstall
 // endpoints reuse the exact CLI surface code paths (no workspace cycle: the
-// CLI implements the interface chit-studio defines). CHIT_SKILLS_DIR overrides
+// CLI implements the interface @chit/studio defines). CHIT_SKILLS_DIR overrides
 // the install location, so e2e tests install into a temp dir instead of the
 // real ~/.claude/skills.
-function buildStudioLifecycle(): import("chit-studio/server").StudioLifecycle {
+function buildStudioLifecycle(): import("@chit/studio/server").StudioLifecycle {
 	const skillsDir = process.env.CHIT_SKILLS_DIR ?? defaultSkillsDir();
 	return {
 		list: () =>
@@ -801,7 +801,7 @@ function buildStudioLifecycle(): import("chit-studio/server").StudioLifecycle {
 }
 
 async function runStudio(args: ParsedArgs): Promise<number> {
-	const { PathError, startStudio } = await import("chit-studio/server");
+	const { PathError, startStudio } = await import("@chit/studio/server");
 	let handle: { url: string; stop(): void };
 	try {
 		const registry = loadRegistry();

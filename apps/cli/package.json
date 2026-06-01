@@ -1,5 +1,5 @@
 {
-	"name": "chit-cli",
+	"name": "@chit/cli",
 	"version": "0.0.0",
 	"private": true,
 	"description": "chit CLI. A thin runtime for multi-agent workflows.",
@@ -17,7 +17,7 @@
 	"dependencies": {
 		"@chit/core": "workspace:*",
 		"@modelcontextprotocol/sdk": "^1.18.0",
-		"chit-studio": "workspace:*",
+		"@chit/studio": "workspace:*",
 		"zod": "^4.4.3"
 	}
 }

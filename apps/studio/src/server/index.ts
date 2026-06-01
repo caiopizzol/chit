@@ -1,4 +1,4 @@
-// Public server entry. apps/cli imports startStudio from "chit-studio/server"
+// Public server entry. apps/cli imports startStudio from "@chit/studio/server"
 // at boot. The CLI loads the registry (node-side) and passes it in; this
 // module knows nothing about CLI internals.
 
@@ -18,7 +18,7 @@ import type { StudioLifecycle } from "./types.ts";
 
 // Client bundle output, relative to this file. Resolved against import.meta
 // so the path is correct regardless of the caller's cwd. Built by
-// `bun --filter chit-studio build:client`.
+// `bun --filter @chit/studio build:client`.
 const CLIENT_DIST = join(import.meta.dir, "..", "..", "dist", "client");
 const CLIENT_ASSETS = new Set(["index.js", "index.css"]);
 
@@ -172,7 +172,7 @@ export function buildApp(opts: BuildAppOptions) {
 		if (surfaceQuery !== undefined && surfaceQuery !== "") {
 			if (!isKnownSurface(surfaceQuery)) {
 				// new Response instead of c.text because Hono's c.text generics
-				// resolve narrowly in chit-cli's typecheck context with a
+				// resolve narrowly in @chit/cli's typecheck context with a
 				// templated message + numeric literal status.
 				return new Response(`unknown surface "${surfaceQuery}"`, { status: 400 });
 			}

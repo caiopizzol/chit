@@ -74,7 +74,7 @@ bun --filter '*' test             # all tests across workspaces
 bun --filter '*' typecheck        # all typechecks
 bun run check                     # biome (lint + format)
 bun run check:browser             # @chit/core node-leakage check
-bun run cli ...                   # chit-cli from root
+bun run cli ...                   # @chit/cli from root
 bun run docs:dev                  # public site + docs local server
 bun run studio:preview            # build and launch the local Studio
 ```

@@ -7,7 +7,7 @@
 //
 // The run-id and blob-ref shapes + the dir resolution mirror
 // apps/cli/src/audit/store.ts (which Studio cannot import: apps/cli already
-// depends on chit-studio, so importing it back would be a cycle). Keep the two
+// depends on @chit/studio, so importing it back would be a cycle). Keep the two
 // in sync.
 
 import { existsSync, readFileSync } from "node:fs";

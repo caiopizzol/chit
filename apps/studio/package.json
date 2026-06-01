@@ -1,5 +1,5 @@
 {
-	"name": "chit-studio",
+	"name": "@chit/studio",
 	"version": "0.0.0",
 	"private": true,
 	"description": "chit Studio. Local visual editor for chits. Bun+Hono server (src/server/) plus React+React Flow+ELK client (src/client/), launched by `chit studio`.",

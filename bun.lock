@@ -12,15 +12,15 @@
       },
     },
     "apps/cli": {
-      "name": "chit-cli",
+      "name": "@chit/cli",
       "version": "0.0.0",
       "bin": {
         "chit": "src/cli/run.ts",
       },
       "dependencies": {
         "@chit/core": "workspace:*",
+        "@chit/studio": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.18.0",
-        "chit-studio": "workspace:*",
         "zod": "^4.4.3",
       },
     },
@@ -51,7 +51,7 @@
       },
     },
     "apps/studio": {
-      "name": "chit-studio",
+      "name": "@chit/studio",
       "version": "0.0.0",
       "dependencies": {
         "@chit/core": "workspace:*",
@@ -93,9 +93,13 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.4.16", "", { "os": "win32", "cpu": "x64" }, "sha512-Kp85jgoBHa05gix6UIRjfCDiUV3w/8VIdZ247VyyO2gEjaw12WEVhdIjlxp/AMzXxqxQwbxNTDVZ3Mwd2RG5rw=="],
 
+    "@chit/cli": ["@chit/cli@workspace:apps/cli"],
+
     "@chit/core": ["@chit/core@workspace:packages/core"],
 
     "@chit/site": ["@chit/site@workspace:apps/site"],
+
+    "@chit/studio": ["@chit/studio@workspace:apps/studio"],
 
     "@cloudflare/kv-asset-handler": ["@cloudflare/kv-asset-handler@0.5.0", "", {}, "sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg=="],
 
@@ -480,10 +484,6 @@
     "character-entities-legacy": ["character-entities-legacy@3.0.0", "", {}, "sha512-RpPp0asT/6ufRm//AJVwpViZbGM/MkjQFxJccQRHmISF/22NBtsHqAWmL+/pmkPWoIUJdWyeVleTl1wydHATVQ=="],
 
     "character-reference-invalid": ["character-reference-invalid@2.0.1", "", {}, "sha512-iBZ4F4wRbyORVsu0jPV7gXkOsGYjGHPmAyv+HiHG8gi5PtC9KI2j1+v8/tlibRvjoWX027ypmG/n0HtO5t7unw=="],
-
-    "chit-cli": ["chit-cli@workspace:apps/cli"],
-
-    "chit-studio": ["chit-studio@workspace:apps/studio"],
 
     "chokidar": ["chokidar@5.0.0", "", { "dependencies": { "readdirp": "^5.0.0" } }, "sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw=="],
 
