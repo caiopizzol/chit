@@ -17,3 +17,26 @@ jobs:
       - run: bun run test
       - run: bun run check:browser
       - run: bun run site:build
+
+  # Deploy the static site to Cloudflare Pages, but only after `check` passes
+  # on a push to main (i.e. a merge). Skipped on pull_request events.
+  deploy:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run site:build
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/site
+          command: pages deploy out --project-name=chit-site
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
