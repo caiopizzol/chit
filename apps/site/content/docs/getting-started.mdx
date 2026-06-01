@@ -35,7 +35,7 @@ claude mcp add chit --scope local -- chit mcp
 
 In a Claude Code conversation, in a git worktree:
 
-> Use chit to converge on this task: <a small, scoped change>. Run a couple of iterations and show me the audit trail.
+> Use chit to converge on this task: \<a small, scoped change\>. Run a couple of iterations and show me the audit trail.
 
 chit drives the loop with its converge tools: `chit_converge_start` opens the loop, then each `chit_converge_next` runs one iteration where a write-capable Claude implements the slice and a read-only Codex reviews the diff. Each iteration is recorded; `chit_audit_list` / `chit_audit_show` read the transcript back. You see what ran, what Codex said, and the token usage. No copy-paste between terminals.
 
