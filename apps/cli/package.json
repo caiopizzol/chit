@@ -1,7 +1,7 @@
 {
 	"name": "@chit-run/cli",
 	"version": "0.0.0",
-	"description": "A thin runtime for multi-agent workflows. Stop being the glue between your agents.",
+	"description": "Versioned, cross-vendor agent routines with an audit trail. Stop being the glue between your agents.",
 	"type": "module",
 	"license": "MIT",
 	"homepage": "https://chit.run",
