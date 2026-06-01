@@ -22,8 +22,9 @@ bun run typecheck  # fumadocs-mdx typegen + tsc
 bun run check      # biome
 ```
 
-From the repo root: `bun run docs:dev`, `bun run docs:build`,
-`bun run docs:preview`, and `bun run docs:typecheck`.
+From the repo root: `bun run site:dev`, `bun run site:build`,
+`bun run site:preview`, and `bun run site:typecheck` (the `docs:*` names
+still work as aliases).
 
 ## Layout
 

@@ -48,7 +48,7 @@ Bun workspace monorepo.
 .
 ├── apps/
 │   ├── cli/        chit CLI + the MCP stepwise surface
-│   ├── docs/       public landing + docs: Next.js + Fumadocs static export
+│   ├── site/       public landing + docs: Next.js + Fumadocs static export
 │   └── studio/     local web editor (graph + inspector + Loops drawer)
 └── packages/
     └── core/       browser-safe core: manifest parser, agents registry, graph
@@ -75,7 +75,7 @@ bun --filter '*' typecheck        # all typechecks
 bun run check                     # biome (lint + format)
 bun run check:browser             # @chit/core node-leakage check
 bun run cli ...                   # @chit/cli from root
-bun run docs:dev                  # public site + docs local server
+bun run site:dev                  # public site + docs local server
 bun run studio:preview            # build and launch the local Studio
 ```
 
