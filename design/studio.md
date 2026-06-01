@@ -1,6 +1,6 @@
 # chit Studio v0
 
-Spec for the visual editor `chit studio`. Companion to `notes/schema-v0.md` (manifest contract) and `notes/backlog.md` (cross-cutting backlog).
+Spec for the visual editor `chit studio`. Companion to `design/manifest-schema.md` (manifest contract) and `research/backlog.md` (cross-cutting backlog).
 
 Studio is the visual version of the CLI. Same chits, same runtime, same registry. The manifest is the source of truth. The graph is an editing projection of it.
 
@@ -298,14 +298,14 @@ Visual editor for the user registry file (path subject to the pending v0 state-p
 
 ### Slice 6+: run-from-Studio
 
-Still out of scope. The audit log has shipped (runs are recorded and inspectable in Studio after the fact, see `notes/audit-v0.md`), but live run-from-Studio also wants per-run streaming and cancellation, which are not wired to a Studio-launched run yet. Streaming uses `fetch` + `ReadableStream` per the decision above.
+Still out of scope. The audit log has shipped (runs are recorded and inspectable in Studio after the fact, see `design/audit-log.md`), but live run-from-Studio also wants per-run streaming and cancellation, which are not wired to a Studio-launched run yet. Streaming uses `fetch` + `ReadableStream` per the decision above.
 
 ## What this spec does not cover
 
 - The brand-aligned visuals for the three node types. Pinned in the Slice 0 sketches before code starts.
 - File-watching and disk-side change detection. Slice 1 reads at boot; future re-sync goes through `GET /api/bootstrap` when it lands.
 - Multi-chit projects (a single Studio session editing several chits at once). Slice 1 opens at most one document via the `docId` table.
-- YAML support. Tracked separately in `notes/backlog.md` under open schema questions.
+- YAML support. Tracked separately in `research/backlog.md` under open schema questions.
 
 ## Open items
 

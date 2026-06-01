@@ -1,4 +1,4 @@
-// Server-side read path for the audit log (notes/audit-v0.md). Studio reads
+// Server-side read path for the audit log (design/audit-log.md). Studio reads
 // <auditDir>/runs/<runId>/events.jsonl (the local-state store the CLI writes,
 // NOT the cwd) and serves a run's events, optionally with the referenced blob
 // bodies. Read-only: Studio never writes the audit log. The browser only ever

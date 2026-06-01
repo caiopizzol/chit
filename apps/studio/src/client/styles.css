@@ -984,7 +984,7 @@ header.app .loops-btn {
 	color: var(--ink, #0a0a0a);
 }
 
-/* Audit transcript view (notes/audit-v0.md), reached from a loop iteration. */
+/* Audit transcript view (design/audit-log.md), reached from a loop iteration. */
 .audit-head {
 	padding: 8px 0;
 	border-bottom: 1px solid var(--hairline);

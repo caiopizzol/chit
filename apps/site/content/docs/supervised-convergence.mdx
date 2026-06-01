@@ -33,7 +33,7 @@ Per iteration (default budget: 3):
 
 Stop conditions: a `block`; an ambiguous product or design decision; failing tests needing a user choice; any destructive or outward-facing action; or max iterations.
 
-The shipped form is the Claude Code skill versioned in this repo at `skills/supervised-convergence/SKILL.md`, which encodes this policy. Install it by copying that directory to `~/.claude/skills/` (user-global) or a project's `.claude/skills/`, and set the skill's `manifest_path` to your absolute path to `examples/codex-advisor-thread.json`. It needs zero chit code changes and runs against the shipped MCP server.
+Supervised convergence is currently an operating pattern, not a packaged skill. The stable primitive is the MCP advisor manifest (`examples/codex-advisor-thread.json`) plus a human-driven loop.
 
 ## What this is not (and why)
 

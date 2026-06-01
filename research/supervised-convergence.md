@@ -3,13 +3,13 @@
 The use case: "run an implement -> check loop until it converges or needs me."
 This is NOT a chit runtime feature. It is an orchestrator pattern *on top of*
 chit's primitives, and it's the recommended shape today (validated against the
-code; see receipts 0004-0006 and `notes/proposals/conversational-handoff-needs-mcp.md`).
+code; see `research/proposals/conversational-handoff-needs-mcp.md`).
 
 ## Why it lives above chit, not inside it
 
 - chit manifests are static DAGs: no loops, no conditionals, no human-checkpoint
   step (`parse.ts` topological sort rejects cycles; step kinds are only `call` /
-  `format`; `notes/backlog.md` defers HITL). A "repeat until" cannot be expressed
+  `format`; `research/backlog.md` defers HITL). A "repeat until" cannot be expressed
   in a manifest, by design.
 - chit's implementer is real (this was previously mischaracterized here):
   `claude-cli` runs `claude --print`, which uses tools and edits files - verified,
@@ -47,12 +47,9 @@ Per iteration (default budget: 3):
 Stop conditions: `block`; an ambiguous product/design decision; failing tests
 needing a user choice; any destructive/outward-facing action; or max iterations.
 
-The shipped form is the Claude Code skill versioned in this repo at
-`skills/supervised-convergence/SKILL.md`, which encodes this policy. Install it
-by copying that directory to `~/.claude/skills/` (user-global) or a project's
-`.claude/skills/`, and set the skill's `manifest_path` to your absolute path to
-`examples/codex-advisor-thread.json`. It needs zero chit code changes
-and runs against the shipped MCP server.
+Supervised convergence is an operating pattern, not a packaged skill. The stable
+primitive is the MCP advisor manifest (`examples/codex-advisor-thread.json`) plus
+a human-driven loop.
 
 ## What this is NOT (and why)
 
@@ -85,7 +82,7 @@ and runs against the shipped MCP server.
 ## Platform note (others building on top)
 
 The substrate to build on is the MCP stepwise tool set (`chit_start` /
-`chit_next` / `chit_run_step` / `chit_cancel` / `chit_trace`, `notes/mcp-v0.md`)
+`chit_next` / `chit_run_step` / `chit_cancel` / `chit_trace`, `design/mcp-surface.md`)
 with one invariant: **chit governs the declared legal order and runs one bounded
 handoff to a result; the orchestrator owns the loop and the checkpoint.** Build
 loop policies (like this one) above that line, not inside the manifest.

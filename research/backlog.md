@@ -77,7 +77,7 @@ What landed:
 
 ### Adapter event streaming
 
-Shipped (`notes/audit-v0.md`): a per-run audit store under `~/.local/state/chit/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view. Both adapters now surface their raw event stream through the `onEvent` channel, recorded as `adapter.event` with the raw body blobbed:
+Shipped (`design/audit-log.md`): a per-run audit store under `~/.local/state/chit/audit/runs/<runId>/` with run / step / adapter-call events plus full rendered prompts and outputs as content-addressed blobs and token usage, on all three run surfaces, bounded by retention, readable via `chit audit list` / `chit audit show <runId>` and the Studio audit view. Both adapters now surface their raw event stream through the `onEvent` channel, recorded as `adapter.event` with the raw body blobbed:
 
 - **Codex raw JSONL.** `codex-exec` surfaces every parseable JSONL line, emitted before the failure checks so a run that failed still preserves what it did.
 - **Claude stream-json.** `claude-cli` runs `--print --verbose --output-format stream-json --include-partial-messages` and surfaces each JSONL event the same way; the final `result` event preserves the same output/session/usage and failure semantics (`is_error` / non-success subtype / nonzero exit) the single-JSON mode had.
@@ -88,7 +88,7 @@ Both adapters surface events LIVE as they arrive: each reads stdout incrementall
 
 Small cleanups worth doing before the next major slice (Studio).
 
-- **Atomic write + locking for `FileSessionStore`.** Tracked in `notes/schema-v0.md` Concurrency note. Two concurrent CLI runs with the same `--scope` could race and drop a session entry. Acceptable for single-user single-shell; fix before treating sessions as durable infra.
+- **Atomic write + locking for `FileSessionStore`.** Tracked in `design/manifest-schema.md` Concurrency note. Two concurrent CLI runs with the same `--scope` could race and drop a session entry. Acceptable for single-user single-shell; fix before treating sessions as durable infra.
 - **Fingerprint mismatch visible note.** Two pieces, both needed:
   1. *Detection.* `FileSessionStore.load(key)` currently returns `undefined` on any miss, conflating "no prior session for this participant" with "different fingerprint exists for same participant." Add `list(scope, manifestId, participantId): SessionKey[]` so the coordinator can detect a real mismatch (some fingerprint exists but doesn't match this run's).
   2. *Surfacing.* Once detection works, emit an `InvocationWarning` (kind: `"fingerprint_mismatch"`) via the invocation warning layer (already exists).
@@ -103,11 +103,11 @@ Improvements to the existing static-output inspector. Separate from the Studio w
 - **Interactive edge inspector in HTML output.** The graph model already carries `nodes[].refs` and `nodes[].promptTemplate`. Currently the HTML just lists refs as text. Click-to-expand panel with the prompt template and source step output type would help debugging.
 - **Validation styling in Mermaid.** Nodes with permission gaps or missing capabilities should be styled red. Mermaid supports `classDef`.
 - **`chit show` rendering for multi-input manifests.** Today `show` works fine but the `claude-skill` install surface only supports one input. When the install surface gains multi-input support, `show`'s inspection should mark which inputs flow to which step.
-- **Trace replay view in HTML inspector.** Lower priority now: the audit log shipped and the Studio audit view covers per-run replay (`notes/audit-v0.md`). A static-HTML replay would only matter where Studio is not available.
+- **Trace replay view in HTML inspector.** Lower priority now: the audit log shipped and the Studio audit view covers per-run replay (`design/audit-log.md`). A static-HTML replay would only matter where Studio is not available.
 
 ## Studio / Web UI
 
-Spec'd in [notes/studio-v0.md](studio-v0.md).
+Spec'd in [design/studio.md](../design/studio.md).
 
 Net direction: `chit studio` is a CLI subcommand that boots a local server in the invocation cwd, serves a React + React Flow + ELK client, and edits the same manifests the CLI runs. The manifest is the source of truth. Edges are derived from template references, so drag-to-connect inserts `{{ inputs.X }}` or `{{ steps.X.output }}` into the target template via `parseManifest`-validated candidate edits. The server is launch-token gated with a Host allowlist; no `?path=` queries from the browser; absolute paths never cross the wire.
 
@@ -134,7 +134,7 @@ These have explicit answers (we know what we'd do) but don't ship until a real r
 
 ## Open schema questions
 
-From `notes/schema-v0.md` "Deferred details": answers documented inline, but worth tracking here so they don't get lost:
+From `design/manifest-schema.md` "Deferred details": answers documented inline, but worth tracking here so they don't get lost:
 
 - Template engine choice (custom regex over `{{ x.y.z }}` for v0; defer Mustache)
 - Per-surface scope derivation (claude-skill: session+worktree; CLI: --scope; MCP: TBD)

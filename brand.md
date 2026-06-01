@@ -582,7 +582,7 @@ The metaphor is broader than restaurant. A chit is a small declared written orde
 Migration status:
 
 - *Migrated.* Repo directory (`/personal/handoff` → `/personal/chit`), root README, workspace package names (`chit-workspace`, `@chit/cli`, `@chit/site`, `@chit/core`), CLI binary name (`chit`), CLI help and stderr prefixes, landing site and docs.
-- *Migrated at the v0 cut.* State and config paths (`~/.config/chit/agents.json`, `~/.local/state/chit/sessions/`, `~/.local/state/chit/audit/`) and the install marker (`.chit-install.json`). chit reads and writes only the `chit` names; the old `handoff` paths and `.handoff-install.json` are no longer read, so local state from before the cut must be moved to the `chit` paths to stay visible. Historical artifacts (`notes/proposals/`, receipts, `dogfood/`) keep the `handoff` name on purpose: they record when the project was called handoff.
+- *Migrated at the v0 cut.* State and config paths (`~/.config/chit/agents.json`, `~/.local/state/chit/sessions/`, `~/.local/state/chit/audit/`) and the install marker (`.chit-install.json`). chit reads and writes only the `chit` names; the old `handoff` paths and `.handoff-install.json` are no longer read, so local state from before the cut must be moved to the `chit` paths to stay visible. Historical artifacts under `research/` keep the `handoff` name on purpose: they record when the project was called handoff.
 
 **Pickled** is a sibling brand. Same founder, same voice register, different product (agent legibility testing) and different metaphor (preservation). They should read as *two opinionated dev tools by the same person*, not as a themed series. Do not borrow Pickled's pickle vocabulary in chit copy. Do not borrow chit's paper-and-ink palette in Pickled copy.
 

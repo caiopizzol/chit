@@ -16,14 +16,14 @@ Two kinds, because chit validates in two phases:
 ```sh
 # Parse-time: every one of these must exit non-zero on `show`. unknown-agent is
 # excluded on purpose (it parses fine; it is the resolve-time trap below).
-for f in dogfood/traps/*.json; do
+for f in fixtures/traps/*.json; do
   [ "$(basename "$f")" = "unknown-agent.json" ] && continue
   bun apps/cli/src/cli/run.ts show "$f" --format ascii >/dev/null 2>&1 \
     && echo "LEAK (show passed): $f" || echo "ok (rejected): $f"
 done
 
 # Resolve-time: unknown-agent passes `show` but must fail `run` (exit 2).
-bun apps/cli/src/cli/run.ts run dogfood/traps/unknown-agent.json --input q=hi
+bun apps/cli/src/cli/run.ts run fixtures/traps/unknown-agent.json --input q=hi
 ```
 
 ## Expected failures (verified)

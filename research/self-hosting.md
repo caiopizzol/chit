@@ -3,7 +3,7 @@
 chit builds chit with its own loop. This is the operating guide: which mode to
 use, what the orchestrator still owns, and the discipline that keeps autonomous
 runs honest. The loop itself lives above chit (manifests are static DAGs and
-cannot loop); see `notes/supervised-convergence.md` for why.
+cannot loop); see `research/supervised-convergence.md` for why.
 
 ## The two modes
 
@@ -89,8 +89,8 @@ check, or for watching and cancelling one long handoff.
 
 ## Pointers
 
-- `notes/supervised-convergence.md`: the supervised pattern and the installable
+- `research/supervised-convergence.md`: the supervised pattern and the installable
   skill.
 - `examples/converge.json`: the autonomous loop manifest.
-- `notes/audit-v0.md`: reading transcripts with `chit audit`.
-- `notes/mcp-v0.md`: the stepwise MCP surface and its one invariant.
+- `design/audit-log.md`: reading transcripts with `chit audit`.
+- `design/mcp-surface.md`: the stepwise MCP surface and its one invariant.

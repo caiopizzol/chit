@@ -5,8 +5,8 @@ the human watching it) can run a manifest one step at a time inside a chat,
 with a live heartbeat on each long step. It is the conversational counterpart to
 the CLI `chit run` (which runs the whole DAG to completion in one shot).
 
-Status: validated spike, dogfooded against real claude + codex (receipts 0004,
-0005). One open UX question remains (in-session cancel reachability, below); it
+Status: validated spike, dogfooded against real claude + codex. One open UX
+question remains (in-session cancel reachability, below); it
 is not a correctness gap. Source: `apps/cli/src/surfaces/mcp/` (`server.ts` =
 tools, `engine.ts` = stepwise run engine). Register as a stdio MCP server:
 
@@ -81,7 +81,7 @@ While a call step runs, `chit_run_step` emits, every ~5s, both a progress
 notification (with `progressToken`) and a logging notification carrying the same
 latest-state text: `"<step> · <participant> (<agent>) still running · Ns
 elapsed"`. Claude Code renders the latest heartbeat live in the collapsed tool
-call (verified, receipt 0004); the full transcript is `chit_trace`. There is no
+call (verified); the full transcript is `chit_trace`. There is no
 within-step streaming of the agent's output to the MCP client: the heartbeat is
 latest-state text, not a token stream, and `chit_run_step` returns only the
 step's final output. On an audited run the adapter does capture the agent's live
@@ -99,7 +99,7 @@ aborts it; both adapters (`claude-cli`, `codex-exec`) kill their child process o
 abort and reject; the engine discriminates on `signal.aborted` to settle the
 step `cancelled`. The mechanism is proven end-to-end against real codex (a
 concurrent `chit_cancel` killed an in-flight step in ~6s, not the ~220s it would
-have taken — receipt 0005).
+have taken).
 
 ## In-session cancel: settled (outcome a)
 
@@ -129,7 +129,7 @@ the request's `extra.signal` into its active abort controller the way
   starts, not by wall-clock alone.
 - `inputs` are string→string; `file[]` inputs are not expressible via MCP.
 - Concurrent `per_scope` steps would hit the session store's read-modify-write
-  race (`notes/backlog.md`).
+  race (`research/backlog.md`).
 - No within-step agent-output streaming to the MCP client (heartbeat is latest-state text; the adapter's live event capture feeds the audit log, not the client).
 
 ## What is deliberately NOT next
