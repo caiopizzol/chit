@@ -78,7 +78,7 @@ let SKILLS_DIR: string;
 let FAKE_BIN_DIR: string;
 
 beforeAll(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-skill-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-skill-"));
 	SKILLS_DIR = join(TMPDIR, "skills");
 	mkdirSync(SKILLS_DIR, { recursive: true });
 	FAKE_BIN_DIR = join(TMPDIR, "bin");
@@ -326,10 +326,10 @@ describe("installClaudeSkill: install marker", () => {
 			outputDir: mkdtempSync(join(TMPDIR, "install-")),
 			runtimePath: PROJECT_ROOT,
 			allowUnenforcedPermissions: true,
-			overrideName: "handoff-consult",
+			overrideName: "chit-consult",
 		});
 		const marker = JSON.parse(readFileSync(r.markerPath, "utf-8"));
-		expect(marker.installName).toBe("handoff-consult");
+		expect(marker.installName).toBe("chit-consult");
 		expect(marker.manifestId).toBe("consult");
 	});
 
@@ -502,12 +502,12 @@ describe("installClaudeSkill: validation", () => {
 			outputDir: out,
 			runtimePath: PROJECT_ROOT,
 			allowUnenforcedPermissions: true,
-			overrideName: "handoff-consult",
+			overrideName: "chit-consult",
 		});
-		expect(r.skillDir).toBe(join(out, "handoff-consult"));
+		expect(r.skillDir).toBe(join(out, "chit-consult"));
 		const md = readFileSync(r.skillMdPath, "utf-8");
-		expect(md).toContain("name: handoff-consult");
-		expect(md).toContain("# /handoff-consult");
+		expect(md).toContain("name: chit-consult");
+		expect(md).toContain("# /chit-consult");
 		// Manifest id inside the persisted manifest.json is untouched (it's
 		// the recipe's stable identity, not the install location).
 		const m = JSON.parse(readFileSync(r.manifestPath, "utf-8"));

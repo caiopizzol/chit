@@ -10,7 +10,7 @@ const VALID_MARKER: InstallMarker = {
 	surface: "claude-skill",
 	installName: "test-skill",
 	manifestId: "test",
-	runtimePath: "/abs/path/handoff",
+	runtimePath: "/abs/path/chit",
 	installedAt: "2026-05-27T15:41:32.000Z",
 	manifestHash: "abc123",
 };
@@ -18,7 +18,7 @@ const VALID_MARKER: InstallMarker = {
 let TMPDIR: string;
 
 beforeEach(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-lifecycle-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-lifecycle-"));
 });
 
 afterEach(() => {
@@ -49,14 +49,14 @@ describe("listInstalled", () => {
 	});
 
 	test("ignores directories without the install marker (e.g., a foreign tool's skill folder)", () => {
-		makeMarkedInstall("handoff-consult");
+		makeMarkedInstall("chit-consult");
 		// A foreign skill with SKILL.md + scripts/ but NO marker
 		const foreign = join(TMPDIR, "consult");
 		mkdirSync(join(foreign, "scripts"), { recursive: true });
 		writeFileSync(join(foreign, "SKILL.md"), "(other tool's skill)\n");
 		writeFileSync(join(foreign, "scripts", "consult.js"), "// other\n");
 		const out = listInstalled(TMPDIR);
-		expect(out.map((r) => r.marker.installName)).toEqual(["handoff-consult"]);
+		expect(out.map((r) => r.marker.installName)).toEqual(["chit-consult"]);
 	});
 
 	test("ignores directories with malformed marker", () => {
@@ -138,8 +138,8 @@ describe("uninstall", () => {
 
 	test("rejects path-traversal name even when a valid marker exists at the traversed path", () => {
 		// Set up an "intended" parent dir and a sibling "sensitive" location
-		// that also has a valid handoff marker (as if the user has two --to
-		// locations, both legitimately handoff-managed). Without the
+		// that also has a valid chit marker (as if the user has two --to
+		// locations, both legitimately chit-managed). Without the
 		// kebab-case guard, `uninstall(intended, "../sensitive-parent")` would
 		// rm the sensitive sibling: join() resolves outside intended, and the
 		// marker check passes because we put a valid marker there.

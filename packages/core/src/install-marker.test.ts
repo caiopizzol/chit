@@ -6,7 +6,7 @@ const VALID = {
 	surface: "claude-skill",
 	installName: "consult",
 	manifestId: "consult",
-	runtimePath: "/abs/path/handoff",
+	runtimePath: "/abs/path/chit",
 	installedAt: "2026-05-27T15:41:32.000Z",
 	manifestHash: "abc123",
 };

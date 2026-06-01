@@ -38,7 +38,7 @@ let TMPDIR: string;
 let store: FileSessionStore;
 
 beforeEach(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-store-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-store-"));
 	store = new FileSessionStore(TMPDIR);
 });
 

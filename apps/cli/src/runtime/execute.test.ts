@@ -36,7 +36,7 @@ let TMPDIR: string;
 const TMPFILES: string[] = [];
 
 beforeAll(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-test-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-test-"));
 	for (const name of ["a.ts", "b.ts"]) {
 		const p = join(TMPDIR, name);
 		writeFileSync(p, `// ${name}\n`);
