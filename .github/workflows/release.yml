@@ -37,12 +37,10 @@ jobs:
       # rebuilds it via prepack during the release).
       - name: Build CLI bundle
         run: bun --filter @chit-run/cli build
-      # bun publish and bun pm whoami read the auth token from .npmrc.
+      # npm publish and npm whoami read the auth token from .npmrc.
       - name: Configure npm auth
         if: ${{ env.NPM_TOKEN != '' }}
-        run: |
-          printf '%s\n' "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
-          printf '%s\n' "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > apps/cli/.npmrc
+        run: printf '%s\n' "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
       - name: Release
         if: ${{ env.NPM_TOKEN != '' }}
         env:

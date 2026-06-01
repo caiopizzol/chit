@@ -7,9 +7,9 @@
 		[
 			"@semantic-release/exec",
 			{
-				"verifyConditionsCmd": "bun pm whoami",
+				"verifyConditionsCmd": "npm whoami",
 				"prepareCmd": "cd apps/cli && npm pkg set version=${nextRelease.version} && bun run build",
-				"publishCmd": "cd apps/cli && bun publish --access public"
+				"publishCmd": "cd apps/cli && npm publish --access public && npm access set status=public @chit-run/cli"
 			}
 		],
 		"@semantic-release/github"
