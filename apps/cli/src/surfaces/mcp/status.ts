@@ -20,6 +20,9 @@
 
 import { listAudit, type RunSummary } from "../../audit/reader.ts";
 import type { AuditStore } from "../../audit/store.ts";
+import { isStale } from "../../jobs/health.ts";
+import type { JobStore } from "../../jobs/store.ts";
+import type { JobRecord } from "../../jobs/types.ts";
 import { type ConvergeStatus, describeConverge } from "./converge-engine.ts";
 import type { ConvergeStore } from "./converge-store.ts";
 import { isComplete, type Run, readySteps } from "./engine.ts";
@@ -50,11 +53,60 @@ export function summarizeRunForStatus(run: Run): RunStatusSummary {
 	};
 }
 
+// A compact per-job line for the overview. `display` derives stale (a running job
+// whose worker is gone or silent) so a dead worker is visible without rewriting
+// the stored state. Iteration detail (changed files, usage) lives in the loop log;
+// drill in with chit_job_status / chit_converge_trace / chit_audit_show.
+export interface JobStatusSummary {
+	jobId: string;
+	loopId: string;
+	scope: string;
+	task: string;
+	display: JobRecord["state"] | "stale";
+	phase?: JobRecord["phase"];
+	iterationsCompleted: number;
+	lastVerdict?: JobRecord["lastVerdict"];
+	stopStatus?: JobRecord["stopStatus"];
+	auditRefs: string[];
+	createdAt: string;
+	nextAction: string;
+}
+
+function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary {
+	const stale = isStale(job, nowMs);
+	const display = stale ? "stale" : job.state;
+	const nextAction =
+		display === "running"
+			? `in progress${job.phase ? ` (${job.phase})` : ""}; chit_job_status / chit_job_cancel "${job.jobId}"`
+			: display === "queued"
+				? "queued; the worker is starting"
+				: display === "stale"
+					? `worker appears dead; chit_job_status "${job.jobId}" to inspect, then start a fresh job`
+					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; chit_job_status "${job.jobId}" or chit_audit_show <ref>`;
+	return {
+		jobId: job.jobId,
+		loopId: job.loopId,
+		scope: job.scope,
+		task: job.task,
+		display,
+		...(job.phase !== undefined && { phase: job.phase }),
+		iterationsCompleted: job.iterationsCompleted,
+		...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
+		...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
+		auditRefs: job.auditRefs,
+		createdAt: job.createdAt,
+		nextAction,
+	};
+}
+
 export interface ChitStatus {
 	active: {
 		runs: RunStatusSummary[];
 		loops: ConvergeStatus[];
 	};
+	// Durable background jobs (cross-session): every in-flight job (queued/running,
+	// including stale) plus the most recent terminal ones (capped by recentLimit).
+	jobs: JobStatusSummary[];
 	recent: RunSummary[];
 }
 
@@ -93,13 +145,34 @@ export function buildStatus(
 	runs: RunStore,
 	convergeSessions: ConvergeStore,
 	auditStore: AuditStore,
+	jobStore: JobStore,
 	recentLimit: number,
+	nowMs: number,
 ): ChitStatus {
 	return {
 		active: {
 			runs: byNewest(runs.list()).map(summarizeRunForStatus),
 			loops: byNewest(convergeSessions.list()).map(describeConverge),
 		},
+		jobs: jobsForStatus(jobStore, recentLimit, nowMs),
 		recent: recentRuns(auditStore, recentLimit),
 	};
+}
+
+// Durable jobs for the overview: never hide in-flight work (all queued/running,
+// stale included), then the most recent terminal jobs capped by recentLimit.
+// JobStore.list() is newest-first and skips corrupt files; guard the whole read so
+// a jobs I/O failure never masks the rest of the overview.
+function jobsForStatus(jobStore: JobStore, recentLimit: number, nowMs: number): JobStatusSummary[] {
+	let all: JobRecord[];
+	try {
+		all = jobStore.list();
+	} catch {
+		return [];
+	}
+	const inFlight = all.filter((j) => j.state === "queued" || j.state === "running");
+	const terminal = all
+		.filter((j) => j.state !== "queued" && j.state !== "running")
+		.slice(0, recentLimit);
+	return [...inFlight, ...terminal].map((j) => summarizeJobForStatus(j, nowMs));
 }

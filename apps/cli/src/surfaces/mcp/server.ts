@@ -13,26 +13,24 @@
 // chit_converge_status / chit_converge_cancel / chit_converge_trace. Audit tools
 // (read the local transcripts): chit_audit_list / chit_audit_show.
 
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import {
-	findEnforcementGaps,
-	findUnknownAgents,
-	formatEnforcementGaps,
-	parseManifest,
-} from "@chit-run/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
 import { listAudit, showAudit } from "../../audit/reader.ts";
 import { AuditStore } from "../../audit/store.ts";
-import {
-	buildExecute,
-	type ConvergeExecute,
-	validateConvergeManifest,
-} from "../../cli/converge.ts";
+import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
+import { isStale, pidAlive } from "../../jobs/health.ts";
+import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
+import { JobStore } from "../../jobs/store.ts";
+import type { JobRecord } from "../../jobs/types.ts";
+import { runJobWorker } from "../../jobs/worker.ts";
+import { repoKey, repoRoot } from "../../loops/location.ts";
+import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
 import {
 	cancelConverge,
 	describeConverge,
@@ -67,6 +65,10 @@ const convergeSessions = new ConvergeStore();
 // tools inspect runs that converge/run/MCP-start wrote. Reads validate run ids
 // and only resolve blob refs that appear in a run's own events.
 const auditStore = new AuditStore();
+// Durable background jobs (~/.local/state/chit/jobs). Unlike the in-memory run
+// and converge stores, jobs survive MCP reconnect: a detached worker process
+// owns the run, and these tools read/cancel it through the durable record.
+const jobStore = new JobStore();
 // The agent registry is loaded lazily on first use, not at import. The CLI binary
 // imports this module to expose `chit mcp`, so importing it must not read
 // ~/.config/chit/agents.json (that read belongs to a running server, not to every
@@ -330,49 +332,6 @@ server.registerTool(
 // All sit on the same single-iteration primitive and loop log the CLI uses, so
 // a loop driven over MCP is identical on disk to one driven by `chit converge`.
 
-// Load + validate the converge manifest and build its audited execute. Returns a
-// ready execute (plus any unenforced-permission warnings) or an error string,
-// matching `chit converge`'s setup so the MCP and CLI paths refuse the same
-// manifests (non-converge shape, unknown agent, unenforceable permission).
-function prepareConvergeExecute(
-	raw: unknown,
-	scope: string,
-	cwd: string,
-	allowUnenforced: boolean,
-): { ok: true; execute: ConvergeExecute; warnings: string[] } | { ok: false; error: string } {
-	let manifest: ReturnType<typeof parseManifest>;
-	try {
-		manifest = parseManifest(raw);
-	} catch (e) {
-		return { ok: false, error: (e as Error).message };
-	}
-	const shapeError = validateConvergeManifest(manifest);
-	if (shapeError) return { ok: false, error: shapeError };
-	const registry = getRegistry();
-	const unknown = findUnknownAgents(manifest, registry);
-	if (unknown.length > 0) {
-		return {
-			ok: false,
-			error: `unknown agent(s): ${unknown
-				.map((u) => `${u.agentId} (participant "${u.participantId}")`)
-				.join(", ")}`,
-		};
-	}
-	const gaps = findEnforcementGaps(manifest, registry);
-	if (gaps.length > 0 && !allowUnenforced) {
-		return {
-			ok: false,
-			error: `cannot enforce required permissions:\n${formatEnforcementGaps(
-				gaps,
-			)}\nPass allow_unenforced_permissions=true to run anyway.`,
-		};
-	}
-	const warnings = gaps.map(
-		(g) => `unenforced permission: participant "${g.participantId}" requires ${g.permission}`,
-	);
-	return { ok: true, execute: buildExecute(manifest, registry, scope, cwd), warnings };
-}
-
 server.registerTool(
 	"chit_converge_start",
 	{
@@ -437,7 +396,13 @@ server.registerTool(
 		} else {
 			raw = DEFAULT_CONVERGE_MANIFEST;
 		}
-		const prep = prepareConvergeExecute(raw, scope, runCwd, allow_unenforced_permissions);
+		const prep = prepareConvergeExecute(
+			raw,
+			getRegistry(),
+			scope,
+			runCwd,
+			allow_unenforced_permissions,
+		);
 		if (!prep.ok) return errorResult(prep.error);
 		let session: ReturnType<typeof startConvergeSession>;
 		try {
@@ -489,6 +454,22 @@ server.registerTool(
 				.catch(() => {});
 		};
 
+		// One advancer per loop: a background job worker holds the loop lock for its
+		// whole run, so a foreground iteration on the same loop must not advance it
+		// concurrently. Short retry, then fail fast (a bg job is long-lived; the
+		// caller should cancel it or wait rather than block this turn).
+		let loopLock: ReturnType<typeof acquireLock>;
+		try {
+			loopLock = acquireLock(jobStore.loopLockPath(loop_id), { retryMs: 50, maxAttempts: 4 });
+		} catch (e) {
+			if (e instanceof LockError) {
+				return errorResult(
+					`loop "${loop_id}" is being advanced by a background job; cancel it with chit_job_cancel or wait, then retry`,
+				);
+			}
+			throw e;
+		}
+
 		const iterationNo = session.iteration + 1;
 		heartbeat(`${loop_id} · iteration ${iterationNo} · starting`);
 		try {
@@ -533,6 +514,7 @@ server.registerTool(
 		} catch (e) {
 			return errorResult((e as Error).message);
 		} finally {
+			releaseLock(loopLock);
 			// Refresh the idle timer after a (possibly multi-minute) iteration so a
 			// concurrent chit_converge_start sweep does not evict it immediately.
 			convergeSessions.touch(loop_id, Date.now());
@@ -670,7 +652,275 @@ server.registerTool(
 		},
 	},
 	async ({ recent_limit }) => {
-		return jsonResult(buildStatus(runs, convergeSessions, auditStore, recent_limit));
+		return jsonResult(
+			buildStatus(runs, convergeSessions, auditStore, jobStore, recent_limit, Date.now()),
+		);
+	},
+);
+
+// --- background job tools --------------------------------------------------
+//
+// chit_converge_run starts an autonomous converge loop in a DETACHED worker
+// process and returns immediately; chit_job_status inspects it; chit_job_cancel
+// stops it from any later turn. Unlike the foreground chit_converge_* tools (one
+// blocking iteration per call, in-memory session), a job survives MCP reconnect:
+// its state lives in the durable JobStore, the loop log, and the audit store.
+
+// Spawn the worker as `bun <entry> job-run <jobId>`, reusing this process's exact
+// runtime + entry (process.argv[0..1]) so it works the same from source or the
+// packaged binary. detached + stdio ignore + unref: the worker outlives this
+// server (survives reconnect) and is its own process-group leader (pgid === pid),
+// so chit_job_cancel can signal the whole group.
+function spawnJobWorker(jobId: string, cwd: string): void {
+	const child = spawn(String(process.argv[0]), [String(process.argv[1]), "job-run", jobId], {
+		cwd,
+		detached: true,
+		stdio: "ignore",
+	});
+	child.unref();
+}
+
+server.registerTool(
+	"chit_converge_run",
+	{
+		description:
+			"Start an autonomous converge loop as a BACKGROUND job (a detached worker advances it; you keep chatting). Returns immediately with a job_id and loop_id. Inspect with chit_job_status / chit_status, stop with chit_job_cancel. Use the foreground chit_converge_start/next instead when you want to checkpoint each iteration. v1 starts a NEW loop only: an existing loop_id is refused (use chit_converge_next to continue a foreground loop, or force=true / a new loop_id).",
+		inputSchema: {
+			task: z.string().describe("The slice to converge on"),
+			scope: z
+				.string()
+				.describe("Session scope id; both agents keep their thread across iterations"),
+			cwd: z.string().optional().describe("Repo to run in (defaults to the server cwd)"),
+			manifest_path: z
+				.string()
+				.optional()
+				.describe("Converge manifest path (absolute or relative to cwd). Default: the built-in."),
+			max_iterations: z.number().int().min(1).default(3).describe("Iteration budget. Default 3."),
+			loop_id: z.string().optional().describe("Seed a loop id. Default: generated."),
+			force: z
+				.boolean()
+				.default(false)
+				.describe("Overwrite an existing loop log at this loop_id rather than refusing."),
+			allow_unenforced_permissions: z
+				.boolean()
+				.default(false)
+				.describe("Run even when a declared permission cannot be enforced (emits warnings)."),
+		},
+	},
+	async ({
+		task,
+		scope,
+		cwd,
+		manifest_path,
+		max_iterations,
+		loop_id,
+		force,
+		allow_unenforced_permissions,
+	}) => {
+		const runCwd = resolve(cwd ?? process.cwd());
+		let raw: unknown;
+		let manifestAbs: string | undefined;
+		if (manifest_path) {
+			manifestAbs = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
+			try {
+				raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
+			} catch (e) {
+				return errorResult(`could not read manifest at ${manifestAbs}: ${(e as Error).message}`);
+			}
+		} else {
+			raw = DEFAULT_CONVERGE_MANIFEST;
+		}
+		// Validate synchronously so a bad manifest / unknown agent / unenforceable
+		// permission is an immediate error, not a job that fails in the background.
+		const prep = prepareConvergeExecute(
+			raw,
+			getRegistry(),
+			scope,
+			runCwd,
+			allow_unenforced_permissions,
+		);
+		if (!prep.ok) return errorResult(prep.error);
+
+		const loopId = loop_id ?? crypto.randomUUID();
+		// Reserve the loop (the loud "already exists" check for v1's start-only
+		// contract). startLoop refuses an existing loop log unless force.
+		try {
+			startLoop(runCwd, { scope, task, maxIterations: max_iterations, loopId, force });
+		} catch (e) {
+			if (e instanceof LoopStoreError) {
+				return errorResult(
+					`${e.message}. Use chit_converge_next to continue a foreground loop, or start a background job with force=true or a new loop_id.`,
+				);
+			}
+			return errorResult((e as Error).message);
+		}
+
+		const jobId = crypto.randomUUID();
+		const job: JobRecord = {
+			jobId,
+			loopId,
+			repoKey: repoKey(runCwd),
+			cwd: runCwd,
+			scope,
+			task,
+			...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
+			maxIterations: max_iterations,
+			allowUnenforced: allow_unenforced_permissions,
+			state: "queued",
+			createdAt: new Date().toISOString(),
+			iterationsCompleted: 0,
+			auditRefs: [],
+		};
+		try {
+			jobStore.create(job);
+		} catch (e) {
+			stopLoop(runCwd, loopId, { status: "blocked", reason: "could not create job record" });
+			return errorResult((e as Error).message);
+		}
+		try {
+			spawnJobWorker(jobId, runCwd);
+		} catch (e) {
+			// The worker never started: mark the job failed and close the reserved
+			// loop so neither is left dangling.
+			jobStore.update(jobId, (c) => ({
+				...c,
+				state: "failed",
+				failure: `could not spawn worker: ${(e as Error).message}`,
+				endedAt: new Date().toISOString(),
+			}));
+			stopLoop(runCwd, loopId, { status: "blocked", reason: "worker spawn failed" });
+			return errorResult(`could not spawn background worker: ${(e as Error).message}`);
+		}
+		return jsonResult({
+			jobId,
+			loopId,
+			repo: repoRoot(runCwd),
+			state: "queued",
+			nextAction: `running in the background; poll chit_job_status "${jobId}" (or chit_status), cancel with chit_job_cancel "${jobId}"`,
+			...(prep.warnings.length > 0 && { warnings: prep.warnings }),
+		});
+	},
+);
+
+// Compact, durable per-job view: lifecycle state (with derived `stale` when a
+// running worker is gone/silent), the live phase, and the latest iteration's
+// changed files / workspace warnings / usage read from the loop log (the job
+// record points, the loop log details).
+function describeJob(job: JobRecord) {
+	const now = Date.now();
+	const stale = isStale(job, now);
+	const display = stale ? "stale" : job.state;
+	let latest:
+		| { iteration: number; changedFiles: string[]; workspaceWarnings: string[]; usage?: unknown }
+		| undefined;
+	try {
+		const iters = readLoop(job.cwd, job.loopId).filter((r) => r.type === "iteration");
+		const last = iters.at(-1);
+		if (last && last.type === "iteration") {
+			latest = {
+				iteration: last.n,
+				changedFiles: last.changedFiles,
+				workspaceWarnings: last.workspaceWarnings ?? [],
+				...(last.usage !== undefined && { usage: last.usage }),
+			};
+		}
+	} catch {
+		// loop log not readable yet (worker still starting) or removed; omit detail
+	}
+	const nextAction =
+		display === "running"
+			? "in progress; chit_job_cancel to stop, or wait and poll again"
+			: display === "queued"
+				? "queued; the worker is starting"
+				: display === "stale"
+					? "worker appears dead; inspect with chit_job_status (and chit_audit_show <auditRef> for transcripts), then start a fresh job"
+					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; open a transcript with chit_audit_show <auditRef>`;
+	return {
+		jobId: job.jobId,
+		loopId: job.loopId,
+		scope: job.scope,
+		task: job.task,
+		state: job.state,
+		display,
+		stale,
+		alive: pidAlive(job.pid),
+		...(job.phase !== undefined && { phase: job.phase }),
+		...(job.iteration !== undefined && { iteration: job.iteration }),
+		iterationsCompleted: job.iterationsCompleted,
+		...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
+		...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
+		...(job.failure !== undefined && { failure: job.failure }),
+		...(job.cancelRequestedAt !== undefined && { cancelRequestedAt: job.cancelRequestedAt }),
+		auditRefs: job.auditRefs,
+		createdAt: job.createdAt,
+		...(job.startedAt !== undefined && { startedAt: job.startedAt }),
+		...(job.endedAt !== undefined && { endedAt: job.endedAt }),
+		...(job.lastHeartbeatAt !== undefined && { lastHeartbeatAt: job.lastHeartbeatAt }),
+		...(latest !== undefined && { latest }),
+		nextAction,
+	};
+}
+
+server.registerTool(
+	"chit_job_status",
+	{
+		description:
+			"Show one background job: state (queued/running/completed/cancelled/failed, or derived `stale` when the worker is gone), current phase, loop id, iterations, last verdict, audit refs, and the latest iteration's changed files / workspace warnings / usage. Read-only.",
+		inputSchema: { job_id: z.string() },
+	},
+	async ({ job_id }) => {
+		const job = jobStore.get(job_id);
+		if (!job) return errorResult(`unknown job_id ${job_id}`);
+		return jsonResult(describeJob(job));
+	},
+);
+
+server.registerTool(
+	"chit_job_cancel",
+	{
+		description:
+			"Cancel a background job from any turn. Persists the cancel intent FIRST (so it survives a worker restart), then signals the worker's process group. A queued job is cancelled before it starts; a running job stops at the next safe point and records a clean `cancelled` stop. A job that already finished is reported back unchanged.",
+		inputSchema: { job_id: z.string() },
+	},
+	async ({ job_id }) => {
+		const job = jobStore.get(job_id);
+		if (!job) return errorResult(`unknown job_id ${job_id}`);
+		if (job.state !== "queued" && job.state !== "running") {
+			return jsonResult({
+				jobId: job_id,
+				state: job.state,
+				cancelled: false,
+				note: `job already ${job.state}`,
+			});
+		}
+		// Intent first: persist cancelRequestedAt before signaling, so a worker that
+		// restarts or is stale-detected still has the reason on record.
+		const updated = jobStore.update(job_id, (c) => ({
+			...c,
+			cancelRequestedAt: new Date().toISOString(),
+			...(c.state === "running" && { phase: "cancelling" as const }),
+		}));
+		// Then signal the worker's process group (best effort): the in-flight
+		// iteration aborts; a queued worker will see the intent before iteration 1.
+		// Only signal a job that is NOT stale: a stale job's pid may have been reused
+		// by an unrelated process, and process.kill(-pgid) would hit that group. For
+		// a stale job the persisted intent stands; the worker is already gone.
+		let signaled = false;
+		if (!isStale(updated, Date.now()) && updated.pgid !== undefined && pidAlive(updated.pid)) {
+			try {
+				process.kill(-updated.pgid, "SIGTERM");
+				signaled = true;
+			} catch {
+				// ESRCH: the worker already exited. The persisted intent still stands.
+			}
+		}
+		return jsonResult({
+			jobId: job_id,
+			state: updated.state,
+			cancelRequested: true,
+			signaled,
+			note: "cancellation requested; the worker stops at the next safe point and records a clean cancelled stop",
+		});
 	},
 );
 
@@ -686,6 +936,15 @@ export async function startMcpServer(): Promise<void> {
 // Direct source-dev entrypoint: `bun apps/cli/src/surfaces/mcp/server.ts` still
 // starts the server. When this module is imported (e.g. bundled into the CLI),
 // import.meta.main is false, so it does not auto-start.
+//
+// chit_converge_run spawns the worker as `<runtime> <this-entry> job-run <id>`,
+// reusing whatever entry launched the server. If that entry is THIS module
+// (source-dev), it must also dispatch job-run rather than start a second MCP
+// server; the CLI entry (run.ts) already does. So both entrypoints route job-run.
 if (import.meta.main) {
-	await startMcpServer();
+	if (process.argv[2] === "job-run" && process.argv[3]) {
+		await runJobWorker(process.argv[3], { jobStore });
+	} else {
+		await startMcpServer();
+	}
 }

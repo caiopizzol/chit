@@ -18,6 +18,8 @@ import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
+import { JobStore } from "../jobs/store.ts";
+import { runJobWorker } from "../jobs/worker.ts";
 import { loopLogDir } from "../loops/location.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { RuntimeError } from "../runtime/render.ts";
@@ -380,6 +382,18 @@ export async function runMain(argv: string[]): Promise<number> {
 	// doctor is a read-only preflight (checks Bun, the agent CLIs, registry,
 	// audit dir, MCP registration, git); it owns its own (argument-less) parsing.
 	if (argv[0] === "doctor") return runDoctor(argv.slice(1));
+	// job-run is the INTERNAL background-converge worker entrypoint (spawned
+	// detached by chit_converge_run); deliberately not listed in help. It advances
+	// one job's converge loop to a terminal state, writing job/loop/audit state.
+	if (argv[0] === "job-run") {
+		const jobId = argv[1];
+		if (!jobId) {
+			process.stderr.write("chit job-run: requires a <jobId>\n");
+			return 2;
+		}
+		await runJobWorker(jobId, { jobStore: new JobStore() });
+		return 0;
+	}
 
 	let args: ParsedArgs;
 	try {

@@ -94,7 +94,14 @@ const CHECKS_RUN_FALLBACK = "unreported";
 // cancelled (the MCP converge surface passes one; the CLI driver does not).
 export type ConvergeExecute = (
 	inputs: { task: string; prior_review: string },
-	ctx?: { loopId: string; iteration: number; signal?: AbortSignal },
+	ctx?: {
+		loopId: string;
+		iteration: number;
+		signal?: AbortSignal;
+		// Live per-step trace, in addition to the audit recorder. The background
+		// worker uses it to surface the current phase (implementing/reviewing).
+		onTrace?: (event: TraceEvent) => void;
+	},
 ) => Promise<RunResult & { auditRunId?: string }>;
 
 export interface ConvergeLoopOptions {
@@ -263,6 +270,9 @@ export interface ConvergeIterationContext {
 	// When present, threaded to execute so the iteration's manifest run can be
 	// cancelled mid-flight. Absent for the CLI driver (uncancellable, as before).
 	signal?: AbortSignal;
+	// When present, threaded to execute so a driver (the background worker) can
+	// observe per-step progress and surface the current phase.
+	onTrace?: (event: TraceEvent) => void;
 }
 
 // The structured next-state a single iteration hands back so the caller can
@@ -335,6 +345,7 @@ export async function runConvergeIteration(
 				loopId: ctx.loopId,
 				iteration: ctx.iteration,
 				...(ctx.signal && { signal: ctx.signal }),
+				...(ctx.onTrace && { onTrace: ctx.onTrace }),
 			},
 		);
 	} catch (e) {
@@ -497,6 +508,54 @@ export function buildExecute(
 	);
 }
 
+export type PrepareConvergeResult =
+	| { ok: true; execute: ConvergeExecute; warnings: string[] }
+	| { ok: false; error: string };
+
+// Load + validate a converge manifest and build its audited execute. Shared by
+// the MCP converge surface and the background worker so both refuse the same
+// manifests (non-converge shape, unknown agent, unenforceable permission) and
+// build the execute identically. Returns the ready execute plus any
+// unenforced-permission warnings, or a single error string.
+export function prepareConvergeExecute(
+	raw: unknown,
+	registry: NormalizedRegistry,
+	scope: string,
+	cwd: string,
+	allowUnenforced: boolean,
+): PrepareConvergeResult {
+	let manifest: ReturnType<typeof parseManifest>;
+	try {
+		manifest = parseManifest(raw);
+	} catch (e) {
+		return { ok: false, error: (e as Error).message };
+	}
+	const shapeError = validateConvergeManifest(manifest);
+	if (shapeError) return { ok: false, error: shapeError };
+	const unknown = findUnknownAgents(manifest, registry);
+	if (unknown.length > 0) {
+		return {
+			ok: false,
+			error: `unknown agent(s): ${unknown
+				.map((u) => `${u.agentId} (participant "${u.participantId}")`)
+				.join(", ")}`,
+		};
+	}
+	const gaps = findEnforcementGaps(manifest, registry);
+	if (gaps.length > 0 && !allowUnenforced) {
+		return {
+			ok: false,
+			error: `cannot enforce required permissions:\n${formatEnforcementGaps(
+				gaps,
+			)}\nPass allow_unenforced_permissions=true to run anyway.`,
+		};
+	}
+	const warnings = gaps.map(
+		(g) => `unenforced permission: participant "${g.participantId}" requires ${g.permission}`,
+	);
+	return { ok: true, execute: buildExecute(manifest, registry, scope, cwd), warnings };
+}
+
 // Wrap a base adapter map into a converge execute that records each manifest run
 // to the audit store (run/step/adapter-call events + prompt/output blobs +
 // usage). Exported so the audit wiring is testable with fake adapters and an
@@ -539,7 +598,10 @@ export function makeAuditedExecute(
 				inputs,
 				adapters,
 				invocationCwd: cwd,
-				onTrace: (e) => recorder.fromTrace(e),
+				onTrace: (e) => {
+					recorder.fromTrace(e);
+					ctx?.onTrace?.(e);
+				},
 				...(ctx?.signal && { signal: ctx.signal }),
 			});
 			recorder.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);

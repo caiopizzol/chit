@@ -3,11 +3,20 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditStore } from "../../audit/store.ts";
+import { JobStore } from "../../jobs/store.ts";
+import type { JobRecord } from "../../jobs/types.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import { ConvergeStore } from "./converge-store.ts";
 import type { Run } from "./engine.ts";
 import { RunStore } from "./run-store.ts";
 import { buildStatus, summarizeRunForStatus } from "./status.ts";
+
+const NOW = Date.parse("2026-06-01T11:00:00.000Z");
+
+// A fresh, empty job store under a temp dir (never touches the real state dir).
+function emptyJobStore(): JobStore {
+	return new JobStore(mkdtempSync(join(tmpdir(), "chit-status-jobs-")));
+}
 
 // Minimal Run: the status summary reads only runId, manifest.id, records, the
 // manifest dependencies (for readySteps), recorder, and startedAtMs (the
@@ -49,10 +58,74 @@ function emptyAuditStore(): AuditStore {
 
 describe("buildStatus", () => {
 	test("empty stores produce empty active sections and empty recent", () => {
-		const status = buildStatus(new RunStore(), new ConvergeStore(), emptyAuditStore(), 5);
+		const status = buildStatus(
+			new RunStore(),
+			new ConvergeStore(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+		);
 		expect(status.active.runs).toEqual([]);
 		expect(status.active.loops).toEqual([]);
+		expect(status.jobs).toEqual([]);
 		expect(status.recent).toEqual([]);
+	});
+
+	test("durable jobs: in-flight always shown, terminal capped, stale derived", () => {
+		const jobStore = emptyJobStore();
+		const base: Omit<JobRecord, "jobId" | "loopId" | "state" | "createdAt"> = {
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 0,
+			auditRefs: [],
+		};
+		// a live running job (fresh heartbeat, this process's pid => alive)
+		jobStore.create({
+			...base,
+			jobId: "live",
+			loopId: "live",
+			state: "running",
+			createdAt: "2026-06-01T10:03:00.000Z",
+			pid: process.pid,
+			lastHeartbeatAt: new Date(NOW).toISOString(),
+		});
+		// a stale running job (heartbeat ancient => derived stale)
+		jobStore.create({
+			...base,
+			jobId: "stale",
+			loopId: "stale",
+			state: "running",
+			createdAt: "2026-06-01T10:02:00.000Z",
+			pid: process.pid,
+			lastHeartbeatAt: "2020-01-01T00:00:00.000Z",
+		});
+		jobStore.create({
+			...base,
+			jobId: "done",
+			loopId: "done",
+			state: "completed",
+			createdAt: "2026-06-01T10:01:00.000Z",
+			stopStatus: "converged",
+		});
+
+		const status = buildStatus(
+			new RunStore(),
+			new ConvergeStore(),
+			emptyAuditStore(),
+			jobStore,
+			5,
+			NOW,
+		);
+		const byId = Object.fromEntries(status.jobs.map((j) => [j.jobId, j]));
+		expect(byId.live?.display).toBe("running");
+		expect(byId.stale?.display).toBe("stale");
+		expect(byId.done?.display).toBe("completed");
+		expect(byId.done?.stopStatus).toBe("converged");
 	});
 
 	test("summarizes a pending run as not-complete with its ready step", () => {
@@ -83,7 +156,7 @@ describe("buildStatus", () => {
 		loops.add(fakeSession("loop-old", 0), 0);
 		loops.add(fakeSession("loop-new", 1), 1);
 
-		const status = buildStatus(runs, loops, emptyAuditStore(), 5);
+		const status = buildStatus(runs, loops, emptyAuditStore(), emptyJobStore(), 5, NOW);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["new", "old"]);
 		expect(status.active.loops.map((l) => l.loopId)).toEqual(["loop-new", "loop-old"]);
@@ -101,13 +174,20 @@ describe("buildStatus", () => {
 		loops.add(fakeSession("loop-b", 1), 1);
 		loops.add(fakeSession("loop-a", 2), 2); // restarted with a later startedAtMs
 
-		const status = buildStatus(new RunStore(), loops, emptyAuditStore(), 5);
+		const status = buildStatus(new RunStore(), loops, emptyAuditStore(), emptyJobStore(), 5, NOW);
 
 		expect(status.active.loops.map((l) => l.loopId)).toEqual(["loop-a", "loop-b"]);
 	});
 
 	test("recent_limit of 0 returns no recent runs", () => {
-		const status = buildStatus(new RunStore(), new ConvergeStore(), emptyAuditStore(), 0);
+		const status = buildStatus(
+			new RunStore(),
+			new ConvergeStore(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			0,
+			NOW,
+		);
 		expect(status.recent).toEqual([]);
 	});
 
@@ -122,7 +202,7 @@ describe("buildStatus", () => {
 		const runs = new RunStore();
 		runs.add(fakeRun("r1", { startedAtMs: 0 }), 0);
 
-		const status = buildStatus(runs, new ConvergeStore(), throwingStore, 5);
+		const status = buildStatus(runs, new ConvergeStore(), throwingStore, emptyJobStore(), 5, NOW);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["r1"]);
 		expect(status.recent).toEqual([]);

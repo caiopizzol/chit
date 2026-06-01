@@ -76,6 +76,22 @@ Cancel a loop. Input: `loop_id`. If an iteration is in flight, aborts it (it set
 
 Diagnostic history, answering "what happened?". Input: `loop_id`. Reads straight from the durable loop log (not a second source of truth) and adds the live state. Returns `{ loop_id, status, active, audit_refs[], records[] }`, where `records` are the loop-log records: the header, each iteration (summary, changed files, verdict, decision, usage, audit ref), and the stop record.
 
+## Background jobs
+
+The converge tools above are foreground: one blocking iteration per call, so you checkpoint each round. A background **job** is the other mode: a detached worker advances the loop on its own while you keep working, and you inspect or stop it from any later turn. Use foreground converge when you want to review every iteration; use a job when the task is scoped enough to run unattended. A job's state is durable (it survives an MCP reconnect): the job record lives under the state dir, the iterations in the loop log, the transcripts in the audit store.
+
+### chit_converge_run
+
+Start a converge loop as a background job. Inputs: `task`, `scope`, `cwd?`, `manifest_path?`, `max_iterations?` (default 3), `loop_id?`, `force?`, `allow_unenforced_permissions?`. Validates the manifest synchronously, reserves the loop, spawns the detached worker, and returns immediately with `{ jobId, loopId, repo, state: "queued", nextAction, warnings? }`. v1 starts a NEW loop only: an existing `loop_id` is refused (continue a foreground loop with `chit_converge_next`, or pass `force: true` / a new `loop_id`).
+
+### chit_job_status
+
+Inspect one job. Input: `job_id`. Returns the job's `state` (`queued` / `running` / `completed` / `cancelled` / `failed`) plus a derived `stale` (a running job whose worker is gone or silent), the current `phase`, `iterationsCompleted`, `lastVerdict`, `stopStatus`, `auditRefs`, and the latest iteration's `changedFiles` / `workspaceWarnings` / `usage` (read from the loop log). Read-only.
+
+### chit_job_cancel
+
+Cancel a job from any turn. Input: `job_id`. Persists the cancel intent first (so it survives a worker restart), then signals the worker's process group. A queued job is cancelled before it starts; a running job stops at the next safe point and records a clean `cancelled` stop. A finished job is reported back unchanged. `chit_status` lists active and recent jobs alongside the in-memory runs.
+
 ## Audit tools
 
 The audit tools read the local audit transcripts that audited runs write (`chit converge`, `chit run --audit`, MCP `chit_run_start audit:true`, and MCP converge), so a run's prompts, outputs, usage, and timeline are inspectable from the chat. Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
