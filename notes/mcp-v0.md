@@ -90,32 +90,35 @@ MCP client.
 
 ## Cancellation
 
-Cancellation is an explicit chit action, not a dependency on ambient Esc
-behavior. `chit_run_step` owns an `AbortController` per run+step, registered for
-the whole call, and folds in the request's own `extra.signal` (so if a client
-cancellation ever propagates, it aborts the same controller). `chit_cancel`
+Cancellation has two reachable paths: the explicit, portable `chit_cancel`, and
+(in Claude Code) the Esc key, which propagates request cancellation (settled
+below). `chit_run_step` owns an `AbortController` per run+step, registered for
+the whole call, and folds in the request's own `extra.signal` (a propagated
+client cancellation aborts the same controller). `chit_cancel`
 aborts it; both adapters (`claude-cli`, `codex-exec`) kill their child process on
 abort and reject; the engine discriminates on `signal.aborted` to settle the
 step `cancelled`. The mechanism is proven end-to-end against real codex (a
 concurrent `chit_cancel` killed an in-flight step in ~6s, not the ~220s it would
 have taken — receipt 0005).
 
-## Open question (UX, not correctness)
+## In-session cancel: settled (outcome a)
 
-In-session cancel reachability is unproven: because `chit_run_step` blocks the
-model's turn, issuing a `chit_cancel` while a step is in flight depends on
-pressing **Esc** to free the turn. Three outcomes, to be settled by a cheap live
-probe (start a long step, Esc after the first heartbeat, record what happens):
+In-session cancel is reachable. Because `chit_run_step` blocks the model's turn,
+in-session cancel rides on the Esc key; a live probe in Claude Code (start a long
+codex step, press Esc after the first heartbeat) settled it as outcome (a): Esc
+propagates MCP request cancellation. The interrupt freed the turn AND the
+folded-in `extra.signal` aborted the step's controller, killing the codex child
+and settling the step `cancelled` ("aborted by client") in ~5.4s, with no
+`chit_cancel` call at all. (Observed via `chit_trace`; that probe run was not
+audited, so this is the observed trace, not a reopenable receipt.)
 
-- (a) Esc propagates MCP cancellation → the folded-in `extra.signal` cancels the
-  step with no `chit_cancel` call at all.
-- (b) Esc frees the turn but does not cancel → a follow-up `chit_cancel` reaches
-  the still-registered controller (server-side path proven by 0005).
-- (c) Esc neither cancels nor frees the turn → in-session cancel is unreachable,
-  which would justify converting `chit_run_step` to async dispatch (returns
-  immediately; poll `chit_next`/a `chit_status`; `chit_cancel` in a normal
-  turn). That is a contract-breaking slice, not a tweak — deferred until (c) is
-  actually observed.
+This is a Claude Code behavior, not a guarantee for every MCP client, so
+`chit_cancel` stays the portable, programmatic path (and the only one when the
+turn is not blocked, e.g. cancelling from a fresh turn). No async-dispatch
+contract change is needed: a blocking tool can stay blocking as long as it folds
+the request's `extra.signal` into its active abort controller the way
+`chit_run_step` does. That is the cancellation contract a future
+`chit_converge_next` must follow.
 
 ## Known limits / backlog
 

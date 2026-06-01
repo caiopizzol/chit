@@ -55,7 +55,7 @@ There is no within-step streaming of the agent's output to the MCP client. The h
 
 ## Cancellation
 
-Cancellation is an explicit chit action, not a dependency on ambient Esc behavior. `chit_run_step` owns an `AbortController` per run and step, registered for the whole call, and folds in the request's own `extra.signal` (so if a client cancellation ever propagates, it aborts the same controller). `chit_cancel` aborts it; both adapters (`claude-cli`, `codex-exec`) kill their child process on abort and reject; the engine discriminates on `signal.aborted` to settle the step `cancelled`. The mechanism is proven end-to-end against codex, where a concurrent `chit_cancel` killed an in-flight step in ~6s rather than the ~220s it would otherwise have taken.
+Cancellation has two reachable paths. The portable one is `chit_cancel`: `chit_run_step` owns an `AbortController` per run and step, registered for the whole call; `chit_cancel` aborts it, both adapters (`claude-cli`, `codex-exec`) kill their child process on abort and reject, and the engine discriminates on `signal.aborted` to settle the step `cancelled`. It is proven end-to-end against codex, where a concurrent `chit_cancel` killed an in-flight step in ~6s rather than the ~220s it would otherwise have taken. The second path is ambient: in Claude Code, pressing **Esc** during a blocking `chit_run_step` propagates request cancellation through the call's folded-in `extra.signal`, which aborts the same controller. A live probe confirmed this (a long codex step, Esc after the first heartbeat, settled `cancelled` "aborted by client" in ~5.4s, with no `chit_cancel` call). Esc behavior is client-specific, so `chit_cancel` stays the portable backup.
 
 ## Limits
 
