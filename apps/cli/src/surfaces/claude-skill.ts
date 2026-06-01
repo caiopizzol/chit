@@ -131,7 +131,7 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 		);
 	}
 	const primaryInputSchema = manifest.inputs[primaryInput];
-	if (!primaryInputSchema || primaryInputSchema.type !== "string") {
+	if (primaryInputSchema?.type !== "string") {
 		throw new SurfaceInstallError(
 			`manifest "${manifest.id}": claude-skill surface only supports a string-typed primary input ` +
 				`(got "${primaryInput}": ${primaryInputSchema?.type ?? "missing"})`,
