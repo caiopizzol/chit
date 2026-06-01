@@ -23,7 +23,7 @@ chit is not an agent framework, a workflow engine, a SaaS dashboard, a dynamic r
 Requires [Bun](https://bun.sh). Install the CLI, check your setup, and register the MCP server:
 
 ```sh
-bun install -g @chit-run/cli
+bun install -g @chit-run/cli@latest
 chit doctor
 claude mcp add chit --scope local -- chit mcp
 ```
@@ -34,7 +34,7 @@ Then, in a Claude Code conversation, in a git worktree:
 
 > Use chit to converge on this task: <a small, scoped change>. Run a couple of iterations and show me the audit trail.
 
-chit drives the loop with its converge tools: a write-capable Claude implements the slice, a read-only Codex reviews the diff, and each iteration is recorded. Read the receipt with the audit tools. The implementer edits files, so run it against a git worktree, not your main checkout. Upgrade later with `bun update -g @chit-run/cli`.
+chit drives the loop with its converge tools: a write-capable Claude implements the slice, a read-only Codex reviews the diff, and each iteration is recorded. Read the receipt with the audit tools. The implementer edits files, so run it against a git worktree, not your main checkout. Upgrade later with the same command: `bun install -g @chit-run/cli@latest` (during 0.x, `bun update -g` will not cross a minor).
 
 ## The implement/check loop
 

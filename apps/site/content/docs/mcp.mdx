@@ -8,11 +8,11 @@ The MCP surface exposes chit inside a chat through two tool families. Stepwise m
 Install the CLI, then register the MCP server with `chit mcp`:
 
 ```sh
-bun install -g @chit-run/cli
+bun install -g @chit-run/cli@latest
 claude mcp add chit --scope local -- chit mcp
 ```
 
-`chit mcp` runs the stdio MCP server from the installed `chit` binary (the same binary as `chit run`, `chit converge`, `chit audit`). Upgrade with `bun update -g @chit-run/cli`. From a source checkout the equivalent is `claude mcp add chit --scope local -- bun <repo>/apps/cli/src/cli/run.ts mcp`.
+`chit mcp` runs the stdio MCP server from the installed `chit` binary (the same binary as `chit run`, `chit converge`, `chit audit`). Upgrade with the same command, `bun install -g @chit-run/cli@latest` (during 0.x, `bun update -g` will not cross a minor). From a source checkout the equivalent is `claude mcp add chit --scope local -- bun <repo>/apps/cli/src/cli/run.ts mcp`.
 
 Source: `apps/cli/src/surfaces/mcp/` (`server.ts` is the tools, `engine.ts` is the stepwise run engine, `converge-engine.ts` is the single-iteration converge driver).
 
