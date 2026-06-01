@@ -5,9 +5,11 @@
 		"@semantic-release/commit-analyzer",
 		"@semantic-release/release-notes-generator",
 		[
-			"@semantic-release/npm",
+			"@semantic-release/exec",
 			{
-				"pkgRoot": "apps/cli"
+				"verifyConditionsCmd": "bun pm whoami",
+				"prepareCmd": "cd apps/cli && npm pkg set version=${nextRelease.version} && bun run build",
+				"publishCmd": "cd apps/cli && bun publish --access public"
 			}
 		],
 		"@semantic-release/github"

@@ -33,10 +33,14 @@ jobs:
       - run: bun run check
       - run: bun run typecheck
       - run: bun run test
-      # Build the bundle up front so npm sees dist/chit.js when it reads the
-      # manifest (prepack builds it too, which keeps local npm pack working).
+      # Validate the publishable bundle builds on every push (bun publish also
+      # rebuilds it via prepack during the release).
       - name: Build CLI bundle
         run: bun --filter @chit-run/cli build
+      # bun publish and bun pm whoami read the auth token from .npmrc.
+      - name: Configure npm auth
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
       - name: Release
         if: ${{ env.NPM_TOKEN != '' }}
         env:

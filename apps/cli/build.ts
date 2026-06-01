@@ -3,6 +3,11 @@
 // third-party deps) is inlined, so the published package has no runtime
 // dependencies. The binary targets Bun: the CLI uses Bun.spawn / Bun.stdin and
 // Studio uses Bun.serve, so it runs under `bunx`, not plain Node.
+//
+// @chit-run/core and @chit-run/studio stay as workspace:* devDependencies so the
+// source resolves under tsc and bun, but they are inlined here, so the published
+// package carries no runtime dependencies. The release publishes with
+// `bun publish` (not npm), which understands the workspace: protocol.
 import { chmodSync } from "node:fs";
 
 const result = await Bun.build({
