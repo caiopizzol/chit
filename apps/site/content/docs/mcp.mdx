@@ -73,6 +73,18 @@ Cancel a loop. Input: `loop_id`. If an iteration is in flight, aborts it (it set
 
 Diagnostic history, answering "what happened?". Input: `loop_id`. Reads straight from the durable loop log (not a second source of truth) and adds the live state. Returns `{ loop_id, status, active, audit_refs[], records[] }`, where `records` are the loop-log records: the header, each iteration (summary, changed files, verdict, decision, usage, audit ref), and the stop record.
 
+## Audit tools
+
+The audit tools read the local audit transcripts that audited runs write (`chit converge`, `chit run --audit`, MCP `chit_start audit:true`, and MCP converge), so a run's prompts, outputs, usage, and timeline are inspectable from the chat. Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
+
+### chit_audit_list
+
+List audited runs, newest first. Input: `limit?`. Returns `{ runs[] }`, each run `{ runId, manifestId, surface, scope?, loopId?, iteration?, startedAt?, status, stepCount, usage?, openCall? }`, where `status` is the `run.completed` status or `incomplete`, and `openCall` (when present) names a step whose adapter call started but never completed (killed mid-call).
+
+### chit_audit_show
+
+Show one run. Inputs: `run_id`, `include_bodies` (default `false`). Returns `{ summary, incompleteReason?, participants?, timeline[] }`: the summary above, the reason when incomplete, the participant config recorded at start, and the structured event timeline. Prompt/output/event bodies are attached to their timeline entries (`input`/`output`/`raw`) only when `include_bodies` is true, since they can be large or hold secrets. Errors on an invalid or missing run id.
+
 ## Observability (heartbeat)
 
 While a call step runs, `chit_run_step` emits, every ~5s, both a progress notification (with `progressToken`) and a logging notification carrying the same latest-state text: `"<step> · <participant> (<agent>) still running · Ns elapsed"`. Claude Code renders the latest heartbeat live in the collapsed tool call; the full transcript is `chit_trace`.

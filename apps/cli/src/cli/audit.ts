@@ -10,12 +10,13 @@
 // run with no terminal marker. The reader never infers success from the absence
 // of a terminal event.
 
+import { type AuditEvent, configPairs, formatAdapterUsage } from "@chit-run/core";
 import {
-	type AdapterUsage,
-	type AuditEvent,
-	configPairs,
-	formatAdapterUsage,
-} from "@chit-run/core";
+	describeIncomplete,
+	type RunSummary,
+	safeReadEvents,
+	summarizeRun,
+} from "../audit/reader.ts";
 import { AuditStore } from "../audit/store.ts";
 
 export interface AuditIO {
@@ -46,143 +47,10 @@ then chit/audit). A run with no run.completed event is shown as INCOMPLETE.
 
 class UsageError extends Error {}
 
-// An adapter call that started but has no matching adapter.call.completed: the
-// process was killed or abandoned WHILE the call was in flight. The audit
-// wrapper records completed even on error/cancel, so a missing completed means
-// the call never returned at all (the wedge/kill case), not a normal failure.
-interface OpenCall {
-	stepId: string;
-	participantId: string;
-	agentId: string;
-	since: string;
-}
-
-interface RunSummary {
-	runId: string;
-	manifestId: string;
-	surface: string;
-	scope?: string;
-	loopId?: string;
-	iteration?: number;
-	startedAt?: string;
-	// The run.completed status, or "incomplete" when there is no terminal event.
-	status: string;
-	stepCount: number;
-	usage?: AdapterUsage;
-	// Set only when an adapter call was left open (no completed). Present on
-	// incomplete runs that were killed mid-call; absent on healthy runs.
-	openCall?: OpenCall;
-}
-
-const USAGE_KEYS: (keyof AdapterUsage)[] = [
-	"inputTokens",
-	"outputTokens",
-	"totalTokens",
-	"cachedInputTokens",
-	"reasoningTokens",
-	"estimatedCostUsd",
-];
-
-// Sum every adapter.call.completed usage in the run, per field (absent stays
-// absent). Cost is the sum of REPORTED costs only, so it is a known-cost floor.
-function sumUsage(events: AuditEvent[]): AdapterUsage | undefined {
-	const usage: AdapterUsage = {};
-	let any = false;
-	for (const e of events) {
-		if (e.type !== "adapter.call.completed" || !e.usage) continue;
-		for (const k of USAGE_KEYS) {
-			const v = e.usage[k];
-			if (typeof v === "number") {
-				usage[k] = (usage[k] ?? 0) + v;
-				any = true;
-			}
-		}
-	}
-	return any ? usage : undefined;
-}
-
-// Find an adapter call with no matching adapter.call.completed. Keyed by stepId,
-// which is safe even when a manifest level runs its steps in parallel: step ids
-// are unique manifest keys that run once per audit run, so concurrent calls
-// occupy distinct keys and never collide. Returns the most recent still-open
-// call, or undefined when every call settled. This is the "killed mid-call"
-// signal: a normal error/cancel still records a completed event.
-function findOpenCall(events: AuditEvent[]): OpenCall | undefined {
-	const open = new Map<string, OpenCall>();
-	for (const e of events) {
-		if (e.type === "adapter.call.started") {
-			open.set(e.stepId, {
-				stepId: e.stepId,
-				participantId: e.participantId,
-				agentId: e.agentId,
-				since: e.ts,
-			});
-		} else if (e.type === "adapter.call.completed") {
-			open.delete(e.stepId);
-		}
-	}
-	let latest: OpenCall | undefined;
-	for (const c of open.values()) {
-		if (latest === undefined || c.since > latest.since) latest = c;
-	}
-	return latest;
-}
-
-// Explain WHY an incomplete run (no run.completed) ended where it did, from the
-// timeline alone. Precedence: a call left open (work killed mid-flight) is the
-// most actionable; else a step that failed; else the run was abandoned before
-// any terminal marker. The reason follows the "incomplete" label in `show`.
-function describeIncomplete(s: RunSummary, events: AuditEvent[]): string {
-	if (s.openCall) {
-		const c = s.openCall;
-		return `open call: ${c.stepId} ${c.participantId}/${c.agentId} since ${c.since}; no adapter.call.completed`;
-	}
-	const failed = events.find((e) => e.type === "step.failed");
-	if (failed?.type === "step.failed") {
-		const err = failed.error.replace(/\s+/g, " ").trim();
-		const clipped = err.length > 200 ? `${err.slice(0, 200)}...` : err;
-		return `failed step: ${failed.stepId}: ${clipped}`;
-	}
-	return "abandoned before terminal run.completed";
-}
-
-function summarize(runId: string, events: AuditEvent[]): RunSummary {
-	const started = events.find((e) => e.type === "run.started");
-	const completed = events.find((e) => e.type === "run.completed");
-	const summary: RunSummary = {
-		runId,
-		manifestId: started?.type === "run.started" ? started.manifestId : "?",
-		surface: started?.type === "run.started" ? started.surface : "?",
-		status: completed?.type === "run.completed" ? completed.status : "incomplete",
-		stepCount: events.filter((e) => e.type === "step.completed").length,
-	};
-	if (started?.type === "run.started") {
-		summary.startedAt = started.ts;
-		if (started.scope !== undefined) summary.scope = started.scope;
-		if (started.loopId !== undefined) summary.loopId = started.loopId;
-		if (started.iteration !== undefined) summary.iteration = started.iteration;
-	}
-	const usage = sumUsage(events);
-	if (usage !== undefined) summary.usage = usage;
-	const openCall = findOpenCall(events);
-	if (openCall !== undefined) summary.openCall = openCall;
-	return summary;
-}
-
-// Read a run's events, returning [] on any read error so `list` stays robust
-// across a corrupt or mid-write log (show() reads directly so it can report).
-function safeRead(store: AuditStore, runId: string): AuditEvent[] {
-	try {
-		return store.readEvents(runId);
-	} catch {
-		return [];
-	}
-}
-
 function runList(store: AuditStore, io: AuditIO, json: boolean): number {
 	const summaries: RunSummary[] = [];
 	for (const runId of store.listRuns()) {
-		summaries.push(summarize(runId, safeRead(store, runId)));
+		summaries.push(summarizeRun(runId, safeReadEvents(store, runId)));
 	}
 	summaries.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
 
@@ -287,7 +155,7 @@ function runShow(
 		return 0;
 	}
 
-	const s = summarize(runId, events);
+	const s = summarizeRun(runId, events);
 	io.out(`run ${runId}\n`);
 	io.out(
 		`  manifest: ${s.manifestId}   surface: ${s.surface}${s.scope ? `   scope: ${s.scope}` : ""}\n`,

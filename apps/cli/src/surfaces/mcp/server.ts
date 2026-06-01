@@ -10,7 +10,8 @@
 // Stepwise manifest tools: chit_start -> chit_next -> chit_run_step (repeat) ->
 // chit_trace. Converge tools (autonomous implement/review loop, one iteration
 // per call): chit_converge_start -> chit_converge_next (repeat) with
-// chit_converge_status / chit_converge_cancel / chit_converge_trace.
+// chit_converge_status / chit_converge_cancel / chit_converge_trace. Audit tools
+// (read the local transcripts): chit_audit_list / chit_audit_show.
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -24,6 +25,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
+import { listAudit, showAudit } from "../../audit/reader.ts";
+import { AuditStore } from "../../audit/store.ts";
 import {
 	buildExecute,
 	type ConvergeExecute,
@@ -59,6 +62,10 @@ const controllers: StepControllers = new Map();
 // Idle-evicting converge session store (sweeps on chit_converge_start). Holds the
 // in-memory state for chit_converge_* loops; the durable record is the loop log.
 const convergeSessions = new ConvergeStore();
+// The local audit store (~/.local/state/chit/audit), read-only here: the audit
+// tools inspect runs that converge/run/MCP-start wrote. Reads validate run ids
+// and only resolve blob refs that appear in a run's own events.
+const auditStore = new AuditStore();
 const registry = loadRegistry();
 
 const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
@@ -563,6 +570,57 @@ server.registerTool(
 		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
 		try {
 			return jsonResult(traceConverge(session));
+		} catch (e) {
+			return errorResult((e as Error).message);
+		}
+	},
+);
+
+// --- audit tools ----------------------------------------------------------
+//
+// Read the local audit transcripts (what `chit converge`, `chit run --audit`, and
+// MCP audited runs wrote) from inside a chat. Same reader as `chit audit
+// list/show`. Read-only: list summarizes every run; show returns one run's
+// timeline, with prompt/output/event bodies included ONLY when explicitly asked,
+// and bodies resolved only from refs the run's own events carry (no arbitrary
+// file reads). An incomplete run (no run.completed) is labelled with why: an open
+// call killed mid-flight, a failed step, or an abandoned run.
+
+server.registerTool(
+	"chit_audit_list",
+	{
+		description:
+			"List audited runs (newest first): run id, manifest, surface, scope, loop, status (or `incomplete`), step count, usage/cost, and an open-call marker for a run killed mid-call. Use chit_audit_show for one run's timeline.",
+		inputSchema: {
+			limit: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Return at most this many runs (newest first). Default: all."),
+		},
+	},
+	async ({ limit }) => {
+		return jsonResult({ runs: listAudit(auditStore, limit) });
+	},
+);
+
+server.registerTool(
+	"chit_audit_show",
+	{
+		description:
+			"Show one audited run: a summary (manifest/surface/scope/status/usage), the recorded participant config, and the event timeline. An incomplete run carries the reason (open call / failed step / abandoned). Prompt/output/event bodies are included ONLY when include_bodies is true (they can be large or hold secrets), and only for blob refs the run's own events carry.",
+		inputSchema: {
+			run_id: z.string(),
+			include_bodies: z
+				.boolean()
+				.default(false)
+				.describe("Include rendered prompt/output/event bodies. Off by default."),
+		},
+	},
+	async ({ run_id, include_bodies }) => {
+		try {
+			return jsonResult(showAudit(auditStore, run_id, include_bodies));
 		} catch (e) {
 			return errorResult((e as Error).message);
 		}

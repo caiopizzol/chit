@@ -138,6 +138,33 @@ durable loop log (NOT a second source of truth) and adds the live state. Returns
 loop-log records (header, each iteration's summary/changed files/verdict/decision/
 usage/audit ref, and the stop record).
 
+## Audit tools
+
+Read the local audit transcripts (`chit converge`, `chit run --audit`, MCP
+`chit_start audit:true`, MCP converge) from the chat. Same reader as the CLI
+`chit audit list/show` (the pure logic lives in `apps/cli/src/audit/reader.ts`,
+shared by both surfaces). Read-only over `~/.local/state/chit/audit`. A run with
+no `run.completed` is `incomplete`, with the reason derived from the timeline (an
+open call killed mid-flight, a failed step, or an abandoned run). Bodies are
+resolved ONLY from blob refs a run's own events carry (`inputBlob`/`outputBlob`/
+`rawBlob`), never a caller path, so the tools cannot serve an arbitrary file.
+
+### chit_audit_list
+List audited runs, newest first. Input: `limit?`. Returns `{ runs[] }`, each
+`{ runId, manifestId, surface, scope?, loopId?, iteration?, startedAt?, status,
+stepCount, usage?, openCall? }`. `status` is the `run.completed` status or
+`incomplete`; `openCall` (when present) names a step whose adapter call started
+but never completed (the killed-mid-call signal). Robust to a corrupt run log: it
+is summarized as incomplete rather than failing the whole list.
+
+### chit_audit_show
+Show one run. Inputs: `run_id`, `include_bodies` (default false). Returns
+`{ summary, incompleteReason?, participants?, timeline[] }`: the summary above,
+the reason when incomplete, the participant config recorded at `run.started`, and
+the structured event timeline. Prompt/output/event bodies attach to their
+timeline entries (`input`/`output`/`raw`) only when `include_bodies` is true (they
+can be large or hold secrets). Errors on an invalid or missing run id.
+
 ## Observability (heartbeat)
 
 While a call step runs, `chit_run_step` emits, every ~5s, both a progress
