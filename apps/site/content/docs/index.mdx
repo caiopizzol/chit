@@ -3,9 +3,11 @@ title: Overview
 description: A thin runtime for multi-agent workflows. Stop being the glue between your agents.
 ---
 
-A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, where a reviewer checks, where you check. The runtime reads the chit and runs it inside your Claude Code, MCP, or CLI session. You stop being the copy-paste layer between two terminals.
+A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, and where a reviewer checks the work. The runtime reads the chit and runs it, primarily inside a Claude Code conversation over MCP. You stay in the loop and step in where judgment matters.
 
-The manifest is the artifact. A shared runtime executes it. Surfaces (a Claude Code skill, MCP tools, a CLI command) are thin shims that call the runtime with a manifest and inputs.
+Claude implements. Codex reviews. chit records what happened. Three things you get: a versioned routine, cross-vendor agents, and an audit trail.
+
+The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools, a CLI command, a Claude Code skill) are thin shims that call the runtime with a manifest and inputs. MCP is the primary surface; the CLI is support tooling.
 
 ## What this is not
 
@@ -19,15 +21,31 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (a Claude C
 
 1. **Agents.** A registry of invocable participants (Codex CLI, Claude CLI, others via adapters).
 2. **Chits.** JSON manifests wiring agents into handoff graphs for a task.
-3. **Surfaces.** Adapters that expose a chit as a Claude Code skill, MCP tools, or a CLI command.
+3. **Surfaces.** Shims that expose a chit as MCP tools, a CLI command, or a Claude Code skill.
+
+## Safety model
+
+- **Codex is hard-sandboxed.** A read-only reviewer runs `codex exec --sandbox read-only`, an OS-level sandbox.
+- **Claude read-only is permission-level.** A read-only `claude` runs with `--permission-mode plan`, which blocks writes from inside Claude. It is a Claude plan-mode permission, not an OS sandbox.
+- **Strict MCP isolation.** The chit-spawned `claude` is launched isolated from your MCP servers by default, so a run does not inherit ambient tools.
+- **Audit sensitivity.** Audit transcripts hold full prompts and outputs and can contain secrets. They live under your local state dir; auditing is on for converge and opt-in elsewhere.
+- **Worktree discipline.** Run autonomous, write-capable work against a git worktree, not your main checkout.
+
+## Known limits
+
+- Manifests are static DAGs: no loops, no conditionals, no dynamic routing. Iteration lives in an orchestrator on top.
+- Studio cannot run a chit; it is a read-and-inspect editor, and it needs a source checkout in this version.
+- No client-facing token stream over MCP: a long step shows a latest-state heartbeat, not the model's live tokens.
+- chit is not a general workflow engine: no schedulers, queues, or hosted execution.
 
 ## Where to go next
 
-- [Getting started](/docs/getting-started) installs the CLI and runs your first chit.
+- [Getting started](/docs/getting-started) installs chit, registers the MCP server, and runs your first check.
+- [Surfaces](/docs/surfaces) covers MCP (primary), the CLI, the Claude Code skill, and Studio.
+- [MCP surface](/docs/mcp) is the authoritative tool reference.
 - [Concepts](/docs/concepts) explains agents, chits, and surfaces.
 - [Manifest schema](/docs/manifest-schema) is the reference for what a chit can declare.
-- [Surfaces](/docs/surfaces) covers the CLI, the Claude Code skill, MCP, and Studio.
 
 ## Status
 
-Early, and honest about it. The runtime, the CLI, the Claude Code skill surface, the MCP stepwise surface, Studio in a source checkout, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.
+Early, and honest about it. The runtime, the CLI, the MCP surface (stepwise, converge, and audit tools), the Claude Code skill, Studio in a source checkout, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.

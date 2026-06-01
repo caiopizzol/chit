@@ -15,7 +15,7 @@ chit is an open-source runtime for multi-agent workflows. A chit is a small decl
 
 chit started life as the `handoff` repo for prototyping multi-agent recipes. It got renamed and rewritten when the real problem came into focus, and the real problem is not framework choice and not governance theater. The real problem is smaller and more useful: the multi-agent routines that actually work are the ones you already trust enough to run again, and today you run them by hand.
 
-**What it really does.** chit turns a routine you can describe ("Claude proposes, Codex verifies, Claude executes") into a declared file the runtime executes for you. You declare participants, steps, context flow, and permissions. The runtime walks the chit and calls the right agent at each step. The CLI and the Claude Code skill call the same runtime with the same chit. The output at the end shows what ran.
+**What it really does.** chit turns a routine you can describe ("Claude proposes, Codex verifies, Claude executes") into a declared file the runtime executes for you. You declare participants, steps, context flow, and permissions. The runtime walks the chit and calls the right agent at each step. The MCP server (the primary surface, inside Claude Code), the CLI, and the Claude Code skill call the same runtime with the same chit. The output at the end shows what ran.
 
 **The problem.** You opened a second terminal. Then a third. Claude on one side, Codex on another. You found a working rhythm: one agent proposes, another verifies, the first executes. The rhythm is useful. The rhythm is not portable. It does not survive next week, the next branch, or a teammate's machine. It also does not scale beyond what your fingers can keep up with.
 
@@ -72,7 +72,7 @@ Agent frameworks try to be the way you build the agent. chit assumes you already
 - **Static by design.** No dynamic dispatch in v1. Loops and agent-decided routing wait until a real recipe forces them.
 - **Marker-based install lifecycle.** Every install writes a sealed marker. `chit list` and `chit uninstall` operate only on marked installs.
 - **Browser-safe core.** Parsing, validation, graph model, registry parsing live in a node-free module. The Studio reuses what the CLI uses.
-- **CLI-first. CI-native. Open source.**
+- **MCP-first; CLI and CI native. Open source.** The primary operating surface is MCP inside Claude Code; the CLI runs the same runtime for inspection, audits, and CI.
 
 **Territory owned.** The declared routine between your agents. The small written file you would have produced if you had written down the multi-agent workflow that already works for you.
 
@@ -113,7 +113,7 @@ Agent frameworks try to be the way you build the agent. chit assumes you already
 - You step in when judgment is required.
 - You don't paste.
 
-**Base message.** chit turns the multi-agent routines you already trust into declared files. The runtime reads the chit and runs the workflow inside your CLI or Claude Code session. You stop being the copy-paste layer.
+**Base message.** chit turns the multi-agent routines you already trust into declared files. The runtime reads the chit and runs the workflow inside your Claude Code session over MCP, or from your CLI. You stop being the copy-paste layer.
 
 Keep this paragraph stable across surfaces (README lead, homepage subhead, npm description, GitHub social card). When the product story shifts, update this paragraph first and propagate.
 
@@ -264,7 +264,7 @@ End note.
 
 **Chit, not chat.** Chat is one agent at a time with you in the middle. A chit takes the middle out. Strategic spine; use sparingly.
 
-**Open. Free. MIT. CLI-first. CI-native.** No login. No dashboard. Runs locally. Runs in CI.
+**Open. Free. MIT. MCP-first. CLI and CI native.** No login. No dashboard. Runs locally, in your Claude Code session and your terminal. Runs in CI.
 
 ### Phrases
 
@@ -407,11 +407,11 @@ Release notes are a public surface. Same grammar as the CLI: short, specific, no
 
 **LinkedIn.**
 
-chit is an open-source runtime for multi-agent workflows. A chit is a small declared file that captures the routine you already run by hand: which agents take part, in what order, with what context, under what permissions. The runtime reads the chit and runs the workflow inside your Claude Code or CLI session. Codex, Claude, MCP. Multi-vendor by contract. Inspectable before execution. CLI-first, CI-native, MIT.
+chit is an open-source runtime for multi-agent workflows. A chit is a small declared file that captures the routine you already run by hand: which agents take part, in what order, with what context, under what permissions. The runtime reads the chit and runs the workflow inside your Claude Code session over MCP, or from your CLI. Codex, Claude, MCP. Multi-vendor by contract. Inspectable before execution. MCP-first; CLI and CI native; MIT.
 
 **X / Twitter.**
 
-Open-source runtime for multi-agent workflows. The chit is the routine: who runs, in what order, with what context. Inside your session. Not in your clipboard. Codex, Claude, MCP. CLI-first. MIT.
+Open-source runtime for multi-agent workflows. The chit is the routine: who runs, in what order, with what context. Inside your session. Not in your clipboard. Codex, Claude, MCP. MCP-first. MIT.
 
 **GitHub repo description.**
 
@@ -567,7 +567,7 @@ Skip photography of people, robots, devices, and "AI brain" art. Use:
 - Any product with a robot mascot personality.
 - Brigade / kitchen-cosplay branding. chit is broader than restaurant; keep food references restrained.
 
-**Direction.** The identity should feel like a small declared file pinned next to your terminal. Old enough to be trustworthy. Sharp enough to be modern. Quiet enough that the product, not the brand, is the loudest thing on the page. **The CLI is the hero. The chit is the artifact. The receipt is the proof.**
+**Direction.** The identity should feel like a small declared file pinned next to your terminal. Old enough to be trustworthy. Sharp enough to be modern. Quiet enough that the product, not the brand, is the loudest thing on the page. **The chit is the artifact. The run is the hero. The receipt is the proof.**
 
 ## Naming notes
 
@@ -586,4 +586,4 @@ Migration status:
 
 **Pickled** is a sibling brand. Same founder, same voice register, different product (agent legibility testing) and different metaphor (preservation). They should read as *two opinionated dev tools by the same person*, not as a themed series. Do not borrow Pickled's pickle vocabulary in chit copy. Do not borrow chit's paper-and-ink palette in Pickled copy.
 
-**Status.** Early v0. Shipped: the runtime, CLI, `@chit-run/cli` publish path, Claude Code skill surface, MCP stepwise surface, inspector (ASCII / JSON / Mermaid / HTML), Studio in a source checkout (graph editor + read-only Loops view + audit transcript view), the convergence log, the supervised and autonomous implement/check loops, the audit log (full prompt/output transcripts on all three run surfaces, with retention, readable via `chit audit` and Studio), preservation of both adapters' observable event streams (Codex JSONL and Claude stream-json) as audit events on audited runs, the install marker, and safe lifecycle. Not shipped: a bundled Studio client in the published CLI package; declared human-checkpoint or loop steps inside manifests; MCP client-facing output streaming (a live token stream to the client). Adapter events are surfaced live as they arrive, recorded with real arrival timestamps on audited runs, and are the observable CLI event stream, never hidden model reasoning. Brand copy must match what is shipped. Do not promise what is not.
+**Status.** Early v0. Shipped: the runtime, CLI, `@chit-run/cli` publish path, the `chit doctor` preflight, Claude Code skill surface, the MCP surface launched via `chit mcp` (stepwise tools, converge tools, and audit-reading tools), inspector (ASCII / JSON / Mermaid / HTML), Studio in a source checkout (graph editor + read-only Loops view + audit transcript view), the convergence log, the supervised and autonomous implement/check loops, the audit log (full prompt/output transcripts on all three run surfaces, with retention, readable via `chit audit` and Studio), preservation of both adapters' observable event streams (Codex JSONL and Claude stream-json) as audit events on audited runs, the install marker, and safe lifecycle. Not shipped: a bundled Studio client in the published CLI package; declared human-checkpoint or loop steps inside manifests; MCP client-facing output streaming (a live token stream to the client). Adapter events are surfaced live as they arrive, recorded with real arrival timestamps on audited runs, and are the observable CLI event stream, never hidden model reasoning. Brand copy must match what is shipped. Do not promise what is not.

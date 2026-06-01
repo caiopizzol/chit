@@ -1,38 +1,52 @@
 ---
 title: Surfaces
-description: The CLI, the Claude Code skill, MCP, and Studio.
+description: MCP is the primary surface; the CLI is support tooling; the Claude Code skill and Studio are secondary.
 ---
 
-A surface is a thin shim that calls the runtime with a manifest and inputs. The runtime is the same underneath each one.
+A surface is a thin shim that calls the runtime with a manifest and inputs. The runtime is the same underneath each one. They are not peers: MCP is where you operate chit day to day; the rest are support tooling.
 
-## CLI
+## MCP (primary)
 
-The command line is the primary surface.
+The primary surface. chit registers as a stdio MCP server and you drive it from a Claude Code conversation, so the human stays in the loop, the chat keeps context, and each handoff is a visible, cancellable tool call.
+
+```sh
+claude mcp add chit --scope local -- chit mcp
+```
+
+Three tool groups:
+
+- **Stepwise manifest tools** run a chit one step at a time: `chit_start`, then `chit_run_step` per step, each with a live heartbeat.
+- **Converge tools** drive the autonomous implement/review loop one iteration at a time: `chit_converge_start`, `chit_converge_next`, with `chit_converge_status` / `chit_converge_cancel` / `chit_converge_trace`.
+- **Audit tools** read recorded transcripts: `chit_audit_list`, `chit_audit_show`.
+
+See [the MCP reference](/docs/mcp).
+
+## CLI (support tooling)
+
+The same binary, for debugging, inspection, audits, running the loop from a terminal, installs, and CI. Brand vocabulary stays out of the verbs; the CLI says what it does.
 
 ```sh
 chit run        # execute a manifest
 chit show       # render a manifest without running it
+chit converge   # run the autonomous implement/check loop
+chit audit      # read a recorded run transcript
+chit doctor     # preflight: check first-time setup
+chit loop-log   # read a convergence log
 chit install    # install a chit as a skill
 chit list       # list installed chits
 chit uninstall  # remove an installed chit
-chit studio     # open the local editor
-chit converge   # run the autonomous implement/check loop
-chit audit      # read a recorded run transcript
-chit loop-log   # read a convergence log
+chit studio     # open the local editor (source checkout)
+chit mcp        # run the stdio MCP server
 ```
 
-## Claude Code skill
+## Claude Code skill (secondary)
 
-Install a chit as a slash-invocable skill inside Claude Code. The skill surface declares its capabilities; install fails if the chit needs one the surface lacks.
+Install a chit as a slash-invocable skill inside Claude Code. The skill surface declares its capabilities; install fails if the chit needs one the surface lacks. Generated skills currently run the CLI from a source checkout, so this surface is secondary to MCP for v0.
 
-## MCP (stepwise)
-
-The MCP surface runs a chit one step at a time. `chit_start`, then `chit_run_step` per step, each with a live heartbeat, so every handoff is a separate visible tool call you can watch and cancel. See [the MCP reference](/docs/mcp).
-
-## Studio
+## Studio (secondary, source checkout)
 
 Studio is a local web editor: a graph view, an inspector, and a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. Launch it from a source checkout with `bun run studio:preview`; the published CLI package does not include the Studio client bundle in this version. See [the Studio reference](/docs/studio).
 
 ## Audit
 
-An audited run records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. Read it with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. See [the audit log reference](/docs/audit-log).
+An audited run records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. Read it over MCP with `chit_audit_list` / `chit_audit_show`, or from the terminal with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. See [the audit log reference](/docs/audit-log).

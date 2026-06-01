@@ -1,66 +1,72 @@
 ---
 title: Getting started
-description: Install the CLI and execute your first chit.
+description: Install chit, register the MCP server, and run your first check inside Claude Code.
 ---
 
-chit runs under Bun. The npm package ships the CLI; the source repo ships example manifests and Studio client assets.
+chit runs under Bun. The day-to-day surface is MCP inside Claude Code: you register chit once, then ask for a routine in the conversation. The CLI ships in the same package for inspection, audits, and running the loop from a terminal.
 
 ## Install
 
-```sh
-bunx @chit-run/cli --help
-```
-
-Or install the `chit` binary:
+Requires [Bun](https://bun.sh).
 
 ```sh
 bun install -g @chit-run/cli
-chit --help
 ```
 
-## Write or inspect a chit
+Upgrade later with `bun update -g @chit-run/cli`.
 
-A chit is a JSON manifest. Point the CLI at one:
+## Check your setup
 
 ```sh
-chit show path/to/your-manifest.json
-chit run path/to/your-manifest.json --input question="..."
+chit doctor
 ```
 
-## Run the repo example
+`chit doctor` is a preflight. It checks Bun, the `chit` binary on PATH, the `codex` and `claude` CLIs, the agent registry, MCP registration, the audit directory, and whether the current directory is a git repo, and reports each as pass, warning, or failure with a fix. It runs no agents; it writes and removes one probe file in the audit dir to confirm that dir is writable, and changes nothing else. Agent authentication is confirmed on the first real run, not here.
 
-The repo ships a small first-run manifest in `examples/consult.json`. It fans a question out to Codex and Claude, then formats both answers.
+## Register the MCP server
+
+```sh
+claude mcp add chit --scope local -- chit mcp
+```
+
+`chit mcp` launches the stdio MCP server from the installed binary. Reconnect in Claude Code (`/mcp`) and the `chit_*` tools are available.
+
+## Run your first check
+
+In a Claude Code conversation, in a git worktree:
+
+> Use chit to converge on this task: <a small, scoped change>. Run a couple of iterations and show me the audit trail.
+
+chit drives the loop with its converge tools: `chit_converge_start` opens the loop, then each `chit_converge_next` runs one iteration where a write-capable Claude implements the slice and a read-only Codex reviews the diff. Each iteration is recorded; `chit_audit_list` / `chit_audit_show` read the transcript back. You see what ran, what Codex said, and the token usage. No copy-paste between terminals.
+
+The implementer edits files, so run this against a git worktree, not your main checkout. For a read-only fan-out instead of the implement/review loop, run a manifest like `examples/consult.json` with `chit_start` from a source checkout.
+
+## Inspect a chit before it runs
+
+A chit is a JSON manifest. `show` renders one without executing it, in any of four views.
+
+```sh
+chit show examples/consult.json            # ASCII graph
+chit show examples/consult.json --json     # JSON
+chit show examples/consult.json --mermaid  # Mermaid
+```
+
+## Run a chit from the terminal
+
+The CLI runs the same runtime as the MCP surface. From a source checkout with the example manifests:
 
 ```sh
 git clone https://github.com/caiopizzol/chit
 cd chit
 bun install
-bun run cli run examples/consult.json --scope work-session
+bun run cli run examples/consult.json --scope work-session --input question="..."
 ```
 
-The run prints what ran: the resolved manifest, the adapters, the validation result, and the execution levels. No chat log.
-
-## Read a chit before you run it
-
-`show` renders a manifest without executing it, in any of four views.
-
-```sh
-bun run cli show examples/consult.json            # ASCII graph
-bun run cli show examples/consult.json --json     # JSON
-bun run cli show examples/consult.json --mermaid  # Mermaid
-```
-
-## Open Studio
-
-Studio is a local web editor for chits: a graph view, an inspector, and a read-only Loops drawer.
-
-```sh
-bun run cli studio examples/consult.json
-```
-
-Studio currently needs a source checkout; the published CLI package does not include the Studio client bundle.
+The run prints what ran: the resolved manifest, the adapters, the validation result, and the execution order. No chat log.
 
 ## Next
 
+- [Surfaces](/docs/surfaces) for MCP, the CLI, the Claude Code skill, and Studio.
+- [MCP surface](/docs/mcp) for the authoritative tool reference.
+- [Self-hosting](/docs/self-hosting) for the implement/check loop.
 - [Concepts](/docs/concepts) for the model behind agents, chits, and surfaces.
-- [Manifest schema](/docs/manifest-schema) for everything a chit can declare.
