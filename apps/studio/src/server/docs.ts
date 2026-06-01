@@ -16,7 +16,7 @@ import type {
 	StudioDocument,
 } from "./types.ts";
 
-// Match the existing apps/cli/examples/*.json formatting: tab-indented,
+// Match the existing examples/*.json formatting: tab-indented,
 // key order preserved from the input. Deterministic for the same draft,
 // which is what the diff view needs in a later sub-unit.
 function canonicalize(draft: unknown): string {

@@ -9,7 +9,7 @@ import {
 	renderShow,
 } from "@chit/core";
 
-const EXAMPLES = join(import.meta.dir, "..", "..", "examples");
+const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 const CONSULT = JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8"));
 const ASK_CODEX = JSON.parse(readFileSync(join(EXAMPLES, "ask-codex.json"), "utf-8"));
 const REGISTRY = parseRegistry(undefined);

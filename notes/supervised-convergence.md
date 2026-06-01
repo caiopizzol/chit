@@ -13,7 +13,7 @@ code; see receipts 0004-0006 and `proposals/conversational-handoff-needs-mcp.md`
   in a manifest, by design.
 - chit's implementer is real (this was previously mischaracterized here):
   `claude-cli` runs `claude --print`, which uses tools and edits files - verified,
-  and the `converge` manifest (`apps/cli/examples/converge.json`) drives it
+  and the `converge` manifest (`examples/converge.json`) drives it
   autonomously (a write-capable Claude implements; `codex-exec --sandbox
   read-only` reviews). So the executor can be either the interactive Claude Code
   chat (full conversational context, your per-edit approval) or a chit-spawned
@@ -51,13 +51,13 @@ The shipped form is the Claude Code skill versioned in this repo at
 `skills/supervised-convergence/SKILL.md`, which encodes this policy. Install it
 by copying that directory to `~/.claude/skills/` (user-global) or a project's
 `.claude/skills/`, and set the skill's `manifest_path` to your absolute path to
-`apps/cli/examples/codex-advisor-thread.json`. It needs zero chit code changes
+`examples/codex-advisor-thread.json`. It needs zero chit code changes
 and runs against the shipped MCP server.
 
 ## What this is NOT (and why)
 
 - Autonomous "Chit Converge" now EXISTS - the spike passed. The `converge`
-  manifest (`apps/cli/examples/converge.json`) runs a write-capable `claude-cli`
+  manifest (`examples/converge.json`) runs a write-capable `claude-cli`
   implementer plus a read-only `codex-exec` reviewer, driven from the MCP one
   iteration per `chit_start` while a human sequences and checkpoints (run under a
   worktree). Supervised convergence (this doc) is the lighter-weight mode when you

@@ -10,7 +10,7 @@ function tempCwd(): string {
 	return mkdtempSync(join(tmpdir(), "chit-studio-discovery-"));
 }
 
-// Minimal valid chit shape. Mirrors apps/cli/examples but tiny so the tests
+// Minimal valid chit shape. Mirrors examples but tiny so the tests
 // stay self-contained.
 function chit(id: string): string {
 	return JSON.stringify({

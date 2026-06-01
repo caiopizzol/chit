@@ -16,10 +16,10 @@ import { parseArgs } from "./run.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 const RUN_TS = join(PROJECT_ROOT, "src", "cli", "run.ts");
-const ASK_CODEX = join(PROJECT_ROOT, "examples", "ask-codex.json");
-const ASK_CLAUDE = join(PROJECT_ROOT, "examples", "ask-claude.json");
-const CONSULT_STATELESS = join(PROJECT_ROOT, "examples", "consult-stateless.json");
-const CONSULT = join(PROJECT_ROOT, "examples", "consult.json");
+const ASK_CODEX = join(PROJECT_ROOT, "..", "..", "examples", "ask-codex.json");
+const ASK_CLAUDE = join(PROJECT_ROOT, "..", "..", "examples", "ask-claude.json");
+const CONSULT_STATELESS = join(PROJECT_ROOT, "..", "..", "examples", "consult-stateless.json");
+const CONSULT = join(PROJECT_ROOT, "..", "..", "examples", "consult.json");
 
 const FAKE_CODEX = `#!/bin/sh
 IS_RESUME=0
@@ -744,7 +744,7 @@ describe("handoff run (subprocess)", () => {
 	});
 
 	test("show against claude-skill surface flags can_pass_files missing for file[] inputs", async () => {
-		const investigateBug = join(PROJECT_ROOT, "examples", "investigate-bug.json");
+		const investigateBug = join(PROJECT_ROOT, "..", "..", "examples", "investigate-bug.json");
 		const { stdout, code } = await runCLI([
 			"show",
 			investigateBug,

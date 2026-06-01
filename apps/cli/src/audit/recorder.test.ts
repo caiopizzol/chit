@@ -240,7 +240,10 @@ describe("audit integration via executeManifest", () => {
 	test("a manifest run writes a full audit run: run/step/adapter-call events + blobs", async () => {
 		const manifest = parseManifest(
 			JSON.parse(
-				readFileSync(join(import.meta.dir, "..", "..", "examples", "investigate-bug.json"), "utf8"),
+				readFileSync(
+					join(import.meta.dir, "..", "..", "..", "..", "examples", "investigate-bug.json"),
+					"utf8",
+				),
 			),
 		);
 		const rec = recorder("RUN");

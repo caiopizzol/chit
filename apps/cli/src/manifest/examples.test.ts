@@ -1,5 +1,5 @@
 // Integration tests for parseManifest against the example manifests that
-// live in apps/cli/examples/. parseManifest itself lives in @chit/core;
+// live in examples/. parseManifest itself lives in @chit/core;
 // this test exercises it against real fixtures.
 
 import { describe, expect, test } from "bun:test";
@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseManifest } from "@chit/core";
 
-const EXAMPLES = join(import.meta.dir, "..", "..", "examples");
+const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 
 function loadExample(name: string): unknown {
 	return JSON.parse(readFileSync(join(EXAMPLES, `${name}.json`), "utf8"));

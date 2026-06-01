@@ -17,7 +17,7 @@ Open `http://127.0.0.1:4040`.
 
 ## Inputs
 
-Hardcoded: one `question` input, one `ask_codex` call, one `out` format. Mirrors `apps/cli/examples/consult.json` shape (single-advisor variant).
+Hardcoded: one `question` input, one `ask_codex` call, one `out` format. Mirrors `examples/consult.json` shape (single-advisor variant).
 
 ## What this spike does not do
 

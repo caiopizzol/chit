@@ -9,7 +9,7 @@ To install: copy this directory to `~/.claude/skills/supervised-convergence/`
 (user-global) or a project's `.claude/skills/`. Then edit the `manifest_path`
 bullet under step 2 ("Check") below and replace the `<MANIFEST_PATH>`
 placeholder with the absolute path to your `codex-advisor-thread.json` (this
-repo ships one at `apps/cli/examples/codex-advisor-thread.json`). Requires the
+repo ships one at `examples/codex-advisor-thread.json`). Requires the
 chit MCP server registered (`notes/mcp-v0.md`).
 
 Roles, fixed:

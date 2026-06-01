@@ -18,10 +18,10 @@ bun run cli --help
 
 ## Run a chit
 
-The repo ships canonical manifests in `apps/cli/examples/`. `consult.json` fans a question out to two models and formats the answer.
+The repo ships canonical manifests in `examples/`. `consult.json` fans a question out to two models and formats the answer.
 
 ```sh
-bun run cli run apps/cli/examples/consult.json --scope work-session
+bun run cli run examples/consult.json --scope work-session
 ```
 
 The run prints what ran: the resolved manifest, the adapters, the validation result, and the execution levels. No chat log.
@@ -31,9 +31,9 @@ The run prints what ran: the resolved manifest, the adapters, the validation res
 `show` renders a manifest without executing it, in any of four views.
 
 ```sh
-bun run cli show apps/cli/examples/consult.json            # ASCII graph
-bun run cli show apps/cli/examples/consult.json --json     # JSON
-bun run cli show apps/cli/examples/consult.json --mermaid  # Mermaid
+bun run cli show examples/consult.json            # ASCII graph
+bun run cli show examples/consult.json --json     # JSON
+bun run cli show examples/consult.json --mermaid  # Mermaid
 ```
 
 ## Open Studio
@@ -41,7 +41,7 @@ bun run cli show apps/cli/examples/consult.json --mermaid  # Mermaid
 Studio is a local web editor for chits: a graph view, an inspector, and a read-only Loops drawer.
 
 ```sh
-bun run cli studio apps/cli/examples/consult.json
+bun run cli studio examples/consult.json
 ```
 
 ## Next

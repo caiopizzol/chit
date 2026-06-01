@@ -12,13 +12,13 @@ and a human checkpoints. They differ in who implements.
 
 - **Supervised.** The Claude Code chat implements with its full tools and
   context; a chit `per_scope` Codex advisor reviews each round
-  (`apps/cli/examples/implementation-check-thread.json`, which inspects the git
+  (`examples/implementation-check-thread.json`, which inspects the git
   diff). The chat owns the loop and the checkpoint. Reach for this on nuanced,
   cross-package, or exploratory slices, where the chat's reasoning and live tools
   earn their keep.
 - **Autonomous (`chit converge`).** The chat sets a task and runs the converge
   driver; chit's write-capable Claude implements and a read-only Codex reviews,
-  and the driver loops to convergence (`apps/cli/examples/converge.json`). The
+  and the driver loops to convergence (`examples/converge.json`). The
   chat does not implement and does not babysit each handoff. Reach for this on
   well-scoped, self-contained slices, and to keep building the self-hosting
   habit.
@@ -91,6 +91,6 @@ check, or for watching and cancelling one long handoff.
 
 - `notes/supervised-convergence.md`: the supervised pattern and the installable
   skill.
-- `apps/cli/examples/converge.json`: the autonomous loop manifest.
+- `examples/converge.json`: the autonomous loop manifest.
 - `notes/audit-v0.md`: reading transcripts with `chit audit`.
 - `notes/mcp-v0.md`: the stepwise MCP surface and its one invariant.

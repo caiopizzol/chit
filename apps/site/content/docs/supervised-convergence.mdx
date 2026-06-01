@@ -8,7 +8,7 @@ The use case: run an implement and check loop until it converges or needs you. T
 ## Why it lives above chit, not inside it
 
 - chit manifests are static DAGs: no loops, no conditionals, no human-checkpoint step (`parse.ts` topological sort rejects cycles; step kinds are only `call` and `format`). A "repeat until" cannot be expressed in a manifest, by design.
-- chit's implementer is real. `claude-cli` runs `claude --print`, which uses tools and edits files, and the `converge` manifest (`apps/cli/examples/converge.json`) drives it autonomously (a write-capable Claude implements, a read-only `codex-exec --sandbox read-only` reviews). So the executor can be either the interactive Claude Code chat (full conversational context, your per-edit approval) or a chit-spawned Claude (autonomous, run under a worktree plus a human checkpoint).
+- chit's implementer is real. `claude-cli` runs `claude --print`, which uses tools and edits files, and the `converge` manifest (`examples/converge.json`) drives it autonomously (a write-capable Claude implements, a read-only `codex-exec --sandbox read-only` reviews). So the executor can be either the interactive Claude Code chat (full conversational context, your per-edit approval) or a chit-spawned Claude (autonomous, run under a worktree plus a human checkpoint).
 
 So the loop and the checkpoint belong to the orchestrator (the chat); chit runs one bounded check per call.
 
@@ -33,11 +33,11 @@ Per iteration (default budget: 3):
 
 Stop conditions: a `block`; an ambiguous product or design decision; failing tests needing a user choice; any destructive or outward-facing action; or max iterations.
 
-The shipped form is the Claude Code skill versioned in this repo at `skills/supervised-convergence/SKILL.md`, which encodes this policy. Install it by copying that directory to `~/.claude/skills/` (user-global) or a project's `.claude/skills/`, and set the skill's `manifest_path` to your absolute path to `apps/cli/examples/codex-advisor-thread.json`. It needs zero chit code changes and runs against the shipped MCP server.
+The shipped form is the Claude Code skill versioned in this repo at `skills/supervised-convergence/SKILL.md`, which encodes this policy. Install it by copying that directory to `~/.claude/skills/` (user-global) or a project's `.claude/skills/`, and set the skill's `manifest_path` to your absolute path to `examples/codex-advisor-thread.json`. It needs zero chit code changes and runs against the shipped MCP server.
 
 ## What this is not (and why)
 
-- Not the only mode. The autonomous loop also exists: the `converge` manifest (`apps/cli/examples/converge.json`) runs a write-capable `claude-cli` implementer plus a read-only `codex-exec` reviewer, driven from the MCP one iteration per `chit_start` while a human sequences and checkpoints (run under a worktree). Supervised convergence is the lighter-weight mode when you want this conversation's context to do the implementing; reach for the converge manifest (see [self-hosting](/docs/self-hosting)) when you want the agents to run it themselves. The real constraint is unchanged: manifests cannot loop, so the iteration is always driven by an orchestrator, never the manifest.
+- Not the only mode. The autonomous loop also exists: the `converge` manifest (`examples/converge.json`) runs a write-capable `claude-cli` implementer plus a read-only `codex-exec` reviewer, driven from the MCP one iteration per `chit_start` while a human sequences and checkpoints (run under a worktree). Supervised convergence is the lighter-weight mode when you want this conversation's context to do the implementing; reach for the converge manifest (see [self-hosting](/docs/self-hosting)) when you want the agents to run it themselves. The real constraint is unchanged: manifests cannot loop, so the iteration is always driven by an orchestrator, never the manifest.
 - Not a manifest loop, conditional, or checkpoint step kind. That would break the static-DAG thesis; the chat loops and checkpoints for free.
 - Not a second headless Claude inside chit. That is weak, context-blind, and drifts from the chat.
 

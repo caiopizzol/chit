@@ -8,7 +8,7 @@ import { buildAgentInput, executeManifest } from "./execute.ts";
 import { RuntimeError } from "./render.ts";
 import type { AdapterCallRequest, RuntimeAdapter, TraceEvent } from "./types.ts";
 
-const EXAMPLES = join(import.meta.dir, "..", "..", "examples");
+const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 
 function loadExample(name: string): NormalizedManifest {
 	return parseManifest(JSON.parse(readFileSync(join(EXAMPLES, `${name}.json`), "utf8")));

@@ -430,10 +430,10 @@ function validateConvergeManifest(manifest: NormalizedManifest): string | null {
 	return null;
 }
 
-// apps/cli/examples/converge.json, resolved from this file's location. This
+// examples/converge.json, resolved from this file's location. This
 // file is apps/cli/src/cli/converge.ts; two dirname() hops reach apps/cli.
 function defaultManifestPath(): string {
-	return join(dirname(dirname(import.meta.dir)), "examples", "converge.json");
+	return join(dirname(dirname(dirname(dirname(import.meta.dir)))), "examples", "converge.json");
 }
 
 interface ParsedConverge {

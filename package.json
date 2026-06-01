@@ -15,7 +15,7 @@
 		"check:staged:fix": "biome check --write --staged --no-errors-on-unmatched",
 		"prepare": "lefthook install",
 		"check:browser": "bun --filter '@chit/core' check:browser",
-		"cli": "bun --cwd apps/cli src/cli/run.ts",
+		"cli": "bun apps/cli/src/cli/run.ts",
 		"site:dev": "bun --filter @chit/site dev",
 		"site:build": "bun --filter @chit/site build",
 		"site:preview": "bun --filter @chit/site preview",
@@ -27,7 +27,7 @@
 		"docs:typecheck": "bun run site:typecheck",
 		"docs:deploy": "bun run site:deploy",
 		"studio:build": "bun --filter @chit/studio build:client",
-		"studio:preview": "bun run studio:build && bun --cwd apps/cli src/cli/run.ts studio examples/consult.json"
+		"studio:preview": "bun run studio:build && bun apps/cli/src/cli/run.ts studio examples/consult.json"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",

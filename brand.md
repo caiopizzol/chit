@@ -358,7 +358,7 @@ A chit with `needs override` validation can still run if the user explicitly acc
 **Good terminal copy.**
 
 ```text
-chit run apps/cli/examples/consult.json --question "Is this migration safe?"
+chit run examples/consult.json --question "Is this migration safe?"
 
 manifest: consult
 participants: codex, claude
@@ -531,7 +531,7 @@ The seal indicator is a small filled circle followed by uppercase mono text: `â—
 Skip photography of people, robots, devices, and "AI brain" art. Use:
 
 - Real CLI output. The actual terminal, the actual chit, the actual receipt.
-- Code blocks with real manifest files from `apps/cli/examples/`.
+- Code blocks with real manifest files from `examples/`.
 - Abstract close-ups of paper, ink, perforations, seal impressions, ledger margins, only as texture, never as the main subject.
 
 **Avoid.**

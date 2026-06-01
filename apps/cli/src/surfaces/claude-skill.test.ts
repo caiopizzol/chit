@@ -20,9 +20,9 @@ import {
 import { installClaudeSkill, SurfaceInstallError } from "./claude-skill.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
-const CONSULT_PATH = join(PROJECT_ROOT, "examples", "consult.json");
-const ASK_CODEX_PATH = join(PROJECT_ROOT, "examples", "ask-codex.json");
-const INVESTIGATE_BUG_PATH = join(PROJECT_ROOT, "examples", "investigate-bug.json");
+const CONSULT_PATH = join(PROJECT_ROOT, "..", "..", "examples", "consult.json");
+const ASK_CODEX_PATH = join(PROJECT_ROOT, "..", "..", "examples", "ask-codex.json");
+const INVESTIGATE_BUG_PATH = join(PROJECT_ROOT, "..", "..", "examples", "investigate-bug.json");
 
 // A test-only registry whose claude agent points at an adapter kind with no
 // descriptor, so read_only is unenforceable. No built-in adapter is unenforceable

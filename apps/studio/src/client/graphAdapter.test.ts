@@ -15,7 +15,7 @@ import {
 import { adaptGraphModel } from "./graphAdapter.ts";
 
 const REGISTRY = parseRegistry(undefined);
-const EXAMPLES_DIR = join(import.meta.dir, "..", "..", "..", "cli", "examples");
+const EXAMPLES_DIR = join(import.meta.dir, "..", "..", "..", "..", "examples");
 
 // A test-only registry whose claude agent points at an adapter kind with no
 // descriptor, so read_only is unenforceable. No built-in adapter is unenforceable
