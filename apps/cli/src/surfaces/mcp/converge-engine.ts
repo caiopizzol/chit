@@ -11,7 +11,7 @@
 // (the audited execute boundary, the prior_review to thread forward, and the
 // live AbortController for an in-flight iteration).
 
-import type { LoopRecord, LoopStopStatus, LoopVerdict } from "@chit/core";
+import type { AdapterUsage, LoopRecord, LoopStopStatus, LoopVerdict } from "@chit/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
@@ -104,6 +104,8 @@ export type NextResult =
 			decision: LoopVerdict;
 			findingCount: number;
 			checksRun: string;
+			changedFiles: string[];
+			usage?: AdapterUsage;
 			auditRunId?: string;
 			stopStatus?: LoopStopStatus;
 	  }
@@ -239,6 +241,8 @@ export async function runNextIteration(
 			decision: iter.decision,
 			findingCount: iter.findingCount,
 			checksRun: iter.checksRun,
+			changedFiles: iter.changedFiles,
+			...(iter.usage !== undefined && { usage: iter.usage }),
 			...(iter.auditRunId !== undefined && { auditRunId: iter.auditRunId }),
 			...(session.terminalStatus !== undefined && { stopStatus: session.terminalStatus }),
 		};

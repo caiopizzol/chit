@@ -506,6 +506,8 @@ server.registerTool(
 				decision: result.decision,
 				findingCount: result.findingCount,
 				checksRun: result.checksRun,
+				changedFiles: result.changedFiles,
+				...(result.usage && { usage: result.usage }),
 				...(result.auditRunId && { auditRunId: result.auditRunId }),
 				...(result.stopStatus && { stopStatus: result.stopStatus }),
 				loop: describeConverge(session),

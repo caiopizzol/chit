@@ -59,7 +59,7 @@ Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to the server cwd; also w
 
 ### chit_converge_next
 
-Run exactly one implement to review iteration, blocking until it settles; emits a heartbeat while it runs. Input: `loop_id`. A normal iteration returns `{ iteration, verdict, decision, findingCount, checksRun, auditRunId?, stopStatus?, loop }`. A set `stopStatus` means the loop also stopped this round: `proceed` converges, `block` blocks, exhausting the budget is `max-iterations`. A cancelled iteration returns `{ cancelled: true, iteration, loop }` and records a clean `cancelled` stop with no iteration record, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, loop }` and closes the loop `blocked`. It rejects a loop that already stopped or already has an iteration in flight (the loop log is single-writer).
+Run exactly one implement to review iteration, blocking until it settles; emits a heartbeat while it runs. Input: `loop_id`. A normal iteration returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, usage?, auditRunId?, stopStatus?, loop }` (`usage` is the iteration's token/cost when the adapters reported it). A set `stopStatus` means the loop also stopped this round: `proceed` converges, `block` blocks, exhausting the budget is `max-iterations`. A cancelled iteration returns `{ cancelled: true, iteration, loop }` and records a clean `cancelled` stop with no iteration record, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, loop }` and closes the loop `blocked`. It rejects a loop that already stopped or already has an iteration in flight (the loop log is single-writer).
 
 ### chit_converge_status
 

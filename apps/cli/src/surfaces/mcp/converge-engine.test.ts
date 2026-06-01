@@ -187,6 +187,35 @@ describe("runNextIteration: verdict-driven stops", () => {
 		expect(session.auditRefs).toEqual(["run-7"]);
 		expect(iterations("L1")[0]?.detailsRef).toBe("audit:run-7");
 	});
+
+	test("an iteration result carries changedFiles and usage for the next response", async () => {
+		const review = reviewJson("proceed");
+		// A trace whose review step reports usage, so sumTraceUsage surfaces it.
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "x", review },
+			trace: [
+				{
+					type: "step.completed",
+					stepId: "review",
+					output: review,
+					durationMs: 10,
+					usage: { inputTokens: 11, outputTokens: 2 },
+				},
+			],
+		});
+		const session = start(execute);
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		// changedFiles is always present (an array; empty in this non-git tmp cwd);
+		// usage is surfaced when the run reported it. These are what criterion 5 of
+		// issue #3 requires in the chit_converge_next response.
+		expect(Array.isArray(r.changedFiles)).toBe(true);
+		expect(r.usage).toEqual({ inputTokens: 11, outputTokens: 2 });
+		// And they still match the durable iteration record.
+		expect(iterations("L1")[0]?.usage).toEqual({ inputTokens: 11, outputTokens: 2 });
+	});
 });
 
 describe("runNextIteration: failure (not cancellation)", () => {

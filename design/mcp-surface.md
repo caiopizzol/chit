@@ -110,9 +110,10 @@ Run exactly ONE implement→review iteration, blocking until it settles; emits a
 heartbeat while it runs. Input: `loop_id`. Folds the request's `extra.signal`
 into the iteration's abort, so Esc (or `chit_converge_cancel`) cancels the
 in-flight implement/review. A normal iteration returns `{ iteration, verdict,
-decision, findingCount, checksRun, auditRunId?, stopStatus?, loop }` (a set
-`stopStatus` means the loop also stopped: `proceed`→converged, `block`→blocked,
-the budget→max-iterations). A cancelled iteration returns `{ cancelled: true,
+decision, findingCount, checksRun, changedFiles, usage?, auditRunId?, stopStatus?,
+loop }` (a set `stopStatus` means the loop also stopped: `proceed`→converged,
+`block`→blocked, the budget→max-iterations; `usage` is the iteration's token/cost
+when reported). A cancelled iteration returns `{ cancelled: true,
 iteration, loop }` and records a clean `cancelled` stop with NO iteration record
 (never a fake-successful round). A graceful manifest failure returns
 `{ failed: true, iteration, failure, loop }` and closes the loop `blocked`.

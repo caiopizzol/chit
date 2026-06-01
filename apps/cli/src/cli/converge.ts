@@ -278,6 +278,11 @@ export type ConvergeIterationResult =
 			findingCount: number;
 			checksRun: string;
 			decision: LoopVerdict;
+			// The same changed files and usage written to the iteration record, also
+			// returned so a caller (the MCP next response) can surface them without
+			// re-reading the loop log. usage is absent when no call reported any.
+			changedFiles: string[];
+			usage?: AdapterUsage;
 			auditRunId?: string;
 			reviewText: string;
 			stopStatus?: LoopStopStatus;
@@ -342,9 +347,10 @@ export async function runConvergeIteration(
 	const reviewText = result.outputs.review ?? "";
 	const review = parseReview(reviewText);
 	const usage = sumTraceUsage(result.trace);
+	const changedFiles = gitChangedFiles(ctx.cwd);
 	appendIteration(ctx.cwd, ctx.loopId, {
 		implementSummary: capSummary(result.outputs.implement ?? ""),
-		changedFiles: gitChangedFiles(ctx.cwd),
+		changedFiles,
 		checksRun: review.checksRun,
 		verdict: review.verdict,
 		findingCount: review.findingCount,
@@ -369,6 +375,8 @@ export async function runConvergeIteration(
 		findingCount: review.findingCount,
 		checksRun: review.checksRun,
 		decision: review.verdict,
+		changedFiles,
+		...(usage && { usage }),
 		...(result.auditRunId && { auditRunId: result.auditRunId }),
 		reviewText,
 		...(stopStatus && { stopStatus }),
