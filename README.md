@@ -83,3 +83,7 @@ bun run studio:preview
 ## License
 
 MIT.
+
+## Contribuidores
+
+<a href="https://github.com/caiopizzol"><img src="https://github.com/caiopizzol.png" width="50" height="50" alt="caiopizzol" title="Caio Pizzol" /></a>
