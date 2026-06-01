@@ -33,6 +33,7 @@ import {
 import { startMcpServer } from "../surfaces/mcp/server.ts";
 import { runAudit } from "./audit.ts";
 import { runConverge } from "./converge.ts";
+import { runDoctor } from "./doctor.ts";
 import { runLoopLog } from "./loop-log.ts";
 
 const BASE_CLI_CAPABILITIES: ReadonlySet<string> = new Set(["can_show_markdown"]);
@@ -281,6 +282,7 @@ const HELP = `Usage:
   chit uninstall <name> [--to <dir>]
   chit studio [path]
   chit mcp                                         (run the stdio MCP server)
+  chit doctor                                      (preflight: check setup)
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
   chit converge --task <text> --scope <id> [options]   (chit converge --help)
   chit audit <list|show> [options]   (chit audit --help)
@@ -374,6 +376,9 @@ export async function runMain(argv: string[]): Promise<number> {
 	if (argv[0] === "converge") return runConverge(argv.slice(1));
 	// audit reads the persisted audit transcripts; read-only, its own parsing.
 	if (argv[0] === "audit") return runAudit(argv.slice(1));
+	// doctor is a read-only preflight (checks Bun, the agent CLIs, registry,
+	// audit dir, MCP registration, git); it owns its own (argument-less) parsing.
+	if (argv[0] === "doctor") return runDoctor(argv.slice(1));
 
 	let args: ParsedArgs;
 	try {
