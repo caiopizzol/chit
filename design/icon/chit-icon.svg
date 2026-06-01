@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- chit icon master: c + seal punch. Open ink ring with the seal dot inside,
+       on a paper tile. Brand colors: Paper #F4F2EA, Ink #0A0A0A, Hairline #C7BFAB. -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#F4F2EA" stroke="#C7BFAB" stroke-width="12"/>
+  <!-- 'c' = circle stroke with a gap on the right, via dash offset -->
+  <circle cx="256" cy="256" r="128" fill="none" stroke="#0A0A0A" stroke-width="72"
+          stroke-linecap="round" stroke-dasharray="589.8 214.4" stroke-dashoffset="697.0"/>
+  <!-- seal dot punched into the counter -->
+  <circle cx="256" cy="256" r="40" fill="#0A0A0A"/>
+</svg>
