@@ -1,4 +1,4 @@
-# spike/studio-nodes
+# notes/spikes/studio-nodes
 
 Slice 0 of the chit Studio plan. See `notes/studio-v0.md` and `notes/studio-node-sketches.md` for context.
 

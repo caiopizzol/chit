@@ -3,7 +3,7 @@
 The use case: "run an implement -> check loop until it converges or needs me."
 This is NOT a chit runtime feature. It is an orchestrator pattern *on top of*
 chit's primitives, and it's the recommended shape today (validated against the
-code; see receipts 0004-0006 and `proposals/conversational-handoff-needs-mcp.md`).
+code; see receipts 0004-0006 and `notes/proposals/conversational-handoff-needs-mcp.md`).
 
 ## Why it lives above chit, not inside it
 
