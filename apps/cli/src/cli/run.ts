@@ -30,6 +30,7 @@ import {
 	listInstalled,
 	uninstall,
 } from "../surfaces/lifecycle.ts";
+import { startMcpServer } from "../surfaces/mcp/server.ts";
 import { runAudit } from "./audit.ts";
 import { runConverge } from "./converge.ts";
 import { runLoopLog } from "./loop-log.ts";
@@ -43,7 +44,7 @@ function cliCapabilities(scope: string | undefined): Set<string> {
 }
 
 interface ParsedArgs {
-	command: "run" | "install" | "show" | "list" | "uninstall" | "studio" | "help";
+	command: "run" | "install" | "show" | "list" | "uninstall" | "studio" | "mcp" | "help";
 	manifestPath?: string;
 	// `run`-specific fields.
 	inputs: Record<string, string>;
@@ -104,6 +105,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
 	if (argv[0] === "list") return parseListArgs(argv);
 	if (argv[0] === "uninstall") return parseUninstallArgs(argv);
 	if (argv[0] === "studio") return parseStudioArgs(argv);
+	if (argv[0] === "mcp") {
+		// `chit mcp` takes no arguments: it launches the stdio MCP server.
+		if (argv.length > 1) throw new Error(`mcp: unexpected argument "${argv[1]}"`);
+		return emptyArgs("mcp");
+	}
 	throw new Error(`unknown command: ${argv[0]}`);
 }
 
@@ -274,6 +280,7 @@ const HELP = `Usage:
   chit list [--to <dir>] [--json]
   chit uninstall <name> [--to <dir>]
   chit studio [path]
+  chit mcp                                         (run the stdio MCP server)
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
   chit converge --task <text> --scope <id> [options]   (chit converge --help)
   chit audit <list|show> [options]   (chit audit --help)
@@ -321,7 +328,11 @@ install options:
                                 generated SKILL.md runs <runtime-path>/src/cli/run.ts
                                 in its bash block. Default: auto-detected from
                                 this CLI's location. Passing the repo root here
-                                will generate a broken skill.
+                                will generate a broken skill. NOTE: the claude-skill
+                                surface needs a SOURCE checkout: the generated skill
+                                runs the CLI source, not the installed binary, so
+                                point --runtime-path at a cloned apps/cli, not an
+                                npm-installed @chit-run/cli (which ships only dist/).
   --name <id>                   Override the install name (folder + SKILL.md name).
                                 Useful when manifest.id collides with an existing
                                 skill on disk. Defaults to manifest.id.
@@ -390,6 +401,14 @@ export async function runMain(argv: string[]): Promise<number> {
 	}
 	if (args.command === "studio") {
 		return runStudio(args);
+	}
+	if (args.command === "mcp") {
+		// Launch the stdio MCP server. connect() resolves once connected; the stdio
+		// transport then keeps the process alive until stdin closes, so returning 0
+		// here does not end the process early (runMain's caller sets exitCode and
+		// lets the event loop drain), matching `bun server.ts` and `chit studio`.
+		await startMcpServer();
+		return 0;
 	}
 	if (!args.manifestPath) {
 		process.stderr.write(`chit: run requires a manifest path\n\n${HELP}`);

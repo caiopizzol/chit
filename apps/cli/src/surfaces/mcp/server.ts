@@ -30,9 +30,9 @@ import { AuditStore } from "../../audit/store.ts";
 import {
 	buildExecute,
 	type ConvergeExecute,
-	defaultManifestPath,
 	validateConvergeManifest,
 } from "../../cli/converge.ts";
+import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import {
 	cancelConverge,
 	describeConverge,
@@ -66,7 +66,16 @@ const convergeSessions = new ConvergeStore();
 // tools inspect runs that converge/run/MCP-start wrote. Reads validate run ids
 // and only resolve blob refs that appear in a run's own events.
 const auditStore = new AuditStore();
-const registry = loadRegistry();
+// The agent registry is loaded lazily on first use, not at import. The CLI binary
+// imports this module to expose `chit mcp`, so importing it must not read
+// ~/.config/chit/agents.json (that read belongs to a running server, not to every
+// `chit` invocation). loadRegistry can also throw on a malformed config; deferring
+// it keeps that failure on the mcp path, not on import.
+let registryCache: ReturnType<typeof loadRegistry> | undefined;
+function getRegistry(): ReturnType<typeof loadRegistry> {
+	registryCache ??= loadRegistry();
+	return registryCache;
+}
 
 const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
 
@@ -156,7 +165,7 @@ server.registerTool(
 			run = startRun(crypto.randomUUID(), {
 				rawManifest: raw,
 				inputs,
-				registry,
+				registry: getRegistry(),
 				scope,
 				invocationCwd: cwd ?? process.cwd(),
 				allowUnenforcedPermissions: allow_unenforced_permissions,
@@ -325,20 +334,11 @@ server.registerTool(
 // matching `chit converge`'s setup so the MCP and CLI paths refuse the same
 // manifests (non-converge shape, unknown agent, unenforceable permission).
 function prepareConvergeExecute(
-	manifestPath: string,
+	raw: unknown,
 	scope: string,
 	cwd: string,
 	allowUnenforced: boolean,
 ): { ok: true; execute: ConvergeExecute; warnings: string[] } | { ok: false; error: string } {
-	let raw: unknown;
-	try {
-		raw = JSON.parse(readFileSync(manifestPath, "utf-8"));
-	} catch (e) {
-		return {
-			ok: false,
-			error: `could not read manifest at ${manifestPath}: ${(e as Error).message}`,
-		};
-	}
 	let manifest: ReturnType<typeof parseManifest>;
 	try {
 		manifest = parseManifest(raw);
@@ -347,6 +347,7 @@ function prepareConvergeExecute(
 	}
 	const shapeError = validateConvergeManifest(manifest);
 	if (shapeError) return { ok: false, error: shapeError };
+	const registry = getRegistry();
 	const unknown = findUnknownAgents(manifest, registry);
 	if (unknown.length > 0) {
 		return {
@@ -391,7 +392,7 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe(
-					"Converge manifest path (absolute, or relative to cwd). Default: bundled converge.json",
+					"Converge manifest path (absolute, or relative to cwd). Default: the built-in converge manifest.",
 				),
 			max_iterations: z.number().int().min(1).default(3).describe("Iteration budget. Default 3."),
 			loop_id: z.string().optional().describe("Reuse/seed a loop id. Default: generated."),
@@ -422,12 +423,20 @@ server.registerTool(
 		// converge` (which resolves cwd); a relative cwd must not produce a
 		// different on-disk loop log than the CLI for the same run.
 		const runCwd = resolve(cwd ?? process.cwd());
-		const manifestPath = manifest_path
-			? isAbsolute(manifest_path)
-				? manifest_path
-				: resolve(runCwd, manifest_path)
-			: defaultManifestPath();
-		const prep = prepareConvergeExecute(manifestPath, scope, runCwd, allow_unenforced_permissions);
+		// A given manifest_path is read from disk; with none, use the embedded
+		// default converge manifest (the published binary ships no examples/).
+		let raw: unknown;
+		if (manifest_path) {
+			const path = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
+			try {
+				raw = JSON.parse(readFileSync(path, "utf-8"));
+			} catch (e) {
+				return errorResult(`could not read manifest at ${path}: ${(e as Error).message}`);
+			}
+		} else {
+			raw = DEFAULT_CONVERGE_MANIFEST;
+		}
+		const prep = prepareConvergeExecute(raw, scope, runCwd, allow_unenforced_permissions);
 		if (!prep.ok) return errorResult(prep.error);
 		let session: ReturnType<typeof startConvergeSession>;
 		try {
@@ -627,4 +636,18 @@ server.registerTool(
 	},
 );
 
-await server.connect(new StdioServerTransport());
+// Start serving on stdio. Exported so the CLI binary can launch the MCP server
+// as `chit mcp` (the packaged path); the connect is no longer a top-level side
+// effect, so importing this module from the CLI dispatcher registers nothing and
+// connects nothing. The stdio transport keeps the process alive until stdin
+// closes, so the caller can `await` this and then return its exit code.
+export async function startMcpServer(): Promise<void> {
+	await server.connect(new StdioServerTransport());
+}
+
+// Direct source-dev entrypoint: `bun apps/cli/src/surfaces/mcp/server.ts` still
+// starts the server. When this module is imported (e.g. bundled into the CLI),
+// import.meta.main is false, so it does not auto-start.
+if (import.meta.main) {
+	await startMcpServer();
+}

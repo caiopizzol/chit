@@ -264,6 +264,18 @@ describe("parseArgs", () => {
 	test("studio --help yields help", () => {
 		expect(parseArgs(["studio", "--help"]).command).toBe("help");
 	});
+
+	test("mcp parses as the mcp command (launches the stdio server)", () => {
+		expect(parseArgs(["mcp"]).command).toBe("mcp");
+	});
+
+	test("mcp rejects extra arguments", () => {
+		expect(() => parseArgs(["mcp", "extra"])).toThrow(/unexpected argument/);
+	});
+
+	test("mcp --help yields help", () => {
+		expect(parseArgs(["mcp", "--help"]).command).toBe("help");
+	});
 });
 
 describe("chit run (subprocess)", () => {

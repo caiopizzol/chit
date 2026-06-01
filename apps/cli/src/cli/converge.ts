@@ -17,7 +17,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
 	type AdapterUsage,
 	findEnforcementGaps,
@@ -41,6 +41,7 @@ import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
 import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import type { SessionStore } from "../sessions/types.ts";
+import { DEFAULT_CONVERGE_MANIFEST } from "./default-converge-manifest.ts";
 
 export interface ConvergeIO {
 	out: (s: string) => void;
@@ -562,17 +563,14 @@ export function validateConvergeManifest(manifest: NormalizedManifest): string |
 	return null;
 }
 
-// examples/converge.json, resolved from this file's location. This
-// file is apps/cli/src/cli/converge.ts; two dirname() hops reach apps/cli.
-export function defaultManifestPath(): string {
-	return join(dirname(dirname(dirname(dirname(import.meta.dir)))), "examples", "converge.json");
-}
-
 interface ParsedConverge {
 	task: string;
 	scope: string;
 	cwd: string;
-	manifestPath: string;
+	// The --manifest path, or undefined to use the embedded default converge
+	// manifest (DEFAULT_CONVERGE_MANIFEST). The default is NOT a file path: the
+	// published binary ships no examples/, so the default lives in the bundle.
+	manifestPath?: string;
 	maxIterations: number;
 	loopId?: string;
 	allowUnenforcedPermissions: boolean;
@@ -583,7 +581,7 @@ const CONVERGE_HELP = `chit converge --task <text> --scope <id> [options]
   --task <text>            Required. The slice to converge on.
   --scope <id>             Required. Session scope; both agents keep their thread.
   --cwd <dir>              Repo to run in. Default: current directory.
-  --manifest <path>        Convergence manifest. Default: bundled examples/converge.json.
+  --manifest <path>        Convergence manifest. Default: the built-in converge manifest.
   --max-iterations <n>     Iteration budget. Default: 3.
   --loop-id <id>           Reuse/seed a loop id. Default: generated.
   --allow-unenforced-permissions
@@ -642,7 +640,7 @@ function parseConvergeArgs(argv: string[]): ParsedConverge {
 		task,
 		scope,
 		cwd: resolve(cwd ?? process.cwd()),
-		manifestPath: manifestPath ?? defaultManifestPath(),
+		manifestPath,
 		maxIterations,
 		loopId,
 		allowUnenforcedPermissions,
@@ -668,10 +666,16 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 
 	let manifest: NormalizedManifest;
 	try {
-		manifest = parseManifest(JSON.parse(readFileSync(parsed.manifestPath, "utf-8")));
+		// No --manifest: use the embedded default, which works from the published
+		// binary (no examples/ on disk). A given path is read from disk as before.
+		const raw =
+			parsed.manifestPath !== undefined
+				? JSON.parse(readFileSync(parsed.manifestPath, "utf-8"))
+				: DEFAULT_CONVERGE_MANIFEST;
+		manifest = parseManifest(raw);
 	} catch (e) {
 		io.err(
-			`chit converge: failed to load manifest ${parsed.manifestPath}: ${(e as Error).message}\n`,
+			`chit converge: failed to load manifest ${parsed.manifestPath ?? "(built-in default)"}: ${(e as Error).message}\n`,
 		);
 		return 2;
 	}

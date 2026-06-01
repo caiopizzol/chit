@@ -5,11 +5,14 @@ description: Run a chit manifest one step at a time inside a chat, with a heartb
 
 The MCP surface exposes chit inside a chat through two tool families. Stepwise manifest tools run a manifest one step at a time, with a live heartbeat on each long step. Converge tools drive the autonomous implement/review loop one iteration at a time. Each is the conversational counterpart to a CLI command that otherwise runs to completion in one shot (`chit run` and `chit converge`), so a model and the human watching it can drive and inspect it from the chat.
 
-Register it as a stdio MCP server:
+Install the CLI, then register the MCP server with `chit mcp`:
 
 ```sh
-claude mcp add chit --scope local -- bun <repo>/apps/cli/src/surfaces/mcp/server.ts
+bun install -g @chit-run/cli
+claude mcp add chit --scope local -- chit mcp
 ```
+
+`chit mcp` runs the stdio MCP server from the installed `chit` binary (the same binary as `chit run`, `chit converge`, `chit audit`). Upgrade with `bun update -g @chit-run/cli`. From a source checkout the equivalent is `claude mcp add chit --scope local -- bun <repo>/apps/cli/src/cli/run.ts mcp`.
 
 Source: `apps/cli/src/surfaces/mcp/` (`server.ts` is the tools, `engine.ts` is the stepwise run engine, `converge-engine.ts` is the single-iteration converge driver).
 
@@ -55,7 +58,7 @@ The converge tools drive `chit converge` (a write-capable implementer slices the
 
 ### chit_converge_start
 
-Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to the server cwd; also where the loop log is written), `manifest_path?` (default the bundled `converge.json`), `max_iterations` (default 3), `loop_id?`, `force` (overwrite an existing log), `allow_unenforced_permissions` (default `false`). Audit is always on, so the loop records link to the audit transcript. Returns `describeConverge` (plus `warnings[]` for unenforced permissions). Errors mirror `chit converge`: unreadable or invalid manifest, non-converge shape, unknown agent, enforcement gap without the flag, existing log without `force`.
+Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to the server cwd; also where the loop log is written), `manifest_path?` (default: the built-in converge manifest), `max_iterations` (default 3), `loop_id?`, `force` (overwrite an existing log), `allow_unenforced_permissions` (default `false`). Audit is always on, so the loop records link to the audit transcript. Returns `describeConverge` (plus `warnings[]` for unenforced permissions). Errors mirror `chit converge`: unreadable or invalid manifest, non-converge shape, unknown agent, enforcement gap without the flag, existing log without `force`.
 
 ### chit_converge_next
 

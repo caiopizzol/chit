@@ -29,6 +29,8 @@ bun install -g @chit-run/cli
 chit --help
 ```
 
+Upgrade with `bun update -g @chit-run/cli` (or re-run the global install). Register the MCP server from the installed binary with `claude mcp add chit --scope local -- chit mcp`.
+
 ## Try The Examples
 
 The npm package ships the CLI. The example manifests live in this repo.

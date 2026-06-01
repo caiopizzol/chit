@@ -10,11 +10,19 @@ Status: validated spike, dogfooded against real claude + codex. In-session
 cancel is settled (outcome a, below). Source: `apps/cli/src/surfaces/mcp/`
 (`server.ts` = tools, `engine.ts` = stepwise run engine, `converge-engine.ts` =
 single-iteration converge driver, `*-store.ts` = idle-evicting in-memory stores).
-Register as a stdio MCP server:
+Register as a stdio MCP server. From an install (`bun install -g @chit-run/cli`),
+the packaged path is `chit mcp`; from a source checkout, run `run.ts mcp` (or
+`server.ts` directly):
 
 ```sh
-claude mcp add chit --scope local -- bun <repo>/apps/cli/src/surfaces/mcp/server.ts
+claude mcp add chit --scope local -- chit mcp
+# source checkout:
+claude mcp add chit --scope local -- bun <repo>/apps/cli/src/cli/run.ts mcp
 ```
+
+`chit mcp` is a CLI subcommand that calls the exported `startMcpServer()` in
+`server.ts`; the connect is no longer a top-level side effect, so the CLI binary
+imports the module (bundling the server) without starting it.
 
 ## Execution model
 
@@ -97,7 +105,7 @@ last_decision?, failure?, audit_refs[], next_action }`, where `status` is
 
 ### chit_converge_start
 Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to server cwd; also where
-the loop log is written), `manifest_path?` (default bundled `converge.json`),
+the loop log is written), `manifest_path?` (default: the built-in converge manifest),
 `max_iterations` (default 3), `loop_id?`, `force` (overwrite an existing log),
 `allow_unenforced_permissions` (default `false`). Audit is always on (the loop
 records link to the audit transcript). Returns `describeConverge` (+ `warnings[]`
