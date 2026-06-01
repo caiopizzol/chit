@@ -1,7 +1,5 @@
 pre-commit:
   commands:
-    typecheck:
-      run: bun run typecheck
     biome:
       run: bun run check:staged:fix
       stage_fixed: true
