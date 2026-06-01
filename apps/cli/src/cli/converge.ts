@@ -241,8 +241,132 @@ function gitChangedFiles(cwd: string): string[] {
 	return [...new Set(all)];
 }
 
-// The pure loop: implement -> check -> decide, recording each round. No agent
-// spawning here — that is entirely behind `execute`.
+// One iteration's loop position and the execute boundary it runs against. The
+// loop (start/stop, prior_review threading, stop decision) is the caller's job;
+// this is just what a single implement -> check round needs. `scope` is not here
+// because it is already baked into `execute` (buildExecute closes over it); the
+// only per-iteration audit linkage is loopId + iteration, passed to execute.
+export interface ConvergeIterationContext {
+	cwd: string;
+	loopId: string;
+	iteration: number;
+	task: string;
+	prior_review: string;
+	execute: ConvergeExecute;
+}
+
+// The structured next-state a single iteration hands back so the caller can
+// decide continue-vs-stop and what prior_review to feed the next round. A
+// discriminated union on `ok`:
+//   - ok: false  -> the manifest run failed gracefully; `failure` is the reason
+//     string (no iteration record was appended). The caller stops the loop.
+//   - ok: true   -> the iteration record was appended; the parsed verdict and
+//     metrics are returned, plus `reviewText` (the next prior_review) and
+//     `stopStatus` (converged for proceed, blocked for block, undefined for
+//     revise -> continue). `decision` == verdict (the autonomous driver follows
+//     the reviewer). `auditRunId` is present only when the run was audited.
+export type ConvergeIterationResult =
+	| { ok: false; failure: string }
+	| {
+			ok: true;
+			verdict: LoopVerdict;
+			findingCount: number;
+			checksRun: string;
+			decision: LoopVerdict;
+			auditRunId?: string;
+			reviewText: string;
+			stopStatus?: LoopStopStatus;
+	  };
+
+// Tags an error thrown by the injected execute (the manifest run itself), so the
+// driver can tell a RUN throw apart from a post-run logging/append throw. This
+// preserves the pre-refactor exception boundary: before the iteration body was
+// extracted, only the execute call sat inside the driver's try, so a run throw
+// closed the loop as blocked and rethrew, while a parse/append throw propagated
+// raw with NO stop record. The tag keeps that split now that both live in the
+// primitive. `message` mirrors the original reason text so the driver can build
+// the same stop reason; `executeError` is the original error to rethrow.
+class ConvergeExecuteError extends Error {
+	readonly executeError: unknown;
+	constructor(executeError: unknown) {
+		super(executeError instanceof Error ? executeError.message : String(executeError));
+		this.executeError = executeError;
+	}
+}
+
+// A single implement -> check iteration: run the converge manifest once via the
+// injected execute, and (on a successful run) append the iteration record with
+// the same shape and fields the loop has always written. It does NOT own the
+// outer loop and does NOT start or stop the loop (the caller does that). A
+// graceful ok:false is returned as { ok: false, failure } for the caller to stop
+// on. Throw boundary, matching the pre-extraction loop exactly: a throw FROM
+// execute is re-thrown tagged as ConvergeExecuteError (the caller closes the loop
+// as blocked and rethrows the original); a throw from parsing/appending the
+// record propagates UNTAGGED, so the caller leaves the loop as it was (no stop
+// record). No agent spawning here: that is entirely behind `execute`.
+export async function runConvergeIteration(
+	ctx: ConvergeIterationContext,
+): Promise<ConvergeIterationResult> {
+	let result: RunResult & { auditRunId?: string };
+	try {
+		result = await ctx.execute(
+			{ task: ctx.task, prior_review: ctx.prior_review },
+			{ loopId: ctx.loopId, iteration: ctx.iteration },
+		);
+	} catch (e) {
+		// Tag only the run throw. Everything below stays untagged and propagates
+		// raw, preserving the original "no stop record on append failure" behavior.
+		throw new ConvergeExecuteError(e);
+	}
+
+	if (!result.ok) {
+		// A step failed gracefully. Hand the reason back so the caller can close
+		// the loop as blocked; a failed run appends no iteration record.
+		return {
+			ok: false,
+			failure: `manifest run failed at step "${result.failedStep}": ${result.error}`,
+		};
+	}
+
+	const reviewText = result.outputs.review ?? "";
+	const review = parseReview(reviewText);
+	const usage = sumTraceUsage(result.trace);
+	appendIteration(ctx.cwd, ctx.loopId, {
+		implementSummary: capSummary(result.outputs.implement ?? ""),
+		changedFiles: gitChangedFiles(ctx.cwd),
+		checksRun: review.checksRun,
+		verdict: review.verdict,
+		findingCount: review.findingCount,
+		// Autonomous driver: it follows the reviewer, so decision == verdict.
+		decision: review.verdict,
+		// The check (review) step's own duration, not the whole-run wall time.
+		checkDurationMs: reviewDurationMs(result.trace),
+		// Total token/cost across the run's calls (implement + review).
+		...(usage && { usage }),
+		// Link to the audit transcript for this iteration's run, when audited.
+		...(result.auditRunId && { detailsRef: `audit:${result.auditRunId}` }),
+	});
+
+	// proceed -> converged, block -> blocked; revise leaves it undefined so the
+	// caller threads reviewText back in and runs another round.
+	const stopStatus: LoopStopStatus | undefined =
+		review.verdict === "proceed" ? "converged" : review.verdict === "block" ? "blocked" : undefined;
+
+	return {
+		ok: true,
+		verdict: review.verdict,
+		findingCount: review.findingCount,
+		checksRun: review.checksRun,
+		decision: review.verdict,
+		...(result.auditRunId && { auditRunId: result.auditRunId }),
+		reviewText,
+		...(stopStatus && { stopStatus }),
+	};
+}
+
+// The pure loop: a thin driver over runConvergeIteration. startLoop, then run
+// one iteration per round (deciding stop from its returned next-state), then
+// stopLoop. No agent spawning here: that is entirely behind `execute`.
 export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeResult> {
 	const { loopId } = startLoop(opts.cwd, {
 		scope: opts.scope,
@@ -257,62 +381,50 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 	let status: LoopStopStatus | undefined;
 
 	for (let i = 1; i <= opts.maxIterations; i++) {
-		let result: RunResult & { auditRunId?: string };
+		let iter: ConvergeIterationResult;
 		try {
-			result = await opts.execute(
-				{ task: opts.task, prior_review: priorReview },
-				{ loopId, iteration: i },
-			);
-		} catch (e) {
-			// The run threw (not a graceful ok:false). Close the loop as blocked so
-			// it is not left open, then rethrow for a clean CLI error + non-zero exit.
-			stopLoop(opts.cwd, loopId, {
-				status: "blocked",
-				reason: `manifest run threw: ${e instanceof Error ? e.message : String(e)}`,
+			iter = await runConvergeIteration({
+				cwd: opts.cwd,
+				loopId,
+				iteration: i,
+				task: opts.task,
+				prior_review: priorReview,
+				execute: opts.execute,
 			});
+		} catch (e) {
+			if (e instanceof ConvergeExecuteError) {
+				// The run threw (not a graceful ok:false). Close the loop as blocked so
+				// it is not left open, then rethrow the ORIGINAL error for a clean CLI
+				// error + non-zero exit.
+				stopLoop(opts.cwd, loopId, {
+					status: "blocked",
+					reason: `manifest run threw: ${e.message}`,
+				});
+				throw e.executeError;
+			}
+			// A post-run throw (parsing/appending the iteration record). Propagate it
+			// unchanged, adding no stop record, exactly as before the iteration body
+			// was extracted into runConvergeIteration.
 			throw e;
 		}
 
-		if (!result.ok) {
+		if (!iter.ok) {
 			// A step failed gracefully. Failure is terminal: close the loop as
 			// blocked with a clear reason rather than leaving it open. `failure` is
-			// set so the CLI exits non-zero — a failed run is not a success.
+			// set so the CLI exits non-zero (a failed run is not a success).
 			status = "blocked";
-			const reason = `manifest run failed at step "${result.failedStep}": ${result.error}`;
-			stopLoop(opts.cwd, loopId, { status, reason });
-			return { loopId, iterations, status, failure: reason };
+			stopLoop(opts.cwd, loopId, { status, reason: iter.failure });
+			return { loopId, iterations, status, failure: iter.failure };
 		}
 
-		const reviewText = result.outputs.review ?? "";
-		const review = parseReview(reviewText);
-		const usage = sumTraceUsage(result.trace);
-		appendIteration(opts.cwd, loopId, {
-			implementSummary: capSummary(result.outputs.implement ?? ""),
-			changedFiles: gitChangedFiles(opts.cwd),
-			checksRun: review.checksRun,
-			verdict: review.verdict,
-			findingCount: review.findingCount,
-			// Autonomous driver: it follows the reviewer, so decision == verdict.
-			decision: review.verdict,
-			// The check (review) step's own duration, not the whole-run wall time.
-			checkDurationMs: reviewDurationMs(result.trace),
-			// Total token/cost across the run's calls (implement + review).
-			...(usage && { usage }),
-			// Link to the audit transcript for this iteration's run, when audited.
-			...(result.auditRunId && { detailsRef: `audit:${result.auditRunId}` }),
-		});
 		iterations++;
 
-		if (review.verdict === "proceed") {
-			status = "converged";
-			break;
-		}
-		if (review.verdict === "block") {
-			status = "blocked";
+		if (iter.stopStatus !== undefined) {
+			status = iter.stopStatus;
 			break;
 		}
 		// revise: feed the review back in and go again.
-		priorReview = reviewText;
+		priorReview = iter.reviewText;
 	}
 
 	if (status === undefined) status = "max-iterations";

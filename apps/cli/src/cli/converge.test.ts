@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type NormalizedRegistry, parseManifest } from "@chit/core";
 import { AuditStore } from "../audit/store.ts";
-import { readLoop } from "../loops/log-store.ts";
+import { readLoop, startLoop } from "../loops/log-store.ts";
 import type { AdapterMap } from "../runtime/types.ts";
 import { FileSessionStore } from "../sessions/store.ts";
 import {
@@ -14,6 +14,7 @@ import {
 	convergeLoop,
 	makeAuditedExecute,
 	runConverge,
+	runConvergeIteration,
 } from "./converge.ts";
 
 let cwd: string;
@@ -714,6 +715,165 @@ describe("runConverge (CLI)", () => {
 		// implement is checked first, so the error names it specifically.
 		expect(err).toMatch(/"implement" must be a call step/);
 		expect(() => readLoop(cwd, "SHAPE3")).toThrow();
+	});
+});
+
+describe("runConvergeIteration (single-iteration primitive)", () => {
+	// The primitive does not start or stop the loop, so each test opens a loop
+	// first (so appendIteration has an open loop to write to) and asserts on the
+	// returned next-state plus the appended iteration record.
+	test("runs one iteration with prior_review and returns next-state for revise", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "IT1" });
+		const review = reviewJson("revise", { findingCount: 3, checksRun: "bun test" });
+		const calls: { task: string; prior_review: string }[] = [];
+		const execute: ConvergeExecute = async (inputs) => {
+			calls.push(inputs);
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "did it", review },
+				trace: [{ type: "step.completed", stepId: "review", output: review, durationMs: 42 }],
+			};
+		};
+
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 2,
+			task: "t",
+			prior_review: "earlier review",
+			execute,
+		});
+
+		// The injected prior_review reached execute for this iteration.
+		expect(calls[0]?.prior_review).toBe("earlier review");
+		// Next-state: revise leaves stopStatus undefined (caller continues) and
+		// returns the review text to thread as the next prior_review.
+		if (!res.ok) throw new Error("expected ok iteration");
+		expect(res.verdict).toBe("revise");
+		expect(res.decision).toBe("revise");
+		expect(res.findingCount).toBe(3);
+		expect(res.checksRun).toBe("bun test");
+		expect(res.stopStatus).toBeUndefined();
+		expect(res.reviewText).toBe(review);
+		expect(res.auditRunId).toBeUndefined();
+		// The iteration record was appended with the parsed verdict/metrics.
+		const it = firstIteration(loopId);
+		expect(it.verdict).toBe("revise");
+		expect(it.findingCount).toBe(3);
+		expect(it.checksRun).toBe("bun test");
+		expect(it.checkDurationMs).toBe(42);
+	});
+
+	test("proceed yields stopStatus converged and surfaces auditRunId", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT2" });
+		const review = reviewJson("proceed");
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "x", review },
+			trace: [],
+			auditRunId: "run-9",
+		});
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		expect(res.verdict).toBe("proceed");
+		expect(res.stopStatus).toBe("converged");
+		expect(res.auditRunId).toBe("run-9");
+		// The audit link is threaded into the iteration record's detailsRef.
+		expect(firstIteration(loopId).detailsRef).toBe("audit:run-9");
+	});
+
+	test("block yields stopStatus blocked", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT3" });
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "x", review: reviewJson("block") },
+			trace: [],
+		});
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		expect(res.verdict).toBe("block");
+		expect(res.stopStatus).toBe("blocked");
+	});
+
+	test("a failed run returns { ok: false, failure } and appends no iteration record", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT4" });
+		const execute: ConvergeExecute = async () => ({
+			ok: false,
+			failedStep: "review",
+			error: "codex exited 1",
+			outputs: { implement: "partial" },
+			trace: [],
+		});
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+		expect(res.ok).toBe(false);
+		if (res.ok) throw new Error("expected failed iteration");
+		expect(res.failure).toMatch(/manifest run failed at step "review"/);
+		expect(res.failure).toMatch(/codex exited 1/);
+		// No iteration record was appended for the failed run.
+		expect(readLoop(cwd, loopId).filter((r) => r.type === "iteration")).toHaveLength(0);
+	});
+
+	test("an execute throw propagates and appends no iteration record", async () => {
+		// A run that THROWS (not a graceful ok:false) must propagate out of the
+		// primitive so the caller can close the loop as blocked; no iteration record
+		// is appended for a thrown run.
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT6" });
+		const execute: ConvergeExecute = async () => {
+			throw new Error("adapter exploded");
+		};
+		await expect(
+			runConvergeIteration({ cwd, loopId, iteration: 1, task: "t", prior_review: "", execute }),
+		).rejects.toThrow("adapter exploded");
+		expect(readLoop(cwd, loopId).filter((r) => r.type === "iteration")).toHaveLength(0);
+	});
+
+	test("an unparseable verdict appends a block record and yields stopStatus blocked", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT5" });
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "x", review: "no verdict block here" },
+			trace: [],
+		});
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		// Fail-safe: no usable block resolves to block, never an implicit proceed.
+		expect(res.verdict).toBe("block");
+		expect(res.stopStatus).toBe("blocked");
+		expect(res.findingCount).toBe(0);
+		expect(res.checksRun).toBe("unreported");
+		expect(firstIteration(loopId).verdict).toBe("block");
 	});
 });
 
