@@ -52,6 +52,7 @@ import {
 	startRun,
 } from "./engine.ts";
 import { RunStore } from "./run-store.ts";
+import { buildStatus } from "./status.ts";
 
 // Idle-evicting run store (sweeps on chit_start) so the in-memory run map is
 // bounded; see run-store.ts.
@@ -639,6 +640,36 @@ server.registerTool(
 		} catch (e) {
 			return errorResult((e as Error).message);
 		}
+	},
+);
+
+// --- status tool ----------------------------------------------------------
+//
+// One read-only overview for the overseeing agent: the runs and converge loops
+// live in THIS server right now (with each loop's status and next action), plus
+// a compact slice of recently audited runs from the durable store. chit's
+// MCP-native answer to a workflows progress view. Side-effect-free: it does NOT
+// sweep or touch the in-memory stores, so polling it never keeps a run alive
+// (see status.ts). Active state is per-session; recent state is durable.
+
+server.registerTool(
+	"chit_status",
+	{
+		description:
+			"Operator overview: the stepwise runs and converge loops live in THIS server right now (each loop with its status and next action), plus a compact list of recently audited runs (newest first). Read-only; answers 'what is active and what should I do next?'. Active state is per-session (a new session starts empty, and idle runs are evicted); recent state is durable. Drill into one item with chit_converge_status/chit_trace, or chit_audit_show for a run's receipt.",
+		inputSchema: {
+			recent_limit: z
+				.number()
+				.int()
+				.min(0)
+				.default(5)
+				.describe(
+					"How many recently audited runs to include (newest first). Default 5; 0 for none.",
+				),
+		},
+	},
+	async ({ recent_limit }) => {
+		return jsonResult(buildStatus(runs, convergeSessions, auditStore, recent_limit));
 	},
 );
 

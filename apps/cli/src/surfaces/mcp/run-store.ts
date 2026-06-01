@@ -39,6 +39,13 @@ export class RunStore {
 		if (this.runs.has(runId)) this.lastTouched.set(runId, now);
 	}
 
+	// All current runs, in insertion (creation) order. Read-only: chit_status
+	// enumerates live runs through this WITHOUT touching idle timers, so a status
+	// poll never keeps a run alive (that would defeat idle eviction).
+	list(): Run[] {
+		return [...this.runs.values()];
+	}
+
 	// Evict runs idle longer than the TTL that have no running step. Returns the
 	// evicted run ids. Deletes from both maps so no timestamp leaks.
 	sweep(now: number): string[] {

@@ -41,6 +41,13 @@ export class ConvergeStore {
 		if (this.sessions.has(loopId)) this.lastTouched.set(loopId, now);
 	}
 
+	// All current sessions, in insertion (creation) order. Read-only: chit_status
+	// enumerates live loops through this WITHOUT touching idle timers, so a status
+	// poll never keeps a session alive (that would defeat idle eviction).
+	list(): ConvergeSession[] {
+		return [...this.sessions.values()];
+	}
+
 	// Evict sessions idle longer than the TTL that have no in-flight iteration.
 	// Returns the evicted loop ids. Deletes from both maps so no timestamp leaks.
 	sweep(now: number): string[] {
