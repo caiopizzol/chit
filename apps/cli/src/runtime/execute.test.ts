@@ -389,3 +389,84 @@ describe("executeManifest: trace events", () => {
 		expect(events.some((e) => e.type === "step.failed")).toBe(false);
 	});
 });
+
+describe("executeManifest: cancellation (signal)", () => {
+	test("threads the run's signal to every adapter call", async () => {
+		const manifest = loadExample("ask-codex");
+		const { adapter, calls } = recordingAdapter();
+		const controller = new AbortController();
+		const result = await executeManifest(manifest, {
+			inputs: { question: "x" },
+			adapters: { codex: adapter },
+			invocationCwd: TMPDIR,
+			signal: controller.signal,
+		});
+		expect(result.ok).toBe(true);
+		// The one call step (ask) received the exact signal the run was given.
+		expect(calls.length).toBe(1);
+		expect(calls[0]?.signal).toBe(controller.signal);
+	});
+
+	test("omitting the signal leaves adapter calls with no signal (CLI path unchanged)", async () => {
+		const manifest = loadExample("ask-codex");
+		const { adapter, calls } = recordingAdapter();
+		const result = await executeManifest(manifest, {
+			inputs: { question: "x" },
+			adapters: { codex: adapter },
+			invocationCwd: TMPDIR,
+		});
+		expect(result.ok).toBe(true);
+		expect(calls[0]?.signal).toBeUndefined();
+	});
+
+	test("an already-aborted signal fails the step before the adapter is called", async () => {
+		const manifest = loadExample("ask-codex");
+		const { adapter, calls } = recordingAdapter();
+		const controller = new AbortController();
+		controller.abort();
+		const result = await executeManifest(manifest, {
+			inputs: { question: "x" },
+			adapters: { codex: adapter },
+			invocationCwd: TMPDIR,
+			signal: controller.signal,
+		});
+		// The call step never reaches the adapter; the run fails at that step with
+		// no partial output (a cancelled run is not a successful one).
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.failedStep).toBe("ask");
+		expect(result.error).toMatch(/cancelled before start/);
+		expect(calls.length).toBe(0);
+	});
+
+	test("an adapter that returns after the signal aborts does not commit a completed step", async () => {
+		const manifest = loadExample("ask-codex");
+		const controller = new AbortController();
+		// An adapter that aborts mid-call (a late abort, or one that ignores the
+		// signal) and still resolves successfully. The post-call guard must discard
+		// that output rather than commit a cancelled call as a completed step --
+		// otherwise a converge iteration cancelled in its last step would record a
+		// fake-successful round.
+		const ignoresAbort: RuntimeAdapter = {
+			call: async () => {
+				controller.abort();
+				return { output: "late output after abort" };
+			},
+		};
+		const events: TraceEvent[] = [];
+		const result = await executeManifest(manifest, {
+			inputs: { question: "x" },
+			adapters: { codex: ignoresAbort },
+			invocationCwd: TMPDIR,
+			signal: controller.signal,
+			onTrace: (e) => events.push(e),
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.failedStep).toBe("ask");
+		expect(result.error).toMatch(/cancelled/);
+		// The late output is never committed: no completed event, no output value.
+		expect(result.outputs.ask).toBeUndefined();
+		expect(events.some((e) => e.type === "step.completed" && e.stepId === "ask")).toBe(false);
+	});
+});

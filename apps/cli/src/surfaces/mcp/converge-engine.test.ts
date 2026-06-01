@@ -1,0 +1,319 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { LoopIterationRecord, LoopStopRecord } from "@chit/core";
+import type { ConvergeExecute } from "../../cli/converge.ts";
+import { readLoop } from "../../loops/log-store.ts";
+import {
+	ConvergeEngineError,
+	cancelConverge,
+	describeConverge,
+	runNextIteration,
+	startConvergeSession,
+	traceConverge,
+} from "./converge-engine.ts";
+
+let cwd: string;
+
+beforeEach(() => {
+	cwd = mkdtempSync(join(tmpdir(), "chit-converge-engine-"));
+});
+afterEach(() => {
+	rmSync(cwd, { recursive: true, force: true });
+});
+
+function reviewJson(
+	verdict: string,
+	extra: { findingCount?: number; checksRun?: string } = {},
+): string {
+	const block = {
+		verdict,
+		findingCount: extra.findingCount ?? 0,
+		checksRun: extra.checksRun ?? "none",
+		risk: "none",
+	};
+	return `Reviewed.\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\``;
+}
+
+// A fake execute mirroring executeManifest's contract, including its
+// cancellation behavior: when the iteration's signal is aborted, the real
+// executeManifest turns the adapter rejection into a graceful ok:false failure
+// envelope (NOT a throw), so this fake does the same.
+function scriptedExecute(reviews: string[], opts: { auditRunId?: string } = {}): ConvergeExecute {
+	let i = 0;
+	return async (_inputs, ctx) => {
+		if (ctx?.signal?.aborted) {
+			return {
+				ok: false,
+				failedStep: "implement",
+				error: "aborted",
+				outputs: {} as Record<string, string>,
+				trace: [],
+			};
+		}
+		const review = reviews[i++] ?? "";
+		return {
+			ok: true,
+			output: "",
+			outputs: { implement: "did it", review },
+			trace: [{ type: "step.completed", stepId: "review", output: review, durationMs: 10 }],
+			...(opts.auditRunId !== undefined && { auditRunId: opts.auditRunId }),
+		};
+	};
+}
+
+// A controllable execute for in-flight / abort-during tests: it signals when it
+// starts, then parks until either release() resolves it ok:true, or its signal
+// aborts and it resolves ok:false (the executeManifest abort contract).
+function gatedExecute(review: string): {
+	execute: ConvergeExecute;
+	onStarted: Promise<void>;
+	release: () => void;
+} {
+	let started!: () => void;
+	const onStarted = new Promise<void>((r) => {
+		started = r;
+	});
+	let release!: () => void;
+	const execute: ConvergeExecute = (_inputs, ctx) =>
+		new Promise((resolve) => {
+			started();
+			release = () =>
+				resolve({ ok: true, output: "", outputs: { implement: "x", review }, trace: [] });
+			const onAbort = () =>
+				resolve({
+					ok: false,
+					failedStep: "implement",
+					error: "aborted",
+					outputs: {} as Record<string, string>,
+					trace: [],
+				});
+			const sig = ctx?.signal;
+			if (sig?.aborted) onAbort();
+			else sig?.addEventListener("abort", onAbort, { once: true });
+		});
+	return { execute, onStarted, release: () => release() };
+}
+
+function start(execute: ConvergeExecute, maxIterations = 3) {
+	return startConvergeSession({ cwd, scope: "s", task: "t", maxIterations, execute, loopId: "L1" });
+}
+
+function iterations(loopId: string): LoopIterationRecord[] {
+	return readLoop(cwd, loopId).filter((r): r is LoopIterationRecord => r.type === "iteration");
+}
+function stopRecord(loopId: string): LoopStopRecord | undefined {
+	return readLoop(cwd, loopId).find((r): r is LoopStopRecord => r.type === "stop");
+}
+
+describe("startConvergeSession", () => {
+	test("writes a loop-log header and opens the session", () => {
+		const session = start(scriptedExecute([]));
+		expect(session.loopId).toBe("L1");
+		expect(session.iteration).toBe(0);
+		expect(session.terminalStatus).toBeUndefined();
+		const records = readLoop(cwd, "L1");
+		expect(records[0]?.type).toBe("loop");
+		expect(records.some((r) => r.type === "stop")).toBe(false);
+		expect(describeConverge(session).status).toBe("open");
+	});
+});
+
+describe("runNextIteration: verdict-driven stops", () => {
+	test("revise leaves the loop open and threads the review into the next iteration", async () => {
+		const review1 = reviewJson("revise", { findingCount: 2, checksRun: "bun test" });
+		const session = start(scriptedExecute([review1, reviewJson("proceed")]));
+
+		const r1 = await runNextIteration(session);
+		expect(r1.kind).toBe("iteration");
+		if (r1.kind !== "iteration") throw new Error("expected iteration");
+		expect(r1.verdict).toBe("revise");
+		expect(r1.stopStatus).toBeUndefined();
+		expect(session.iteration).toBe(1);
+		expect(session.priorReview).toBe(review1);
+		expect(stopRecord("L1")).toBeUndefined(); // still open
+		expect(describeConverge(session).status).toBe("open");
+
+		const r2 = await runNextIteration(session);
+		if (r2.kind !== "iteration") throw new Error("expected iteration");
+		expect(r2.stopStatus).toBe("converged");
+		expect(iterations("L1").length).toBe(2);
+		expect(stopRecord("L1")?.status).toBe("converged");
+	});
+
+	test("proceed converges and closes the loop; a further next is rejected", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.stopStatus).toBe("converged");
+		expect(session.terminalStatus).toBe("converged");
+		expect(stopRecord("L1")?.status).toBe("converged");
+		// Terminal: another next throws rather than appending past the stop.
+		await expect(runNextIteration(session)).rejects.toBeInstanceOf(ConvergeEngineError);
+	});
+
+	test("block closes the loop blocked", async () => {
+		const session = start(scriptedExecute([reviewJson("block")]));
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.stopStatus).toBe("blocked");
+		expect(stopRecord("L1")?.status).toBe("blocked");
+	});
+
+	test("an unparseable verdict fails safe to block (never an implicit proceed)", async () => {
+		const session = start(scriptedExecute(["no verdict block here"]));
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.verdict).toBe("block");
+		expect(r.stopStatus).toBe("blocked");
+	});
+
+	test("revise that consumes the budget stops as max-iterations", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("revise")]), 2);
+		await runNextIteration(session);
+		const r2 = await runNextIteration(session);
+		if (r2.kind !== "iteration") throw new Error("expected iteration");
+		expect(r2.stopStatus).toBe("max-iterations");
+		expect(stopRecord("L1")?.status).toBe("max-iterations");
+		expect(iterations("L1").length).toBe(2);
+	});
+
+	test("collects audit refs from audited iterations", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")], { auditRunId: "run-7" }));
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.auditRunId).toBe("run-7");
+		expect(session.auditRefs).toEqual(["run-7"]);
+		expect(iterations("L1")[0]?.detailsRef).toBe("audit:run-7");
+	});
+});
+
+describe("runNextIteration: failure (not cancellation)", () => {
+	test("a graceful manifest failure closes the loop blocked with the failure reason", async () => {
+		const execute: ConvergeExecute = async () => ({
+			ok: false,
+			failedStep: "review",
+			error: "codex exploded",
+			outputs: {},
+			trace: [],
+		});
+		const session = start(execute);
+		const r = await runNextIteration(session);
+		expect(r.kind).toBe("failed");
+		if (r.kind !== "failed") throw new Error("expected failed");
+		expect(r.failure).toContain("codex exploded");
+		expect(session.terminalStatus).toBe("blocked");
+		expect(session.failure).toContain("codex exploded");
+		// A failed run appends NO iteration record, only the blocked stop.
+		expect(iterations("L1").length).toBe(0);
+		expect(stopRecord("L1")?.status).toBe("blocked");
+	});
+});
+
+describe("runNextIteration: cancellation", () => {
+	test("an already-aborted signal records a clean cancelled stop and NO iteration", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		const controller = new AbortController();
+		controller.abort();
+		const r = await runNextIteration(session, controller.signal);
+		expect(r.kind).toBe("cancelled");
+		expect(session.terminalStatus).toBe("cancelled");
+		// The crux: a cancelled iteration is never recorded as a (fake) successful
+		// round. The log holds the header + a cancelled stop, zero iterations.
+		expect(iterations("L1").length).toBe(0);
+		expect(stopRecord("L1")?.status).toBe("cancelled");
+	});
+
+	test("aborting an in-flight iteration settles it cancelled with no iteration record", async () => {
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		const controller = new AbortController();
+		const pending = runNextIteration(session, controller.signal);
+		await gated.onStarted; // the iteration is now in flight (active set)
+		expect(session.active).toBeDefined();
+		controller.abort(); // Esc / chit_converge_cancel propagates here
+		const r = await pending;
+		expect(r.kind).toBe("cancelled");
+		expect(stopRecord("L1")?.status).toBe("cancelled");
+		expect(iterations("L1").length).toBe(0);
+		expect(session.active).toBeUndefined();
+	});
+});
+
+describe("runNextIteration: single-writer lock", () => {
+	test("a second next while one is in flight is rejected", async () => {
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		const pending = runNextIteration(session);
+		await gated.onStarted;
+		await expect(runNextIteration(session)).rejects.toBeInstanceOf(ConvergeEngineError);
+		gated.release();
+		const r = await pending;
+		expect(r.kind).toBe("iteration");
+	});
+});
+
+describe("cancelConverge", () => {
+	test("closes an idle-open loop as cancelled", () => {
+		const session = start(scriptedExecute([reviewJson("revise")]));
+		const res = cancelConverge(session);
+		expect(res.state).toBe("closed");
+		expect(session.terminalStatus).toBe("cancelled");
+		expect(stopRecord("L1")?.status).toBe("cancelled");
+	});
+
+	test("reports a terminal loop unchanged", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		await runNextIteration(session);
+		const res = cancelConverge(session);
+		expect(res).toEqual({ state: "already", status: "converged" });
+	});
+
+	test("aborts an in-flight iteration (cancelling), which then settles cancelled", async () => {
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		const pending = runNextIteration(session);
+		await gated.onStarted;
+		const res = cancelConverge(session);
+		expect(res.state).toBe("cancelling");
+		const r = await pending;
+		expect(r.kind).toBe("cancelled");
+		expect(stopRecord("L1")?.status).toBe("cancelled");
+	});
+});
+
+describe("describeConverge / traceConverge", () => {
+	test("status reflects open -> running -> terminal with a next action", async () => {
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		expect(describeConverge(session).status).toBe("open");
+		expect(describeConverge(session).nextAction).toContain("chit_converge_next");
+
+		const pending = runNextIteration(session);
+		await gated.onStarted;
+		const running = describeConverge(session);
+		expect(running.status).toBe("running");
+		expect(running.active).toBe(true);
+		expect(running.cancellable).toBe(true);
+
+		gated.release();
+		await pending;
+		const done = describeConverge(session);
+		expect(done.status).toBe("converged");
+		expect(done.cancellable).toBe(false);
+		expect(done.iteration).toBe(1);
+	});
+
+	test("trace reads the durable loop log plus the live state", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session);
+		const t = traceConverge(session);
+		expect(t.loopId).toBe("L1");
+		expect(t.status).toBe("open");
+		expect(t.active).toBe(false);
+		// The records come straight from the loop log (header + the one iteration).
+		expect(t.records[0]?.type).toBe("loop");
+		expect(t.records.filter((r) => r.type === "iteration").length).toBe(1);
+	});
+});

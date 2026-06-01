@@ -723,6 +723,7 @@ const STOP_LABEL: Record<LoopStopStatus, string> = {
 	blocked: "blocked",
 	"max-iterations": "max iterations",
 	"needs-decision": "needs decision",
+	cancelled: "cancelled",
 };
 
 // Compact convergence shape: one chip per iteration showing the loop owner's

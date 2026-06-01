@@ -12,7 +12,12 @@
 import type { AdapterUsage } from "../audit/events.ts";
 
 export type LoopVerdict = "proceed" | "revise" | "block";
-export type LoopStopStatus = "converged" | "blocked" | "max-iterations" | "needs-decision";
+export type LoopStopStatus =
+	| "converged"
+	| "blocked"
+	| "max-iterations"
+	| "needs-decision"
+	| "cancelled";
 
 const VERDICTS: ReadonlySet<string> = new Set(["proceed", "revise", "block"]);
 const STOP_STATUSES: ReadonlySet<string> = new Set([
@@ -20,6 +25,7 @@ const STOP_STATUSES: ReadonlySet<string> = new Set([
 	"blocked",
 	"max-iterations",
 	"needs-decision",
+	"cancelled",
 ]);
 
 export interface LoopHeaderRecord {

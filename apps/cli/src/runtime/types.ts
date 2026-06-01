@@ -93,6 +93,11 @@ export interface ExecuteOptions {
 	adapters: AdapterMap;
 	invocationCwd: string;
 	onTrace?: (event: TraceEvent) => void;
+	// If provided, threaded to every adapter call so an in-flight run can be
+	// cancelled: an adapter must kill its child and reject when this aborts.
+	// Optional, so the plain CLI run path (which passes none) is unchanged. The
+	// MCP converge surface passes one to make a running iteration Esc-cancellable.
+	signal?: AbortSignal;
 }
 
 export type RunResult =

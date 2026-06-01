@@ -1,14 +1,16 @@
 # chit MCP surface (v0)
 
-The MCP surface exposes a chit run as a set of stepwise tools, so a model (and
-the human watching it) can run a manifest one step at a time inside a chat,
-with a live heartbeat on each long step. It is the conversational counterpart to
-the CLI `chit run` (which runs the whole DAG to completion in one shot).
+The MCP surface exposes chit inside a chat through two tool families: stepwise
+manifest tools (run a manifest one step at a time, with a live heartbeat on each
+long step) and converge tools (drive the autonomous implement/review loop one
+iteration at a time). Both are the conversational counterpart to a CLI command
+that otherwise runs to completion in one shot (`chit run` and `chit converge`).
 
-Status: validated spike, dogfooded against real claude + codex. One open UX
-question remains (in-session cancel reachability, below); it
-is not a correctness gap. Source: `apps/cli/src/surfaces/mcp/` (`server.ts` =
-tools, `engine.ts` = stepwise run engine). Register as a stdio MCP server:
+Status: validated spike, dogfooded against real claude + codex. In-session
+cancel is settled (outcome a, below). Source: `apps/cli/src/surfaces/mcp/`
+(`server.ts` = tools, `engine.ts` = stepwise run engine, `converge-engine.ts` =
+single-iteration converge driver, `*-store.ts` = idle-evicting in-memory stores).
+Register as a stdio MCP server:
 
 ```sh
 claude mcp add chit --scope local -- bun <repo>/apps/cli/src/surfaces/mcp/server.ts
@@ -75,6 +77,66 @@ The transcript so far. Input: `run_id`. Returns
 `{ run_id, manifest, complete, trace[] }`, each trace entry
 `{ step, kind, participant, agent, status, durationMs, output, error }`.
 
+## Converge tools
+
+The converge tools drive the autonomous implement/review loop (`chit converge`)
+one iteration at a time, so each iteration is a separate, cancellable tool call
+and the loop is inspectable between calls. They sit on the SAME single-iteration
+primitive (`runConvergeIteration`) and write the SAME loop log
+(`.chit/loops/<loop_id>.jsonl`) as the CLI, so a loop driven over MCP is
+identical on disk to one driven by `chit converge`. The loop log is the durable
+state; the server keeps an idle-evicting in-memory session (the audited execute
+boundary, the `prior_review` to thread forward, and the in-flight
+`AbortController`) but never a second source of truth for iterations.
+
+`describeConverge` (the loop's control-plane view, embedded as `loop` in
+`chit_converge_next`/`_cancel` results) is `{ loop_id, scope, cwd, task,
+max_iterations, iteration (completed), status, active, cancellable, last_verdict?,
+last_decision?, failure?, audit_refs[], next_action }`, where `status` is
+`open | running | converged | blocked | max-iterations | cancelled`.
+
+### chit_converge_start
+Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to server cwd; also where
+the loop log is written), `manifest_path?` (default bundled `converge.json`),
+`max_iterations` (default 3), `loop_id?`, `force` (overwrite an existing log),
+`allow_unenforced_permissions` (default `false`). Audit is always on (the loop
+records link to the audit transcript). Returns `describeConverge` (+ `warnings[]`
+for unenforced permissions). Errors mirror `chit converge`: unreadable/invalid
+manifest, non-converge shape, unknown agent, enforcement gap without the flag,
+existing log without `force`.
+
+### chit_converge_next
+Run exactly ONE implement→review iteration, blocking until it settles; emits a
+heartbeat while it runs. Input: `loop_id`. Folds the request's `extra.signal`
+into the iteration's abort, so Esc (or `chit_converge_cancel`) cancels the
+in-flight implement/review. A normal iteration returns `{ iteration, verdict,
+decision, findingCount, checksRun, auditRunId?, stopStatus?, loop }` (a set
+`stopStatus` means the loop also stopped: `proceed`→converged, `block`→blocked,
+the budget→max-iterations). A cancelled iteration returns `{ cancelled: true,
+iteration, loop }` and records a clean `cancelled` stop with NO iteration record
+(never a fake-successful round). A graceful manifest failure returns
+`{ failed: true, iteration, failure, loop }` and closes the loop `blocked`.
+Rejects (engine error) a loop that is already terminal or already has an
+iteration in flight (the loop log is single-writer).
+
+### chit_converge_status
+Compact control-plane view: "what should I do next?". Input: `loop_id`. Returns
+`describeConverge` from the in-memory session alone (no loop-log read), so it is
+cheap to poll.
+
+### chit_converge_cancel
+Cancel a loop. Input: `loop_id`. If an iteration is in flight, aborts it (it
+settles as a clean `cancelled` stop; best-effort, like `chit_cancel`); if the
+loop is open but idle, closes it `cancelled` now; a terminal loop is reported
+back unchanged. Returns `{ cancel: { state: cancelling | closed | already }, loop }`.
+
+### chit_converge_trace
+Diagnostic history: "what happened?". Input: `loop_id`. Reads straight from the
+durable loop log (NOT a second source of truth) and adds the live state. Returns
+`{ loop_id, status, active, audit_refs[], records[] }`, where `records` are the
+loop-log records (header, each iteration's summary/changed files/verdict/decision/
+usage/audit ref, and the stop record).
+
 ## Observability (heartbeat)
 
 While a call step runs, `chit_run_step` emits, every ~5s, both a progress
@@ -117,8 +179,10 @@ This is a Claude Code behavior, not a guarantee for every MCP client, so
 turn is not blocked, e.g. cancelling from a fresh turn). No async-dispatch
 contract change is needed: a blocking tool can stay blocking as long as it folds
 the request's `extra.signal` into its active abort controller the way
-`chit_run_step` does. That is the cancellation contract a future
-`chit_converge_next` must follow.
+`chit_run_step` does. `chit_converge_next` follows exactly this contract: it
+folds `extra.signal` into the iteration's abort, and a cancelled iteration
+records a clean `cancelled` stop (no iteration record) rather than a
+fake-successful round.
 
 ## Known limits / backlog
 

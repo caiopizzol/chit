@@ -7,14 +7,37 @@
 // Register (stdio):
 //   claude mcp add chit --scope local -- bun <repo>/apps/cli/src/surfaces/mcp/server.ts
 //
-// Tools: chit_start -> chit_next -> chit_run_step (repeat) -> chit_trace.
+// Stepwise manifest tools: chit_start -> chit_next -> chit_run_step (repeat) ->
+// chit_trace. Converge tools (autonomous implement/review loop, one iteration
+// per call): chit_converge_start -> chit_converge_next (repeat) with
+// chit_converge_status / chit_converge_cancel / chit_converge_trace.
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import {
+	findEnforcementGaps,
+	findUnknownAgents,
+	formatEnforcementGaps,
+	parseManifest,
+} from "@chit/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
+import {
+	buildExecute,
+	type ConvergeExecute,
+	defaultManifestPath,
+	validateConvergeManifest,
+} from "../../cli/converge.ts";
+import {
+	cancelConverge,
+	describeConverge,
+	runNextIteration,
+	startConvergeSession,
+	traceConverge,
+} from "./converge-engine.ts";
+import { ConvergeStore } from "./converge-store.ts";
 import {
 	cancelStep,
 	finalOutput,
@@ -33,6 +56,9 @@ const runs = new RunStore();
 // AbortControllers for in-flight steps, so chit_cancel can stop a running step
 // even after the model's turn is interrupted (the server keeps running).
 const controllers: StepControllers = new Map();
+// Idle-evicting converge session store (sweeps on chit_converge_start). Holds the
+// in-memory state for chit_converge_* loops; the durable record is the loop log.
+const convergeSessions = new ConvergeStore();
 const registry = loadRegistry();
 
 const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
@@ -276,6 +302,268 @@ server.registerTool(
 			complete: isComplete(run),
 			trace,
 		});
+	},
+);
+
+// --- converge tools -------------------------------------------------------
+//
+// chit_converge_start -> chit_converge_next (repeat, blocking) -> stops at the
+// reviewer's verdict. chit_converge_status (what next?) and chit_converge_trace
+// (what happened?) inspect between calls; chit_converge_cancel stops a loop.
+// All sit on the same single-iteration primitive and loop log the CLI uses, so
+// a loop driven over MCP is identical on disk to one driven by `chit converge`.
+
+// Load + validate the converge manifest and build its audited execute. Returns a
+// ready execute (plus any unenforced-permission warnings) or an error string,
+// matching `chit converge`'s setup so the MCP and CLI paths refuse the same
+// manifests (non-converge shape, unknown agent, unenforceable permission).
+function prepareConvergeExecute(
+	manifestPath: string,
+	scope: string,
+	cwd: string,
+	allowUnenforced: boolean,
+): { ok: true; execute: ConvergeExecute; warnings: string[] } | { ok: false; error: string } {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(manifestPath, "utf-8"));
+	} catch (e) {
+		return {
+			ok: false,
+			error: `could not read manifest at ${manifestPath}: ${(e as Error).message}`,
+		};
+	}
+	let manifest: ReturnType<typeof parseManifest>;
+	try {
+		manifest = parseManifest(raw);
+	} catch (e) {
+		return { ok: false, error: (e as Error).message };
+	}
+	const shapeError = validateConvergeManifest(manifest);
+	if (shapeError) return { ok: false, error: shapeError };
+	const unknown = findUnknownAgents(manifest, registry);
+	if (unknown.length > 0) {
+		return {
+			ok: false,
+			error: `unknown agent(s): ${unknown
+				.map((u) => `${u.agentId} (participant "${u.participantId}")`)
+				.join(", ")}`,
+		};
+	}
+	const gaps = findEnforcementGaps(manifest, registry);
+	if (gaps.length > 0 && !allowUnenforced) {
+		return {
+			ok: false,
+			error: `cannot enforce required permissions:\n${formatEnforcementGaps(
+				gaps,
+			)}\nPass allow_unenforced_permissions=true to run anyway.`,
+		};
+	}
+	const warnings = gaps.map(
+		(g) => `unenforced permission: participant "${g.participantId}" requires ${g.permission}`,
+	);
+	return { ok: true, execute: buildExecute(manifest, registry, scope, cwd), warnings };
+}
+
+server.registerTool(
+	"chit_converge_start",
+	{
+		description:
+			"Start an autonomous converge loop (a write-capable implementer slices the task, a read-only reviewer checks the diff) driven one iteration at a time. Returns a loop_id and the next action. Then call chit_converge_next per iteration. Records to .chit/loops/<loop_id>.jsonl, identical to `chit converge`.",
+		inputSchema: {
+			task: z.string().describe("The slice to converge on"),
+			scope: z
+				.string()
+				.describe("Session scope id; both agents keep their thread across iterations"),
+			cwd: z
+				.string()
+				.optional()
+				.describe(
+					"Repo to run in (defaults to the server cwd); also where the loop log is written",
+				),
+			manifest_path: z
+				.string()
+				.optional()
+				.describe(
+					"Converge manifest path (absolute, or relative to cwd). Default: bundled converge.json",
+				),
+			max_iterations: z.number().int().min(1).default(3).describe("Iteration budget. Default 3."),
+			loop_id: z.string().optional().describe("Reuse/seed a loop id. Default: generated."),
+			force: z
+				.boolean()
+				.default(false)
+				.describe("Overwrite an existing loop log at this loop_id rather than refusing."),
+			allow_unenforced_permissions: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Run even when the manifest declares a permission its adapter cannot enforce (emits warnings). Default off: such a manifest is refused.",
+				),
+		},
+	},
+	async ({
+		task,
+		scope,
+		cwd,
+		manifest_path,
+		max_iterations,
+		loop_id,
+		force,
+		allow_unenforced_permissions,
+	}) => {
+		convergeSessions.sweep(Date.now());
+		// Resolve to an absolute path so the loop header's `repo` matches `chit
+		// converge` (which resolves cwd); a relative cwd must not produce a
+		// different on-disk loop log than the CLI for the same run.
+		const runCwd = resolve(cwd ?? process.cwd());
+		const manifestPath = manifest_path
+			? isAbsolute(manifest_path)
+				? manifest_path
+				: resolve(runCwd, manifest_path)
+			: defaultManifestPath();
+		const prep = prepareConvergeExecute(manifestPath, scope, runCwd, allow_unenforced_permissions);
+		if (!prep.ok) return errorResult(prep.error);
+		let session: ReturnType<typeof startConvergeSession>;
+		try {
+			session = startConvergeSession({
+				cwd: runCwd,
+				scope,
+				task,
+				maxIterations: max_iterations,
+				loopId: loop_id,
+				force,
+				execute: prep.execute,
+			});
+		} catch (e) {
+			return errorResult((e as Error).message);
+		}
+		convergeSessions.add(session, Date.now());
+		return jsonResult({
+			...describeConverge(session),
+			...(prep.warnings.length > 0 && { warnings: prep.warnings }),
+		});
+	},
+);
+
+server.registerTool(
+	"chit_converge_next",
+	{
+		description:
+			"Run exactly ONE implement->review iteration of a converge loop, blocking until it settles. Emits a heartbeat while it runs. Pressing Esc (or chit_converge_cancel) cancels the in-flight iteration: it records a clean `cancelled` stop and NO iteration, never a fake-successful round. Returns this iteration's verdict/decision and the loop's next action; a set stopStatus means the loop also stopped.",
+		inputSchema: { loop_id: z.string() },
+	},
+	async ({ loop_id }, extra) => {
+		const session = convergeSessions.get(loop_id, Date.now());
+		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
+
+		let progress = 0;
+		const progressToken = extra._meta?.progressToken;
+		const heartbeat = (message: string) => {
+			progress++;
+			if (progressToken !== undefined) {
+				void extra
+					.sendNotification({
+						method: "notifications/progress",
+						params: { progressToken, progress, message },
+					})
+					.catch(() => {});
+			}
+			void server
+				.sendLoggingMessage({ level: "info", data: message, logger: "chit" })
+				.catch(() => {});
+		};
+
+		const iterationNo = session.iteration + 1;
+		heartbeat(`${loop_id} · iteration ${iterationNo} · starting`);
+		try {
+			// extra.signal folds into the iteration's abort: Esc propagates here and
+			// cancels the in-flight implement/review (the #4 cancellation contract).
+			const result = await runNextIteration(session, extra.signal);
+			if (result.kind === "cancelled") {
+				heartbeat(`${loop_id} · iteration ${result.iteration} · cancelled`);
+				return jsonResult({
+					cancelled: true,
+					iteration: result.iteration,
+					loop: describeConverge(session),
+				});
+			}
+			if (result.kind === "failed") {
+				heartbeat(`${loop_id} · iteration ${result.iteration} · failed`);
+				return jsonResult({
+					failed: true,
+					iteration: result.iteration,
+					failure: result.failure,
+					loop: describeConverge(session),
+				});
+			}
+			heartbeat(
+				`${loop_id} · iteration ${result.iteration} · ${result.verdict}${
+					result.stopStatus ? ` · ${result.stopStatus}` : ""
+				}`,
+			);
+			return jsonResult({
+				iteration: result.iteration,
+				verdict: result.verdict,
+				decision: result.decision,
+				findingCount: result.findingCount,
+				checksRun: result.checksRun,
+				...(result.auditRunId && { auditRunId: result.auditRunId }),
+				...(result.stopStatus && { stopStatus: result.stopStatus }),
+				loop: describeConverge(session),
+			});
+		} catch (e) {
+			return errorResult((e as Error).message);
+		} finally {
+			// Refresh the idle timer after a (possibly multi-minute) iteration so a
+			// concurrent chit_converge_start sweep does not evict it immediately.
+			convergeSessions.touch(loop_id, Date.now());
+		}
+	},
+);
+
+server.registerTool(
+	"chit_converge_status",
+	{
+		description:
+			"Compact control-plane view of a converge loop: open/running/<stop status>, completed iterations, last verdict/decision, whether it is cancellable, and the next action. Answers 'what should I do next?'.",
+		inputSchema: { loop_id: z.string() },
+	},
+	async ({ loop_id }) => {
+		const session = convergeSessions.get(loop_id, Date.now());
+		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
+		return jsonResult(describeConverge(session));
+	},
+);
+
+server.registerTool(
+	"chit_converge_cancel",
+	{
+		description:
+			"Cancel a converge loop. If an iteration is in flight, aborts it (it settles as a clean `cancelled` stop); if the loop is open but idle, closes it cancelled now. A loop that already stopped is reported back unchanged. Use to stop a loop from a later turn.",
+		inputSchema: { loop_id: z.string() },
+	},
+	async ({ loop_id }) => {
+		const session = convergeSessions.get(loop_id, Date.now());
+		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
+		const cancel = cancelConverge(session);
+		return jsonResult({ cancel, loop: describeConverge(session) });
+	},
+);
+
+server.registerTool(
+	"chit_converge_trace",
+	{
+		description:
+			"Diagnostic history of a converge loop: the durable loop-log records (header, each iteration's summary/changed files/verdict/decision/usage/audit ref, and the stop record) plus the live state and audit refs. Read-only over the loop log. Answers 'what happened?'.",
+		inputSchema: { loop_id: z.string() },
+	},
+	async ({ loop_id }) => {
+		const session = convergeSessions.get(loop_id, Date.now());
+		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
+		try {
+			return jsonResult(traceConverge(session));
+		} catch (e) {
+			return errorResult((e as Error).message);
+		}
 	},
 );
 

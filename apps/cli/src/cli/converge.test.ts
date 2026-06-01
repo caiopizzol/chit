@@ -875,6 +875,57 @@ describe("runConvergeIteration (single-iteration primitive)", () => {
 		expect(res.checksRun).toBe("unreported");
 		expect(firstIteration(loopId).verdict).toBe("block");
 	});
+
+	test("forwards ctx.signal to execute so the iteration's run is cancellable", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT6" });
+		const controller = new AbortController();
+		let seenSignal: AbortSignal | undefined;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			seenSignal = ctx?.signal;
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [],
+			};
+		};
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+			signal: controller.signal,
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		// The primitive passes its signal straight through to execute's ctx, which
+		// is what wires Esc/chit_converge_cancel down to the adapter call.
+		expect(seenSignal).toBe(controller.signal);
+	});
+
+	test("omitting ctx.signal leaves execute with no signal (CLI driver path)", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT7" });
+		let ctxSeen: { signal?: AbortSignal } | undefined;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctxSeen = ctx;
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [],
+			};
+		};
+		await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+		expect(ctxSeen?.signal).toBeUndefined();
+	});
 });
 
 describe("converge: makeAuditedExecute (audit wiring)", () => {

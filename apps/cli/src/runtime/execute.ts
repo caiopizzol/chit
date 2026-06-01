@@ -34,6 +34,7 @@ async function runStep(
 	adapters: AdapterMap,
 	invocationCwd: string,
 	onTrace: (event: TraceEvent) => void,
+	signal?: AbortSignal,
 ): Promise<string> {
 	const step = manifest.steps[stepId];
 	if (!step) throw new RuntimeError(`internal: step "${stepId}" not found`);
@@ -67,14 +68,26 @@ async function runStep(
 			prompt: renderedPrompt,
 		});
 		const input = buildAgentInput(participant.role, renderedPrompt);
+		// Don't even start the call if cancellation already landed (e.g. between
+		// this level and the previous one). The adapter also honors signal during
+		// the call; this just avoids spawning a child we would immediately kill.
+		if (signal?.aborted) throw new RuntimeError(`step "${stepId}" cancelled before start`);
 		const result = await adapter.call({
 			participantId: step.call,
 			agentId: participant.agent,
 			stepId,
 			input,
 			cwd: invocationCwd,
+			signal,
 			filesystem: participant.permissions.filesystem,
 		});
+		// Cancel may have landed while the call was completing (or an adapter
+		// ignored the signal and returned anyway). Don't commit a cancelled call as
+		// a completed step -- mirror the stepwise engine (surfaces/mcp/engine.ts).
+		// This makes an aborted run settle as ok:false (failedStep = this step), so
+		// a converge iteration cancelled in its last step is a clean cancelled stop
+		// with no iteration record, not a fake-successful round.
+		if (signal?.aborted) throw new RuntimeError(`step "${stepId}" cancelled`);
 		onTrace({
 			type: "step.completed",
 			stepId,
@@ -117,6 +130,7 @@ export async function executeManifest(
 					options.adapters,
 					options.invocationCwd,
 					recordEvent,
+					options.signal,
 				),
 			),
 		);

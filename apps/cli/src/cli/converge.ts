@@ -87,10 +87,12 @@ const CHECKS_RUN_FALLBACK = "unreported";
 // failed, so a loop record never links to a missing transcript. `ctx` carries
 // the loop position so the audit run.started can name its source loop/iteration.
 // Both ctx and auditRunId are optional, so a fake/non-audited execute (tests, or
-// a future caller that does not audit) still satisfies the contract.
+// a future caller that does not audit) still satisfies the contract. ctx.signal,
+// when present, is threaded to the manifest run so an in-flight iteration can be
+// cancelled (the MCP converge surface passes one; the CLI driver does not).
 export type ConvergeExecute = (
 	inputs: { task: string; prior_review: string },
-	ctx?: { loopId: string; iteration: number },
+	ctx?: { loopId: string; iteration: number; signal?: AbortSignal },
 ) => Promise<RunResult & { auditRunId?: string }>;
 
 export interface ConvergeLoopOptions {
@@ -253,6 +255,9 @@ export interface ConvergeIterationContext {
 	task: string;
 	prior_review: string;
 	execute: ConvergeExecute;
+	// When present, threaded to execute so the iteration's manifest run can be
+	// cancelled mid-flight. Absent for the CLI driver (uncancellable, as before).
+	signal?: AbortSignal;
 }
 
 // The structured next-state a single iteration hands back so the caller can
@@ -286,7 +291,9 @@ export type ConvergeIterationResult =
 // raw with NO stop record. The tag keeps that split now that both live in the
 // primitive. `message` mirrors the original reason text so the driver can build
 // the same stop reason; `executeError` is the original error to rethrow.
-class ConvergeExecuteError extends Error {
+// Exported so other drivers over runConvergeIteration (the MCP converge surface)
+// preserve the same run-throw vs append-throw split, not just convergeLoop.
+export class ConvergeExecuteError extends Error {
 	readonly executeError: unknown;
 	constructor(executeError: unknown) {
 		super(executeError instanceof Error ? executeError.message : String(executeError));
@@ -311,7 +318,11 @@ export async function runConvergeIteration(
 	try {
 		result = await ctx.execute(
 			{ task: ctx.task, prior_review: ctx.prior_review },
-			{ loopId: ctx.loopId, iteration: ctx.iteration },
+			{
+				loopId: ctx.loopId,
+				iteration: ctx.iteration,
+				...(ctx.signal && { signal: ctx.signal }),
+			},
 		);
 	} catch (e) {
 		// Tag only the run throw. Everything below stays untagged and propagates
@@ -443,7 +454,7 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 // The default adapter-backed execute. Mirrors the run-command path: build one
 // adapter per agent, wrap them in the per_scope session coordinator (converge
 // is a per_scope manifest), and run the whole manifest to completion.
-function buildExecute(
+export function buildExecute(
 	manifest: NormalizedManifest,
 	registry: NormalizedRegistry,
 	scope: string,
@@ -511,6 +522,7 @@ export function makeAuditedExecute(
 				adapters,
 				invocationCwd: cwd,
 				onTrace: (e) => recorder.fromTrace(e),
+				...(ctx?.signal && { signal: ctx.signal }),
 			});
 			recorder.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
 			recorder.prune(); // opportunistic retention; never prunes this run
@@ -529,7 +541,7 @@ export function makeAuditedExecute(
 // Validate that contract up front so a non-converge manifest fails clearly
 // instead of silently writing a garbage loop log. Returns an error string, or
 // null when the manifest satisfies the contract.
-function validateConvergeManifest(manifest: NormalizedManifest): string | null {
+export function validateConvergeManifest(manifest: NormalizedManifest): string | null {
 	for (const id of [IMPLEMENT_STEP_ID, REVIEW_STEP_ID]) {
 		const step = manifest.steps[id];
 		if (!step) {
@@ -544,7 +556,7 @@ function validateConvergeManifest(manifest: NormalizedManifest): string | null {
 
 // examples/converge.json, resolved from this file's location. This
 // file is apps/cli/src/cli/converge.ts; two dirname() hops reach apps/cli.
-function defaultManifestPath(): string {
+export function defaultManifestPath(): string {
 	return join(dirname(dirname(dirname(dirname(import.meta.dir)))), "examples", "converge.json");
 }
 
