@@ -1,4 +1,4 @@
-import type { NormalizedAgent } from "@chit/core";
+import type { NormalizedAgent } from "@chit-run/core";
 import type { RuntimeAdapter } from "../runtime/types.ts";
 import { ClaudeCliAdapter } from "./claude-cli.ts";
 import { CodexExecAdapter } from "./codex-exec.ts";

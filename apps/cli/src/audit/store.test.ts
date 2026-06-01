@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterCallCompletedEvent, AuditEvent, RunStartedEvent } from "@chit/core";
+import type { AdapterCallCompletedEvent, AuditEvent, RunStartedEvent } from "@chit-run/core";
 import { AuditStore, AuditStoreError, defaultAuditDir } from "./store.ts";
 
 let baseDir: string;

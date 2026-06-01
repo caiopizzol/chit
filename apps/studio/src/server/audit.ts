@@ -7,13 +7,13 @@
 //
 // The run-id and blob-ref shapes + the dir resolution mirror
 // apps/cli/src/audit/store.ts (which Studio cannot import: apps/cli already
-// depends on @chit/studio, so importing it back would be a cycle). Keep the two
+// depends on @chit-run/studio, so importing it back would be a cycle). Keep the two
 // in sync.
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type AuditEvent, AuditEventError, parseAuditLog } from "@chit/core";
+import { type AuditEvent, AuditEventError, parseAuditLog } from "@chit-run/core";
 
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;

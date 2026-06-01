@@ -16,7 +16,7 @@ import {
 	INSTALL_MARKER_FILENAME,
 	type NormalizedRegistry,
 	parseRegistry,
-} from "@chit/core";
+} from "@chit-run/core";
 import { installClaudeSkill, SurfaceInstallError } from "./claude-skill.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");

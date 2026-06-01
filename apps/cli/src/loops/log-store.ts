@@ -1,7 +1,7 @@
 // Node-backed writer for the convergence log. The supervised-convergence
 // orchestrator (the Claude Code chat) calls this once per loop step to append
 // to .chit/loops/<loopId>.jsonl under the working repo. The pure record model
-// and validation live in @chit/core; this adds the filesystem and the
+// and validation live in @chit-run/core; this adds the filesystem and the
 // write-time INVARIANTS the reader cannot retrofit:
 //
 //   - .chit/loops/ is created under cwd; loopId is constrained to a safe slug.
@@ -37,7 +37,7 @@ import {
 	parseLoopLog,
 	serializeLoopRecord,
 	validateLoopLog,
-} from "@chit/core";
+} from "@chit-run/core";
 
 export class LoopStoreError extends Error {}
 

@@ -1,5 +1,5 @@
 {
-	"name": "@chit/site",
+	"name": "@chit-run/site",
 	"version": "0.0.0",
 	"private": true,
 	"description": "chit documentation site. Next.js + Fumadocs, static export, Cloudflare-ready.",

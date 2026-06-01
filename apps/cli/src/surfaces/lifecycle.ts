@@ -7,7 +7,7 @@ import {
 	MarkerError,
 	parseInstallMarker,
 	VALID_INSTALL_NAME_RE,
-} from "@chit/core";
+} from "@chit-run/core";
 
 // Where the CLI looks by default. Mirrors `chit install --to`'s default.
 export function defaultSkillsDir(): string {

@@ -3,7 +3,7 @@
 // target.
 
 import { describe, expect, test } from "bun:test";
-import { buildGraphModel, parseManifest, parseRegistry } from "@chit/core";
+import { buildGraphModel, parseManifest, parseRegistry } from "@chit-run/core";
 import { initClientState } from "./state.ts";
 
 const REGISTRY = parseRegistry(undefined);

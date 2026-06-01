@@ -395,7 +395,7 @@ Release notes are a public surface. Same grammar as the CLI: short, specific, no
 
 ### Improvements
 
-- **Browser-safe core boundary** - Parsing, validation, graph model, and the show renderer moved into `@chit/core` with no node imports. CI verifies the boundary.
+- **Browser-safe core boundary** - Parsing, validation, graph model, and the show renderer moved into `@chit-run/core` with no node imports. CI verifies the boundary.
 - **Path resolution from workspace root** - Studio resolves relative paths from the workspace root, not the launch cwd, so quick-links work regardless of how Studio was started.
 
 ### Fixes

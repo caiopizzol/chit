@@ -14,10 +14,10 @@ That also installs the lefthook pre-commit hook (staged Biome formatting).
 
 ## Layout
 
-- `apps/cli` (`@chit/cli`) - the chit CLI and the MCP stepwise surface.
-- `apps/site` (`@chit/site`) - the public website: landing page plus Fumadocs docs.
-- `apps/studio` (`@chit/studio`) - the local visual editor.
-- `packages/core` (`@chit/core`) - browser-safe shared model, parser, and graph logic.
+- `apps/cli` (`@chit-run/cli`) - the chit CLI and the MCP stepwise surface.
+- `apps/site` (`@chit-run/site`) - the public website: landing page plus Fumadocs docs.
+- `apps/studio` (`@chit-run/studio`) - the local visual editor.
+- `packages/core` (`@chit-run/core`) - browser-safe shared model, parser, and graph logic.
 - `examples/` - canonical chit manifests.
 - `design/` - living technical contracts the code cites (not the published docs).
 - `research/` - historical proposals and superseded notes (non-authoritative).
@@ -39,7 +39,7 @@ Run these before opening a PR; CI runs the same set:
 bun run typecheck       # all workspaces
 bun run test            # all workspaces
 bun run check           # Biome (lint + format)
-bun run check:browser   # @chit/core stays browser-safe (no Node-only refs)
+bun run check:browser   # @chit-run/core stays browser-safe (no Node-only refs)
 bun run site:build      # static export of the site
 ```
 

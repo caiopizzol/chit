@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type AdapterCallCompletedEvent, type NormalizedRegistry, parseManifest } from "@chit/core";
+import {
+	type AdapterCallCompletedEvent,
+	type NormalizedRegistry,
+	parseManifest,
+} from "@chit-run/core";
 import { loadRegistry } from "../../agents/parse.ts";
 import { AuditRecorder } from "../../audit/recorder.ts";
 import { AuditStore } from "../../audit/store.ts";

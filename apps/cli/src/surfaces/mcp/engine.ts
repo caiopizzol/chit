@@ -14,7 +14,7 @@ import {
 	type NormalizedRegistry,
 	parseManifest,
 	resolveParticipantSnapshots,
-} from "@chit/core";
+} from "@chit-run/core";
 import { buildAdapter } from "../../adapters/factory.ts";
 import { AuditRecorder } from "../../audit/recorder.ts";
 import { AuditStore } from "../../audit/store.ts";

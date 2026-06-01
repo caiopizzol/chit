@@ -1,23 +1,50 @@
 {
-	"name": "@chit/cli",
+	"name": "@chit-run/cli",
 	"version": "0.0.0",
-	"private": true,
 	"description": "chit CLI. A thin runtime for multi-agent workflows.",
 	"type": "module",
+	"license": "MIT",
+	"homepage": "https://chit.run",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/caiopizzol/chit.git",
+		"directory": "apps/cli"
+	},
+	"keywords": [
+		"chit",
+		"agents",
+		"multi-agent",
+		"workflow",
+		"cli",
+		"mcp",
+		"claude",
+		"codex"
+	],
 	"bin": {
-		"chit": "src/cli/run.ts"
+		"chit": "./dist/chit.js"
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"bun": ">=1.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
 	},
 	"scripts": {
+		"build": "bun run build.ts",
+		"prepack": "bun run build",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
 		"check": "biome check .",
 		"check:fix": "biome check --write .",
 		"start": "bun src/cli/run.ts"
 	},
-	"dependencies": {
-		"@chit/core": "workspace:*",
+	"devDependencies": {
+		"@chit-run/core": "workspace:*",
+		"@chit-run/studio": "workspace:*",
 		"@modelcontextprotocol/sdk": "^1.18.0",
-		"@chit/studio": "workspace:*",
 		"zod": "^4.4.3"
 	}
 }

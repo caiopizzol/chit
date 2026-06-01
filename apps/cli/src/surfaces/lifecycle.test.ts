@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INSTALL_MARKER_FILENAME, type InstallMarker } from "@chit/core";
+import { INSTALL_MARKER_FILENAME, type InstallMarker } from "@chit-run/core";
 import { LifecycleError, listInstalled, uninstall } from "./lifecycle.ts";
 
 const VALID_MARKER: InstallMarker = {

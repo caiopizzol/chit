@@ -20,8 +20,8 @@ import type {
 	ParticipantInfo,
 	SurfaceKind,
 	ValidationReport,
-} from "@chit/core";
-import { configPairs, formatAdapterUsage } from "@chit/core";
+} from "@chit-run/core";
+import { configPairs, formatAdapterUsage } from "@chit-run/core";
 import {
 	applyEdgeChanges,
 	Background,
@@ -834,7 +834,7 @@ const USAGE_KEYS: (keyof AdapterUsage)[] = [
 ];
 
 // Sum adapter-call token usage across a run, then render it with the shared
-// @chit/core formatter so the Studio and CLI views never drift.
+// @chit-run/core formatter so the Studio and CLI views never drift.
 function renderAuditUsage(events: AuditEvent[]): string {
 	const usage: AdapterUsage = {};
 	let any = false;

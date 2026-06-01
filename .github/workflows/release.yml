@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run typecheck
+      - run: bun run test
+      - name: Release
+        if: ${{ env.NPM_TOKEN != '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release
+      - name: Skip release (no NPM_TOKEN)
+        if: ${{ env.NPM_TOKEN == '' }}
+        run: echo "NPM_TOKEN is not set; gates passed but publish is skipped. Add the NPM_TOKEN secret to enable releases."

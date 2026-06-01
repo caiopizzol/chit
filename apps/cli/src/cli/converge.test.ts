@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type NormalizedRegistry, parseManifest } from "@chit/core";
+import { type NormalizedRegistry, parseManifest } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import type { AdapterMap } from "../runtime/types.ts";

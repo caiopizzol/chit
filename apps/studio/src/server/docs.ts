@@ -4,8 +4,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, relative } from "node:path";
-import type { NormalizedRegistry, SurfaceKind } from "@chit/core";
-import { buildGraphModel, parseManifest } from "@chit/core";
+import type { NormalizedRegistry, SurfaceKind } from "@chit-run/core";
+import { buildGraphModel, parseManifest } from "@chit-run/core";
 import type { DiscoveryResult } from "./discovery.ts";
 import type {
 	Bootstrap,

@@ -1,5 +1,5 @@
 {
-	"name": "@chit/core",
+	"name": "@chit-run/core",
 	"version": "0.0.0",
 	"private": true,
 	"description": "Browser-safe core for chit: manifest parser, agent registry, graph model, install marker, show renderer.",

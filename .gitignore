@@ -22,3 +22,4 @@ apps/studio/.playwright/
 # summaries, but they carry task/change text and may reference sensitive
 # content; never commit them. Full audit transcripts live in ~/.local/state.
 .chit/
+apps/cli/dist/

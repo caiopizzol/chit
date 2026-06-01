@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
-import type { NormalizedManifest, NormalizedRegistry } from "@chit/core";
+import type { NormalizedManifest, NormalizedRegistry } from "@chit-run/core";
 import {
 	findEnforcementGaps,
 	findMissingCapabilities,
@@ -11,7 +11,7 @@ import {
 	type InstallMarker,
 	parseManifest,
 	VALID_INSTALL_NAME_RE,
-} from "@chit/core";
+} from "@chit-run/core";
 import { loadRegistry } from "../agents/parse.ts";
 
 export class SurfaceInstallError extends Error {

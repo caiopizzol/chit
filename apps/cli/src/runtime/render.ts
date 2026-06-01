@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { InputType, NormalizedInput } from "@chit/core";
+import type { InputType, NormalizedInput } from "@chit-run/core";
 
 export class RuntimeError extends Error {
 	constructor(message: string) {

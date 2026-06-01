@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { NormalizedManifest } from "@chit/core";
+import type { NormalizedManifest } from "@chit-run/core";
 import {
 	buildGraphModel,
 	collectInvocationWarnings,
@@ -12,7 +12,7 @@ import {
 	renderShow,
 	resolveParticipantSnapshots,
 	type ShowFormat,
-} from "@chit/core";
+} from "@chit-run/core";
 import { AdapterError, buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
@@ -768,10 +768,10 @@ function runUninstall(args: ParsedArgs): number {
 
 // Lifecycle adapter injected into Studio so its install/list/uninstall
 // endpoints reuse the exact CLI surface code paths (no workspace cycle: the
-// CLI implements the interface @chit/studio defines). CHIT_SKILLS_DIR overrides
+// CLI implements the interface @chit-run/studio defines). CHIT_SKILLS_DIR overrides
 // the install location, so e2e tests install into a temp dir instead of the
 // real ~/.claude/skills.
-function buildStudioLifecycle(): import("@chit/studio/server").StudioLifecycle {
+function buildStudioLifecycle(): import("@chit-run/studio/server").StudioLifecycle {
 	const skillsDir = process.env.CHIT_SKILLS_DIR ?? defaultSkillsDir();
 	return {
 		list: () =>
@@ -807,7 +807,7 @@ function buildStudioLifecycle(): import("@chit/studio/server").StudioLifecycle {
 }
 
 async function runStudio(args: ParsedArgs): Promise<number> {
-	const { PathError, startStudio } = await import("@chit/studio/server");
+	const { PathError, startStudio } = await import("@chit-run/studio/server");
 	let handle: { url: string; stop(): void };
 	try {
 		const registry = loadRegistry();

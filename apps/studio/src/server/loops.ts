@@ -3,12 +3,12 @@
 // summaries plus a single loop's records. The browser only ever sees the
 // safe-slug loopId, never a filesystem path (same rule as the docId table for
 // manifests). Read-only: Studio never writes the log; the orchestrator's
-// `chit loop-log` owns writes. Parsing/validation reuse the shared @chit/core
+// `chit loop-log` owns writes. Parsing/validation reuse the shared @chit-run/core
 // contract, so a file that violates it is rejected here too.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LoopLogError, type LoopRecord, parseLoopLog, validateLoopLog } from "@chit/core";
+import { LoopLogError, type LoopRecord, parseLoopLog, validateLoopLog } from "@chit-run/core";
 import type { LoopSummary } from "./types.ts";
 
 export type { LoopSummary };

@@ -14,25 +14,26 @@
 		"check:fix": "biome check --write .",
 		"check:staged:fix": "biome check --write --staged --no-errors-on-unmatched",
 		"prepare": "lefthook install",
-		"check:browser": "bun --filter '@chit/core' check:browser",
+		"check:browser": "bun --filter '@chit-run/core' check:browser",
 		"cli": "bun apps/cli/src/cli/run.ts",
-		"site:dev": "bun --filter @chit/site dev",
-		"site:build": "bun --filter @chit/site build",
-		"site:preview": "bun --filter @chit/site preview",
-		"site:typecheck": "bun --filter @chit/site typecheck",
-		"site:deploy": "bun --filter @chit/site deploy",
+		"site:dev": "bun --filter @chit-run/site dev",
+		"site:build": "bun --filter @chit-run/site build",
+		"site:preview": "bun --filter @chit-run/site preview",
+		"site:typecheck": "bun --filter @chit-run/site typecheck",
+		"site:deploy": "bun --filter @chit-run/site deploy",
 		"docs:dev": "bun run site:dev",
 		"docs:build": "bun run site:build",
 		"docs:preview": "bun run site:preview",
 		"docs:typecheck": "bun run site:typecheck",
 		"docs:deploy": "bun run site:deploy",
-		"studio:build": "bun --filter @chit/studio build:client",
+		"studio:build": "bun --filter @chit-run/studio build:client",
 		"studio:preview": "bun run studio:build && bun apps/cli/src/cli/run.ts studio examples/consult.json"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",
 		"@types/bun": "^1.3.14",
 		"lefthook": "^2.1.9",
+		"semantic-release": "^24.2.3",
 		"typescript": "^6.0.3"
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildGraphModel, parseManifest, parseRegistry, validationSeverity } from "@chit/core";
+import { buildGraphModel, parseManifest, parseRegistry, validationSeverity } from "@chit-run/core";
 import {
 	appendReference,
 	canonicalize,

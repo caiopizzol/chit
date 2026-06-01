@@ -1,11 +1,11 @@
 // Integration tests for parseManifest against the example manifests that
-// live in examples/. parseManifest itself lives in @chit/core;
+// live in examples/. parseManifest itself lives in @chit-run/core;
 // this test exercises it against real fixtures.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseManifest } from "@chit/core";
+import { parseManifest } from "@chit-run/core";
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 

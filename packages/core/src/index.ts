@@ -1,6 +1,6 @@
-// Public surface of @chit/core. Browser-safe modules only. No node:* imports.
+// Public surface of @chit-run/core. Browser-safe modules only. No node:* imports.
 // Consumers (apps/cli, apps/site, Studio) import from this barrel
-// or from a specific subpath like "@chit/core/show".
+// or from a specific subpath like "@chit-run/core/show".
 
 export * from "./agents/registry.ts";
 export * from "./agents/types.ts";

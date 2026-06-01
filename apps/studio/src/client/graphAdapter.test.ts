@@ -11,7 +11,7 @@ import {
 	type NormalizedRegistry,
 	parseManifest,
 	parseRegistry,
-} from "@chit/core";
+} from "@chit-run/core";
 import { adaptGraphModel } from "./graphAdapter.ts";
 
 const REGISTRY = parseRegistry(undefined);

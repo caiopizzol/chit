@@ -1,5 +1,5 @@
 // Numeric guards for adapter usage extraction. The extracted usage is typed as
-// @chit/core's AdapterUsage, which has RUNTIME invariants (token fields are
+// @chit-run/core's AdapterUsage, which has RUNTIME invariants (token fields are
 // non-negative integers; cost is finite and non-negative) enforced when an audit
 // adapter.call.completed event is validated. Extractors must honor those same
 // invariants so a CLI that reports a stray negative/fractional value never

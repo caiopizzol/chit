@@ -6,7 +6,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { parseManifest } from "@chit/core";
+import { parseManifest } from "@chit-run/core";
 import { resolveExplicitPath } from "./paths.ts";
 
 export type DiscoveryResult =

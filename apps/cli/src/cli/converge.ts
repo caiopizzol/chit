@@ -29,7 +29,7 @@ import {
 	type NormalizedRegistry,
 	parseManifest,
 	resolveParticipantSnapshots,
-} from "@chit/core";
+} from "@chit-run/core";
 import { buildAdapter } from "../adapters/factory.ts";
 import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
@@ -733,7 +733,7 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 	} catch (e) {
 		// Any failure from the loop exits cleanly with a `chit converge:` message
 		// and code 1, never a raw stack — mirroring loop-log's discipline. This
-		// covers an AdapterError, a LoopStoreError, a LoopLogError from @chit/core
+		// covers an AdapterError, a LoopStoreError, a LoopLogError from @chit-run/core
 		// record validation, a rethrown manifest-run error, or an unexpected fs
 		// error (e.g. ENOTDIR when --cwd is a regular file).
 		io.err(`chit converge: ${(e as Error).message}\n`);

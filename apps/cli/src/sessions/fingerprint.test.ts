@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { NormalizedAgent, NormalizedParticipant } from "@chit/core";
+import type { NormalizedAgent, NormalizedParticipant } from "@chit-run/core";
 import { computeFingerprint } from "./fingerprint.ts";
 
 function agent(overrides: Partial<NormalizedAgent> = {}): NormalizedAgent {

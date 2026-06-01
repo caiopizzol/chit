@@ -7,7 +7,12 @@
 // simple.
 
 import { resolve } from "node:path";
-import { LoopLogError, type LoopRecord, type LoopStopStatus, type LoopVerdict } from "@chit/core";
+import {
+	LoopLogError,
+	type LoopRecord,
+	type LoopStopStatus,
+	type LoopVerdict,
+} from "@chit-run/core";
 import {
 	appendIteration,
 	LoopStoreError,

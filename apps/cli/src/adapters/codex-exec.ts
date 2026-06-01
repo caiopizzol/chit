@@ -1,4 +1,4 @@
-import type { AdapterUsage } from "@chit/core";
+import type { AdapterUsage } from "@chit-run/core";
 import type {
 	AdapterCallRequest,
 	AdapterCallResult,

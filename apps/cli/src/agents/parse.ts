@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type NormalizedRegistry, parseRegistry, RegistryError } from "@chit/core";
+import { type NormalizedRegistry, parseRegistry, RegistryError } from "@chit-run/core";
 
 function defaultConfigPath(): string {
 	const xdg = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -34,4 +34,4 @@ export function loadRegistry(configPath?: string): NormalizedRegistry {
 
 // Re-export RegistryError so existing call sites that catch errors from
 // loadRegistry can keep their import path stable.
-export { RegistryError } from "@chit/core";
+export { RegistryError } from "@chit-run/core";

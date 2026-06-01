@@ -4,7 +4,7 @@
 // as a StudioApiError.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { LoopRecord } from "@chit/core";
+import type { LoopRecord } from "@chit-run/core";
 import type { LoopSummary } from "../server/types.ts";
 import { fetchLoop, fetchLoops, StudioApiError } from "./api.ts";
 import { TOKEN_STORAGE_KEY } from "./boot.ts";

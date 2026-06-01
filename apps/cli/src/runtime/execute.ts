@@ -1,4 +1,4 @@
-import type { NormalizedManifest } from "@chit/core";
+import type { NormalizedManifest } from "@chit-run/core";
 import { type PreparedInputs, prepareInputs, RuntimeError, renderTemplate } from "./render.ts";
 import type { AdapterMap, ExecuteOptions, RunResult, TraceEvent } from "./types.ts";
 

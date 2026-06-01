@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ManifestError, parseManifest } from "./parse.ts";
 
 // Example-driven tests live in apps/cli/src/manifest/examples.test.ts
-// because the manifest fixtures live in examples/. @chit/core
+// because the manifest fixtures live in examples/. @chit-run/core
 // stays free of cross-workspace fixture dependencies.
 
 const VALID_BASE = {

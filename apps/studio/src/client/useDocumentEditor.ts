@@ -3,8 +3,8 @@
 // edit/preview/save lifecycle. Pure decision logic (dirty, canSave) lives in
 // editor.ts; this hook is the React glue.
 
-import type { GraphModel, SurfaceKind } from "@chit/core";
-import { parseManifest } from "@chit/core";
+import type { GraphModel, SurfaceKind } from "@chit-run/core";
+import { parseManifest } from "@chit-run/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { previewDocument, StudioApiError, saveDocument } from "./api.ts";
 import {

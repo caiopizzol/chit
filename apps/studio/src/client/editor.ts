@@ -3,8 +3,8 @@
 // saving while a preview is mid-flight), so they live here, unit-tested,
 // rather than inline in the hook.
 
-import type { GraphModel } from "@chit/core";
-import { validationSeverity } from "@chit/core";
+import type { GraphModel } from "@chit-run/core";
+import { validationSeverity } from "@chit-run/core";
 
 // Deep structural equality for JSON-shaped values. Object key order does not
 // matter. Arrays compare element-wise in order.

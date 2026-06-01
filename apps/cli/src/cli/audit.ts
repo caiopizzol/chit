@@ -2,7 +2,7 @@
 // converge by default, chit run --audit, MCP chit_start audit:true). Read-only
 // inspection: `list` the runs, or `show <runId>` one run's event timeline, with
 // optional blob bodies (prompts/outputs) and a usage/cost summary. The store +
-// event schema live in audit/store.ts and @chit/core; this is the human reader.
+// event schema live in audit/store.ts and @chit-run/core; this is the human reader.
 //
 // A run that has no run.completed event is reported INCOMPLETE, and the reader
 // says WHY from the timeline alone: an open adapter call (started, never
@@ -10,7 +10,12 @@
 // run with no terminal marker. The reader never infers success from the absence
 // of a terminal event.
 
-import { type AdapterUsage, type AuditEvent, configPairs, formatAdapterUsage } from "@chit/core";
+import {
+	type AdapterUsage,
+	type AuditEvent,
+	configPairs,
+	formatAdapterUsage,
+} from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 
 export interface AuditIO {

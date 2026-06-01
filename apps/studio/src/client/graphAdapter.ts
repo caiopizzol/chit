@@ -1,4 +1,4 @@
-// Adapter from @chit/core's GraphModel to React Flow inputs (nodes, edges,
+// Adapter from @chit-run/core's GraphModel to React Flow inputs (nodes, edges,
 // and a size map for the ELK layout pass). The adapter is pure and small:
 // it does not know about consult.json or any specific chit. Given any
 // GraphModel produced by buildGraphModel, it yields the right React Flow
@@ -9,7 +9,7 @@
 // carries both the surface and the validation; passing validation as a
 // separate argument would create drift potential.
 
-import type { GraphModel } from "@chit/core";
+import type { GraphModel } from "@chit-run/core";
 import type { Node } from "@xyflow/react";
 import type { CallData, FormatData, InputData } from "./nodes.tsx";
 

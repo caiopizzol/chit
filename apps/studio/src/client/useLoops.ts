@@ -4,7 +4,7 @@
 // honest empty/loading/error UI. All data comes from the server routes; the
 // client never reads the filesystem or parses JSONL. Mirrors useInstalled.
 
-import type { AuditEvent, LoopRecord } from "@chit/core";
+import type { AuditEvent, LoopRecord } from "@chit-run/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LoopSummary } from "../server/types.ts";
 import {

@@ -1,5 +1,5 @@
 // Bundles the client React app to dist/client/. Run via:
-//   bun --filter @chit/studio build:client
+//   bun --filter @chit-run/studio build:client
 // or from this workspace:
 //   bun run build:client
 //

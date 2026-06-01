@@ -6,7 +6,7 @@ what each agent was asked and what it returned, with token usage and timing, aft
 the run is over. It is the receipt layer: which agent, with what input, what
 output, in what order. The bodies are kept too, but they are opt-in to read.
 
-Status: shipped are the event schema (`@chit/core`), the node store, audit on all
+Status: shipped are the event schema (`@chit-run/core`), the node store, audit on all
 three run surfaces, retention, the `chit audit` reader, the Studio audit view
 (open a run from a loop's detailsRef in the Loops drawer), and preservation of
 both adapters' observable event streams as `adapter.event` records on audited

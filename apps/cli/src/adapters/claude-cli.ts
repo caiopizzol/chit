@@ -1,4 +1,4 @@
-import type { AdapterUsage, FilesystemPermission } from "@chit/core";
+import type { AdapterUsage, FilesystemPermission } from "@chit-run/core";
 import type {
 	AdapterCallRequest,
 	AdapterCallResult,

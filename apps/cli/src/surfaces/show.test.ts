@@ -7,7 +7,7 @@ import {
 	parseManifest,
 	parseRegistry,
 	renderShow,
-} from "@chit/core";
+} from "@chit-run/core";
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 const CONSULT = JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8"));

@@ -70,7 +70,7 @@ chit · 2 iterations · 3m 12s
 
 ## Build order
 
-1. **Pure data model + validate/serialize/parse** in `@chit/core` (browser-safe),
+1. **Pure data model + validate/serialize/parse** in `@chit-run/core` (browser-safe),
    so both the writer and Studio share one contract. <- first loop slice
 2. **Node-backed append/read** + a tiny `chit` writer the skill calls each
    iteration.

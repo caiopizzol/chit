@@ -3,7 +3,7 @@
 // the client bundle and the API on one port), so no CORS configuration is
 // involved.
 
-import type { AuditEvent, LoopRecord } from "@chit/core";
+import type { AuditEvent, LoopRecord } from "@chit-run/core";
 import type {
 	ConflictResponse,
 	DocumentDetail,

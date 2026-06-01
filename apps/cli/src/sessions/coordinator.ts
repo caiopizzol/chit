@@ -1,4 +1,4 @@
-import type { NormalizedManifest, NormalizedRegistry } from "@chit/core";
+import type { NormalizedManifest, NormalizedRegistry } from "@chit-run/core";
 import type { AdapterCallRequest, AdapterMap, RuntimeAdapter } from "../runtime/types.ts";
 import { computeFingerprint } from "./fingerprint.ts";
 import type { SessionKey, SessionStore } from "./types.ts";

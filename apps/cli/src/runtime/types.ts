@@ -1,4 +1,4 @@
-import type { AdapterUsage, FilesystemPermission } from "@chit/core";
+import type { AdapterUsage, FilesystemPermission } from "@chit-run/core";
 
 // One intra-call event from the underlying CLI stream. Both adapters emit these
 // live: each reads stdout incrementally and calls AdapterCallRequest.onEvent per
@@ -50,7 +50,7 @@ export interface AdapterCallResult {
 	session?: unknown;
 	// Token/cost accounting for this call, when the adapter's CLI reports it.
 	// Optional: a missing usage is not an error (an older CLI, or a call that
-	// failed before any usage was emitted). Uses the shared @chit/core type so
+	// failed before any usage was emitted). Uses the shared @chit-run/core type so
 	// the trace, the audit event, and loop aggregation all speak one shape.
 	usage?: AdapterUsage;
 }

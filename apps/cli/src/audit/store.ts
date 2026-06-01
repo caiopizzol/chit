@@ -1,6 +1,6 @@
 // Node-backed audit store. Persists one run's audit events and their large
 // bodies under ~/.local/state/chit/audit/runs/<runId>/. The browser-safe
-// event schema + validation live in @chit/core (audit/events.ts); this adds the
+// event schema + validation live in @chit-run/core (audit/events.ts); this adds the
 // filesystem:
 //
 //   events.jsonl   append-only, one validated AuditEvent per line.
@@ -12,7 +12,7 @@
 // Blobs are per-run, NOT global. Dedup is within a run, but retention can delete
 // a whole run directory without refcounting blobs shared across runs (slice 2b).
 //
-// The store OWNS the blob naming scheme (sha256 hex), which the @chit/core schema
+// The store OWNS the blob naming scheme (sha256 hex), which the @chit-run/core schema
 // deliberately leaves opaque. So readBlob validates the ref shape before building
 // a path: a crafted ref cannot escape the blobs directory.
 //
@@ -35,7 +35,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type AuditEvent, type BlobRef, parseAuditLog, serializeAuditEvent } from "@chit/core";
+import { type AuditEvent, type BlobRef, parseAuditLog, serializeAuditEvent } from "@chit-run/core";
 
 export class AuditStoreError extends Error {}
 

@@ -7,7 +7,7 @@
 // server-side, so the client cannot recompute buildGraphModel locally;
 // the server's preview/save endpoints are the validation source.
 
-import type { GraphModel } from "@chit/core";
+import type { GraphModel } from "@chit-run/core";
 import type { Bootstrap } from "../server/types.ts";
 
 export interface OpenClientState {

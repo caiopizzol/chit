@@ -16,7 +16,7 @@ The key constraint is that **edges are not first-class in the manifest**. Connec
 
 - **Server.** Hono on Bun, bound to `127.0.0.1`, lifetime tied to the CLI process.
 - **Client.** React + React Flow + ELK, bundled via `bun build --target=browser`. Vite as fallback.
-- **Source of truth.** The manifest file on disk. The server reads it from disk for the SSR bootstrap (regenerated per `GET /`, so a reload reflects current disk) and on each document API call. Edits go through the server, are validated by `@chit/core`'s `parseManifest`, and write canonical JSON back to disk. A per-file content hash is carried through bootstrap/read responses and sent back on save for conflict detection.
+- **Source of truth.** The manifest file on disk. The server reads it from disk for the SSR bootstrap (regenerated per `GET /`, so a reload reflects current disk) and on each document API call. Edits go through the server, are validated by `@chit-run/core`'s `parseManifest`, and write canonical JSON back to disk. A per-file content hash is carried through bootstrap/read responses and sent back on save for conflict detection.
 - **No layout in the manifest.** Layout is computed deterministically by ELK at render time. Layout persistence, if ever, goes in a sidecar at `.chit/layouts/<id>.json`, not `_layout` in the chit.
 
 The `apps/studio` workspace stays. Internals change from SSR-only Hono to server + client React. The old Hono inspector route deletes at the end of Slice 1 once the React graph renders the same information.
@@ -95,10 +95,10 @@ An explicit "Arrange" mode (drag handles via React Flow's `dragHandle`, transien
 
 ## Wire types
 
-All referenced types exist in `@chit/core`.
+All referenced types exist in `@chit-run/core`.
 
 ```ts
-import type { NormalizedManifest, GraphModel } from "@chit/core";
+import type { NormalizedManifest, GraphModel } from "@chit-run/core";
 
 type ParsedStudioDocument = {
 	id: string;

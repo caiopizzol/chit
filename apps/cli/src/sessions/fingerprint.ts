@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { NormalizedAgent, NormalizedParticipant } from "@chit/core";
+import type { NormalizedAgent, NormalizedParticipant } from "@chit-run/core";
 
 export interface FingerprintInput {
 	agent: NormalizedAgent;

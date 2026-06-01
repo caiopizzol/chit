@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { NormalizedAgent } from "@chit/core";
+import type { NormalizedAgent } from "@chit-run/core";
 import { ClaudeCliAdapter } from "./claude-cli.ts";
 import { CodexExecAdapter } from "./codex-exec.ts";
 import { buildAdapter } from "./factory.ts";

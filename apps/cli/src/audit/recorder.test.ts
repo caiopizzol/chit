@@ -8,7 +8,7 @@ import {
 	type AdapterEventEvent,
 	parseManifest,
 	type StepCompletedEvent,
-} from "@chit/core";
+} from "@chit-run/core";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterCallRequest, RuntimeAdapter } from "../runtime/types.ts";
 import { AuditRecorder } from "./recorder.ts";

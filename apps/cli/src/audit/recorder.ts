@@ -22,7 +22,7 @@ import type {
 	StepCompletedEvent,
 	StepKind,
 	StepStartedEvent,
-} from "@chit/core";
+} from "@chit-run/core";
 import type {
 	AdapterCallRequest,
 	AdapterCallResult,
