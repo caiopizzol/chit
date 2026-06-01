@@ -164,6 +164,22 @@ export type TimelineEntry = AuditEvent & {
 	raw?: string;
 };
 
+// Two orthogonal knobs control how much a timeline shows. They are separate
+// concerns and compose:
+//   verbose       - include the raw `adapter.event` rows (the per-call CLI event
+//                   stream). Off by default: a run emits dozens of these, and they
+//                   would bury the receipt. The run/step/adapter-call lifecycle
+//                   always shows.
+//   includeBodies - resolve each SHOWN row's own blob refs to their text. Off by
+//                   default: bodies are full prompts/outputs and can hold secrets.
+// Default is a receipt (no event rows, no bodies). verbose adds the event rows.
+// includeBodies adds bodies to whatever rows are shown. verbose + includeBodies is
+// the full forensic dump.
+export interface TimelineOptions {
+	includeBodies: boolean;
+	verbose: boolean;
+}
+
 function readBody(store: AuditStore, runId: string, ref: string): string {
 	try {
 		return store.readBlob(runId, ref);
@@ -172,18 +188,31 @@ function readBody(store: AuditStore, runId: string, ref: string): string {
 	}
 }
 
-// The run's events as a structured timeline. With includeBodies, each event's own
-// blob refs are resolved to their text (input/output/raw); without it, no body is
-// read (the refs stay on the event, but the potentially large/sensitive bodies
-// are omitted). Never reads a ref not present on the event itself.
+// The raw CLI event stream (Codex JSONL / Claude stream-json) arrives as
+// `adapter.event` rows. They are the bulk of a run's events and the least legible
+// line by line, so they are the rows `verbose` gates. Everything else is the
+// receipt: run/step lifecycle and adapter-call started/completed.
+export function isReceiptEvent(e: AuditEvent): boolean {
+	return e.type !== "adapter.event";
+}
+
+export function hiddenAdapterEventCount(events: AuditEvent[]): number {
+	return events.reduce((n, e) => (e.type === "adapter.event" ? n + 1 : n), 0);
+}
+
+// The run's events as a structured timeline. Without verbose, the raw
+// `adapter.event` rows are dropped (a receipt, not an event log). With
+// includeBodies, each SHOWN row's own blob refs are resolved to text. Never reads
+// a ref not present on the event itself.
 export function auditTimeline(
 	store: AuditStore,
 	runId: string,
 	events: AuditEvent[],
-	includeBodies: boolean,
+	opts: TimelineOptions,
 ): TimelineEntry[] {
-	return events.map((e): TimelineEntry => {
-		if (!includeBodies) return e;
+	const rows = opts.verbose ? events : events.filter(isReceiptEvent);
+	return rows.map((e): TimelineEntry => {
+		if (!opts.includeBodies) return e;
 		if (e.type === "adapter.call.started") {
 			return { ...e, input: readBody(store, runId, e.inputBlob) };
 		}
@@ -207,23 +236,33 @@ export interface AuditShow {
 	// The participant config recorded at run.started (an older run may lack it).
 	participants?: ParticipantSnapshots;
 	timeline: TimelineEntry[];
+	// Set when the default receipt view hid raw adapter.event rows: how many, and
+	// how to see them. Absent under verbose, or when the run had no such rows.
+	note?: string;
 }
 
 // One run's full inspection: the summary header, the incomplete reason when
-// applicable, the recorded participant snapshot, and the structured timeline.
-// store.readEvents throws on an invalid or missing run id; the caller maps that
-// to its surface's error (the CLI prints it, the MCP tool returns an error).
-export function showAudit(store: AuditStore, runId: string, includeBodies: boolean): AuditShow {
+// applicable, the recorded participant snapshot, and the timeline. By default the
+// timeline is a receipt (no raw adapter.event rows, no bodies); `verbose` adds the
+// event rows and `includeBodies` adds blob bodies, independently. store.readEvents
+// throws on an invalid or missing run id; the caller maps that to its surface.
+export function showAudit(store: AuditStore, runId: string, opts: TimelineOptions): AuditShow {
 	const events = store.readEvents(runId);
 	const summary = summarizeRun(runId, events);
 	const out: AuditShow = {
 		summary,
-		timeline: auditTimeline(store, runId, events, includeBodies),
+		timeline: auditTimeline(store, runId, events, opts),
 	};
 	if (summary.status === "incomplete") out.incompleteReason = describeIncomplete(summary, events);
 	const started = events.find((e) => e.type === "run.started");
 	if (started?.type === "run.started" && started.participants !== undefined) {
 		out.participants = started.participants;
+	}
+	if (!opts.verbose) {
+		const hidden = hiddenAdapterEventCount(events);
+		if (hidden > 0) {
+			out.note = `${hidden} raw adapter events hidden; pass verbose to include them, include_bodies to show blob bodies.`;
+		}
 	}
 	return out;
 }

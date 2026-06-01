@@ -618,18 +618,24 @@ server.registerTool(
 	"chit_audit_show",
 	{
 		description:
-			"Show one audited run: a summary (manifest/surface/scope/status/usage), the recorded participant config, and the event timeline. An incomplete run carries the reason (open call / failed step / abandoned). Prompt/output/event bodies are included ONLY when include_bodies is true (they can be large or hold secrets), and only for blob refs the run's own events carry.",
+			"Show one audited run as a receipt: a summary (manifest/surface/scope/status/usage), the recorded participant config, and a step-level timeline (run/step lifecycle and adapter calls with duration and usage). The raw per-call adapter event stream is hidden by default; set verbose to include those rows. Prompt/output/event bodies are included ONLY when include_bodies is true (they can be large or hold secrets), and only for blob refs the run's own events carry. verbose and include_bodies are independent.",
 		inputSchema: {
 			run_id: z.string(),
+			verbose: z
+				.boolean()
+				.default(false)
+				.describe("Include the raw adapter.event rows (the CLI event stream). Off by default."),
 			include_bodies: z
 				.boolean()
 				.default(false)
-				.describe("Include rendered prompt/output/event bodies. Off by default."),
+				.describe(
+					"Resolve blob bodies (rendered prompts/outputs/events) for shown rows. Off by default.",
+				),
 		},
 	},
-	async ({ run_id, include_bodies }) => {
+	async ({ run_id, verbose, include_bodies }) => {
 		try {
-			return jsonResult(showAudit(auditStore, run_id, include_bodies));
+			return jsonResult(showAudit(auditStore, run_id, { includeBodies: include_bodies, verbose }));
 		} catch (e) {
 			return errorResult((e as Error).message);
 		}

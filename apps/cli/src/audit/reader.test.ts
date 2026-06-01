@@ -55,6 +55,17 @@ function writeCompleteRun(runId: string, startedAt: string): void {
 			inputBlob,
 		}),
 	);
+	// A raw CLI event row: hidden in the default receipt, shown under verbose.
+	const eventBlob = store.writeBlob(runId, `EVENT for ${runId}`);
+	store.appendEvent(
+		runId,
+		ev(runId, {
+			type: "adapter.event",
+			stepId: "implement",
+			eventType: "stream_event",
+			rawBlob: eventBlob,
+		}),
+	);
 	store.appendEvent(
 		runId,
 		ev(runId, {
@@ -186,28 +197,55 @@ describe("listAudit", () => {
 	});
 });
 
+const RECEIPT = { includeBodies: false, verbose: false };
+
 describe("auditTimeline", () => {
-	test("omits bodies by default", () => {
+	test("default is a receipt: no raw adapter.event rows and no bodies", () => {
 		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
-		const tl = auditTimeline(store, "r", store.readEvents("r"), false);
+		const tl = auditTimeline(store, "r", store.readEvents("r"), RECEIPT);
+		// The raw event stream is hidden; the call lifecycle stays.
+		expect(tl.some((e) => e.type === "adapter.event")).toBe(false);
+		expect(tl.some((e) => e.type === "adapter.call.completed")).toBe(true);
+		// No bodies on the shown rows.
 		const started = tl.find((e) => e.type === "adapter.call.started");
 		const completed = tl.find((e) => e.type === "adapter.call.completed");
 		expect(started && "input" in started).toBe(false);
 		expect(completed && "output" in completed).toBe(false);
 	});
 
-	test("includes bodies (resolved from the event's own refs) when requested", () => {
+	test("verbose includes the raw adapter.event rows (still no bodies)", () => {
 		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
-		const tl = auditTimeline(store, "r", store.readEvents("r"), true);
-		const started = tl.find((e) => e.type === "adapter.call.started");
-		const completed = tl.find((e) => e.type === "adapter.call.completed");
+		const tl = auditTimeline(store, "r", store.readEvents("r"), {
+			includeBodies: false,
+			verbose: true,
+		});
+		const event = tl.find((e) => e.type === "adapter.event");
+		expect(event).toBeDefined();
+		expect(event && "raw" in event).toBe(false);
+	});
+
+	test("includeBodies resolves bodies on shown rows; verbose still gates event rows", () => {
+		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
+		// Receipt rows get bodies, but adapter.event rows are still hidden.
+		const receiptWithBodies = auditTimeline(store, "r", store.readEvents("r"), {
+			includeBodies: true,
+			verbose: false,
+		});
+		const started = receiptWithBodies.find((e) => e.type === "adapter.call.started");
 		expect(started?.type === "adapter.call.started" && started.input).toBe("PROMPT for r");
-		expect(completed?.type === "adapter.call.completed" && completed.output).toBe("OUTPUT for r");
+		expect(receiptWithBodies.some((e) => e.type === "adapter.event")).toBe(false);
+
+		// Full forensic: event rows present AND their raw bodies resolved.
+		const full = auditTimeline(store, "r", store.readEvents("r"), {
+			includeBodies: true,
+			verbose: true,
+		});
+		const event = full.find((e) => e.type === "adapter.event");
+		expect(event?.type === "adapter.event" && event.raw).toBe("EVENT for r");
 	});
 
 	test("marks a missing blob unavailable rather than throwing", () => {
 		store.openRun("r");
-		// A valid sha256-shaped ref that has no blob on disk.
 		const danglingRef = "a".repeat(64);
 		store.appendEvent(
 			"r",
@@ -224,7 +262,10 @@ describe("auditTimeline", () => {
 				inputBlob: danglingRef,
 			}),
 		);
-		const tl = auditTimeline(store, "r", store.readEvents("r"), true);
+		const tl = auditTimeline(store, "r", store.readEvents("r"), {
+			includeBodies: true,
+			verbose: false,
+		});
 		const started = tl.find((e) => e.type === "adapter.call.started");
 		expect(started?.type === "adapter.call.started" && started.input).toMatch(/blob unavailable/);
 	});
@@ -232,22 +273,34 @@ describe("auditTimeline", () => {
 
 describe("showAudit", () => {
 	test("throws on an invalid run id (no generic file access)", () => {
-		expect(() => showAudit(store, "../etc", false)).toThrow(/invalid run id/);
+		expect(() => showAudit(store, "../etc", RECEIPT)).toThrow(/invalid run id/);
 	});
 
 	test("throws on a missing run", () => {
-		expect(() => showAudit(store, "nope", false)).toThrow(/no audit log/);
+		expect(() => showAudit(store, "nope", RECEIPT)).toThrow(/no audit log/);
 	});
 
-	test("returns summary + timeline; bodies gated on include_bodies", () => {
+	test("default receipt hides event rows, omits bodies, and notes what's hidden", () => {
 		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
-		const without = showAudit(store, "r", false);
-		expect(without.summary.status).toBe("ok");
-		expect(without.incompleteReason).toBeUndefined();
-		expect(without.timeline.some((e) => "input" in e || "output" in e)).toBe(false);
+		const show = showAudit(store, "r", RECEIPT);
+		expect(show.summary.status).toBe("ok");
+		expect(show.incompleteReason).toBeUndefined();
+		expect(show.timeline.some((e) => e.type === "adapter.event")).toBe(false);
+		expect(show.timeline.some((e) => "input" in e || "output" in e)).toBe(false);
+		expect(show.note).toMatch(/1 raw adapter events hidden/);
+	});
 
-		const withBodies = showAudit(store, "r", true);
-		expect(withBodies.timeline.some((e) => "output" in e)).toBe(true);
+	test("verbose shows event rows and drops the note", () => {
+		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
+		const show = showAudit(store, "r", { includeBodies: false, verbose: true });
+		expect(show.timeline.some((e) => e.type === "adapter.event")).toBe(true);
+		expect(show.note).toBeUndefined();
+	});
+
+	test("include_bodies adds bodies to shown rows", () => {
+		writeCompleteRun("r", "2026-06-01T10:00:00.000Z");
+		const show = showAudit(store, "r", { includeBodies: true, verbose: false });
+		expect(show.timeline.some((e) => "output" in e)).toBe(true);
 	});
 
 	test("an incomplete run carries the reason", () => {
@@ -260,7 +313,7 @@ describe("showAudit", () => {
 			"inc",
 			ev("inc", { type: "step.failed", stepId: "review", error: "nope", durationMs: 1 }),
 		);
-		const show = showAudit(store, "inc", false);
+		const show = showAudit(store, "inc", RECEIPT);
 		expect(show.summary.status).toBe("incomplete");
 		expect(show.incompleteReason).toMatch(/failed step: review/);
 	});

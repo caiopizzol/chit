@@ -268,7 +268,7 @@ describe("chit audit show", () => {
 		expect(c.out()).toContain("THE OUTPUT");
 	});
 
-	test("renders a preserved adapter.event and its raw body with --blobs", () => {
+	function seedWithEvent(): void {
 		const raw = '{"type":"item.completed","item":{"type":"command_execution"}}';
 		store.appendEvent("EV1", {
 			type: "run.started",
@@ -294,10 +294,23 @@ describe("chit audit show", () => {
 			status: "ok",
 			durationMs: 10,
 		});
+	}
+
+	test("default receipt hides adapter.event rows and notes the count", () => {
+		seedWithEvent();
 		const c = capture();
-		runAudit(["show", "EV1", "--blobs"], c.io, store);
+		runAudit(["show", "EV1"], c.io, store);
+		expect(c.out()).not.toContain("adapter.event");
+		expect(c.out()).toMatch(/1 raw adapter events hidden; pass --verbose/);
+	});
+
+	test("--verbose --blobs renders a preserved adapter.event and its raw body", () => {
+		seedWithEvent();
+		const c = capture();
+		runAudit(["show", "EV1", "--verbose", "--blobs"], c.io, store);
 		expect(c.out()).toMatch(/adapter\.event\s+a item\.completed/);
 		expect(c.out()).toContain("command_execution"); // raw body printed
+		expect(c.out()).not.toContain("hidden"); // no note under --verbose
 	});
 
 	test("--json emits the raw events", () => {

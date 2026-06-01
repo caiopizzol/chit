@@ -13,6 +13,8 @@
 import { type AuditEvent, configPairs, formatAdapterUsage } from "@chit-run/core";
 import {
 	describeIncomplete,
+	hiddenAdapterEventCount,
+	isReceiptEvent,
 	type RunSummary,
 	safeReadEvents,
 	summarizeRun,
@@ -32,13 +34,14 @@ const defaultIO: AuditIO = {
 const AUDIT_HELP = `chit audit <command> [options]
 
   list                     List audited runs, newest first.
-  show <runId>             Show one run's event timeline.
+  show <runId>             Show one run as a receipt (summary, participants, timeline).
 
 list options:
   --json                   Emit the run summaries as JSON.
 
 show options:
   --json                   Emit the raw events as JSON.
+  --verbose                Include the raw adapter.event rows (the CLI event stream).
   --blobs, --include-bodies  Print blob bodies (rendered prompts, outputs).
 
 Audited runs live under the local state dir (XDG_STATE_HOME or ~/.local/state,
@@ -140,7 +143,7 @@ function runShow(
 	store: AuditStore,
 	runId: string,
 	io: AuditIO,
-	opts: { json: boolean; blobs: boolean },
+	opts: { json: boolean; blobs: boolean; verbose: boolean },
 ): number {
 	let events: AuditEvent[];
 	try {
@@ -191,8 +194,17 @@ function runShow(
 	}
 
 	io.out("\ntimeline:\n");
-	for (const e of events) {
+	// Receipt by default: drop the raw adapter.event stream rows unless --verbose.
+	// --blobs (bodies) is independent of --verbose (which rows to show).
+	const rows = opts.verbose ? events : events.filter(isReceiptEvent);
+	for (const e of rows) {
 		for (const line of renderEvent(store, runId, e, opts.blobs)) io.out(`  ${line}\n`);
+	}
+	if (!opts.verbose) {
+		const hidden = hiddenAdapterEventCount(events);
+		if (hidden > 0) {
+			io.out(`\n  (${hidden} raw adapter events hidden; pass --verbose to include them.)\n`);
+		}
 	}
 	return 0;
 }
@@ -202,6 +214,7 @@ interface ParsedAudit {
 	runId?: string;
 	json: boolean;
 	blobs: boolean;
+	verbose: boolean;
 }
 
 function parseAuditArgs(argv: string[]): ParsedAudit {
@@ -209,11 +222,12 @@ function parseAuditArgs(argv: string[]): ParsedAudit {
 	if (sub !== "list" && sub !== "show") {
 		throw new UsageError(`unknown audit command ${JSON.stringify(sub ?? "")}`);
 	}
-	const out: ParsedAudit = { command: sub, json: false, blobs: false };
+	const out: ParsedAudit = { command: sub, json: false, blobs: false, verbose: false };
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--json") out.json = true;
 		else if (a === "--blobs" || a === "--include-bodies") out.blobs = true;
+		else if (a === "--verbose") out.verbose = true;
 		else if (
 			a !== undefined &&
 			!a.startsWith("--") &&
@@ -254,5 +268,6 @@ export function runAudit(
 	return runShow(store, parsed.runId as string, io, {
 		json: parsed.json,
 		blobs: parsed.blobs,
+		verbose: parsed.verbose,
 	});
 }
