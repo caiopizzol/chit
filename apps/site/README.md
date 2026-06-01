@@ -1,4 +1,4 @@
-# chit-docs
+# @chit/site
 
 The chit documentation site and marketing landing. Next.js + Fumadocs, static
 export (`output: "export"`), deployable to Cloudflare.
@@ -16,7 +16,7 @@ The site serves:
 
 ```sh
 bun run dev        # local dev server
-bun run build      # static export to apps/docs/out
+bun run build      # static export to apps/site/out
 bun run preview    # serve the built site
 bun run typecheck  # fumadocs-mdx typegen + tsc
 bun run check      # biome

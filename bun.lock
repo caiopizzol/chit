@@ -24,8 +24,8 @@
         "zod": "^4.4.3",
       },
     },
-    "apps/docs": {
-      "name": "chit-docs",
+    "apps/site": {
+      "name": "@chit/site",
       "version": "0.0.0",
       "dependencies": {
         "@orama/orama": "^3.1.18",
@@ -94,6 +94,8 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.4.16", "", { "os": "win32", "cpu": "x64" }, "sha512-Kp85jgoBHa05gix6UIRjfCDiUV3w/8VIdZ247VyyO2gEjaw12WEVhdIjlxp/AMzXxqxQwbxNTDVZ3Mwd2RG5rw=="],
 
     "@chit/core": ["@chit/core@workspace:packages/core"],
+
+    "@chit/site": ["@chit/site@workspace:apps/site"],
 
     "@cloudflare/kv-asset-handler": ["@cloudflare/kv-asset-handler@0.5.0", "", {}, "sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg=="],
 
@@ -480,8 +482,6 @@
     "character-reference-invalid": ["character-reference-invalid@2.0.1", "", {}, "sha512-iBZ4F4wRbyORVsu0jPV7gXkOsGYjGHPmAyv+HiHG8gi5PtC9KI2j1+v8/tlibRvjoWX027ypmG/n0HtO5t7unw=="],
 
     "chit-cli": ["chit-cli@workspace:apps/cli"],
-
-    "chit-docs": ["chit-docs@workspace:apps/docs"],
 
     "chit-studio": ["chit-studio@workspace:apps/studio"],
 

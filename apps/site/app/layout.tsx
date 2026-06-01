@@ -9,7 +9,7 @@ import "./chit-theme.css";
 // Self-hosted variable fonts (brand.md -> Visual). Bundled from local
 // .woff2 files so `next build` needs no network: deterministic CI/offline
 // builds and no runtime Google Fonts request. Files + license note live in
-// apps/docs/fonts/.
+// apps/site/fonts/.
 const inter = localFont({
 	src: "../fonts/inter-variable.woff2",
 	variable: "--font-chit-body",
