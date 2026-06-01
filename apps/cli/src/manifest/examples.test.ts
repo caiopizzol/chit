@@ -3,7 +3,7 @@
 // this test exercises it against real fixtures.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseManifest } from "@chit-run/core";
 
@@ -14,28 +14,12 @@ function loadExample(name: string): unknown {
 }
 
 describe("example manifests", () => {
-	test("investigate-bug normalizes to sequential execution order", () => {
-		const m = parseManifest(loadExample("investigate-bug"));
-
-		expect(m.id).toBe("investigate-bug");
-		expect(m.output).toBe("out");
-
-		expect(m.inferredRequires.can_pass_files).toBe(true);
-		expect(m.inferredRequires.can_provide_stable_scope).toBe(true);
-		expect(m.declaredRequires.can_show_markdown).toBe(true);
-		expect(m.requires).toEqual({
-			can_show_markdown: true,
-			can_pass_files: true,
-			can_provide_stable_scope: true,
-		});
-
-		expect(m.participants.diagnostician.permissions.filesystem).toBe("read_only");
-		expect(m.participants.verifier.permissions.filesystem).toBe("read_only");
-
-		expect(m.executionOrder).toEqual([["diagnose"], ["verify"], ["out"]]);
-		expect(m.dependencies.diagnose).toEqual([]);
-		expect(m.dependencies.verify).toEqual(["diagnose"]);
-		expect(m.dependencies.out).toEqual(["diagnose", "verify"]);
+	test("ships only the curated public examples", () => {
+		expect(
+			readdirSync(EXAMPLES)
+				.filter((file) => file.endsWith(".json"))
+				.sort(),
+		).toEqual(["consult.json", "converge.json"]);
 	});
 
 	test("consult normalizes to parallel fan-out", () => {
@@ -50,25 +34,21 @@ describe("example manifests", () => {
 		expect(m.inferredRequires.can_provide_stable_scope).toBe(true);
 	});
 
-	test("codex-advisor-thread normalizes to a single per_scope advisor", () => {
-		const m = parseManifest(loadExample("codex-advisor-thread"));
+	test("converge normalizes to implement, review, then format", () => {
+		const m = parseManifest(loadExample("converge"));
 
-		expect(m.id).toBe("codex-advisor-thread");
+		expect(m.id).toBe("converge");
 		expect(m.output).toBe("out");
 
-		// Three explicit inputs (MCP-only; the third is optional).
 		expect(m.inputs.task?.type).toBe("string");
-		expect(m.inputs.claude_response?.type).toBe("string");
-		expect(m.inputs.context?.optional).toBe(true);
-
-		// One Codex advisor, per_scope (so it carries the thread across runs).
-		expect(Object.keys(m.participants)).toEqual(["codex_advisor"]);
-		expect(m.participants.codex_advisor?.agent).toBe("codex");
-		expect(m.participants.codex_advisor?.session).toBe("per_scope");
+		expect(m.inputs.prior_review?.optional).toBe(true);
+		expect(m.participants.implementer?.permissions.filesystem).toBe("write");
+		expect(m.participants.reviewer?.permissions.filesystem).toBe("read_only");
 		expect(m.inferredRequires.can_provide_stable_scope).toBe(true);
 
-		expect(m.executionOrder).toEqual([["review"], ["out"]]);
-		expect(m.dependencies.review).toEqual([]);
-		expect(m.dependencies.out).toEqual(["review"]);
+		expect(m.executionOrder).toEqual([["implement"], ["review"], ["out"]]);
+		expect(m.dependencies.implement).toEqual([]);
+		expect(m.dependencies.review).toEqual(["implement"]);
+		expect(m.dependencies.out).toEqual(["implement", "review"]);
 	});
 });

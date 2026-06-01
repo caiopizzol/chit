@@ -9,7 +9,7 @@ chit builds chit with its own loop. This is the operating guide: which mode to u
 
 Both modes share one shape: an implementer writes a slice, a reviewer checks it, and a human checkpoints. They differ in who implements.
 
-- **Supervised.** The Claude Code chat implements with its full tools and context; a chit `per_scope` Codex advisor reviews each round (`examples/implementation-check-thread.json`, which inspects the git diff). The chat owns the loop and the checkpoint. Reach for this on nuanced, cross-package, or exploratory slices, where the chat's reasoning and live tools earn their keep.
+- **Supervised.** The Claude Code chat implements with its full tools and context; a per-scope Codex advisor reviews each round and inspects the git diff. The chat owns the loop and the checkpoint. Reach for this on nuanced, cross-package, or exploratory slices, where the chat's reasoning and live tools earn their keep.
 - **Autonomous (`chit converge`).** The chat sets a task and runs the converge driver; chit's write-capable Claude implements and a read-only Codex reviews, and the driver loops to convergence (`examples/converge.json`). The chat does not implement and does not babysit each handoff. Reach for this on well-scoped, self-contained slices, and to keep building the self-hosting habit.
 
 The mode is a per-slice choice, not a default. When in doubt on a gnarly change, supervised produces cleaner results faster; on a tight, well-specified change, autonomous is the better demonstration and offloads the writing.

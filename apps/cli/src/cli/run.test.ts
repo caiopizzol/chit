@@ -16,10 +16,11 @@ import { parseArgs } from "./run.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 const RUN_TS = join(PROJECT_ROOT, "src", "cli", "run.ts");
-const ASK_CODEX = join(PROJECT_ROOT, "..", "..", "examples", "ask-codex.json");
-const ASK_CLAUDE = join(PROJECT_ROOT, "..", "..", "examples", "ask-claude.json");
-const CONSULT_STATELESS = join(PROJECT_ROOT, "..", "..", "examples", "consult-stateless.json");
 const CONSULT = join(PROJECT_ROOT, "..", "..", "examples", "consult.json");
+let ASK_CODEX: string;
+let ASK_CLAUDE: string;
+let CONSULT_STATELESS: string;
+let FILE_INPUT_MANIFEST: string;
 
 const FAKE_CODEX = `#!/bin/sh
 IS_RESUME=0
@@ -57,8 +58,87 @@ fi
 let TMPDIR: string;
 let FAKE_BIN_DIR: string;
 
+function writeManifestFixture(name: string, manifest: unknown): string {
+	const path = join(TMPDIR, `${name}.json`);
+	writeFileSync(path, `${JSON.stringify(manifest, null, "\t")}\n`);
+	return path;
+}
+
 beforeAll(() => {
 	TMPDIR = mkdtempSync(join(tmpdir(), "chit-cli-"));
+	ASK_CODEX = writeManifestFixture("ask-codex", {
+		schema: 1,
+		id: "ask-codex",
+		description: "Ask Codex a single stateless question.",
+		inputs: { question: { type: "string" } },
+		requires: { can_show_markdown: true },
+		participants: {
+			codex: {
+				agent: "codex",
+				role: "Answer briefly. Cite file:line for any claim about code.",
+				session: "stateless",
+			},
+		},
+		steps: {
+			ask: { call: "codex", prompt: "{{ inputs.question }}" },
+			out: { format: "{{ steps.ask.output }}" },
+		},
+		output: "out",
+	});
+	ASK_CLAUDE = writeManifestFixture("ask-claude", {
+		schema: 1,
+		id: "ask-claude",
+		description: "Ask Claude a single stateless question.",
+		inputs: { question: { type: "string" } },
+		requires: { can_show_markdown: true },
+		participants: {
+			claude: {
+				agent: "claude",
+				role: "Answer briefly. Cite file:line for any claim about code.",
+				session: "stateless",
+			},
+		},
+		steps: {
+			ask: { call: "claude", prompt: "{{ inputs.question }}" },
+			out: { format: "{{ steps.ask.output }}" },
+		},
+		output: "out",
+	});
+	CONSULT_STATELESS = writeManifestFixture("consult-stateless", {
+		schema: 1,
+		id: "consult-stateless",
+		description: "Ask Codex and Claude the same question in parallel.",
+		inputs: { question: { type: "string" } },
+		requires: { can_show_markdown: true },
+		participants: {
+			codex: { agent: "codex", role: "Second opinion advisor.", session: "stateless" },
+			claude: { agent: "claude", role: "Second opinion advisor.", session: "stateless" },
+		},
+		steps: {
+			ask_codex: { call: "codex", prompt: "{{ inputs.question }}" },
+			ask_claude: { call: "claude", prompt: "{{ inputs.question }}" },
+			out: {
+				format:
+					"## codex\n\n{{ steps.ask_codex.output }}\n\n## claude\n\n{{ steps.ask_claude.output }}",
+			},
+		},
+		output: "out",
+	});
+	FILE_INPUT_MANIFEST = writeManifestFixture("file-input-check", {
+		schema: 1,
+		id: "file-input-check",
+		description: "Test-only manifest requiring file input passing.",
+		inputs: { files: { type: "file[]" } },
+		requires: { can_show_markdown: true },
+		participants: {
+			codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+		},
+		steps: {
+			check: { call: "codex", prompt: "{{ inputs.files }}" },
+			out: { format: "{{ steps.check.output }}" },
+		},
+		output: "out",
+	});
 	FAKE_BIN_DIR = join(TMPDIR, "bin");
 	mkdirSync(FAKE_BIN_DIR, { recursive: true });
 	const codexPath = join(FAKE_BIN_DIR, "codex");
@@ -279,7 +359,7 @@ describe("parseArgs", () => {
 });
 
 describe("chit run (subprocess)", () => {
-	test("ask-codex.json end-to-end with fake codex", async () => {
+	test("codex-only fixture end-to-end with fake codex", async () => {
 		const { stdout, code } = await runCLI([
 			"run",
 			ASK_CODEX,
@@ -382,7 +462,7 @@ describe("chit run (subprocess)", () => {
 		}
 	});
 
-	test("consult-stateless.json runs codex + claude in parallel", async () => {
+	test("stateless consult fixture runs codex + claude in parallel", async () => {
 		const { stdout, code } = await runCLI([
 			"run",
 			CONSULT_STATELESS,
@@ -762,10 +842,9 @@ describe("chit run (subprocess)", () => {
 	});
 
 	test("show against claude-skill surface flags can_pass_files missing for file[] inputs", async () => {
-		const investigateBug = join(PROJECT_ROOT, "..", "..", "examples", "investigate-bug.json");
 		const { stdout, code } = await runCLI([
 			"show",
-			investigateBug,
+			FILE_INPUT_MANIFEST,
 			"--surface",
 			"claude-skill",
 			"--format",

@@ -109,8 +109,8 @@ describe("adaptGraphModel", () => {
 		}
 	});
 
-	test("investigate-bug.json (sequential with verification) adapts without throwing", () => {
-		const model = loadGraphModel("investigate-bug.json");
+	test("converge.json (sequential implement/review loop body) adapts without throwing", () => {
+		const model = loadGraphModel("converge.json");
 		const adapted = adaptGraphModel(model);
 		expect(adapted.nodes.length).toBeGreaterThan(0);
 		expect(adapted.edges.length).toBeGreaterThan(0);

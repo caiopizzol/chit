@@ -12,9 +12,25 @@ import {
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 const CONSULT = parseManifest(JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8")));
-const ASK_CODEX = parseManifest(
-	JSON.parse(readFileSync(join(EXAMPLES, "ask-codex.json"), "utf-8")),
-);
+const ASK_CODEX = parseManifest({
+	schema: 1,
+	id: "ask-codex",
+	description: "Ask Codex a single stateless question.",
+	inputs: { question: { type: "string" } },
+	requires: { can_show_markdown: true },
+	participants: {
+		codex: {
+			agent: "codex",
+			role: "Answer briefly. Cite file:line for any claim about code.",
+			session: "stateless",
+		},
+	},
+	steps: {
+		ask: { call: "codex", prompt: "{{ inputs.question }}" },
+		out: { format: "{{ steps.ask.output }}" },
+	},
+	output: "out",
+});
 const REGISTRY = parseRegistry(undefined);
 
 // A test-only registry: the claude agent points at an adapter kind with no

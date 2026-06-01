@@ -9,8 +9,67 @@ import { RuntimeError } from "./render.ts";
 import type { AdapterCallRequest, RuntimeAdapter, TraceEvent } from "./types.ts";
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
+const CODEX_ONLY_MANIFEST = {
+	schema: 1,
+	id: "codex-only",
+	description: "Ask Codex a single stateless question.",
+	inputs: { question: { type: "string" } },
+	requires: { can_show_markdown: true },
+	participants: {
+		codex: {
+			agent: "codex",
+			role: "Answer briefly. Cite file:line for any claim about code.",
+			session: "stateless",
+		},
+	},
+	steps: {
+		ask: { call: "codex", prompt: "{{ inputs.question }}" },
+		out: { format: "{{ steps.ask.output }}" },
+	},
+	output: "out",
+};
+const SEQUENTIAL_MANIFEST = {
+	schema: 1,
+	id: "sequential-check",
+	description: "Test-only sequential manifest with optional file inputs.",
+	inputs: {
+		issue: { type: "string" },
+		files: { type: "file[]", optional: true },
+	},
+	requires: { can_show_markdown: true },
+	participants: {
+		diagnostician: {
+			agent: "codex",
+			role: "Find the likely root cause.",
+			session: "per_scope",
+		},
+		verifier: {
+			agent: "claude",
+			role: "Verify each claim in the diagnosis.",
+			session: "per_scope",
+		},
+	},
+	steps: {
+		diagnose: {
+			call: "diagnostician",
+			prompt: "Investigate this issue:\n{{ inputs.issue }}\n\nRelevant files:\n{{ inputs.files }}",
+		},
+		verify: {
+			call: "verifier",
+			prompt:
+				"Verify the diagnosis below against the current code.\n\nOriginal issue:\n{{ inputs.issue }}\n\nRelevant files:\n{{ inputs.files }}\n\nDiagnosis:\n{{ steps.diagnose.output }}",
+		},
+		out: {
+			format:
+				"## Diagnosis\n\n{{ steps.diagnose.output }}\n\n## Verification\n\n{{ steps.verify.output }}",
+		},
+	},
+	output: "out",
+};
 
-function loadExample(name: string): NormalizedManifest {
+function loadManifestFixture(name: string): NormalizedManifest {
+	if (name === "codex-only") return parseManifest(CODEX_ONLY_MANIFEST);
+	if (name === "sequential-check") return parseManifest(SEQUENTIAL_MANIFEST);
 	return parseManifest(JSON.parse(readFileSync(join(EXAMPLES, `${name}.json`), "utf8")));
 }
 
@@ -56,7 +115,7 @@ describe("buildAgentInput", () => {
 
 describe("executeManifest: consult (parallel fan-out)", () => {
 	test("runs both advisors and produces formatted output", async () => {
-		const manifest = loadExample("consult");
+		const manifest = loadManifestFixture("consult");
 		const result = await executeManifest(manifest, {
 			inputs: { question: "what?" },
 			adapters: { codex: echoAdapter("codex"), claude: echoAdapter("claude") },
@@ -75,7 +134,7 @@ describe("executeManifest: consult (parallel fan-out)", () => {
 	});
 
 	test("both parallel steps start before either completes", async () => {
-		const manifest = loadExample("consult");
+		const manifest = loadManifestFixture("consult");
 		const events: TraceEvent[] = [];
 		await executeManifest(manifest, {
 			inputs: { question: "x" },
@@ -96,7 +155,7 @@ describe("executeManifest: consult (parallel fan-out)", () => {
 
 	test("adapter receives role envelope", async () => {
 		const { adapter, calls } = recordingAdapter();
-		const manifest = loadExample("consult");
+		const manifest = loadManifestFixture("consult");
 		await executeManifest(manifest, {
 			inputs: { question: "what?" },
 			adapters: { codex: adapter, claude: adapter },
@@ -114,10 +173,10 @@ describe("executeManifest: consult (parallel fan-out)", () => {
 	});
 });
 
-describe("executeManifest: investigate-bug (sequential with verification)", () => {
+describe("executeManifest: sequential-check fixture", () => {
 	test("pipes diagnose output into verify and produces formatted final output", async () => {
 		const { adapter, calls } = recordingAdapter();
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 
 		const result = await executeManifest(manifest, {
 			inputs: { issue: "login hangs" },
@@ -142,7 +201,7 @@ describe("executeManifest: investigate-bug (sequential with verification)", () =
 
 	test("file[] inputs render as newline-joined absolute paths", async () => {
 		const { adapter, calls } = recordingAdapter();
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 
 		await executeManifest(manifest, {
 			inputs: { issue: "x", files: TMPFILES },
@@ -157,7 +216,7 @@ describe("executeManifest: investigate-bug (sequential with verification)", () =
 
 	test("relative file paths resolve against invocationCwd", async () => {
 		const { adapter, calls } = recordingAdapter();
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 
 		await executeManifest(manifest, {
 			inputs: { issue: "x", files: ["a.ts", "b.ts"] },
@@ -172,7 +231,7 @@ describe("executeManifest: investigate-bug (sequential with verification)", () =
 
 	test("absent optional file[] renders as empty string", async () => {
 		const { adapter, calls } = recordingAdapter();
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 
 		await executeManifest(manifest, {
 			inputs: { issue: "x" },
@@ -190,7 +249,7 @@ describe("executeManifest: investigate-bug (sequential with verification)", () =
 
 describe("executeManifest: failure modes", () => {
 	test("step failure yields failure envelope with partial outputs", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		const failing: RuntimeAdapter = {
 			call: (req) => {
 				if (req.stepId === "verify") return Promise.reject(new Error("verify exploded"));
@@ -223,7 +282,7 @@ describe("executeManifest: failure modes", () => {
 	});
 
 	test("missing required input rejects with RuntimeError", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		await expect(
 			executeManifest(manifest, {
 				inputs: {},
@@ -234,7 +293,7 @@ describe("executeManifest: failure modes", () => {
 	});
 
 	test("unknown input rejects with RuntimeError", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		await expect(
 			executeManifest(manifest, {
 				inputs: { issue: "x", bogus: 1 },
@@ -245,7 +304,7 @@ describe("executeManifest: failure modes", () => {
 	});
 
 	test("nonexistent file path rejects with RuntimeError", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		await expect(
 			executeManifest(manifest, {
 				inputs: { issue: "x", files: ["does-not-exist.ts"] },
@@ -256,7 +315,7 @@ describe("executeManifest: failure modes", () => {
 	});
 
 	test("missing adapter rejected upfront", async () => {
-		const manifest = loadExample("consult");
+		const manifest = loadManifestFixture("consult");
 		await expect(
 			executeManifest(manifest, {
 				inputs: { question: "x" },
@@ -267,7 +326,7 @@ describe("executeManifest: failure modes", () => {
 	});
 
 	test("wrong input type rejected", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		await expect(
 			executeManifest(manifest, {
 				inputs: { issue: 123 },
@@ -280,7 +339,7 @@ describe("executeManifest: failure modes", () => {
 
 describe("executeManifest: trace events", () => {
 	test("trace is returned in result even without onTrace", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		const result = await executeManifest(manifest, {
 			inputs: { issue: "x" },
 			adapters: { codex: echoAdapter("c"), claude: echoAdapter("cl") },
@@ -297,7 +356,7 @@ describe("executeManifest: trace events", () => {
 	});
 
 	test("onTrace receives the same events as result.trace", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		const liveEvents: TraceEvent[] = [];
 		const result = await executeManifest(manifest, {
 			inputs: { issue: "x" },
@@ -310,7 +369,7 @@ describe("executeManifest: trace events", () => {
 	});
 
 	test("call step.completed carries adapter usage; format step does not", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		const usageAdapter: RuntimeAdapter = {
 			call: (req) =>
 				Promise.resolve({
@@ -339,7 +398,7 @@ describe("executeManifest: trace events", () => {
 	});
 
 	test("failure trace includes step.failed event", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		const failing: RuntimeAdapter = {
 			call: (req) =>
 				req.stepId === "verify"
@@ -367,7 +426,7 @@ describe("executeManifest: trace events", () => {
 	});
 
 	test("emits started+completed for each non-failed step", async () => {
-		const manifest = loadExample("investigate-bug");
+		const manifest = loadManifestFixture("sequential-check");
 		const events: TraceEvent[] = [];
 		await executeManifest(manifest, {
 			inputs: { issue: "x" },
@@ -392,7 +451,7 @@ describe("executeManifest: trace events", () => {
 
 describe("executeManifest: cancellation (signal)", () => {
 	test("threads the run's signal to every adapter call", async () => {
-		const manifest = loadExample("ask-codex");
+		const manifest = loadManifestFixture("codex-only");
 		const { adapter, calls } = recordingAdapter();
 		const controller = new AbortController();
 		const result = await executeManifest(manifest, {
@@ -408,7 +467,7 @@ describe("executeManifest: cancellation (signal)", () => {
 	});
 
 	test("omitting the signal leaves adapter calls with no signal (CLI path unchanged)", async () => {
-		const manifest = loadExample("ask-codex");
+		const manifest = loadManifestFixture("codex-only");
 		const { adapter, calls } = recordingAdapter();
 		const result = await executeManifest(manifest, {
 			inputs: { question: "x" },
@@ -420,7 +479,7 @@ describe("executeManifest: cancellation (signal)", () => {
 	});
 
 	test("an already-aborted signal fails the step before the adapter is called", async () => {
-		const manifest = loadExample("ask-codex");
+		const manifest = loadManifestFixture("codex-only");
 		const { adapter, calls } = recordingAdapter();
 		const controller = new AbortController();
 		controller.abort();
@@ -440,7 +499,7 @@ describe("executeManifest: cancellation (signal)", () => {
 	});
 
 	test("an adapter that returns after the signal aborts does not commit a completed step", async () => {
-		const manifest = loadExample("ask-codex");
+		const manifest = loadManifestFixture("codex-only");
 		const controller = new AbortController();
 		// An adapter that aborts mid-call (a late abort, or one that ignores the
 		// signal) and still resolves successfully. The post-call guard must discard

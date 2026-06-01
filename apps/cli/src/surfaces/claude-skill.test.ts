@@ -21,8 +21,8 @@ import { installClaudeSkill, SurfaceInstallError } from "./claude-skill.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 const CONSULT_PATH = join(PROJECT_ROOT, "..", "..", "examples", "consult.json");
-const ASK_CODEX_PATH = join(PROJECT_ROOT, "..", "..", "examples", "ask-codex.json");
-const INVESTIGATE_BUG_PATH = join(PROJECT_ROOT, "..", "..", "examples", "investigate-bug.json");
+let ASK_CODEX_PATH: string;
+let FILE_INPUT_MANIFEST_PATH: string;
 
 // A test-only registry whose claude agent points at an adapter kind with no
 // descriptor, so read_only is unenforceable. No built-in adapter is unenforceable
@@ -77,8 +77,48 @@ let TMPDIR: string;
 let SKILLS_DIR: string;
 let FAKE_BIN_DIR: string;
 
+function writeManifestFixture(name: string, manifest: unknown): string {
+	const path = join(TMPDIR, `${name}.json`);
+	writeFileSync(path, `${JSON.stringify(manifest, null, "\t")}\n`);
+	return path;
+}
+
 beforeAll(() => {
 	TMPDIR = mkdtempSync(join(tmpdir(), "chit-skill-"));
+	ASK_CODEX_PATH = writeManifestFixture("ask-codex", {
+		schema: 1,
+		id: "ask-codex",
+		description: "Ask Codex a single stateless question.",
+		inputs: { question: { type: "string" } },
+		requires: { can_show_markdown: true },
+		participants: {
+			codex: {
+				agent: "codex",
+				role: "Answer briefly. Cite file:line for any claim about code.",
+				session: "stateless",
+			},
+		},
+		steps: {
+			ask: { call: "codex", prompt: "{{ inputs.question }}" },
+			out: { format: "{{ steps.ask.output }}" },
+		},
+		output: "out",
+	});
+	FILE_INPUT_MANIFEST_PATH = writeManifestFixture("file-input-check", {
+		schema: 1,
+		id: "file-input-check",
+		description: "Test-only manifest requiring file input passing.",
+		inputs: { files: { type: "file[]" } },
+		requires: { can_show_markdown: true },
+		participants: {
+			codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+		},
+		steps: {
+			check: { call: "codex", prompt: "{{ inputs.files }}" },
+			out: { format: "{{ steps.check.output }}" },
+		},
+		output: "out",
+	});
 	SKILLS_DIR = join(TMPDIR, "skills");
 	mkdirSync(SKILLS_DIR, { recursive: true });
 	FAKE_BIN_DIR = join(TMPDIR, "bin");
@@ -378,7 +418,7 @@ describe("installClaudeSkill: validation", () => {
 	});
 
 	test("refuses install when surface lacks a required capability (file[] input)", () => {
-		const manifestPath = INVESTIGATE_BUG_PATH;
+		const manifestPath = FILE_INPUT_MANIFEST_PATH;
 		expect(() =>
 			installClaudeSkill({
 				manifestPath,

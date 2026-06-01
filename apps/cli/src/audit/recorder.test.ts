@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -238,14 +238,34 @@ describe("wrapAdaptersWithAudit", () => {
 
 describe("audit integration via executeManifest", () => {
 	test("a manifest run writes a full audit run: run/step/adapter-call events + blobs", async () => {
-		const manifest = parseManifest(
-			JSON.parse(
-				readFileSync(
-					join(import.meta.dir, "..", "..", "..", "..", "examples", "investigate-bug.json"),
-					"utf8",
-				),
-			),
-		);
+		const manifest = parseManifest({
+			schema: 1,
+			id: "sequential-check",
+			description: "Test-only sequential manifest.",
+			inputs: { issue: { type: "string" } },
+			requires: { can_show_markdown: true },
+			participants: {
+				diagnostician: {
+					agent: "codex",
+					role: "Find the likely root cause.",
+					session: "per_scope",
+				},
+				verifier: {
+					agent: "claude",
+					role: "Verify each claim in the diagnosis.",
+					session: "per_scope",
+				},
+			},
+			steps: {
+				diagnose: { call: "diagnostician", prompt: "{{ inputs.issue }}" },
+				verify: { call: "verifier", prompt: "{{ steps.diagnose.output }}" },
+				out: {
+					format:
+						"## Diagnosis\n\n{{ steps.diagnose.output }}\n\n## Verification\n\n{{ steps.verify.output }}",
+				},
+			},
+			output: "out",
+		});
 		const rec = recorder("RUN");
 		rec.runStarted();
 		const fake: RuntimeAdapter = {

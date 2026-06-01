@@ -17,7 +17,7 @@ So the loop and the checkpoint belong to the orchestrator (the chat); chit runs 
 | Concern | Owner |
 |---|---|
 | implement | the Claude Code chat (full tools plus your oversight) |
-| check | chit's persistent `per_scope` Codex advisor (`codex-advisor-thread`, read-only enforced) |
+| check | a persistent `per_scope` Codex advisor, read-only enforced |
 | loop control and iteration budget | the chat (re-drives chit each round) |
 | human checkpoint | the chat (a terminal stop state, not a manifest step) |
 
@@ -28,12 +28,12 @@ One chit run is one turn of the loop. The `while` lives in the chat.
 Per iteration (default budget: 3):
 
 1. The chat implements one small, verifiable slice.
-2. The chat calls the advisor: `chit_start` (`codex-advisor-thread.json`, a stable `scope` per thread, `cwd` set to the repo, `inputs.task` plus `inputs.claude_response` describing what changed), then `chit_run_step review`.
+2. The chat calls the advisor with `chit_start` using a stable `scope` per thread, `cwd` set to the repo, and inputs that describe the task plus what changed, then runs the review step with `chit_run_step`.
 3. The chat decides on the `proceed | revise | block` verdict. `proceed` moves to the next slice (or stops if done); `revise` fixes and re-checks (verify each finding first, since Codex is not ground truth); `block` stops and surfaces to the human.
 
 Stop conditions: a `block`; an ambiguous product or design decision; failing tests needing a user choice; any destructive or outward-facing action; or max iterations.
 
-Supervised convergence is currently an operating pattern, not a packaged skill. The stable primitive is the MCP advisor manifest (`examples/codex-advisor-thread.json`) plus a human-driven loop.
+Supervised convergence is currently an operating pattern, not a packaged skill or bundled example. The stable primitive is the MCP stepwise tool set plus a human-driven loop.
 
 ## What this is not (and why)
 

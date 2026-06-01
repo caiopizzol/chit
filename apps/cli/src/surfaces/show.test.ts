@@ -11,7 +11,40 @@ import {
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 const CONSULT = JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8"));
-const ASK_CODEX = JSON.parse(readFileSync(join(EXAMPLES, "ask-codex.json"), "utf-8"));
+const ASK_CODEX = {
+	schema: 1,
+	id: "ask-codex",
+	description: "Ask Codex a single stateless question.",
+	inputs: { question: { type: "string" } },
+	requires: { can_show_markdown: true },
+	participants: {
+		codex: {
+			agent: "codex",
+			role: "Answer briefly. Cite file:line for any claim about code.",
+			session: "stateless",
+		},
+	},
+	steps: {
+		ask: { call: "codex", prompt: "{{ inputs.question }}" },
+		out: { format: "{{ steps.ask.output }}" },
+	},
+	output: "out",
+};
+const FILE_INPUT_MANIFEST = {
+	schema: 1,
+	id: "file-input-check",
+	description: "Test-only manifest requiring file input passing.",
+	inputs: { files: { type: "file[]" } },
+	requires: { can_show_markdown: true },
+	participants: {
+		codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+	},
+	steps: {
+		check: { call: "codex", prompt: "{{ inputs.files }}" },
+		out: { format: "{{ steps.check.output }}" },
+	},
+	output: "out",
+};
 const REGISTRY = parseRegistry(undefined);
 
 function buildConsult(surface?: string): GraphModel {
@@ -188,8 +221,7 @@ describe("renderShow: html", () => {
 	});
 
 	test("missing-capability renders as error (red)", () => {
-		const investigate = JSON.parse(readFileSync(join(EXAMPLES, "investigate-bug.json"), "utf-8"));
-		const m = buildGraphModel(parseManifest(investigate), REGISTRY, "claude-skill");
+		const m = buildGraphModel(parseManifest(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
 		const out = renderShow(m, "html");
 		expect(out).toContain('<section class="validation error">');
 		expect(out).toContain("Missing capabilities");
