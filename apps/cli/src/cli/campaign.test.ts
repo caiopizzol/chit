@@ -137,6 +137,24 @@ describe("campaign start", () => {
 		expect(err.join("")).toMatch(/capped at 2/);
 	});
 
+	test("fetches issues scoped to the resolved campaign repo (not the cwd)", async () => {
+		const seenRepos: string[] = [];
+		const deps = makeDeps({
+			fetchIssue: (n, r) => {
+				seenRepos.push(r);
+				return Promise.resolve({ number: n, title: "Finish v0 docs", body: "" });
+			},
+		});
+		await runCampaign(
+			["start", "--issues", "9", "--repo", repo, "--id", "scoped"],
+			makeIO().io,
+			deps,
+		);
+		// resolveRepo returns the git toplevel (our fake returns `repo`); the fetch
+		// must be scoped to it, not to process.cwd().
+		expect(seenRepos).toEqual([repo]);
+	});
+
 	test("an unclassifiable issue is recorded needs_human, not run", async () => {
 		const { io } = makeIO();
 		const deps = makeDeps({

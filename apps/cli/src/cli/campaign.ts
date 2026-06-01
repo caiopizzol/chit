@@ -75,7 +75,9 @@ export interface TaskRunParams {
 // Injected boundaries. Defaults hit GitHub (gh), git, and the real converge
 // driver; tests override them.
 export interface CampaignDeps {
-	fetchIssue: (n: number) => Promise<IssueInput>;
+	// Fetch an issue, scoped to `repo`: gh must resolve the campaign's repo, not
+	// whatever directory the command happened to run from.
+	fetchIssue: (n: number, repo: string) => Promise<IssueInput>;
 	runTask: (params: TaskRunParams) => Promise<TaskRunOutcome>;
 	git: GitRunner;
 	now: () => number;
@@ -87,11 +89,14 @@ class CampaignError extends Error {}
 
 // --- default boundaries ---
 
-function defaultFetchIssue(n: number): Promise<IssueInput> {
+function defaultFetchIssue(n: number, repo: string): Promise<IssueInput> {
 	return Promise.resolve().then(() => {
 		let out: string;
 		try {
+			// Run gh in the campaign's repo so it resolves that project's remote, not
+			// the remote of whatever directory the command was invoked from.
 			out = execFileSync("gh", ["issue", "view", String(n), "--json", "number,title,body"], {
+				cwd: repo,
 				encoding: "utf-8",
 				stdio: ["ignore", "pipe", "pipe"],
 			});
@@ -385,7 +390,7 @@ async function doStart(p: Parsed, io: CampaignIO, deps: CampaignDeps): Promise<n
 	}
 
 	const fetched: IssueInput[] = [];
-	for (const n of issues) fetched.push(await deps.fetchIssue(n));
+	for (const n of issues) fetched.push(await deps.fetchIssue(n, repo));
 	const tasks = planTasks(fetched, claims);
 
 	const overlaps = findClaimOverlaps(tasks);

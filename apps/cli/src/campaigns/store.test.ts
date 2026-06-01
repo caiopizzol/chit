@@ -87,6 +87,16 @@ describe("validateCampaign", () => {
 		).toThrow(/depends on unknown task/);
 	});
 
+	test("rejects maxParallel above the cap (covers hand-edited/stale files)", () => {
+		expect(() => validateCampaign(campaign({ maxParallel: 3 }))).toThrow(/between 1 and 2/);
+	});
+
+	test("readCampaign rejects a stored file whose maxParallel exceeds the cap", () => {
+		createCampaign(campaign());
+		writeFileSync(campaignPath(repo, "v0-mcp"), JSON.stringify({ ...campaign(), maxParallel: 5 }));
+		expect(() => readCampaign(repo, "v0-mcp")).toThrow(/between 1 and 2/);
+	});
+
 	test("rejects an unknown task status", () => {
 		const bad = campaign({ tasks: [task("a")] });
 		// biome-ignore lint/suspicious/noExplicitAny: deliberately corrupting for the test

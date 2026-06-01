@@ -159,6 +159,15 @@ export function validateCampaign(raw: unknown): Campaign {
 	if (!Array.isArray(tasksRaw)) {
 		throw new CampaignStoreError(`campaign: "tasks" must be an array`);
 	}
+	// Enforce the parallel cap here, not only at create time, so a hand-edited or
+	// stale campaign file cannot drive run() past the advertised ceiling. readCampaign
+	// (the run path) goes through this, so the cap holds for persisted state too.
+	const maxParallel = int(o, "maxParallel", "campaign", 1);
+	if (maxParallel > MAX_PARALLEL_CAP) {
+		throw new CampaignStoreError(
+			`campaign: "maxParallel" must be between 1 and ${MAX_PARALLEL_CAP} (got ${maxParallel})`,
+		);
+	}
 	const tasks = tasksRaw.map((t, i) => validateTask(t, `task[${i}]`));
 	const ids = new Set<string>();
 	for (const t of tasks) {
@@ -182,7 +191,7 @@ export function validateCampaign(raw: unknown): Campaign {
 		repo: str(o, "repo", "campaign"),
 		baseBranch: str(o, "baseBranch", "campaign"),
 		baseSha: str(o, "baseSha", "campaign"),
-		maxParallel: int(o, "maxParallel", "campaign", 1),
+		maxParallel,
 		createdAt: str(o, "createdAt", "campaign"),
 		updatedAt: str(o, "updatedAt", "campaign"),
 		status: oneOf(
