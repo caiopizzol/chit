@@ -3,8 +3,7 @@ import "./landing.css";
 
 export const metadata: Metadata = {
 	title: { absolute: "chit - a thin runtime for multi-agent workflows" },
-	description:
-		"An open-source runtime for multi-agent workflows. Stop being the glue between your agents.",
+	description: "A thin runtime for multi-agent workflows. Stop being the glue between your agents.",
 };
 
 export default function Home() {
@@ -31,7 +30,7 @@ export default function Home() {
 					judgment matters.
 				</p>
 				<a href="#install" className="cta">
-					$ chit install
+					$ bunx @chit-run/cli
 				</a>
 
 				<div className="keystone">
@@ -210,28 +209,27 @@ export default function Home() {
 				</blockquote>
 
 				<section id="install">
-					<h2>Install (soon)</h2>
+					<h2>Install</h2>
 					<p className="lede">
-						Pre-v0. The public repo and the published CLI are not out yet. When they land, the flow
-						will be:
+						The published CLI is <code>@chit-run/cli</code>. It runs under Bun and installs the{" "}
+						<code>chit</code> binary.
 					</p>
 					<pre className="terminal">
-						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
+						<span className="cmd">$ bunx @chit-run/cli --help</span>
 						{"\n"}
-						<span className="cmd">$ cd chit</span>
+						<span className="cmd">$ bun install -g @chit-run/cli</span>
 						{"\n"}
-						<span className="cmd">$ bun install</span>
-						{"\n"}
-						<span className="cmd">$ bun run cli --help</span>
+						<span className="cmd">$ chit --help</span>
 					</pre>
 					<p className="lede" style={{ marginTop: 16 }}>
-						Until then, this page is the brand cut. Nothing to install yet.
+						Example manifests and Studio live in the source repo. Start with the CLI, then open the
+						docs when you want the full surface map.
 					</p>
 				</section>
 			</div>
 
 			<footer>
-				<span>chit · pre-v0 · 2026</span>
+				<span>chit · early · 2026</span>
 				<span>open source · MIT</span>
 			</footer>
 		</div>

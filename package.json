@@ -2,7 +2,7 @@
 	"name": "chit-workspace",
 	"version": "0.0.0",
 	"private": true,
-	"description": "chit — a thin runtime for multi-agent workflows. Monorepo root.",
+	"description": "chit - a thin runtime for multi-agent workflows. Monorepo root.",
 	"workspaces": [
 		"apps/*",
 		"packages/*"

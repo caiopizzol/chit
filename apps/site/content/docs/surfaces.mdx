@@ -10,15 +10,15 @@ A surface is a thin shim that calls the runtime with a manifest and inputs. The 
 The command line is the primary surface.
 
 ```sh
-bun run cli run        # execute a manifest
-bun run cli show       # render a manifest without running it
-bun run cli install    # install a chit as a skill
-bun run cli list       # list installed chits
-bun run cli uninstall  # remove an installed chit
-bun run cli studio     # open the local editor
-bun run cli converge   # run the autonomous implement/check loop
-bun run cli audit      # read a recorded run transcript
-bun run cli loop-log   # read a convergence log
+chit run        # execute a manifest
+chit show       # render a manifest without running it
+chit install    # install a chit as a skill
+chit list       # list installed chits
+chit uninstall  # remove an installed chit
+chit studio     # open the local editor
+chit converge   # run the autonomous implement/check loop
+chit audit      # read a recorded run transcript
+chit loop-log   # read a convergence log
 ```
 
 ## Claude Code skill
@@ -31,7 +31,7 @@ The MCP surface runs a chit one step at a time. `chit_start`, then `chit_run_ste
 
 ## Studio
 
-Studio is a local web editor: a graph view, an inspector, and a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. Launch it with `chit studio [path]`. See [the Studio reference](/docs/studio).
+Studio is a local web editor: a graph view, an inspector, and a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. Launch it from a source checkout with `bun run studio:preview`; the published CLI package does not include the Studio client bundle in this version. See [the Studio reference](/docs/studio).
 
 ## Audit
 

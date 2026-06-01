@@ -10,7 +10,7 @@ A chit is a JSON manifest. This page is the reference for what it can declare. T
 | Field          | Required | Notes                                                                 |
 | -------------- | -------- | --------------------------------------------------------------------- |
 | `schema`       | yes      | Integer. Currently `1`.                                               |
-| `id`           | yes      | Slug. Used as the install id (`chit run <id>`).                       |
+| `id`           | yes      | Slug. Used as the install id and run label.                           |
 | `description`  | yes      | One sentence. Surfaced in the skill/MCP/CLI install artifact.         |
 | `inputs`       | yes      | Map of input name to `{ type, optional? }`. Types: `string`, `file[]`. |
 | `requires`     | no       | Surface capabilities the schema cannot infer. Defaults to `{}`.       |

@@ -433,7 +433,7 @@ One agent proposes. Another verifies. Another executes. A chit captures the rout
 8. If a sentence could appear on a Salesforce page, rewrite it.
 9. Cite when you make a claim. We are early, so be specific about what is shipped and what is not.
 10. Don't apologize for being a CLI.
-11. Be honest about being pre-v0. "Early" is more credible than "trusted by leading teams".
+11. Be honest about being early. "Early" is more credible than "trusted by leading teams".
 12. No em dashes anywhere. Periods, commas, parentheses, or hyphens only.
 13. The keystone contrast is *chit, not chat*. Use it where the contrast teaches. Do not bury it; do not overuse it. It is the spine, not the headline.
 14. Do not pitch governance. We make routines repeatable. Receipts are evidence, not law.
@@ -546,7 +546,7 @@ Skip photography of people, robots, devices, and "AI brain" art. Use:
 
 ### Style
 
-**Design keywords.** Declared. Inked. Restrained. Compact. CLI-native. Plain. Honest. Pre-v0.
+**Design keywords.** Declared. Inked. Restrained. Compact. CLI-native. Plain. Honest. Early.
 
 **Reference brands.**
 
@@ -581,9 +581,9 @@ The metaphor is broader than restaurant. A chit is a small declared written orde
 
 Migration status:
 
-- *Migrated.* Repo directory (`/personal/handoff` → `/personal/chit`), root README, workspace package names (`chit-workspace`, `@chit/cli`, `@chit/site`, `@chit/core`), CLI binary name (`chit`), CLI help and stderr prefixes, landing site and docs.
+- *Migrated.* Repo directory (`/personal/handoff` → `/personal/chit`), root README, workspace package names (`chit-workspace`, `@chit-run/cli`, `@chit-run/site`, `@chit-run/studio`, `@chit-run/core`), CLI binary name (`chit`), CLI help and stderr prefixes, landing site and docs.
 - *Migrated at the v0 cut.* State and config paths (`~/.config/chit/agents.json`, `~/.local/state/chit/sessions/`, `~/.local/state/chit/audit/`) and the install marker (`.chit-install.json`). chit reads and writes only the `chit` names; the old `handoff` paths and `.handoff-install.json` are no longer read, so local state from before the cut must be moved to the `chit` paths to stay visible. Historical artifacts under `research/` keep the `handoff` name on purpose: they record when the project was called handoff.
 
 **Pickled** is a sibling brand. Same founder, same voice register, different product (agent legibility testing) and different metaphor (preservation). They should read as *two opinionated dev tools by the same person*, not as a themed series. Do not borrow Pickled's pickle vocabulary in chit copy. Do not borrow chit's paper-and-ink palette in Pickled copy.
 
-**Status.** Pre-v0. Shipped: the runtime, CLI, Claude Code skill surface, MCP stepwise surface, inspector (ASCII / JSON / Mermaid / HTML), Studio (graph editor + read-only Loops view + audit transcript view), the convergence log, the supervised and autonomous implement/check loops, the audit log (full prompt/output transcripts on all three run surfaces, with retention, readable via `chit audit` and Studio), preservation of both adapters' observable event streams (Codex JSONL and Claude stream-json) as audit events on audited runs, the install marker, and safe lifecycle. Not shipped: declared human-checkpoint or loop steps inside manifests; MCP client-facing output streaming (a live token stream to the client). Adapter events are surfaced live as they arrive, recorded with real arrival timestamps on audited runs, and are the observable CLI event stream, never hidden model reasoning. Brand copy must match what is shipped. Do not promise what is not.
+**Status.** Early v0. Shipped: the runtime, CLI, `@chit-run/cli` publish path, Claude Code skill surface, MCP stepwise surface, inspector (ASCII / JSON / Mermaid / HTML), Studio in a source checkout (graph editor + read-only Loops view + audit transcript view), the convergence log, the supervised and autonomous implement/check loops, the audit log (full prompt/output transcripts on all three run surfaces, with retention, readable via `chit audit` and Studio), preservation of both adapters' observable event streams (Codex JSONL and Claude stream-json) as audit events on audited runs, the install marker, and safe lifecycle. Not shipped: a bundled Studio client in the published CLI package; declared human-checkpoint or loop steps inside manifests; MCP client-facing output streaming (a live token stream to the client). Adapter events are surfaced live as they arrive, recorded with real arrival timestamps on audited runs, and are the observable CLI event stream, never hidden model reasoning. Brand copy must match what is shipped. Do not promise what is not.
