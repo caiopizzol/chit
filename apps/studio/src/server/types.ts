@@ -1,5 +1,5 @@
 // Wire types shared between the server and (eventually) the client. These
-// match the contract in docs/studio-v0.md. Kept here for now because the
+// match the contract in notes/studio-v0.md. Kept here for now because the
 // server is the only consumer in sub-unit 1.0; the client will import the
 // same module from across the workspace once it lands.
 
@@ -138,7 +138,7 @@ export interface InstallRequest {
 	allowUnenforcedPermissions?: boolean;
 }
 
-// Read-only convergence-log view (docs/loop-view-v0.md). GET /api/loops returns
+// Read-only convergence-log view (notes/loop-view-v0.md). GET /api/loops returns
 // LoopSummary[]; GET /api/loops/:loopId returns LoopRecord[] (the @chit/core
 // type). loopId is the validated, safe-slug file basename.
 export interface LoopSummary {

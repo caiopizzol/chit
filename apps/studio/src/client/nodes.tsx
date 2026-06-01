@@ -1,5 +1,5 @@
 // Three custom React Flow node types: input, call, format. Hierarchy and
-// state markers match docs/studio-node-sketches.md.
+// state markers match notes/studio-node-sketches.md.
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 

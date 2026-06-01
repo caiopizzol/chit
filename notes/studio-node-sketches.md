@@ -4,7 +4,7 @@ Targets for the three React Flow node types Studio renders: input, call, format.
 
 Goal: specify hierarchy, labels, badges, and states. Not art direction. Pixel sizes, exact spacing, font weights, and border thickness are decided in the spike. What appears on each node, in what order, with what state markers, is decided here.
 
-Companion to `docs/studio-v0.md` (the Slice 0..6 plan) and `brand.md` (paper-and-ink palette, shape-coded status, JetBrains Mono for code-like labels).
+Companion to `notes/studio-v0.md` (the Slice 0..6 plan) and `brand.md` (paper-and-ink palette, shape-coded status, JetBrains Mono for code-like labels).
 
 ## Shared rules
 

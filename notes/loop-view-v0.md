@@ -1,7 +1,7 @@
 # Loop view + convergence log (v0)
 
 Spec for visualizing a supervised-convergence loop in Studio. Companion to
-`docs/supervised-convergence.md` (the loop policy) and `docs/studio-v0.md` (the
+`notes/supervised-convergence.md` (the loop policy) and `notes/studio-v0.md` (the
 editor). The manifest graph stays the primary Studio artifact; this adds a
 read-only view of loop execution/decision history.
 

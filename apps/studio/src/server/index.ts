@@ -248,7 +248,7 @@ export function buildApp(opts: BuildAppOptions) {
 		return c.json(result);
 	});
 
-	// Read-only convergence-log routes (docs/loop-view-v0.md). The browser sees
+	// Read-only convergence-log routes (notes/loop-view-v0.md). The browser sees
 	// only the safe-slug loopId; .chit/loops lives under the invocation cwd.
 
 	app.get("/api/loops", (c) => {
@@ -265,7 +265,7 @@ export function buildApp(opts: BuildAppOptions) {
 		return c.json(result.records);
 	});
 
-	// Audit transcript for one run (docs/audit-v0.md). A loop iteration's
+	// Audit transcript for one run (notes/audit-v0.md). A loop iteration's
 	// detailsRef ("audit:<runId>") points here. ?blobs=1 also returns the
 	// referenced prompt/output bodies, keyed by ref.
 	app.get("/api/audit/:runId", (c) => {

@@ -126,7 +126,7 @@ probe (start a long step, Esc after the first heartbeat, record what happens):
   starts, not by wall-clock alone.
 - `inputs` are string→string; `file[]` inputs are not expressible via MCP.
 - Concurrent `per_scope` steps would hit the session store's read-modify-write
-  race (`docs/backlog.md`).
+  race (`notes/backlog.md`).
 - No within-step agent-output streaming to the MCP client (heartbeat is latest-state text; the adapter's live event capture feeds the audit log, not the client).
 
 ## What is deliberately NOT next

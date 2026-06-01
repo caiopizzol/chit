@@ -1,4 +1,4 @@
-// Read-only convergence-log state for the Loops drawer (docs/loop-view-v0.md).
+// Read-only convergence-log state for the Loops drawer (notes/loop-view-v0.md).
 // The list loads on mount; selecting a loop fetches its records on demand. Both
 // sides carry explicit loading / error / ready states so the view can render an
 // honest empty/loading/error UI. All data comes from the server routes; the

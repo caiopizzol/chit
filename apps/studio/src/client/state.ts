@@ -1,4 +1,4 @@
-// Client state shape. The slice 2 reshape (per docs/studio-v0.md and
+// Client state shape. The slice 2 reshape (per notes/studio-v0.md and
 // the slice 2 design discussion) replaces `draft: NormalizedManifest`
 // with `draftSource: Record<string, unknown>`: the editable file-shape
 // JSON, not the derived shape parseManifest produces. NormalizedManifest

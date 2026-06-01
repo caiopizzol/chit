@@ -9,7 +9,7 @@ code; see receipts 0004-0006 and `proposals/conversational-handoff-needs-mcp.md`
 
 - chit manifests are static DAGs: no loops, no conditionals, no human-checkpoint
   step (`parse.ts` topological sort rejects cycles; step kinds are only `call` /
-  `format`; `docs/backlog.md` defers HITL). A "repeat until" cannot be expressed
+  `format`; `notes/backlog.md` defers HITL). A "repeat until" cannot be expressed
   in a manifest, by design.
 - chit's implementer is real (this was previously mischaracterized here):
   `claude-cli` runs `claude --print`, which uses tools and edits files - verified,
@@ -85,7 +85,7 @@ and runs against the shipped MCP server.
 ## Platform note (others building on top)
 
 The substrate to build on is the MCP stepwise tool set (`chit_start` /
-`chit_next` / `chit_run_step` / `chit_cancel` / `chit_trace`, `docs/mcp-v0.md`)
+`chit_next` / `chit_run_step` / `chit_cancel` / `chit_trace`, `notes/mcp-v0.md`)
 with one invariant: **chit governs the declared legal order and runs one bounded
 handoff to a result; the orchestrator owns the loop and the checkpoint.** Build
 loop policies (like this one) above that line, not inside the manifest.

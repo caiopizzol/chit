@@ -1,6 +1,6 @@
 # spike/studio-nodes
 
-Slice 0 of the chit Studio plan. See `docs/studio-v0.md` and `docs/studio-node-sketches.md` for context.
+Slice 0 of the chit Studio plan. See `notes/studio-v0.md` and `notes/studio-node-sketches.md` for context.
 
 Goal: prove React Flow + ELK + paper-and-ink can render the three node sketches without producing "React Flow with less color." Also prove `bun build --target=browser` can bundle React Flow.
 
