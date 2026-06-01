@@ -1,0 +1,65 @@
+/*
+ * chit-theme.css - token bridge for Fumadocs UI.
+ *
+ * Maps Fumadocs' `--color-fd-*` variables to chit's paper/ink palette
+ * (brand.md -> Visual) so the docs section reads like the chit.run landing:
+ * warm paper, near-black ink, no accent color. The site is light-only;
+ * the theme toggle is disabled (lib/layout.shared.tsx) and next-themes is
+ * off (components/provider.tsx), so :root is the single source of truth.
+ *
+ * Values are inlined from brand.md rather than imported from the landing,
+ * to keep this Next build independent of the landing's asset pipeline.
+ */
+
+@layer base {
+	:root {
+		/* Page chrome */
+		--color-fd-background: #f4f2ea; /* Paper */
+		--color-fd-foreground: #0a0a0a; /* Ink */
+
+		/* Muted + secondary surfaces */
+		--color-fd-muted: #eae5d5; /* Sheet */
+		--color-fd-muted-foreground: #2a2a2a; /* Carbon */
+		--color-fd-secondary: #eae5d5; /* Sheet */
+		--color-fd-secondary-foreground: #0a0a0a; /* Ink */
+
+		/* Cards + popovers */
+		--color-fd-card: #eae5d5; /* Sheet */
+		--color-fd-card-foreground: #0a0a0a; /* Ink */
+		--color-fd-popover: #f4f2ea; /* Paper */
+		--color-fd-popover-foreground: #0a0a0a; /* Ink */
+
+		/* Hover backgrounds (sidebar items, search hits) */
+		--color-fd-accent: #e0dbc6; /* Receipt */
+		--color-fd-accent-foreground: #0a0a0a; /* Ink */
+
+		/* Borders + focus ring */
+		--color-fd-border: #c7bfab; /* Hairline */
+		--color-fd-ring: #0a0a0a; /* Ink (no accent color) */
+
+		/* "Primary" is ink: chit has no brand accent. */
+		--color-fd-primary: #0a0a0a; /* Ink */
+		--color-fd-primary-foreground: #f4f2ea; /* Paper */
+	}
+
+	html {
+		font-family: var(--font-chit-body), "Inter", system-ui, sans-serif;
+	}
+
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6 {
+		font-family: var(--font-chit-display), "Bricolage Grotesque", system-ui, sans-serif;
+		letter-spacing: -0.02em;
+	}
+
+	code,
+	pre,
+	kbd,
+	samp {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+	}
+}

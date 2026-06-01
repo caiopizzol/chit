@@ -1,0 +1,35 @@
+---
+title: Concepts
+description: Agents, chits, and surfaces, and why manifests are static.
+---
+
+chit has three layers and one rule: the manifest is the artifact, and a shared runtime executes it.
+
+## Agents
+
+An agent is an invocable participant: Codex CLI, Claude CLI, or anything else reachable through an adapter. Agents live in a registry (`~/.config/chit/agents.json`) with built-in `codex` and `claude` entries that your config merges on top. A manifest never talks to a vendor directly; it names a participant, and the registry resolves it to an adapter.
+
+## Chits
+
+A chit is a JSON manifest. It declares:
+
+- **participants** - aliases over registry agents, each with a role, a session policy, and permissions.
+- **steps** - a map of step id to a `call` (invoke a participant) or a `format` (a pure string template).
+- **inputs** and **output** - what flows in, and which step's output is the result.
+
+Context flows through templates. A step that references `steps.ask_codex.output` depends on `ask_codex`; steps with no cross-reference run in parallel. The dependency graph is computed from the references, not declared by hand.
+
+## Surfaces
+
+A surface exposes a chit to a caller: a Claude Code skill, MCP tools, or a CLI command. Each surface declares the capabilities it offers (can it render markdown, pass files, provide a stable scope). Install fails if a chit needs a capability the surface does not have. The same runtime backs every surface, so a chit behaves the same wherever it runs.
+
+## Static by design
+
+Manifests are static DAGs. No loops, no conditionals, no dynamic routing. This is a choice, not a missing feature: a static graph is one you can read, diff, and check before it fires.
+
+Iteration still happens, but it lives in an orchestrator on top of the runtime, never inside the manifest. The recurring "one agent implements, another reviews, repeat" loop runs in two modes:
+
+- **Supervised** - your Claude Code chat owns the loop and the human checkpoint; a chit reviewer checks each round.
+- **Autonomous** - `chit converge` runs both agents to convergence against a git worktree, and you inspect the result.
+
+See [supervised convergence](/docs/supervised-convergence) and [self-hosting](/docs/self-hosting) for the loop in practice.

@@ -1,0 +1,17 @@
+{
+	"title": "Docs",
+	"pages": [
+		"index",
+		"getting-started",
+		"concepts",
+		"surfaces",
+		"---Reference---",
+		"manifest-schema",
+		"mcp",
+		"studio",
+		"audit-log",
+		"---Operating---",
+		"supervised-convergence",
+		"self-hosting"
+	]
+}

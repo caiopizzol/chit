@@ -1,0 +1,33 @@
+---
+title: Overview
+description: A thin runtime for multi-agent workflows. Stop being the glue between your agents.
+---
+
+A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, where a reviewer checks, where you check. The runtime reads the chit and runs it inside your Claude Code, MCP, or CLI session. You stop being the copy-paste layer between two terminals.
+
+The manifest is the artifact. A shared runtime executes it. Surfaces (a Claude Code skill, MCP tools, a CLI command) are thin shims that call the runtime with a manifest and inputs.
+
+## What this is not
+
+- Not a workflow engine. No schedulers, triggers, cron, databases, SaaS connectors.
+- Not a code generator. Manifests are interpreted, not compiled.
+- Not an agent framework. We do not define how agents reason; we define how they hand work to each other.
+- Not a chat tool. The word is *chit*, not *chat*.
+- Not a dynamic router. Manifests are static DAGs: no loops, no conditionals. Iteration, when you want it, is driven by an orchestrator on top, never by the manifest.
+
+## The three layers
+
+1. **Agents.** A registry of invocable participants (Codex CLI, Claude CLI, others via adapters).
+2. **Chits.** JSON manifests wiring agents into handoff graphs for a task.
+3. **Surfaces.** Adapters that expose a chit as a Claude Code skill, MCP tools, or a CLI command.
+
+## Where to go next
+
+- [Getting started](/docs/getting-started) runs your first chit from source.
+- [Concepts](/docs/concepts) explains agents, chits, and surfaces.
+- [Manifest schema](/docs/manifest-schema) is the reference for what a chit can declare.
+- [Surfaces](/docs/surfaces) covers the CLI, the Claude Code skill, MCP, and Studio.
+
+## Status
+
+Early, and honest about it. The runtime, the CLI, the Claude Code skill, the MCP stepwise surface, Studio, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.

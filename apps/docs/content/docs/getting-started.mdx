@@ -1,0 +1,50 @@
+---
+title: Getting started
+description: Run chit from source and execute your first manifest.
+---
+
+chit is pre-v0. There is no published package yet, so you run it from source.
+
+## Install from source
+
+```sh
+git clone https://github.com/caiopizzol/chit
+cd chit
+bun install
+bun run cli --help
+```
+
+`bun run cli` is the CLI from the repo root. Everything below is `bun run cli <command>`.
+
+## Run a chit
+
+The repo ships canonical manifests in `apps/cli/examples/`. `consult.json` fans a question out to two models and formats the answer.
+
+```sh
+bun run cli run apps/cli/examples/consult.json --scope work-session
+```
+
+The run prints what ran: the resolved manifest, the adapters, the validation result, and the execution levels. No chat log.
+
+## Read a chit before you run it
+
+`show` renders a manifest without executing it, in any of four views.
+
+```sh
+bun run cli show apps/cli/examples/consult.json            # ASCII graph
+bun run cli show apps/cli/examples/consult.json --json     # JSON
+bun run cli show apps/cli/examples/consult.json --mermaid  # Mermaid
+```
+
+## Open Studio
+
+Studio is a local web editor for chits: a graph view, an inspector, and a read-only Loops drawer.
+
+```sh
+bun run cli studio apps/cli/examples/consult.json
+```
+
+## Next
+
+- [Concepts](/docs/concepts) for the model behind agents, chits, and surfaces.
+- [Manifest schema](/docs/manifest-schema) for everything a chit can declare.

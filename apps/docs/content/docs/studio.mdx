@@ -1,0 +1,60 @@
+---
+title: Studio
+description: The local visual editor for chit manifests, with a graph view, an inspector, and a read-only Loops drawer
+---
+
+Studio is the visual version of the CLI. Same chits, same runtime, same registry. The manifest file on disk is the source of truth; the graph is an editing projection of it.
+
+The key constraint: edges are not first-class in the manifest. Connections are derived from template references like `{{ steps.diagnose.output }}` and `{{ inputs.question }}`. A visual edge edits the target template. Dragging a connection inserts a reference into the target prompt or format template; deleting a connection removes the corresponding reference.
+
+## Launch
+
+```sh
+chit studio [path]
+```
+
+`chit studio` boots a local server in the invocation cwd, generates a launch token, serves a React app, and opens the browser to it. The server is Hono on Bun, bound to `127.0.0.1`, and its lifetime is tied to the CLI process.
+
+Discovery is cwd-scoped and parse-based:
+
+- `chit studio <path>` opens the explicit path, even if it is outside the cwd.
+- `chit studio` (no path) scans the cwd for `*.json` and runs each through `parseManifest`. One success opens it; multiple successes show a picker; zero successes show an empty state with a path input.
+
+There is no recursive walking and no filename convention. The server keeps a `docId -> absolutePath` table internally; the browser only ever sees the `docId` and a relative path. Absolute paths never cross the wire.
+
+The local server is part of the threat model. A launch token is generated at boot, never appears in the URL, and is required on every `/api/*` request. The server also enforces a Host allowlist (`127.0.0.1`, `localhost`, `[::1]`). When the server restarts, old tabs get a 401 and render "Studio restarted. Refresh to reconnect."
+
+## Graph view
+
+The graph is laid out deterministically by ELK at render time. There is no layout stored in the manifest. Nodes default to execution levels: inputs sit in a left rail, then call and format nodes fill columns left to right by execution order.
+
+Nodes are click-to-inspect, not drag-to-move. Positions are computed and fixed, the layout is not persisted, and selection is sticky (clicking blank canvas does not clear it). This is deliberate for a read and edit inspector whose layout is deterministic.
+
+## Node types
+
+The graph has three node types. Participants are not graph nodes; they live in a side panel.
+
+- **Input** nodes. Typed inputs declared by the chit (`inputs.question`, `inputs.files`). Source only, no template.
+- **Call** nodes. Call a participant. Show the agent badge, session policy, and filesystem permission. Have an editable `prompt` template.
+- **Format** nodes. Output formatters, drawn distinctly as sinks. Have an editable `format` template. The chit's `output` field marks one format node as the canonical output.
+
+An edge from A to B exists exactly because B's template references A. Creating an edge appends the reference token to B's template (`{{ inputs.<name> }}` for an input source, `{{ steps.<id>.output }}` for a step source); deleting an edge removes the matching token. Every edit is validated through `parseManifest` before it is applied, so the parser is the authority: it rejects unknown references and cycles.
+
+## Inspector
+
+The right rail pairs an always-visible validation panel with an inspector for the selected node, edge, or input.
+
+- The validation panel renders shape-coded indicators for ok, warn, and fail, with rows for capabilities, agents, and permissions.
+- The inspector edits safe fields directly: manifest `description`, participant `role`, `session`, and `permissions.filesystem`, plus the call `prompt` and format `format` templates.
+
+Edits run on a debounced preview loop. A preview validates a draft without writing; an explicit save validates, writes canonical JSON back to disk, and checks a per-file content hash for conflicts. Save is disabled while validation severity is `error`. A per-file hash is carried through every read and save so a concurrent on-disk change is detected rather than overwritten.
+
+You can also add blocks (input, participant, call step, format step) and install, list, or uninstall chits through the same code paths as the CLI.
+
+## Loops drawer
+
+The Loops drawer is read-only. It lists loop runs read from `.chit/loops` under the cwd, newest first, and lets you open one loop's iterations. Each iteration links to its recorded transcript through a `detailsRef`, which opens the [audit view](/docs/audit-log) for that run.
+
+### Not supported yet
+
+Run-from-Studio. Recorded runs are inspectable in Studio after the fact through the Loops drawer and the audit view, but launching and streaming a live run from Studio is not wired up.

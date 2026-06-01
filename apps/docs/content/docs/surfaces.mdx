@@ -1,0 +1,38 @@
+---
+title: Surfaces
+description: The CLI, the Claude Code skill, MCP, and Studio.
+---
+
+A surface is a thin shim that calls the runtime with a manifest and inputs. The runtime is the same underneath each one.
+
+## CLI
+
+The command line is the primary surface.
+
+```sh
+bun run cli run        # execute a manifest
+bun run cli show       # render a manifest without running it
+bun run cli install    # install a chit as a skill
+bun run cli list       # list installed chits
+bun run cli uninstall  # remove an installed chit
+bun run cli studio     # open the local editor
+bun run cli converge   # run the autonomous implement/check loop
+bun run cli audit      # read a recorded run transcript
+bun run cli loop-log   # read a convergence log
+```
+
+## Claude Code skill
+
+Install a chit as a slash-invocable skill inside Claude Code. The skill surface declares its capabilities; install fails if the chit needs one the surface lacks.
+
+## MCP (stepwise)
+
+The MCP surface runs a chit one step at a time. `chit_start`, then `chit_run_step` per step, each with a live heartbeat, so every handoff is a separate visible tool call you can watch and cancel. See [the MCP reference](/docs/mcp).
+
+## Studio
+
+Studio is a local web editor: a graph view, an inspector, and a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. Launch it with `chit studio [path]`. See [the Studio reference](/docs/studio).
+
+## Audit
+
+An audited run records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. Read it with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. See [the audit log reference](/docs/audit-log).

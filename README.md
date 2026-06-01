@@ -48,8 +48,8 @@ Bun workspace monorepo.
 .
 ├── apps/
 │   ├── cli/        chit CLI + the MCP stepwise surface
-│   ├── studio/     local web editor (graph + inspector + Loops drawer)
-│   └── web/        landing site: Hono on Cloudflare Workers + Assets
+│   ├── docs/       public landing + docs: Next.js + Fumadocs static export
+│   └── studio/     local web editor (graph + inspector + Loops drawer)
 └── packages/
     └── core/       browser-safe core: manifest parser, agents registry, graph
                     model, convergence-log model, install marker, show renderer.
@@ -75,7 +75,8 @@ bun --filter '*' typecheck        # all typechecks
 bun run check                     # biome (lint + format)
 bun run check:browser             # @chit/core node-leakage check
 bun run cli ...                   # chit-cli from root
-bun run web:dev                   # apps/web local server (wrangler dev)
+bun run docs:dev                  # public site + docs local server
+bun run studio:preview            # build and launch the local Studio
 ```
 
 ## License

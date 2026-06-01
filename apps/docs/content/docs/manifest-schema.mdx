@@ -1,0 +1,138 @@
+---
+title: Manifest schema
+description: Everything a chit manifest can declare, and what the runtime does with it.
+---
+
+A chit is a JSON manifest. This page is the reference for what it can declare. The two manifests in `apps/cli/examples/` are the canonical examples, and `src/manifest/parse.ts` is the source of truth for behavior. Sections marked **Deferred** describe decisions held back on purpose, with the rationale recorded inline.
+
+## Top-level fields
+
+| Field          | Required | Notes                                                                 |
+| -------------- | -------- | --------------------------------------------------------------------- |
+| `schema`       | yes      | Integer. Currently `1`.                                               |
+| `id`           | yes      | Slug. Used as the install id (`chit run <id>`).                       |
+| `description`  | yes      | One sentence. Surfaced in the skill/MCP/CLI install artifact.         |
+| `inputs`       | yes      | Map of input name to `{ type, optional? }`. Types: `string`, `file[]`. |
+| `requires`     | no       | Surface capabilities the schema cannot infer. Defaults to `{}`.       |
+| `participants` | yes      | Aliases over registry agents with role, session, and permissions.    |
+| `steps`        | yes      | Map of step id to step body. Step types: `call`, `format`.            |
+| `output`       | yes      | Step id whose output is the final return value.                       |
+
+## Participants
+
+Each entry:
+
+- `agent`: id from the agent registry.
+- `role`: short text describing the participant's identity or responsibility. The runtime prepends it to every step prompt that targets this participant, using a deterministic envelope (see `call` below). Adapters that natively support a system or developer channel may map `role` to that transport later; manifest semantics stay "role is applied before task."
+- `session`: `stateless` | `per_topology` | `per_scope`. `per_scope` means the session persists across runs sharing a scope (e.g. the same Claude session plus worktree). When any participant uses `per_scope`, the runtime infers `can_provide_stable_scope` as a surface requirement.
+- `permissions.filesystem`: `read_only` | `write`. Optional. Default is `read_only`. Only declare it when the participant needs `write`.
+
+Aliases let the same registry agent participate twice with different roles. Without that, aliases are pure renaming and should not exist.
+
+## Steps
+
+### call
+
+```json
+{
+  "call": "<participant-id>",
+  "prompt": "string with {{ template }} references"
+}
+```
+
+Invokes the participant. Output is bound to `steps.<id>.output`.
+
+The runtime constructs the final agent input deterministically:
+
+```
+Role:
+{participant.role}
+
+Task:
+{rendered step prompt}
+```
+
+Audit logs and adapter calls always see this shape. Adapters that natively support a separate role/system channel may route the `Role:` portion to that transport instead, but the envelope stays the same so manifests remain transport-agnostic.
+
+### format
+
+```json
+{
+  "format": "string with {{ template }} references"
+}
+```
+
+A pure string template. No agent call. Output is bound to `steps.<id>.output`.
+
+## Templates
+
+Mustache-style references only. No filters, conditionals, or loops in the template language.
+
+Resolvable references:
+
+- `{{ inputs.<name> }}`: a manifest input value.
+- `{{ steps.<id>.output }}`: the output of a prior step.
+
+If a template references a step that has not run yet, the runtime constructs a dependency: step B references step A, so B depends on A. Steps with no cross-references run in parallel. Unresolved references at execution time are a runtime error.
+
+### Rendering by input type
+
+Value substitution is fixed and runtime-owned. Surfaces do not negotiate format.
+
+- `string` inputs: substituted as-is.
+- `file[]` inputs: rendered as newline-joined absolute paths. The runtime normalizes relative paths against the invocation cwd/worktree. Paths that do not exist are a runtime error unless the input is declared `optional` and absent. **File contents are not inlined.** Agents with filesystem access read the paths themselves; this keeps token usage predictable and avoids hidden prompt bloat.
+
+## Surface capabilities
+
+Each surface (Claude skill, MCP tool, CLI command) declares what it offers. Examples:
+
+- `can_show_markdown`: the surface can render markdown to the user.
+- `can_pass_files`: the surface can pass file paths through `inputs`.
+- `can_read_git_diff`: the surface can resolve a "diff" input to actual diff content.
+- `can_provide_stable_scope`: the surface can supply a stable scope identifier across runs (required for `session: per_scope`).
+
+A manifest's `requires` block lists **positive requirements only**: capabilities the manifest needs. Absence is the convention for "not needed". Install fails if the surface lacks any required capability.
+
+### Inferred requirements
+
+Several capabilities are implied by the manifest's shape. The author does not declare them; the validator computes them at install time:
+
+- Any input with `type: file[]` adds `can_pass_files`.
+- Any participant with `session: per_scope` adds `can_provide_stable_scope`.
+
+`requires` is reserved for capabilities the schema cannot infer (e.g. `can_show_markdown` depends on what the author intends the format step to produce). Inferred requirements are merged with declared ones before install validation. Declaring an inferred capability explicitly is a no-op, not an error.
+
+## Session identity
+
+A `per_scope` session is keyed by `(scope, manifestId, participantId, fingerprint)`. All four are necessary:
+
+- **scope**: user-supplied via `--scope`, isolates concurrent workspaces.
+- **manifestId**: keeps two manifests from sharing sessions even when both use the same agent.
+- **participantId**: two participants sharing an agent get independent sessions.
+- **fingerprint**: model/role/permissions changes invalidate prior sessions.
+
+The fingerprint hashes enough of the `(agent, participant)` pair that a meaningful change starts a fresh session instead of resuming a mismatched one. Sensitive env values (API keys, tokens) are deliberately not in the fingerprint material.
+
+## Permission enforcement
+
+`permissions` is a governance contract, not a hint. If a manifest declares `permissions.filesystem: read_only` and the chosen adapter cannot enforce it, install fails by default. An install flag (`--allow-unenforced-permissions`) can opt into installing anyway, but the surface artifact must surface the gap to the executor at run time.
+
+Adapters declare per-permission enforceability:
+
+- `codex-exec` enforces `filesystem: read_only` via `--sandbox read-only`.
+- `claude-cli` does not currently enforce filesystem; it depends on Claude's own tool permissions.
+- A generic subprocess adapter cannot enforce; install fails when `read_only` is requested unless the flag is set.
+
+In practice: any manifest using a `claude-cli` participant requires `--allow-unenforced-permissions` today. Codex-only manifests run cleanly. When claude-cli is taught to restrict tools, the gap closes without manifest changes.
+
+## Deferred details
+
+None of these block the parser. They are settled for now with the working answer noted inline, and kept here so a future recipe can reopen the right one.
+
+1. **Template engine.** Custom regex over `{{ x.y.z }}` references, error on unresolved. Mustache sections and partials are unused.
+2. **Explicit `output` vs implicit "last step".** Explicit. Verbose but unambiguous.
+3. **Parallelism budget.** Unbounded for now. Add an implicit `max_parallel` only when a recipe hits the wall.
+4. **`inputs` types beyond `string` and `file[]`.** Add `boolean`, `number`, `enum` only when a recipe needs them.
+5. **Error semantics.** Fail-fast: if any `call` step fails, no downstream step runs. The runtime returns a structured failure envelope (which step failed, the error, partial outputs). Per-step `on_failure: continue` can come later.
+6. **YAML vs JSON.** JSON for now: parses everywhere, no dependency. Revisit if hand-authoring multi-line prompts becomes the dominant path.
+7. **Agent registry location.** `~/.config/chit/agents.json`, with built-in `codex` and `claude` entries that user config merges on top.

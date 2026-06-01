@@ -1,0 +1,14 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+html {
+	scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+	/* biome-ignore lint/complexity/noImportantStyles: neutralize react-remove-scroll's scrollbar compensation when Fumadocs opens the search dialog, so the page does not shift */
+	margin-right: 0px !important;
+	/* biome-ignore lint/complexity/noImportantStyles: same scroll-lock workaround */
+	--removed-body-scroll-bar-size: 0px !important;
+}
