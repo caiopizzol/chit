@@ -5,7 +5,7 @@ description: The durable, append-only record of a run, including prompts, output
 
 The audit log is the durable record of a run. When a run is audited, chit writes one append-only event log plus the full prompts and outputs, so you can read back what each agent was asked and what it returned, with token usage and timing, after the run is over. It is the receipt layer: which agent, with what input, what output, in what order. The bodies are kept too, but they are opt-in to read.
 
-What ships today: the event schema (`@chit-run/core`), the node store, audit on all three run surfaces, retention, the `chit audit` reader, the Studio audit view (open a run from a loop's `detailsRef` in the [Loops drawer](/docs/studio)), and preservation of both adapters' observable event streams as `adapter.event` records on audited runs. That covers the raw JSONL Codex emits and the Claude stream-json stream (system, `stream_event` deltas, assistant, result): tool events, command executions, and reasoning summaries the CLIs emit. Events are surfaced live as they arrive (each line is read incrementally and recorded with a real arrival timestamp), not buffered until the call completes. They are the observable CLI event stream, never hidden model reasoning.
+What ships today: the event schema (`@chit-run/core`), the node store, audit on all three run surfaces, retention, the `chit audit` reader, the Studio audit view (open a run from a loop's `auditRef` in the [Loops drawer](/docs/studio)), and preservation of both adapters' observable event streams as `adapter.event` records on audited runs. That covers the raw JSONL Codex emits and the Claude stream-json stream (system, `stream_event` deltas, assistant, result): tool events, command executions, and reasoning summaries the CLIs emit. Events are surfaced live as they arrive (each line is read incrementally and recorded with a real arrival timestamp), not buffered until the call completes. They are the observable CLI event stream, never hidden model reasoning.
 
 Source: `packages/core/src/audit/events.ts` (schema), `apps/cli/src/audit/` (store, recorder, wrapper), `apps/cli/src/cli/audit.ts` (reader).
 
@@ -29,9 +29,9 @@ The events are a run timeline: `run.started`, then per step `step.started` and `
 
 Audit is opt-in everywhere except the autonomous loop, because the bodies can hold secrets (see Sensitivity).
 
-- `chit converge` audits by default. Each iteration's run is recorded, and the loop iteration links to it through the loop log's `detailsRef`.
+- `chit converge` audits by default. Each iteration's run is recorded, and the loop iteration links to it through the loop log's `auditRef`.
 - `chit run --audit` records one run. The run id is printed on stderr.
-- The MCP surface records a run when `chit_start` is called with `audit: true`. The audit run reuses the MCP `run_id`.
+- The MCP surface records a run when `chit_run_start` is called with `audit: true`. The audit run reuses the MCP `run_id`.
 
 A run with no `run.completed` event is incomplete: it failed, was cancelled, or was abandoned. The reader never treats a missing terminal event as success.
 

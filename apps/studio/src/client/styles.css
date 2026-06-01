@@ -969,6 +969,9 @@ header.app .loops-btn {
 	color: var(--carbon);
 	margin-top: 2px;
 }
+.rail-warn {
+	color: var(--amber, #9a6700);
+}
 .rail-audit-link {
 	margin-top: 4px;
 	padding: 0;

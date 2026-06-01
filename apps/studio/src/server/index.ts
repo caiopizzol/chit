@@ -52,6 +52,10 @@ export interface StartStudioOptions {
 	// Install / list / uninstall, injected by the host (the CLI). Absent means
 	// the lifecycle endpoints return 501 (read-only Studio).
 	lifecycle?: StudioLifecycle;
+	// The loop-log directory, injected by the host (the CLI), which owns the
+	// state-dir location scheme. Absent means no loops are listed (a standalone
+	// Studio with no host).
+	loopsDir?: string;
 }
 
 export interface StudioHandle {
@@ -99,6 +103,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 		allowedHosts,
 		clientDistDir,
 		lifecycle: opts.lifecycle,
+		loopsDir: opts.loopsDir,
 	});
 
 	const server = Bun.serve({
@@ -128,7 +133,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 
 interface BuildAppOptions {
 	token: string;
-	// Invocation cwd, used to locate .chit/loops for the read-only loop routes.
+	// Invocation cwd (used by manifest discovery and the doc store).
 	cwd: string;
 	makeBootstrap: () => import("./types.ts").Bootstrap;
 	store: DocStore;
@@ -136,8 +141,11 @@ interface BuildAppOptions {
 	clientDistDir: string;
 	lifecycle?: StudioLifecycle;
 	// Audit store base dir (defaults to the local-state dir the CLI writes).
-	// Injected in tests; the loop view's detailsRef points into this store.
+	// Injected in tests; the loop view's auditRef points into this store.
 	auditDir?: string;
+	// Loop-log directory injected by the host (see StartStudioOptions). The
+	// read-only loop routes read this; absent means no loops are listed.
+	loopsDir?: string;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -248,15 +256,15 @@ export function buildApp(opts: BuildAppOptions) {
 		return c.json(result);
 	});
 
-	// Read-only convergence-log routes. The browser sees
-	// only the safe-slug loopId; .chit/loops lives under the invocation cwd.
+	// Read-only convergence-log routes. The browser sees only the safe-slug
+	// loopId; the loop dir is injected by the host (see StartStudioOptions).
 
 	app.get("/api/loops", (c) => {
-		return c.json(listLoops(opts.cwd));
+		return c.json(listLoops(opts.loopsDir));
 	});
 
 	app.get("/api/loops/:loopId", (c) => {
-		const result = readLoop(opts.cwd, c.req.param("loopId"));
+		const result = readLoop(opts.loopsDir, c.req.param("loopId"));
 		if (result.kind === "not-found") return c.text("not found", 404);
 		if (result.kind === "invalid-id") return new Response("invalid loop id", { status: 400 });
 		if (result.kind === "invalid-log") {
@@ -266,7 +274,7 @@ export function buildApp(opts: BuildAppOptions) {
 	});
 
 	// Audit transcript for one run. A loop iteration's
-	// detailsRef ("audit:<runId>") points here. ?blobs=1 also returns the
+	// auditRef (the audit run id) points here. ?blobs=1 also returns the
 	// referenced prompt/output bodies, keyed by ref.
 	app.get("/api/audit/:runId", (c) => {
 		const blobs = c.req.query("blobs") === "1";

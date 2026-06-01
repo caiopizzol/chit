@@ -53,7 +53,7 @@ You can also add blocks (input, participant, call step, format step) and install
 
 ## Loops drawer
 
-The Loops drawer is read-only. It lists loop runs read from `.chit/loops` under the cwd, newest first, and lets you open one loop's iterations. Each iteration links to its recorded transcript through a `detailsRef`, which opens the [audit view](/docs/audit-log) for that run.
+The Loops drawer is read-only. It lists this repo's loop runs (read from chit's state dir, keyed by repo, not from the working tree), newest first, and lets you open one loop's iterations. Each iteration links to its recorded transcript through its `auditRef`, which opens the [audit view](/docs/audit-log) for that run.
 
 ### Not supported yet
 

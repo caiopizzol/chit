@@ -50,7 +50,7 @@ export interface Run {
 	invocationCwd: string;
 	outputs: Record<string, string>;
 	records: Record<string, StepRecord>;
-	// Set when chit_start was called with audit:true and the run started cleanly.
+	// Set when chit_run_start was called with audit:true and the run started cleanly.
 	// runStep drives it (step.* + run.completed); adapter.call.* come from the
 	// audit-wrapped adapters. Absent = unaudited run.
 	recorder?: AuditRecorder;
@@ -99,7 +99,7 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 	const needsScope = Object.values(manifest.participants).some((p) => p.session === "per_scope");
 	if (needsScope && opts.scope === undefined) {
 		throw new RuntimeError(
-			`manifest "${manifest.id}" has per_scope participant(s); a scope is required (pass scope to chit_start)`,
+			`manifest "${manifest.id}" has per_scope participant(s); a scope is required (pass scope to chit_run_start)`,
 		);
 	}
 
@@ -113,12 +113,12 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 	}
 
 	// Prepare inputs BEFORE starting audit: prepareInputs throws on unknown /
-	// missing / wrong-type / missing-file inputs, and a chit_start that fails
+	// missing / wrong-type / missing-file inputs, and a chit_run_start that fails
 	// validation must not leave an orphan run.started in the audit log.
 	const preparedInputs = prepareInputs(manifest.inputs, opts.inputs, opts.invocationCwd);
 
 	// Opt-in audit: only reached after all validation above, so run.started is
-	// emitted for a viable run, not a rejected chit_start. The audit wrapper sits
+	// emitted for a viable run, not a rejected chit_run_start. The audit wrapper sits
 	// BENEATH the session wrapper so the recorder sees injected/returned sessions.
 	// The audit runId reuses this run's id, so MCP run_id == audit run.
 	let recorder: AuditRecorder | undefined;
@@ -203,7 +203,7 @@ export function finalOutput(run: Run): string | undefined {
 
 // Registry of AbortControllers for in-flight steps, keyed per run+step. The
 // server registers a controller while a step runs (and folds in the client's
-// own cancel signal); chit_cancel aborts it. Cancellation is an explicit chit
+// own cancel signal); chit_run_cancel aborts it. Cancellation is an explicit chit
 // action, not a dependency on ambient Esc behavior.
 export type StepControllers = Map<string, AbortController>;
 
@@ -215,7 +215,7 @@ export type CancelResult = "cancelled" | "already_done" | "not_running" | "unkno
 
 // Abort an in-flight step's controller if one is registered. The running
 // runStep then rejects (its adapter kills the child) and the record settles to
-// "cancelled" a tick later — chit_cancel reports what it could do right now.
+// "cancelled" a tick later — chit_run_cancel reports what it could do right now.
 export function cancelStep(run: Run, stepId: string, controllers: StepControllers): CancelResult {
 	const rec = run.records[stepId];
 	if (!rec) return "unknown_step";
@@ -264,7 +264,7 @@ export async function runStep(
 	// double-spawn hole: the record stayed "pending" through the whole call.
 	rec.status = "running";
 	// Register the cancel controller now that THIS call owns the step (atomic
-	// with the lock above, still before the first await). chit_cancel resolves
+	// with the lock above, still before the first await). chit_run_cancel resolves
 	// the in-flight step through this registry; registering here, not in the
 	// caller before the lock, is what keeps a rejected duplicate from
 	// overwriting then deleting it.

@@ -41,12 +41,13 @@ const ALLOWED: Record<string, { flags: readonly string[]; bools: readonly string
 			"loop-id",
 			"summary",
 			"changed-files",
+			"workspace-warnings",
 			"checks-run",
 			"verdict",
 			"finding-count",
 			"decision",
 			"duration-ms",
-			"details-ref",
+			"audit-ref",
 		],
 		bools: [],
 	},
@@ -59,7 +60,8 @@ const LOOP_LOG_HELP = `chit loop-log <start|append|stop|show> [flags]
   start   --scope <s> --task <t> --max-iterations <n> [--cwd <dir>] [--loop-id <id>] [--force]
   append  --loop-id <id> --summary <t> --changed-files <json> --checks-run <t>
           --verdict <proceed|revise|block> --finding-count <n>
-          --decision <proceed|revise|block> --duration-ms <n> [--details-ref <r>] [--cwd <dir>]
+          --decision <proceed|revise|block> --duration-ms <n>
+          [--workspace-warnings <json>] [--audit-ref <r>] [--cwd <dir>]
   stop    --loop-id <id> --status <converged|blocked|max-iterations|needs-decision> --reason <t> [--cwd <dir>]
   show    --loop-id <id> [--json] [--cwd <dir>]
 
@@ -113,15 +115,15 @@ function intFlag(p: Parsed, key: string, verb: string): number {
 	return n;
 }
 
-function parseChangedFiles(raw: string): string[] {
+function parseStringArray(raw: string, flag: string): string[] {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(raw);
 	} catch {
-		throw new UsageError("--changed-files must be a JSON array of strings");
+		throw new UsageError(`--${flag} must be a JSON array of strings`);
 	}
 	if (!Array.isArray(parsed) || parsed.some((e) => typeof e !== "string")) {
-		throw new UsageError("--changed-files must be a JSON array of strings");
+		throw new UsageError(`--${flag} must be a JSON array of strings`);
 	}
 	return parsed as string[];
 }
@@ -144,6 +146,10 @@ function renderLoop(records: LoopRecord[]): string {
 					`${Math.round(r.checkDurationMs / 1000)}s · ${r.findingCount} findings`,
 			);
 			lines.push(`     decide ${r.decision}`);
+			if (r.workspaceWarnings && r.workspaceWarnings.length > 0) {
+				lines.push(`     workspace: ${r.workspaceWarnings.length} warning(s)`);
+				for (const w of r.workspaceWarnings) lines.push(`       - ${w}`);
+			}
 		} else if (r.type === "stop") {
 			lines.push("");
 			lines.push(
@@ -176,15 +182,19 @@ export function runLoopLog(argv: string[], io: LoopLogIO = defaultIO): number {
 			return 0;
 		}
 		if (verb === "append") {
+			const warningsRaw = p.flags["workspace-warnings"];
 			const res = appendIteration(cwd, req(p, "loop-id", verb), {
 				implementSummary: req(p, "summary", verb),
-				changedFiles: parseChangedFiles(req(p, "changed-files", verb)),
+				changedFiles: parseStringArray(req(p, "changed-files", verb), "changed-files"),
+				...(warningsRaw !== undefined && {
+					workspaceWarnings: parseStringArray(warningsRaw, "workspace-warnings"),
+				}),
 				checksRun: req(p, "checks-run", verb),
 				verdict: req(p, "verdict", verb) as LoopVerdict,
 				findingCount: intFlag(p, "finding-count", verb),
 				decision: req(p, "decision", verb) as LoopVerdict,
 				checkDurationMs: intFlag(p, "duration-ms", verb),
-				detailsRef: p.flags["details-ref"],
+				auditRef: p.flags["audit-ref"],
 			});
 			io.out(`${JSON.stringify(res)}\n`);
 			return 0;

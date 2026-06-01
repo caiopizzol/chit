@@ -32,7 +32,7 @@ export type LoopDetailState =
 	| { status: "error"; loopId: string; error: string }
 	| { status: "ready"; loopId: string; records: LoopRecord[] };
 
-// Audit transcript for one run, opened from a loop iteration's detailsRef.
+// Audit transcript for one run, opened from a loop iteration's auditRef.
 export type AuditDetailState =
 	| { status: "idle" }
 	| { status: "loading"; runId: string }

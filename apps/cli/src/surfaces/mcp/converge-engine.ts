@@ -5,7 +5,8 @@
 // (chit_converge_status / chit_converge_trace).
 //
 // Both drivers sit on the SAME single-iteration primitive (runConvergeIteration)
-// and write the SAME durable loop log (.chit/loops/<loopId>.jsonl). This engine
+// and write the SAME durable loop log (under the state dir, keyed by repo; see
+// apps/cli loops/location.ts). This engine
 // owns NO new persistence: the loop log is the source of truth for iterations
 // and the stop record; this in-memory session only holds what the log cannot
 // (the audited execute boundary, the prior_review to thread forward, and the
@@ -44,7 +45,7 @@ export interface ConvergeSession {
 	lastVerdict?: LoopVerdict;
 	lastDecision?: LoopVerdict;
 	// Audit run ids for completed audited iterations, in order. The loop log also
-	// records these as detailsRef; mirrored here so status/trace need not re-read
+	// records these as auditRef; mirrored here so status/trace need not re-read
 	// the log just for the refs.
 	auditRefs: string[];
 	// The in-flight iteration's controller, set for the duration of one
@@ -105,6 +106,7 @@ export type NextResult =
 			findingCount: number;
 			checksRun: string;
 			changedFiles: string[];
+			workspaceWarnings: string[];
 			usage?: AdapterUsage;
 			auditRunId?: string;
 			stopStatus?: LoopStopStatus;
@@ -242,6 +244,7 @@ export async function runNextIteration(
 			findingCount: iter.findingCount,
 			checksRun: iter.checksRun,
 			changedFiles: iter.changedFiles,
+			workspaceWarnings: iter.workspaceWarnings,
 			...(iter.usage !== undefined && { usage: iter.usage }),
 			...(iter.auditRunId !== undefined && { auditRunId: iter.auditRunId }),
 			...(session.terminalStatus !== undefined && { stopStatus: session.terminalStatus }),
@@ -258,7 +261,7 @@ export type CancelResult =
 
 // Cancel a converge loop. If an iteration is in flight, abort it: the running
 // runNextIteration sees the aborted signal, gets a graceful ok:false, and writes
-// the cancelled stop (best-effort, like chit_cancel -- if the call had already
+// the cancelled stop (best-effort, like chit_run_cancel -- if the call had already
 // produced its verdict, the abort is a no-op and the loop settles on that
 // verdict). If the loop is open but idle (e.g. after a revise round returned),
 // close it cancelled now. A terminal loop is reported back unchanged.

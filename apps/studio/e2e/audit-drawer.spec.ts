@@ -2,16 +2,21 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
+import { loopLogDir } from "../../cli/src/loops/location.ts";
 import { launchStudio } from "./studio.ts";
 
-// The audit transcript view against a real server. A loop iteration's detailsRef
-// ("audit:<runId>") points into the audit store, which lives in the local-state
-// dir, not the cwd. The harness boots `chit studio` with XDG_STATE_HOME pointed
-// at a temp dir we seed with one audit run; then we open the drawer, select the
-// loop, click "view transcript" on the iteration, and read the audit timeline.
+// The audit transcript view against a real server. A loop iteration's auditRef
+// (the bare audit run id) points into the audit store, which lives in the
+// local-state dir. The loop log lives there too (keyed by repo). The harness
+// boots `chit studio` with XDG_STATE_HOME pointed at a temp dir we seed with one
+// audit run and one loop; then we open the drawer, select the loop, click "view
+// transcript" on the iteration, and read the audit timeline.
 test("audit drawer: loop iteration -> view transcript -> timeline + body", async ({ page }) => {
 	const RUN_ID = "auditrun1";
 	const xdg = mkdtempSync(join(tmpdir(), "chit-e2e-xdg-"));
+	// The loop log is seeded at the same state-dir path the server reads; both
+	// resolve it from XDG_STATE_HOME, so point this process there too.
+	process.env.XDG_STATE_HOME = xdg;
 	try {
 		// Seed the audit run under XDG_STATE_HOME/chit/audit/runs/<runId>/.
 		const runDir = join(xdg, "chit", "audit", "runs", RUN_ID);
@@ -75,7 +80,7 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 
 		const studio = await launchStudio("consult.json", { XDG_STATE_HOME: xdg });
 		const cwd = dirname(studio.file);
-		// A loop whose one iteration links to the audit run via detailsRef.
+		// A loop whose one iteration links to the audit run via auditRef.
 		const lines = [
 			{
 				type: "loop",
@@ -84,6 +89,7 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 				scope: "e2e-scope",
 				task: "audited loop",
 				repo: cwd,
+				repoKey: "e2e",
 				startedAt: "2026-05-31T10:00:00.000Z",
 				maxIterations: 3,
 			},
@@ -98,7 +104,7 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 				decision: "proceed",
 				checkDurationMs: 5000,
 				at: "2026-05-31T10:01:00.000Z",
-				detailsRef: `audit:${RUN_ID}`,
+				auditRef: RUN_ID,
 			},
 			{
 				type: "stop",
@@ -109,9 +115,10 @@ test("audit drawer: loop iteration -> view transcript -> timeline + body", async
 				endedAt: "2026-05-31T10:03:00.000Z",
 			},
 		];
-		mkdirSync(join(cwd, ".chit", "loops"), { recursive: true });
+		const loopsDir = loopLogDir(cwd);
+		mkdirSync(loopsDir, { recursive: true });
 		writeFileSync(
-			join(cwd, ".chit", "loops", "E1.jsonl"),
+			join(loopsDir, "E1.jsonl"),
 			`${lines.map((l) => JSON.stringify(l)).join("\n")}\n`,
 		);
 

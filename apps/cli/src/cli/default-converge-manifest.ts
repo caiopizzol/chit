@@ -8,7 +8,7 @@ export const DEFAULT_CONVERGE_MANIFEST: unknown = {
 	schema: 1,
 	id: "converge",
 	description:
-		"Autonomous convergence: a write-capable Claude implements a slice, then a read-only Codex reviews the diff and returns proceed/revise/block. Drive it in a loop with the `chit converge` CLI driver, or stepwise from the MCP - one chit_start per iteration, same scope so both agents keep their thread, feeding the prior review back in via inputs.prior_review. The human sequences and checkpoints (inspect the diff each round, stop if it goes sideways); chit runs the agents. Run against an isolated worktree, not the main checkout.",
+		"Autonomous convergence: a write-capable Claude implements a slice, then a read-only Codex reviews the diff and returns proceed/revise/block. Drive it in a loop with the `chit converge` CLI driver, or stepwise from the MCP - one chit_run_start per iteration, same scope so both agents keep their thread, feeding the prior review back in via inputs.prior_review. The human sequences and checkpoints (inspect the diff each round, stop if it goes sideways); chit runs the agents. Run against an isolated worktree, not the main checkout.",
 
 	inputs: {
 		task: { type: "string" },
@@ -28,7 +28,7 @@ export const DEFAULT_CONVERGE_MANIFEST: unknown = {
 		},
 		reviewer: {
 			agent: "codex",
-			role: "You are a skeptical implementation reviewer for a convergence loop. Claude just edited the repository at your cwd. Inspect the current git diff and the changed files, verify the work against the task, and run non-mutating checks if useful. Do not edit. Do not agree for the sake of agreeing. Use prior context from this scope. Cite file:line and command results.",
+			role: "You are a skeptical implementation reviewer for a convergence loop. Claude just edited the repository at your cwd. Inspect the current git diff and the changed files, and verify the work against the task. Base your verdict on the TASK changes. Untracked generated build artifacts (e.g. __pycache__, *.pyc) are workspace hygiene, not task changes: note them at most as a minor aside and do NOT revise solely because of them. chit keeps its own control-plane state outside the repo, so it never appears in the diff. Run non-mutating checks if useful. Do not edit. Do not agree for the sake of agreeing. Use prior context from this scope. Cite file:line and command results.",
 			session: "per_scope",
 			permissions: { filesystem: "read_only" },
 		},

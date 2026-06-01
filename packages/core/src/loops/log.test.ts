@@ -17,6 +17,7 @@ const header: LoopHeaderRecord = {
 	scope: "studio-loop-viz",
 	task: "add convergence log writer",
 	repo: "/abs/chit",
+	repoKey: "3f9a2b7c1d4e5a6b",
 	startedAt: "2026-05-29T10:00:00.000Z",
 	maxIterations: 3,
 };
@@ -54,14 +55,14 @@ describe("convergence log: serialize/validate round-trip", () => {
 		expect(parseLoopLog(body)).toEqual([header, stop]);
 	});
 
-	test("optional detailsRef survives the round-trip", () => {
-		const withRef: LoopIterationRecord = { ...iteration, detailsRef: "run:abc123" };
+	test("optional auditRef survives the round-trip", () => {
+		const withRef: LoopIterationRecord = { ...iteration, auditRef: "run:abc123" };
 		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(withRef)))).toEqual(withRef);
 	});
 
-	test("an absent detailsRef is omitted, not set to undefined", () => {
+	test("an absent auditRef is omitted, not set to undefined", () => {
 		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
-		expect("detailsRef" in rec).toBe(false);
+		expect("auditRef" in rec).toBe(false);
 	});
 
 	test("optional usage survives the round-trip (full and partial)", () => {
@@ -88,6 +89,29 @@ describe("convergence log: serialize/validate round-trip", () => {
 		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
 		expect("usage" in rec).toBe(false);
 	});
+
+	test("the required repoKey on the header survives the round-trip", () => {
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(header)))).toEqual(header);
+	});
+
+	test("rejects a header missing the required repoKey", () => {
+		const { repoKey, ...noKey } = header;
+		void repoKey;
+		expect(() => validateLoopRecord(noKey)).toThrow(/repoKey/);
+	});
+
+	test("optional workspaceWarnings survives the round-trip", () => {
+		const withWarn: LoopIterationRecord = {
+			...iteration,
+			workspaceWarnings: ["untracked generated artifact: __pycache__/calc.cpython-314.pyc"],
+		};
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(withWarn)))).toEqual(withWarn);
+	});
+
+	test("an absent workspaceWarnings is omitted, not set to undefined", () => {
+		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
+		expect("workspaceWarnings" in rec).toBe(false);
+	});
 });
 
 describe("convergence log: validation", () => {
@@ -110,6 +134,16 @@ describe("convergence log: validation", () => {
 
 	test("rejects a wrong schema version on the header", () => {
 		expect(() => validateLoopRecord({ ...header, schema: 2 })).toThrow(/schema/);
+	});
+
+	test("rejects workspaceWarnings that is not a string array", () => {
+		expect(() => validateLoopRecord({ ...iteration, workspaceWarnings: [1] })).toThrow(
+			/workspaceWarnings/,
+		);
+	});
+
+	test("rejects an empty repoKey on the header", () => {
+		expect(() => validateLoopRecord({ ...header, repoKey: "" })).toThrow(/repoKey/);
 	});
 
 	test("rejects changedFiles that is not a string array", () => {

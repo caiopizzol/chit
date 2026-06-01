@@ -171,7 +171,7 @@ describe("mcp engine: cancellation", () => {
 	});
 });
 
-describe("mcp engine: chit_cancel via the controller registry", () => {
+describe("mcp engine: chit_run_cancel via the controller registry", () => {
 	test("cancelStep aborts an in-flight step -> rejects, marks cancelled, blocks dependents", async () => {
 		// Adapter that settles only when its signal aborts (kills + rejects).
 		const adapters: AdapterMap = {
@@ -234,7 +234,7 @@ describe("mcp engine: chit_cancel via the controller registry", () => {
 		await expect(runStep(run, "a", () => {}, dup, controllers)).rejects.toThrow(/already running/);
 		expect(controllers.get(key)).toBe(owner);
 
-		// So chit_cancel still reaches the real in-flight step.
+		// So chit_run_cancel still reaches the real in-flight step.
 		expect(cancelStep(run, "a", controllers)).toBe("cancelled");
 		await expect(first).rejects.toThrow();
 		expect(run.records.a?.status).toBe("cancelled");
@@ -519,7 +519,7 @@ describe("mcp engine: audit", () => {
 		expect(store.readEvents("AR").some((e) => e.type === "run.completed")).toBe(false);
 	});
 
-	test("a chit_start that fails input validation writes NO audit run", () => {
+	test("a chit_run_start that fails input validation writes NO audit run", () => {
 		expect(() =>
 			startRun("RUN-3", {
 				rawManifest: CHAIN,

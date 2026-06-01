@@ -7,8 +7,8 @@
 // Register (stdio):
 //   claude mcp add chit --scope local -- bun <repo>/apps/cli/src/surfaces/mcp/server.ts
 //
-// Stepwise manifest tools: chit_start -> chit_next -> chit_run_step (repeat) ->
-// chit_trace. Converge tools (autonomous implement/review loop, one iteration
+// Stepwise manifest tools: chit_run_start -> chit_run_next -> chit_run_step (repeat) ->
+// chit_run_trace. Converge tools (autonomous implement/review loop, one iteration
 // per call): chit_converge_start -> chit_converge_next (repeat) with
 // chit_converge_status / chit_converge_cancel / chit_converge_trace. Audit tools
 // (read the local transcripts): chit_audit_list / chit_audit_show.
@@ -54,10 +54,10 @@ import {
 import { RunStore } from "./run-store.ts";
 import { buildStatus } from "./status.ts";
 
-// Idle-evicting run store (sweeps on chit_start) so the in-memory run map is
+// Idle-evicting run store (sweeps on chit_run_start) so the in-memory run map is
 // bounded; see run-store.ts.
 const runs = new RunStore();
-// AbortControllers for in-flight steps, so chit_cancel can stop a running step
+// AbortControllers for in-flight steps, so chit_run_cancel can stop a running step
 // even after the model's turn is interrupted (the server keeps running).
 const controllers: StepControllers = new Map();
 // Idle-evicting converge session store (sweeps on chit_converge_start). Holds the
@@ -119,7 +119,7 @@ function describeRun(run: Run) {
 }
 
 server.registerTool(
-	"chit_start",
+	"chit_run_start",
 	{
 		description:
 			"Start a stepwise run of a chit manifest. Returns a run_id and the steps ready to run. chit owns the declared order; only ready steps can be run. Then call chit_run_step for each ready step.",
@@ -151,7 +151,7 @@ server.registerTool(
 		},
 	},
 	async ({ manifest_path, inputs, scope, cwd, allow_unenforced_permissions, audit }) => {
-		// Opportunistic idle cleanup on every chit_start request, before the work,
+		// Opportunistic idle cleanup on every chit_run_start request, before the work,
 		// so cleanup still happens when this start fails (bad manifest, etc.).
 		runs.sweep(Date.now());
 		const path = isAbsolute(manifest_path) ? manifest_path : resolve(process.cwd(), manifest_path);
@@ -181,7 +181,7 @@ server.registerTool(
 );
 
 server.registerTool(
-	"chit_next",
+	"chit_run_next",
 	{
 		description: "List the steps ready to run next for a run, or report that the run is complete.",
 		inputSchema: { run_id: z.string() },
@@ -221,10 +221,10 @@ server.registerTool(
 				.catch(() => {});
 		};
 
-		// chit owns a controller for this step so chit_cancel can stop it. Fold in
+		// chit owns a controller for this step so chit_run_cancel can stop it. Fold in
 		// the client's own signal: if Esc ever propagates, it aborts the same
 		// controller. The controller stays registered for the whole call so a
-		// chit_cancel issued after the model's turn is interrupted can still reach
+		// chit_run_cancel issued after the model's turn is interrupted can still reach
 		// it (the server keeps running the in-flight step).
 		const controller = new AbortController();
 		extra.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -232,7 +232,7 @@ server.registerTool(
 		// wins the running-lock, and unregisters it on settle. Doing it there, not
 		// here before the lock, stops a duplicate concurrent chit_run_step from
 		// overwriting then deleting the live step's controller (which would leave
-		// chit_cancel unable to reach it).
+		// chit_run_cancel unable to reach it).
 
 		const rec0 = run.records[step_id];
 		if (rec0?.kind === "call") {
@@ -263,14 +263,14 @@ server.registerTool(
 		} finally {
 			// Refresh idle timer after the step settles: a multi-minute step's
 			// touch-on-lookup is stale by now, and it's no longer running, so a
-			// concurrent chit_start sweep could otherwise evict it immediately.
+			// concurrent chit_run_start sweep could otherwise evict it immediately.
 			runs.touch(run_id, Date.now());
 		}
 	},
 );
 
 server.registerTool(
-	"chit_cancel",
+	"chit_run_cancel",
 	{
 		description:
 			"Cancel a step that is currently running: aborts its controller, which kills the agent's child process and settles the step as cancelled (terminal, blocks dependents). Returns cancelled:true if it stopped a running step, or a reason (already_done | not_running) otherwise. Use after interrupting a long step.",
@@ -291,7 +291,7 @@ server.registerTool(
 );
 
 server.registerTool(
-	"chit_trace",
+	"chit_run_trace",
 	{
 		description:
 			"Return the transcript of a run so far: each step's status, participant, agent, elapsed, and output.",
@@ -377,7 +377,7 @@ server.registerTool(
 	"chit_converge_start",
 	{
 		description:
-			"Start an autonomous converge loop (a write-capable implementer slices the task, a read-only reviewer checks the diff) driven one iteration at a time. Returns a loop_id and the next action. Then call chit_converge_next per iteration. Records to .chit/loops/<loop_id>.jsonl, identical to `chit converge`.",
+			"Start an autonomous converge loop (a write-capable implementer slices the task, a read-only reviewer checks the diff) driven one iteration at a time. Returns a loop_id and the next action. Then call chit_converge_next per iteration. Records the loop under chit's state dir (keyed by repo), identical to `chit converge`.",
 		inputSchema: {
 			task: z.string().describe("The slice to converge on"),
 			scope: z
@@ -524,6 +524,7 @@ server.registerTool(
 				findingCount: result.findingCount,
 				checksRun: result.checksRun,
 				changedFiles: result.changedFiles,
+				workspaceWarnings: result.workspaceWarnings,
 				...(result.usage && { usage: result.usage }),
 				...(result.auditRunId && { auditRunId: result.auditRunId }),
 				...(result.stopStatus && { stopStatus: result.stopStatus }),
@@ -656,7 +657,7 @@ server.registerTool(
 	"chit_status",
 	{
 		description:
-			"Operator overview: the stepwise runs and converge loops live in THIS server right now (each loop with its status and next action), plus a compact list of recently audited runs (newest first). Read-only; answers 'what is active and what should I do next?'. Active state is per-session (a new session starts empty, and idle runs are evicted); recent state is durable. Drill into one item with chit_converge_status/chit_trace, or chit_audit_show for a run's receipt.",
+			"Operator overview: the stepwise runs and converge loops live in THIS server right now (each loop with its status and next action), plus a compact list of recently audited runs (newest first). Read-only; answers 'what is active and what should I do next?'. Active state is per-session (a new session starts empty, and idle runs are evicted); recent state is durable. Drill into one item with chit_converge_status/chit_run_trace, or chit_audit_show for a run's receipt.",
 		inputSchema: {
 			recent_limit: z
 				.number()

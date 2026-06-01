@@ -78,6 +78,7 @@ describe("fetchLoop", () => {
 				scope: "s",
 				task: "t",
 				repo: "/x",
+				repoKey: "k",
 				startedAt: "2026-05-29T10:00:00.000Z",
 				maxIterations: 3,
 			},

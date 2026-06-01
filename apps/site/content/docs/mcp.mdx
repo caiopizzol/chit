@@ -24,17 +24,17 @@ A run is a stepwise projection of a manifest DAG. chit, not the model, decides w
 - **A step runs exactly once.** `chit_run_step` marks the record `running` synchronously before the first await, so a concurrent call on the same step is rejected ("already running"). On settle the record is terminal: `done | failed | cancelled`. Re-running a terminal step is refused.
 - **Completion is all-steps-done**, not just the output step. An independent pending or failed branch keeps the run incomplete.
 - **`chit_run_step` blocks** until its step settles. The heartbeat renders on that in-flight tool call, so a model turn is pinned for the step's whole duration.
-- **Sessions.** `per_scope` participants need a `scope`. `chit_start` rejects a `per_scope` manifest started without one rather than silently running stateless. Within a run, a `per_scope` participant resumes its own session across steps, so a later step can reference its own earlier output without it being re-passed.
+- **Sessions.** `per_scope` participants need a `scope`. `chit_run_start` rejects a `per_scope` manifest started without one rather than silently running stateless. Within a run, a `per_scope` participant resumes its own session across steps, so a later step can reference its own earlier output without it being re-passed.
 
 ## Tools
 
 All results are JSON in a single text block. `describeRun` (embedded in most results) is `{ run_id, manifest, complete, ready[], output? }`, where each `ready` entry is `{ step, kind, participant?, agent?, session? }` and `output` is the final output (present only when `complete`).
 
-### chit_start
+### chit_run_start
 
 Start a run. Inputs: `manifest_path` (absolute, or relative to cwd), `inputs` (string to string map, default `{}`), `scope?`, `cwd?` (passed to agents; defaults to the server cwd), `allow_unenforced_permissions` (default `true`). Returns `describeRun` with the initial ready set. Errors: unreadable or invalid manifest, unknown agent, enforcement gap without the flag, `per_scope` without `scope`.
 
-### chit_next
+### chit_run_next
 
 List the steps ready to run next (or report completion). Input: `run_id`. Returns `describeRun`.
 
@@ -42,17 +42,17 @@ List the steps ready to run next (or report completion). Input: `run_id`. Return
 
 Run one ready step, blocking until it settles; emits a heartbeat while it runs. Inputs: `run_id`, `step_id`. On success returns `{ ran, durationMs, step_output, ...describeRun }`. On cancellation returns `{ cancelled: true, step, durationMs, ...describeRun }` (a clean result, not an error). Rejects out-of-order, duplicate-running, or terminal steps.
 
-### chit_cancel
+### chit_run_cancel
 
 Cancel a step that is currently running. Inputs: `run_id`, `step_id`. Aborts the step's registered controller, the adapter kills the agent's child process, and the step settles `cancelled` (terminal, blocks dependents). Returns `{ step, cancelled, reason?, ...describeRun }` where `cancelled` is `true` if it stopped a running step, else `reason` is `already_done` or `not_running`.
 
-### chit_trace
+### chit_run_trace
 
 The transcript so far. Input: `run_id`. Returns `{ run_id, manifest, complete, trace[] }`, each trace entry `{ step, kind, participant, agent, status, durationMs, output, error }`.
 
 ## Converge tools
 
-The converge tools drive `chit converge` (a write-capable implementer slices the task, a read-only reviewer checks the diff) one iteration at a time, so each iteration is a separate, cancellable tool call and the loop is inspectable between calls. They sit on the same single-iteration primitive and write the same loop log (`.chit/loops/<loop_id>.jsonl`) as the CLI, so a loop driven over MCP is identical on disk to one driven by `chit converge`. The loop log is the durable state; the server keeps an idle-evicting in-memory session for the loop's run-time pieces, never a second source of truth for iterations.
+The converge tools drive `chit converge` (a write-capable implementer slices the task, a read-only reviewer checks the diff) one iteration at a time, so each iteration is a separate, cancellable tool call and the loop is inspectable between calls. They sit on the same single-iteration primitive and write the same loop log (under chit's state dir, keyed by repo) as the CLI, so a loop driven over MCP is identical on disk to one driven by `chit converge`. The loop log is the durable state; the server keeps an idle-evicting in-memory session for the loop's run-time pieces, never a second source of truth for iterations.
 
 `describeConverge` (the control-plane view, embedded as `loop` in `chit_converge_next` and `chit_converge_cancel` results) is `{ loop_id, scope, cwd, task, max_iterations, iteration, status, active, cancellable, last_verdict?, last_decision?, failure?, audit_refs[], next_action }`, where `status` is `open | running | converged | blocked | max-iterations | cancelled` and `iteration` counts completed iterations.
 
@@ -62,7 +62,7 @@ Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to the server cwd; also w
 
 ### chit_converge_next
 
-Run exactly one implement to review iteration, blocking until it settles; emits a heartbeat while it runs. Input: `loop_id`. A normal iteration returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, usage?, auditRunId?, stopStatus?, loop }` (`usage` is the iteration's token/cost when the adapters reported it). A set `stopStatus` means the loop also stopped this round: `proceed` converges, `block` blocks, exhausting the budget is `max-iterations`. A cancelled iteration returns `{ cancelled: true, iteration, loop }` and records a clean `cancelled` stop with no iteration record, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, loop }` and closes the loop `blocked`. It rejects a loop that already stopped or already has an iteration in flight (the loop log is single-writer).
+Run exactly one implement to review iteration, blocking until it settles; emits a heartbeat while it runs. Input: `loop_id`. A normal iteration returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, workspaceWarnings, usage?, auditRunId?, stopStatus?, loop }` (`changedFiles` is the task-relevant diff; `workspaceWarnings` flags untracked generated artifacts left in the tree; `usage` is the iteration's token/cost when the adapters reported it). A set `stopStatus` means the loop also stopped this round: `proceed` converges, `block` blocks, exhausting the budget is `max-iterations`. A cancelled iteration returns `{ cancelled: true, iteration, loop }` and records a clean `cancelled` stop with no iteration record, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, loop }` and closes the loop `blocked`. It rejects a loop that already stopped or already has an iteration in flight (the loop log is single-writer).
 
 ### chit_converge_status
 
@@ -78,7 +78,7 @@ Diagnostic history, answering "what happened?". Input: `loop_id`. Reads straight
 
 ## Audit tools
 
-The audit tools read the local audit transcripts that audited runs write (`chit converge`, `chit run --audit`, MCP `chit_start audit:true`, and MCP converge), so a run's prompts, outputs, usage, and timeline are inspectable from the chat. Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
+The audit tools read the local audit transcripts that audited runs write (`chit converge`, `chit run --audit`, MCP `chit_run_start audit:true`, and MCP converge), so a run's prompts, outputs, usage, and timeline are inspectable from the chat. Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
 
 ### chit_audit_list
 
@@ -90,19 +90,19 @@ Show one run. Inputs: `run_id`, `include_bodies` (default `false`). Returns `{ s
 
 ## Observability (heartbeat)
 
-While a call step runs, `chit_run_step` emits, every ~5s, both a progress notification (with `progressToken`) and a logging notification carrying the same latest-state text: `"<step> · <participant> (<agent>) still running · Ns elapsed"`. Claude Code renders the latest heartbeat live in the collapsed tool call; the full transcript is `chit_trace`.
+While a call step runs, `chit_run_step` emits, every ~5s, both a progress notification (with `progressToken`) and a logging notification carrying the same latest-state text: `"<step> · <participant> (<agent>) still running · Ns elapsed"`. Claude Code renders the latest heartbeat live in the collapsed tool call; the full transcript is `chit_run_trace`.
 
 There is no within-step streaming of the agent's output to the MCP client. The heartbeat is latest-state text, not a token stream, and `chit_run_step` returns only the step's final output. On an audited run the adapter does capture the agent's live event stream as `adapter.event` records, but that feeds the [audit log](/docs/audit-log), not the MCP client.
 
 ## Cancellation
 
-Cancellation has two reachable paths. The portable one is `chit_cancel`: `chit_run_step` owns an `AbortController` per run and step, registered for the whole call; `chit_cancel` aborts it, both adapters (`claude-cli`, `codex-exec`) kill their child process on abort and reject, and the engine discriminates on `signal.aborted` to settle the step `cancelled`. It is proven end-to-end against codex, where a concurrent `chit_cancel` killed an in-flight step in ~6s rather than the ~220s it would otherwise have taken. The second path is ambient: in Claude Code, pressing **Esc** during a blocking `chit_run_step` propagates request cancellation through the call's folded-in `extra.signal`, which aborts the same controller. A live probe confirmed this (a long codex step, Esc after the first heartbeat, settled `cancelled` "aborted by client" in ~5.4s, with no `chit_cancel` call). Esc behavior is client-specific, so `chit_cancel` stays the portable backup.
+Cancellation has two reachable paths. The portable one is `chit_run_cancel`: `chit_run_step` owns an `AbortController` per run and step, registered for the whole call; `chit_run_cancel` aborts it, both adapters (`claude-cli`, `codex-exec`) kill their child process on abort and reject, and the engine discriminates on `signal.aborted` to settle the step `cancelled`. It is proven end-to-end against codex, where a concurrent `chit_run_cancel` killed an in-flight step in ~6s rather than the ~220s it would otherwise have taken. The second path is ambient: in Claude Code, pressing **Esc** during a blocking `chit_run_step` propagates request cancellation through the call's folded-in `extra.signal`, which aborts the same controller. A live probe confirmed this (a long codex step, Esc after the first heartbeat, settled `cancelled` "aborted by client" in ~5.4s, with no `chit_run_cancel` call). Esc behavior is client-specific, so `chit_run_cancel` stays the portable backup.
 
 `chit_converge_next` follows the same contract: it folds the request's `extra.signal` into the in-flight iteration's abort, so Esc (or `chit_converge_cancel`) cancels the running implement or review. A cancelled iteration records a clean `cancelled` stop with no iteration record, so the loop log never carries a fake-successful round.
 
 ## Limits
 
-- Runs live in an in-memory store (`run-store.ts`). A server restart or reconnect loses them. The store is idle-evicting: a run untouched for more than 1h is dropped on the next `chit_start` sweep, unless it still has a `running` step (those are never evicted). Cleanup is opportunistic, so memory is bounded by future starts, not by wall-clock alone.
+- Runs live in an in-memory store (`run-store.ts`). A server restart or reconnect loses them. The store is idle-evicting: a run untouched for more than 1h is dropped on the next `chit_run_start` sweep, unless it still has a `running` step (those are never evicted). Cleanup is opportunistic, so memory is bounded by future starts, not by wall-clock alone.
 - Converge sessions live in the same kind of in-memory store, idle-evicted on the next `chit_converge_start` sweep (a loop with an in-flight iteration is never evicted). The durable loop log persists regardless; only the in-memory session is dropped, after which `chit_converge_status` and `chit_converge_trace` no longer find that `loop_id`.
 - `inputs` are string to string. `file[]` inputs are not expressible via MCP.
 - Concurrent `per_scope` steps would hit the session store's read-modify-write race, so keep same-scope steps serial.

@@ -5,11 +5,21 @@ import { join } from "node:path";
 import { type LoopLogIO, runLoopLog } from "./loop-log.ts";
 
 let cwd: string;
+let stateDir: string;
+let savedXdg: string | undefined;
 beforeEach(() => {
 	cwd = mkdtempSync(join(tmpdir(), "chit-loop-cli-"));
+	// Loop logs live under the state dir now; redirect it to a temp dir so tests
+	// stay isolated from the real ~/.local/state.
+	stateDir = mkdtempSync(join(tmpdir(), "chit-loop-cli-state-"));
+	savedXdg = process.env.XDG_STATE_HOME;
+	process.env.XDG_STATE_HOME = stateDir;
 });
 afterEach(() => {
+	if (savedXdg === undefined) delete process.env.XDG_STATE_HOME;
+	else process.env.XDG_STATE_HOME = savedXdg;
 	rmSync(cwd, { recursive: true, force: true });
+	rmSync(stateDir, { recursive: true, force: true });
 });
 
 function run(...argv: string[]): { code: number; out: string; err: string } {
@@ -213,14 +223,15 @@ describe("loop-log CLI: usage and store errors map to exit codes", () => {
 	});
 
 	test("an unexpected fs error exits 1 with a clean message, not a raw stack", () => {
-		// --cwd points at a regular file, so mkdirSync(.chit/loops) throws a raw
-		// ENOTDIR (not a LoopStoreError); it must still surface cleanly.
-		const filePath = join(cwd, "not-a-dir");
+		// Point the state dir under a regular file, so creating the loop dir throws
+		// a raw ENOTDIR (not a LoopStoreError); it must still surface cleanly.
+		const filePath = join(stateDir, "not-a-dir");
 		writeFileSync(filePath, "x");
+		process.env.XDG_STATE_HOME = filePath;
 		const out: string[] = [];
 		const err: string[] = [];
 		const code = runLoopLog(
-			["start", "--scope", "s", "--task", "t", "--max-iterations", "3", "--cwd", filePath],
+			["start", "--scope", "s", "--task", "t", "--max-iterations", "3", "--cwd", cwd],
 			{ out: (s) => out.push(s), err: (s) => err.push(s) },
 		);
 		expect(code).toBe(1);

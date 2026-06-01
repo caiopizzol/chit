@@ -1,16 +1,23 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
+import { loopLogDir } from "../../cli/src/loops/location.ts";
 import { launchStudio } from "./studio.ts";
 
 // The read-only Loops drawer against a real server. The harness boots
-// `chit studio` in a temp cwd; we seed one convergence log under .chit/loops
-// there (the server reads it per request), then exercise the visual contract:
-// open the drawer, see the loop, select it, read the compact rail, and back
-// out with Escape. Raw JSONL is written directly (the writer/reader format
-// agreement is covered by unit + cross-component tests elsewhere).
+// `chit studio` in a temp cwd with XDG_STATE_HOME pointed at a temp state dir;
+// we seed one convergence log under chit's state dir (keyed by repo, the same
+// place the CLI injects into Studio), then exercise the visual contract: open
+// the drawer, see the loop, select it, read the compact rail, and back out with
+// Escape. Raw JSONL is written directly (the writer/reader format agreement is
+// covered by unit + cross-component tests elsewhere).
 test("loops drawer: list -> select -> compact rail -> Escape back", async ({ page }) => {
-	const studio = await launchStudio("consult.json");
+	const xdg = mkdtempSync(join(tmpdir(), "chit-e2e-xdg-"));
+	// The test seeds the loop log at the same state-dir path the server reads;
+	// both resolve it from XDG_STATE_HOME, so point this process there too.
+	process.env.XDG_STATE_HOME = xdg;
+	const studio = await launchStudio("consult.json", { XDG_STATE_HOME: xdg });
 	const cwd = dirname(studio.file);
 	const lines = [
 		{
@@ -20,6 +27,7 @@ test("loops drawer: list -> select -> compact rail -> Escape back", async ({ pag
 			scope: "e2e-scope",
 			task: "e2e loop task",
 			repo: cwd,
+			repoKey: "e2e",
 			startedAt: "2026-05-29T10:00:00.000Z",
 			maxIterations: 3,
 		},
@@ -44,11 +52,9 @@ test("loops drawer: list -> select -> compact rail -> Escape back", async ({ pag
 			endedAt: "2026-05-29T10:03:00.000Z",
 		},
 	];
-	mkdirSync(join(cwd, ".chit", "loops"), { recursive: true });
-	writeFileSync(
-		join(cwd, ".chit", "loops", "E1.jsonl"),
-		`${lines.map((l) => JSON.stringify(l)).join("\n")}\n`,
-	);
+	const loopsDir = loopLogDir(cwd);
+	mkdirSync(loopsDir, { recursive: true });
+	writeFileSync(join(loopsDir, "E1.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
 
 	try {
 		await page.goto(studio.url);
@@ -101,5 +107,6 @@ test("loops drawer: list -> select -> compact rail -> Escape back", async ({ pag
 		await expect(drawer).toBeHidden();
 	} finally {
 		await studio.close();
+		rmSync(xdg, { recursive: true, force: true });
 	}
 });

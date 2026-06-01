@@ -642,11 +642,10 @@ function fmtElapsed(ms: number | null): string {
 
 // The compact iteration rail for one loop, rendered from its records. The
 // server already validated structure/consistency; this only reads.
-// A loop iteration's detailsRef is "audit:<runId>" when the run was audited.
-// Returns the runId, or undefined for an unaudited iteration.
-function auditRunIdOf(detailsRef: string | undefined): string | undefined {
-	const m = detailsRef?.match(/^audit:(.+)$/);
-	return m?.[1];
+// A loop iteration's auditRef is the audit run id when the run was audited, or
+// undefined for an unaudited iteration; the audit view opens by that id.
+function auditRunIdOf(auditRef: string | undefined): string | undefined {
+	return auditRef ? auditRef : undefined;
 }
 
 function LoopRail({
@@ -687,6 +686,11 @@ function LoopRail({
 									{it.changedFiles.length} files
 									{it.changedFiles.length > 0 ? `: ${it.changedFiles.join(", ")}` : ""}
 								</div>
+								{it.workspaceWarnings && it.workspaceWarnings.length > 0 && (
+									<div className="rail-sub rail-warn">
+										workspace: {it.workspaceWarnings.join("; ")}
+									</div>
+								)}
 								<div className="rail-sub">checks: {it.checksRun}</div>
 								<div className="rail-sub">
 									check <span className={`verdict verdict--${it.verdict}`}>{it.verdict}</span> ·{" "}
@@ -694,7 +698,7 @@ function LoopRail({
 								</div>
 								<div className="rail-sub">decide {it.decision}</div>
 								{(() => {
-									const runId = auditRunIdOf(it.detailsRef);
+									const runId = auditRunIdOf(it.auditRef);
 									return runId && onOpenAudit ? (
 										<button
 											type="button"

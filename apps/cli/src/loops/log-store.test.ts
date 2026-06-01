@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseLoopLog, validateLoopLog } from "@chit-run/core";
+import { loopLogDir } from "./location.ts";
 import {
 	appendIteration,
 	type Clock,
@@ -13,12 +22,22 @@ import {
 } from "./log-store.ts";
 
 let cwd: string;
+let stateDir: string;
+let savedXdg: string | undefined;
 
 beforeEach(() => {
 	cwd = mkdtempSync(join(tmpdir(), "chit-loop-"));
+	// Redirect the loop state dir to an isolated temp dir so tests never touch
+	// the real ~/.local/state and stay independent. location.ts honors this.
+	stateDir = mkdtempSync(join(tmpdir(), "chit-loop-state-"));
+	savedXdg = process.env.XDG_STATE_HOME;
+	process.env.XDG_STATE_HOME = stateDir;
 });
 afterEach(() => {
+	if (savedXdg === undefined) delete process.env.XDG_STATE_HOME;
+	else process.env.XDG_STATE_HOME = savedXdg;
 	rmSync(cwd, { recursive: true, force: true });
+	rmSync(stateDir, { recursive: true, force: true });
 });
 
 // A clock that advances by 1s on each call, so timestamps/durations are
@@ -47,13 +66,19 @@ function start(loopId = "L1", clock?: Clock) {
 }
 
 describe("loop-log store: start", () => {
-	test("creates .chit/loops/<id>.jsonl with a valid header", () => {
+	test("creates the log under the state dir (not the repo) with a valid header", () => {
 		const { loopId, path } = start("L1");
 		expect(loopId).toBe("L1");
-		expect(path).toBe(join(cwd, ".chit", "loops", "L1.jsonl"));
+		// The log lives under the state dir, keyed by repo, NOT in the repo.
+		expect(path).toBe(join(loopLogDir(cwd), "L1.jsonl"));
+		expect(path.startsWith(stateDir)).toBe(true);
+		expect(existsSync(join(cwd, ".chit"))).toBe(false);
 		const recs = validateLoopLog(parseLoopLog(readFileSync(path, "utf-8")));
 		expect(recs).toHaveLength(1);
-		expect(recs[0]).toMatchObject({ type: "loop", scope: "s", task: "t", repo: cwd });
+		// repo is the canonical repo root (realpath of the cwd here, no git repo),
+		// and repoKey is recorded for the namespaced location.
+		expect(recs[0]).toMatchObject({ type: "loop", scope: "s", task: "t", repo: realpathSync(cwd) });
+		expect(recs[0]).toHaveProperty("repoKey");
 	});
 
 	test("generates a loopId when none is given", () => {
@@ -162,11 +187,26 @@ describe("loop-log store: produced file integrity", () => {
 		const recs = readLoop(cwd, "L1");
 		expect(recs.map((r) => r.type)).toEqual(["loop", "iteration", "stop"]);
 	});
+
+	test("persists optional workspaceWarnings; absent when empty/not passed", () => {
+		start("L1");
+		appendIteration(cwd, "L1", {
+			...baseAppend,
+			workspaceWarnings: ["untracked generated artifact: __pycache__/x.pyc"],
+		});
+		appendIteration(cwd, "L1", { ...baseAppend, workspaceWarnings: [] });
+		const iters = readLoop(cwd, "L1").filter((r) => r.type === "iteration");
+		expect(iters[0]).toMatchObject({
+			workspaceWarnings: ["untracked generated artifact: __pycache__/x.pyc"],
+		});
+		// An empty warnings list is omitted, not written as [].
+		expect("workspaceWarnings" in iters[1]).toBe(false);
+	});
 });
 
 describe("loop-log store: rejects inconsistent pre-existing files", () => {
 	function seedRaw(loopId: string, lines: object[]) {
-		const dir = join(cwd, ".chit", "loops");
+		const dir = loopLogDir(cwd);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
 			join(dir, `${loopId}.jsonl`),
@@ -180,6 +220,7 @@ describe("loop-log store: rejects inconsistent pre-existing files", () => {
 		scope: "s",
 		task: "t",
 		repo: cwd,
+		repoKey: "k",
 		startedAt: "2026-05-29T10:00:00.000Z",
 		maxIterations,
 	});

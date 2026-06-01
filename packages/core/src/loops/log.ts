@@ -33,7 +33,13 @@ export interface LoopHeaderRecord {
 	loopId: string;
 	scope: string;
 	task: string;
+	// The repo this loop belongs to: the resolved git top-level path (or the
+	// canonical cwd when not a git repo). Human-readable; `repoKey` is its stable
+	// hash, used to namespace the loop log under the state dir.
 	repo: string;
+	// Stable hash of `repo`: the directory key under which this loop's log lives
+	// in the state dir.
+	repoKey: string;
 	startedAt: string; // ISO 8601
 	maxIterations: number;
 }
@@ -42,14 +48,23 @@ export interface LoopIterationRecord {
 	type: "iteration";
 	n: number;
 	implementSummary: string;
+	// Files the agent changed as part of the task (tracked edits + staged + new
+	// source). Chit's own control-plane state is never listed here.
 	changedFiles: string[];
+	// Non-task workspace conditions worth operator/reviewer attention, e.g. an
+	// untracked generated artifact the implementer's checks produced. NOT "ignored
+	// junk": it is surfaced precisely so it stays visible without polluting
+	// changedFiles. Optional and absent when the workspace was clean.
+	workspaceWarnings?: string[];
 	checksRun: string;
 	verdict: LoopVerdict;
 	findingCount: number;
 	decision: LoopVerdict;
 	checkDurationMs: number;
 	at: string; // ISO 8601
-	detailsRef?: string;
+	// The audit run id for this iteration's transcript, when the run was audited.
+	// Absent for an unaudited iteration.
+	auditRef?: string;
 	// Token/cost for the whole iteration: the sum of every adapter call's usage
 	// in the run (implement + review). Optional: absent when no call reported
 	// usage. Cost is the sum of REPORTED costs only (Claude reports a cost; Codex
@@ -167,6 +182,7 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 			scope: str(o, "scope", ctx),
 			task: str(o, "task", ctx),
 			repo: str(o, "repo", ctx),
+			repoKey: str(o, "repoKey", ctx),
 			startedAt: str(o, "startedAt", ctx),
 			maxIterations: int(o, "maxIterations", ctx, 1),
 		};
@@ -185,7 +201,10 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 			checkDurationMs: int(o, "checkDurationMs", ctx, 0),
 			at: str(o, "at", ctx),
 		};
-		if (o.detailsRef !== undefined) rec.detailsRef = str(o, "detailsRef", ctx);
+		if (o.workspaceWarnings !== undefined) {
+			rec.workspaceWarnings = stringArray(o, "workspaceWarnings", ctx);
+		}
+		if (o.auditRef !== undefined) rec.auditRef = str(o, "auditRef", ctx);
 		const usage = optUsage(o, ctx);
 		if (usage !== undefined) rec.usage = usage;
 		return rec;

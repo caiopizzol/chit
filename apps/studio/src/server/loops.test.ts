@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./index.ts";
@@ -8,27 +8,24 @@ import { generateToken } from "./token.ts";
 
 const HOST = "127.0.0.1:4040";
 
-let cwd: string;
+// The injected loop-log directory (the CLI resolves this; here it is just a
+// temp dir Studio is told to read).
+let dir: string;
 beforeEach(() => {
-	cwd = mkdtempSync(join(tmpdir(), "chit-studio-loops-"));
+	dir = mkdtempSync(join(tmpdir(), "chit-studio-loops-"));
 });
 afterEach(() => {
-	rmSync(cwd, { recursive: true, force: true });
+	rmSync(dir, { recursive: true, force: true });
 });
 
-function loopsDir(): string {
-	const dir = join(cwd, ".chit", "loops");
-	mkdirSync(dir, { recursive: true });
-	return dir;
-}
 function seed(loopId: string, lines: object[]) {
 	writeFileSync(
-		join(loopsDir(), `${loopId}.jsonl`),
+		join(dir, `${loopId}.jsonl`),
 		`${lines.map((l) => JSON.stringify(l)).join("\n")}\n`,
 	);
 }
 function seedRawFile(name: string, body: string) {
-	writeFileSync(join(loopsDir(), name), body);
+	writeFileSync(join(dir, name), body);
 }
 
 const header = (loopId: string, startedAt: string) => ({
@@ -38,6 +35,7 @@ const header = (loopId: string, startedAt: string) => ({
 	scope: "s",
 	task: "t",
 	repo: "/x",
+	repoKey: "k",
 	startedAt,
 	maxIterations: 3,
 });
@@ -63,14 +61,16 @@ const stopRec = (iterations: number) => ({
 });
 
 describe("studio loops loader: listLoops", () => {
-	test("returns [] when .chit/loops is absent", () => {
-		expect(listLoops(cwd)).toEqual([]);
+	test("returns [] for an empty, missing, or undefined dir", () => {
+		expect(listLoops(dir)).toEqual([]); // empty
+		expect(listLoops(join(dir, "missing"))).toEqual([]); // nonexistent
+		expect(listLoops(undefined)).toEqual([]); // no host injected a dir
 	});
 
 	test("summarizes loops newest-first, with status and totals", () => {
 		seed("A", [header("A", "2026-05-29T10:00:00.000Z"), iter(1), stopRec(1)]);
 		seed("B", [header("B", "2026-05-29T11:00:00.000Z"), iter(1)]); // in progress
-		const out = listLoops(cwd);
+		const out = listLoops(dir);
 		expect(out.map((s) => s.loopId)).toEqual(["B", "A"]); // newest startedAt first
 		expect(out.find((s) => s.loopId === "A")).toMatchObject({
 			status: "converged",
@@ -87,7 +87,7 @@ describe("studio loops loader: listLoops", () => {
 	test("skips a malformed file rather than failing the whole list", () => {
 		seed("good", [header("good", "2026-05-29T10:00:00.000Z")]);
 		seedRawFile("bad.jsonl", "not json\n");
-		expect(listLoops(cwd).map((s) => s.loopId)).toEqual(["good"]);
+		expect(listLoops(dir).map((s) => s.loopId)).toEqual(["good"]);
 	});
 
 	test("never surfaces an unsafe or mismatched loopId (binds filename to header)", () => {
@@ -95,36 +95,36 @@ describe("studio loops loader: listLoops", () => {
 		seed("safe", [header("../evil", "2026-05-29T10:00:00.000Z")]);
 		// filename basename is itself an unsafe slug -> skipped
 		seedRawFile("_bad.jsonl", `${JSON.stringify(header("_bad", "2026-05-29T10:00:00.000Z"))}\n`);
-		expect(listLoops(cwd)).toEqual([]);
+		expect(listLoops(dir)).toEqual([]);
 	});
 });
 
 describe("studio loops loader: readLoop", () => {
 	test("ok returns the records in order", () => {
 		seed("A", [header("A", "2026-05-29T10:00:00.000Z"), iter(1), stopRec(1)]);
-		const r = readLoop(cwd, "A");
+		const r = readLoop(dir, "A");
 		expect(r.kind).toBe("ok");
 		if (r.kind === "ok")
 			expect(r.records.map((x) => x.type)).toEqual(["loop", "iteration", "stop"]);
 	});
 
 	test("not-found for an absent loop", () => {
-		expect(readLoop(cwd, "nope").kind).toBe("not-found");
+		expect(readLoop(dir, "nope").kind).toBe("not-found");
 	});
 
 	test("invalid-id for a traversal / unsafe id", () => {
-		expect(readLoop(cwd, "../evil").kind).toBe("invalid-id");
-		expect(readLoop(cwd, "_leading").kind).toBe("invalid-id");
+		expect(readLoop(dir, "../evil").kind).toBe("invalid-id");
+		expect(readLoop(dir, "_leading").kind).toBe("invalid-id");
 	});
 
 	test("invalid-log for a corrupt file", () => {
 		seedRawFile("C.jsonl", "not json\n");
-		expect(readLoop(cwd, "C").kind).toBe("invalid-log");
+		expect(readLoop(dir, "C").kind).toBe("invalid-log");
 	});
 
 	test("invalid-log when the header loopId disagrees with the file name", () => {
 		seed("D", [header("OTHER", "2026-05-29T10:00:00.000Z")]);
-		expect(readLoop(cwd, "D").kind).toBe("invalid-log");
+		expect(readLoop(dir, "D").kind).toBe("invalid-log");
 	});
 });
 
@@ -133,11 +133,12 @@ describe("studio loops routes", () => {
 		const token = generateToken();
 		const app = buildApp({
 			token,
-			cwd,
+			cwd: dir,
 			makeBootstrap: () => ({}) as never,
 			store: {} as never,
 			allowedHosts: new Set([HOST]),
 			clientDistDir: "/nope",
+			loopsDir: dir,
 		});
 		return { app, token };
 	}

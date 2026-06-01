@@ -3,14 +3,14 @@ import type { Run } from "./engine.ts";
 // Holds active MCP runs plus an idle-eviction policy. Lives apart from server.ts
 // so the sweep is unit-testable without booting the stdio server (importing
 // server.ts runs its top-level server.connect). The in-memory run map would
-// otherwise grow without bound (every chit_start adds; nothing removed).
+// otherwise grow without bound (every chit_run_start adds; nothing removed).
 //
 // Eviction is IDLE-based, not age-based: a run is touched on create, on every
 // successful lookup, and again after a step settles (a multi-minute step's
 // lookup-touch is stale by the time it finishes). sweep() drops only runs idle
 // past the TTL that have NO still-running step — so a long in-flight run is
-// never evicted out from under chit_cancel/chit_next/chit_trace. Sweeping is
-// opportunistic (called on chit_start), so memory is bounded by future starts,
+// never evicted out from under chit_run_cancel/chit_run_next/chit_run_trace. Sweeping is
+// opportunistic (called on chit_run_start), so memory is bounded by future starts,
 // not wall-clock alone. `now` is passed in to keep the logic pure/testable.
 
 const ONE_HOUR_MS = 60 * 60 * 1000;

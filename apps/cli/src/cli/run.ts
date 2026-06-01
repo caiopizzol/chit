@@ -18,6 +18,7 @@ import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
+import { loopLogDir } from "../loops/location.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { RuntimeError } from "../runtime/render.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
@@ -840,6 +841,9 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			explicitPath: args.manifestPath,
 			registry,
 			lifecycle: buildStudioLifecycle(),
+			// The CLI owns the loop-log location scheme; inject the resolved dir so
+			// Studio reads the same place chit writes.
+			loopsDir: loopLogDir(process.cwd()),
 		});
 	} catch (e) {
 		if (e instanceof PathError) {

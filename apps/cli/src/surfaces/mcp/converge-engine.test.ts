@@ -185,7 +185,7 @@ describe("runNextIteration: verdict-driven stops", () => {
 		if (r.kind !== "iteration") throw new Error("expected iteration");
 		expect(r.auditRunId).toBe("run-7");
 		expect(session.auditRefs).toEqual(["run-7"]);
-		expect(iterations("L1")[0]?.detailsRef).toBe("audit:run-7");
+		expect(iterations("L1")[0]?.auditRef).toBe("run-7");
 	});
 
 	test("an iteration result carries changedFiles and usage for the next response", async () => {

@@ -275,7 +275,7 @@ describe("convergeLoop", () => {
 		expect("usage" in firstIteration("U2")).toBe(false);
 	});
 
-	test("links the iteration to its audit run via detailsRef when execute returns an auditRunId", async () => {
+	test("links the iteration to its audit run via auditRef when execute returns an auditRunId", async () => {
 		const review = reviewJson("proceed");
 		const execute: ConvergeExecute = async () => ({
 			ok: true,
@@ -285,13 +285,13 @@ describe("convergeLoop", () => {
 			auditRunId: "abc-123",
 		});
 		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "D1", execute });
-		expect(firstIteration("D1").detailsRef).toBe("audit:abc-123");
+		expect(firstIteration("D1").auditRef).toBe("abc-123");
 	});
 
-	test("omits detailsRef when execute returns no auditRunId", async () => {
+	test("omits auditRef when execute returns no auditRunId", async () => {
 		const { execute } = fakeExecute([reviewJson("proceed")]);
 		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 1, loopId: "D2", execute });
-		expect("detailsRef" in firstIteration("D2")).toBe(false);
+		expect("auditRef" in firstIteration("D2")).toBe(false);
 	});
 
 	test("resolves to block when the JSON block is absent, even if prose says proceed", async () => {
@@ -787,8 +787,8 @@ describe("runConvergeIteration (single-iteration primitive)", () => {
 		expect(res.verdict).toBe("proceed");
 		expect(res.stopStatus).toBe("converged");
 		expect(res.auditRunId).toBe("run-9");
-		// The audit link is threaded into the iteration record's detailsRef.
-		expect(firstIteration(loopId).detailsRef).toBe("audit:run-9");
+		// The audit link is threaded into the iteration record's auditRef.
+		expect(firstIteration(loopId).auditRef).toBe("run-9");
 	});
 
 	test("block yields stopStatus blocked", async () => {

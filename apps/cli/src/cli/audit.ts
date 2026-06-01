@@ -1,5 +1,5 @@
 // `chit audit` - read the audit transcripts that audited runs write (chit
-// converge by default, chit run --audit, MCP chit_start audit:true). Read-only
+// converge by default, chit run --audit, MCP chit_run_start audit:true). Read-only
 // inspection: `list` the runs, or `show <runId>` one run's event timeline, with
 // optional blob bodies (prompts/outputs) and a usage/cost summary. The store +
 // event schema live in audit/store.ts and @chit-run/core; this is the human reader.

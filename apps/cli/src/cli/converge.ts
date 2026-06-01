@@ -42,6 +42,7 @@ import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
 import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import type { SessionStore } from "../sessions/types.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "./default-converge-manifest.ts";
+import { classifyWorkspace, type WorkspaceClassification } from "./workspace.ts";
 
 export interface ConvergeIO {
 	out: (s: string) => void;
@@ -232,16 +233,19 @@ function gitLines(cwd: string, args: string[]): string[] {
 	}
 }
 
-// Unstaged + staged + untracked files, deduped. Combining all three matters for
-// the loop-log/audit data: a newly created file (a brand-new converge.ts, say)
-// is untracked, so `git diff --name-only` alone would silently omit it.
-function gitChangedFiles(cwd: string): string[] {
-	const all = [
-		...gitLines(cwd, ["diff", "--name-only"]),
-		...gitLines(cwd, ["diff", "--cached", "--name-only"]),
-		...gitLines(cwd, ["ls-files", "--others", "--exclude-standard"]),
-	];
-	return [...new Set(all)];
+// Snapshot the working tree and classify it into the task's changed files vs
+// non-task workspace dirt (see workspace.ts). Tracked unstaged + staged are the
+// task edits; untracked (non-ignored) files are split into new source (task
+// work) and generated artifacts (surfaced as workspaceWarnings). A new file is
+// untracked, so `git diff --name-only` alone would silently omit it.
+function gitWorkspace(cwd: string): WorkspaceClassification {
+	return classifyWorkspace({
+		tracked: [
+			...gitLines(cwd, ["diff", "--name-only"]),
+			...gitLines(cwd, ["diff", "--cached", "--name-only"]),
+		],
+		untracked: gitLines(cwd, ["ls-files", "--others", "--exclude-standard"]),
+	});
 }
 
 // One iteration's loop position and the execute boundary it runs against. The
@@ -279,10 +283,13 @@ export type ConvergeIterationResult =
 			findingCount: number;
 			checksRun: string;
 			decision: LoopVerdict;
-			// The same changed files and usage written to the iteration record, also
-			// returned so a caller (the MCP next response) can surface them without
-			// re-reading the loop log. usage is absent when no call reported any.
+			// The same changed files, workspace warnings, and usage written to the
+			// iteration record, also returned so a caller (the MCP next response) can
+			// surface them without re-reading the loop log. changedFiles is task work
+			// only; workspaceWarnings is non-task dirt (empty when the tree was clean).
+			// usage is absent when no call reported any.
 			changedFiles: string[];
+			workspaceWarnings: string[];
 			usage?: AdapterUsage;
 			auditRunId?: string;
 			reviewText: string;
@@ -348,10 +355,11 @@ export async function runConvergeIteration(
 	const reviewText = result.outputs.review ?? "";
 	const review = parseReview(reviewText);
 	const usage = sumTraceUsage(result.trace);
-	const changedFiles = gitChangedFiles(ctx.cwd);
+	const { changedFiles, workspaceWarnings } = gitWorkspace(ctx.cwd);
 	appendIteration(ctx.cwd, ctx.loopId, {
 		implementSummary: capSummary(result.outputs.implement ?? ""),
 		changedFiles,
+		workspaceWarnings,
 		checksRun: review.checksRun,
 		verdict: review.verdict,
 		findingCount: review.findingCount,
@@ -362,7 +370,7 @@ export async function runConvergeIteration(
 		// Total token/cost across the run's calls (implement + review).
 		...(usage && { usage }),
 		// Link to the audit transcript for this iteration's run, when audited.
-		...(result.auditRunId && { detailsRef: `audit:${result.auditRunId}` }),
+		...(result.auditRunId && { auditRef: result.auditRunId }),
 	});
 
 	// proceed -> converged, block -> blocked; revise leaves it undefined so the
@@ -377,6 +385,7 @@ export async function runConvergeIteration(
 		checksRun: review.checksRun,
 		decision: review.verdict,
 		changedFiles,
+		workspaceWarnings,
 		...(usage && { usage }),
 		...(result.auditRunId && { auditRunId: result.auditRunId }),
 		reviewText,
@@ -589,8 +598,8 @@ const CONVERGE_HELP = `chit converge --task <text> --scope <id> [options]
                            adapter cannot enforce (emits a warning each run).
                            Default off: such a manifest is refused before running.
 
-Runs the implement/check loop to convergence and records it under
-.chit/loops/<loopId>.jsonl. Stops at the reviewer's verdict: proceed ->
+Runs the implement/check loop to convergence and records it under chit's
+state dir (keyed by repo, not in the worktree). Stops at the reviewer's verdict: proceed ->
 converged, block -> blocked, else revise and retry up to the budget. An
 unparseable verdict is treated as block (never an implicit proceed).
 `;

@@ -14,7 +14,7 @@
 // Pure and side-effect-free BY DESIGN: it does NOT sweep or touch the in-memory
 // stores. Touching on a status poll would keep runs alive forever (defeating
 // idle eviction); sweeping would make a read destructive. Eviction stays tied to
-// chit_start / chit_converge_start, where it belongs. The active sections read
+// chit_run_start / chit_converge_start, where it belongs. The active sections read
 // only in-memory state (no disk), so they never throw; only `recent` touches
 // disk, via listAudit, which is already robust to a corrupt or mid-write log.
 
@@ -26,7 +26,7 @@ import { isComplete, type Run, readySteps } from "./engine.ts";
 import type { RunStore } from "./run-store.ts";
 
 // A compact per-run line for the overview. Deliberately omits the (possibly
-// large) final output and per-step detail: drill into one run with chit_trace,
+// large) final output and per-step detail: drill into one run with chit_run_trace,
 // or chit_audit_show when audited (the run id IS the audit run id).
 export interface RunStatusSummary {
 	run_id: string;
@@ -35,7 +35,7 @@ export interface RunStatusSummary {
 	// Step ids ready to run now; empty when the run is complete.
 	ready: string[];
 	// True when this run is being audited cleanly, so chit_audit_show <run_id>
-	// has a transcript. Mirrors chit_next's audit pointer.
+	// has a transcript. Mirrors chit_run_next's audit pointer.
 	audited: boolean;
 }
 

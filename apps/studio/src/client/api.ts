@@ -165,8 +165,9 @@ export async function uninstallDocument(name: string): Promise<UninstallSummary>
 
 // --- Convergence log (read-only) ---
 
-// List loop summaries. The server reads .chit/loops under cwd; the client never
-// touches the filesystem or parses JSONL.
+// List loop summaries. The server reads the loop dir the host injected (chit's
+// state dir, keyed by repo); the client never touches the filesystem or parses
+// JSONL.
 export async function fetchLoops(): Promise<LoopSummary[]> {
 	const res = await fetch("/api/loops", { headers: authHeaders() });
 	if (!res.ok) {

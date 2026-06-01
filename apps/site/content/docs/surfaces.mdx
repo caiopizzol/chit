@@ -15,7 +15,7 @@ claude mcp add chit --scope local -- chit mcp
 
 Three tool groups:
 
-- **Stepwise manifest tools** run a chit one step at a time: `chit_start`, then `chit_run_step` per step, each with a live heartbeat.
+- **Stepwise manifest tools** run a chit one step at a time: `chit_run_start`, then `chit_run_step` per step, each with a live heartbeat.
 - **Converge tools** drive the autonomous implement/review loop one iteration at a time: `chit_converge_start`, `chit_converge_next`, with `chit_converge_status` / `chit_converge_cancel` / `chit_converge_trace`.
 - **Audit tools** read recorded transcripts: `chit_audit_list`, `chit_audit_show`.
 
