@@ -290,7 +290,7 @@ describe("loadRegistry", () => {
 	let CONFIG: string;
 
 	beforeEach(() => {
-		TMPDIR = mkdtempSync(join(tmpdir(), "handoff-registry-"));
+		TMPDIR = mkdtempSync(join(tmpdir(), "chit-registry-"));
 		CONFIG = join(TMPDIR, "agents.json");
 	});
 

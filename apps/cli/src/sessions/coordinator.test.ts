@@ -77,7 +77,7 @@ let statelessManifest: NormalizedManifest;
 const registry = parseRegistry(undefined);
 
 beforeEach(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-coord-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-coord-"));
 	manifest = parseManifest(STATEFUL_MANIFEST);
 	statelessManifest = parseManifest(STATELESS_MANIFEST);
 });

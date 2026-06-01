@@ -6,10 +6,10 @@ import type { AdapterEvent } from "../runtime/types.ts";
 import { CodexExecAdapter } from "./codex-exec.ts";
 
 // Fake codex shell script. Behavior gates via env vars:
-//   HANDOFF_TEST_FAKE_EXIT       - exit with this code, write "boom" to stderr
-//   HANDOFF_TEST_LAST_INPUT      - capture stdin to this path
-//   HANDOFF_TEST_NO_AGENT_MSG    - emit thread.started but no agent_message
-//   HANDOFF_TEST_RESUME_NO_THREAD_STARTED - on resume, omit thread.started
+//   CHIT_TEST_FAKE_EXIT       - exit with this code, write "boom" to stderr
+//   CHIT_TEST_LAST_INPUT      - capture stdin to this path
+//   CHIT_TEST_NO_AGENT_MSG    - emit thread.started but no agent_message
+//   CHIT_TEST_RESUME_NO_THREAD_STARTED - on resume, omit thread.started
 // Resume mode is detected by the presence of "resume" in argv.
 const FAKE_CODEX = `#!/bin/sh
 IS_RESUME=0
@@ -17,19 +17,19 @@ for arg in "$@"; do
   if [ "$arg" = "resume" ]; then IS_RESUME=1; fi
 done
 
-if [ -n "$HANDOFF_TEST_SLEEP" ]; then
+if [ -n "$CHIT_TEST_SLEEP" ]; then
   cat > /dev/null
   # exec so the long-runner IS the spawned process (as the real codex binary is),
   # not an orphanable child: proc.kill() then terminates it and closes its pipes.
-  exec sleep "$HANDOFF_TEST_SLEEP"
+  exec sleep "$CHIT_TEST_SLEEP"
 fi
 
-if [ -n "$HANDOFF_TEST_FAKE_EXIT" ] && [ "$HANDOFF_TEST_FAKE_EXIT" != "0" ]; then
+if [ -n "$CHIT_TEST_FAKE_EXIT" ] && [ "$CHIT_TEST_FAKE_EXIT" != "0" ]; then
   cat > /dev/null
   echo "boom: codex error" >&2
-  exit "$HANDOFF_TEST_FAKE_EXIT"
+  exit "$CHIT_TEST_FAKE_EXIT"
 fi
-if [ -n "$HANDOFF_TEST_EMIT_THEN_FAIL" ]; then
+if [ -n "$CHIT_TEST_EMIT_THEN_FAIL" ]; then
   cat > /dev/null
   echo '{"type":"thread.started","thread_id":"fail-1"}'
   echo "boom: codex error" >&2
@@ -39,10 +39,10 @@ fi
 # file. The test only creates it from inside onEvent, so the process can finish
 # only if thread.started was surfaced to onEvent WHILE this process was still
 # running. A buffered (post-exit) reader would deadlock here.
-if [ -n "$HANDOFF_TEST_WAIT_FILE" ]; then
+if [ -n "$CHIT_TEST_WAIT_FILE" ]; then
   cat > /dev/null
   echo '{"type":"thread.started","thread_id":"live-1"}'
-  while [ ! -f "$HANDOFF_TEST_WAIT_FILE" ]; do sleep 0.02; done
+  while [ ! -f "$CHIT_TEST_WAIT_FILE" ]; do sleep 0.02; done
   echo '{"type":"item.completed","item":{"type":"agent_message","text":"LIVE: done"}}'
   echo '{"type":"turn.completed"}'
   exit 0
@@ -50,7 +50,7 @@ fi
 # Drip gate: emit a line every ~120ms for ~5 lines (total well over a 400ms
 # no-progress timeout), so the run only completes if the watchdog RESETS on each
 # chunk. Without per-chunk reset it would fire mid-drip.
-if [ -n "$HANDOFF_TEST_DRIP" ]; then
+if [ -n "$CHIT_TEST_DRIP" ]; then
   cat > /dev/null
   echo '{"type":"thread.started","thread_id":"drip-1"}'
   i=0
@@ -62,18 +62,18 @@ if [ -n "$HANDOFF_TEST_DRIP" ]; then
   echo '{"type":"item.completed","item":{"type":"agent_message","text":"DRIP: done"}}'
   exit 0
 fi
-if [ -n "$HANDOFF_TEST_LAST_INPUT" ]; then
-  cat > "$HANDOFF_TEST_LAST_INPUT"
+if [ -n "$CHIT_TEST_LAST_INPUT" ]; then
+  cat > "$CHIT_TEST_LAST_INPUT"
 else
   cat > /dev/null
 fi
-if [ -n "$HANDOFF_TEST_NO_AGENT_MSG" ]; then
+if [ -n "$CHIT_TEST_NO_AGENT_MSG" ]; then
   echo '{"type":"thread.started","thread_id":"fake-1"}'
   exit 0
 fi
 
 if [ "$IS_RESUME" = "1" ]; then
-  if [ -z "$HANDOFF_TEST_RESUME_NO_THREAD_STARTED" ]; then
+  if [ -z "$CHIT_TEST_RESUME_NO_THREAD_STARTED" ]; then
     echo '{"type":"thread.started","thread_id":"fake-1"}'
   fi
   echo '{"type":"item.completed","item":{"type":"agent_message","text":"RESUMED: prompt received"}}'
@@ -81,23 +81,23 @@ else
   echo '{"type":"thread.started","thread_id":"fake-1"}'
   echo '{"type":"item.completed","item":{"type":"agent_message","text":"OK: prompt received"}}'
 fi
-if [ -n "$HANDOFF_TEST_EMIT_USAGE" ]; then
+if [ -n "$CHIT_TEST_EMIT_USAGE" ]; then
   echo '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5}}'
 fi
-if [ -n "$HANDOFF_TEST_EMIT_USAGE_2" ]; then
+if [ -n "$CHIT_TEST_EMIT_USAGE_2" ]; then
   echo '{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3}}'
 fi
-if [ -n "$HANDOFF_TEST_EMIT_USAGE_BAD" ]; then
+if [ -n "$CHIT_TEST_EMIT_USAGE_BAD" ]; then
   echo '{"type":"turn.completed","usage":{"input_tokens":-1,"cached_input_tokens":1.5,"output_tokens":2,"reasoning_output_tokens":3}}'
 fi
 `;
 
-// Fake codex variant that records its argv to $HANDOFF_TEST_ARGS_FILE for
+// Fake codex variant that records its argv to $CHIT_TEST_ARGS_FILE for
 // asserting flag construction. Same JSONL output as above.
 const FAKE_CODEX_ARGS_RECORDER = `#!/bin/sh
-if [ -n "$HANDOFF_TEST_ARGS_FILE" ]; then
+if [ -n "$CHIT_TEST_ARGS_FILE" ]; then
   for arg in "$@"; do
-    printf '%s\\n' "$arg" >> "$HANDOFF_TEST_ARGS_FILE"
+    printf '%s\\n' "$arg" >> "$CHIT_TEST_ARGS_FILE"
   done
 fi
 cat > /dev/null
@@ -110,7 +110,7 @@ let FAKE_BIN_DIR: string;
 let savedPath: string | undefined;
 
 beforeAll(() => {
-	TMPDIR = mkdtempSync(join(tmpdir(), "handoff-codex-"));
+	TMPDIR = mkdtempSync(join(tmpdir(), "chit-codex-"));
 	FAKE_BIN_DIR = join(TMPDIR, "bin");
 	mkdirSyncSafe(FAKE_BIN_DIR);
 	writeFakeBin("codex", FAKE_CODEX);
@@ -140,7 +140,7 @@ function writeFakeBin(name: string, body: string): void {
 describe("CodexExecAdapter: stdin and parsing", () => {
 	test("sends adapter input to codex stdin and returns agent_message text", async () => {
 		const promptFile = join(TMPDIR, "last-input-1.txt");
-		process.env.HANDOFF_TEST_LAST_INPUT = promptFile;
+		process.env.CHIT_TEST_LAST_INPUT = promptFile;
 		try {
 			const adapter = new CodexExecAdapter({});
 			const result = await adapter.call({
@@ -154,12 +154,12 @@ describe("CodexExecAdapter: stdin and parsing", () => {
 			const received = readFileSync(promptFile, "utf-8");
 			expect(received).toBe("Role:\nyou are an advisor\n\nTask:\nhello world");
 		} finally {
-			delete process.env.HANDOFF_TEST_LAST_INPUT;
+			delete process.env.CHIT_TEST_LAST_INPUT;
 		}
 	});
 
 	test("throws when codex exits non-zero, with stderr tail in message", async () => {
-		process.env.HANDOFF_TEST_FAKE_EXIT = "3";
+		process.env.CHIT_TEST_FAKE_EXIT = "3";
 		try {
 			const adapter = new CodexExecAdapter({});
 			await expect(
@@ -172,12 +172,12 @@ describe("CodexExecAdapter: stdin and parsing", () => {
 				}),
 			).rejects.toThrow(/codex exec exited 3/);
 		} finally {
-			delete process.env.HANDOFF_TEST_FAKE_EXIT;
+			delete process.env.CHIT_TEST_FAKE_EXIT;
 		}
 	});
 
 	test("throws when codex emits no agent_message", async () => {
-		process.env.HANDOFF_TEST_NO_AGENT_MSG = "1";
+		process.env.CHIT_TEST_NO_AGENT_MSG = "1";
 		try {
 			const adapter = new CodexExecAdapter({});
 			await expect(
@@ -190,7 +190,7 @@ describe("CodexExecAdapter: stdin and parsing", () => {
 				}),
 			).rejects.toThrow(/no agent_message/);
 		} finally {
-			delete process.env.HANDOFF_TEST_NO_AGENT_MSG;
+			delete process.env.CHIT_TEST_NO_AGENT_MSG;
 		}
 	});
 });
@@ -226,7 +226,7 @@ describe("CodexExecAdapter: onEvent (raw JSONL preservation)", () => {
 	});
 
 	test("surfaces JSONL emitted before a non-zero exit, and still throws", async () => {
-		process.env.HANDOFF_TEST_EMIT_THEN_FAIL = "1";
+		process.env.CHIT_TEST_EMIT_THEN_FAIL = "1";
 		const events: AdapterEvent[] = [];
 		try {
 			await expect(
@@ -242,7 +242,7 @@ describe("CodexExecAdapter: onEvent (raw JSONL preservation)", () => {
 			// The events Codex wrote before failing are preserved for the audit.
 			expect(events.map((e) => e.type)).toEqual(["thread.started"]);
 		} finally {
-			delete process.env.HANDOFF_TEST_EMIT_THEN_FAIL;
+			delete process.env.CHIT_TEST_EMIT_THEN_FAIL;
 		}
 	});
 
@@ -270,7 +270,7 @@ describe("CodexExecAdapter: onEvent (raw JSONL preservation)", () => {
 		// (read-all-then-emit) implementation would deadlock and time out here.
 		const waitFile = join(TMPDIR, "live-go.txt");
 		rmSync(waitFile, { force: true });
-		process.env.HANDOFF_TEST_WAIT_FILE = waitFile;
+		process.env.CHIT_TEST_WAIT_FILE = waitFile;
 		const events: AdapterEvent[] = [];
 		try {
 			const result = await new CodexExecAdapter({}).call({
@@ -291,7 +291,7 @@ describe("CodexExecAdapter: onEvent (raw JSONL preservation)", () => {
 				"turn.completed",
 			]);
 		} finally {
-			delete process.env.HANDOFF_TEST_WAIT_FILE;
+			delete process.env.CHIT_TEST_WAIT_FILE;
 			rmSync(waitFile, { force: true });
 		}
 	}, 15000);
@@ -309,7 +309,7 @@ describe("CodexExecAdapter: usage extraction", () => {
 	}
 
 	test("maps a turn.completed usage block onto AdapterUsage", async () => {
-		process.env.HANDOFF_TEST_EMIT_USAGE = "1";
+		process.env.CHIT_TEST_EMIT_USAGE = "1";
 		try {
 			const result = await run();
 			expect(result.usage).toEqual({
@@ -319,13 +319,13 @@ describe("CodexExecAdapter: usage extraction", () => {
 				reasoningTokens: 5,
 			});
 		} finally {
-			delete process.env.HANDOFF_TEST_EMIT_USAGE;
+			delete process.env.CHIT_TEST_EMIT_USAGE;
 		}
 	});
 
 	test("sums usage across multiple turn.completed events", async () => {
-		process.env.HANDOFF_TEST_EMIT_USAGE = "1";
-		process.env.HANDOFF_TEST_EMIT_USAGE_2 = "1";
+		process.env.CHIT_TEST_EMIT_USAGE = "1";
+		process.env.CHIT_TEST_EMIT_USAGE_2 = "1";
 		try {
 			const result = await run();
 			// turn 1: in 100 / cached 40 / out 20 / reasoning 5; turn 2: in 7 / out 3.
@@ -336,18 +336,18 @@ describe("CodexExecAdapter: usage extraction", () => {
 				reasoningTokens: 5,
 			});
 		} finally {
-			delete process.env.HANDOFF_TEST_EMIT_USAGE;
-			delete process.env.HANDOFF_TEST_EMIT_USAGE_2;
+			delete process.env.CHIT_TEST_EMIT_USAGE;
+			delete process.env.CHIT_TEST_EMIT_USAGE_2;
 		}
 	});
 
 	test("omits fields a turn did not report (absent is not zero)", async () => {
-		process.env.HANDOFF_TEST_EMIT_USAGE_2 = "1"; // only {input_tokens, output_tokens}
+		process.env.CHIT_TEST_EMIT_USAGE_2 = "1"; // only {input_tokens, output_tokens}
 		try {
 			const result = await run();
 			expect(result.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
 		} finally {
-			delete process.env.HANDOFF_TEST_EMIT_USAGE_2;
+			delete process.env.CHIT_TEST_EMIT_USAGE_2;
 		}
 	});
 
@@ -357,14 +357,14 @@ describe("CodexExecAdapter: usage extraction", () => {
 	});
 
 	test("drops invalid token values (negative, fractional) to stay schema-valid", async () => {
-		process.env.HANDOFF_TEST_EMIT_USAGE_BAD = "1";
+		process.env.CHIT_TEST_EMIT_USAGE_BAD = "1";
 		try {
 			const result = await run();
 			// input_tokens -1 and cached_input_tokens 1.5 are dropped; only the
 			// non-negative integers output 2 and reasoning 3 survive.
 			expect(result.usage).toEqual({ outputTokens: 2, reasoningTokens: 3 });
 		} finally {
-			delete process.env.HANDOFF_TEST_EMIT_USAGE_BAD;
+			delete process.env.CHIT_TEST_EMIT_USAGE_BAD;
 		}
 	});
 });
@@ -373,7 +373,7 @@ describe("CodexExecAdapter: command construction", () => {
 	test("passes -m, -c, and the read-only sandbox flags on fresh calls", async () => {
 		writeFakeBin("codex", FAKE_CODEX_ARGS_RECORDER);
 		const argsFile = join(TMPDIR, "argv-1.txt");
-		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		process.env.CHIT_TEST_ARGS_FILE = argsFile;
 		try {
 			const adapter = new CodexExecAdapter({
 				model: "gpt-5.3-codex",
@@ -398,7 +398,7 @@ describe("CodexExecAdapter: command construction", () => {
 			expect(argv).toContain("--skip-git-repo-check");
 			expect(argv[argv.length - 1]).toBe("-");
 		} finally {
-			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			delete process.env.CHIT_TEST_ARGS_FILE;
 			writeFakeBin("codex", FAKE_CODEX);
 		}
 	});
@@ -420,7 +420,7 @@ describe("CodexExecAdapter: session resume", () => {
 	test("resume uses 'exec resume <threadId>' with --skip-git-repo-check, drops other flags", async () => {
 		writeFakeBin("codex", FAKE_CODEX_ARGS_RECORDER);
 		const argsFile = join(TMPDIR, "argv-resume.txt");
-		process.env.HANDOFF_TEST_ARGS_FILE = argsFile;
+		process.env.CHIT_TEST_ARGS_FILE = argsFile;
 		try {
 			const adapter = new CodexExecAdapter({
 				model: "gpt-5.3-codex",
@@ -447,7 +447,7 @@ describe("CodexExecAdapter: session resume", () => {
 			expect(argv).not.toContain("-m");
 			expect(argv).not.toContain("-c");
 		} finally {
-			delete process.env.HANDOFF_TEST_ARGS_FILE;
+			delete process.env.CHIT_TEST_ARGS_FILE;
 			writeFakeBin("codex", FAKE_CODEX);
 		}
 	});
@@ -467,7 +467,7 @@ describe("CodexExecAdapter: session resume", () => {
 	});
 
 	test("preserves prior threadId when resume output emits no thread.started", async () => {
-		process.env.HANDOFF_TEST_RESUME_NO_THREAD_STARTED = "1";
+		process.env.CHIT_TEST_RESUME_NO_THREAD_STARTED = "1";
 		try {
 			const adapter = new CodexExecAdapter({});
 			const result = await adapter.call({
@@ -480,7 +480,7 @@ describe("CodexExecAdapter: session resume", () => {
 			});
 			expect(result.session).toEqual({ threadId: "preserved-thread" });
 		} finally {
-			delete process.env.HANDOFF_TEST_RESUME_NO_THREAD_STARTED;
+			delete process.env.CHIT_TEST_RESUME_NO_THREAD_STARTED;
 		}
 	});
 
@@ -504,7 +504,7 @@ describe("CodexExecAdapter: cancellation", () => {
 		// Fake codex sleeps 10s; without honoring the abort, the call would hang
 		// that long. We abort after 100ms and assert it rejects well under 10s,
 		// which can only happen if the child was killed and the await unblocked.
-		process.env.HANDOFF_TEST_SLEEP = "10";
+		process.env.CHIT_TEST_SLEEP = "10";
 		try {
 			const adapter = new CodexExecAdapter({});
 			const controller = new AbortController();
@@ -521,7 +521,7 @@ describe("CodexExecAdapter: cancellation", () => {
 			await expect(p).rejects.toThrow();
 			expect(Date.now() - started).toBeLessThan(4000);
 		} finally {
-			delete process.env.HANDOFF_TEST_SLEEP;
+			delete process.env.CHIT_TEST_SLEEP;
 		}
 	});
 });
@@ -534,7 +534,7 @@ describe("CodexExecAdapter: call timeout watchdog", () => {
 		// reaches it; a wrapping shell would orphan it and keep the pipe open.
 		// NOTE: proc.kill() terminates only the DIRECT child, not a deeper
 		// descendant tree - the same limitation the cancel path has.
-		process.env.HANDOFF_TEST_SLEEP = "10";
+		process.env.CHIT_TEST_SLEEP = "10";
 		try {
 			const adapter = new CodexExecAdapter({ callTimeoutMs: 200 });
 			const started = Date.now();
@@ -549,7 +549,7 @@ describe("CodexExecAdapter: call timeout watchdog", () => {
 			).rejects.toThrow(/codex exec timed out after 200ms/);
 			expect(Date.now() - started).toBeLessThan(4000);
 		} finally {
-			delete process.env.HANDOFF_TEST_SLEEP;
+			delete process.env.CHIT_TEST_SLEEP;
 		}
 	});
 });
@@ -559,7 +559,7 @@ describe("CodexExecAdapter: no-progress watchdog", () => {
 		// The fake emits nothing and sleeps 10s; the no-progress watchdog fires at
 		// 200ms. A fast reject proves the no-progress kill, distinct from the 15min
 		// hard timeout. Off by default, so only this opted-in agent is affected.
-		process.env.HANDOFF_TEST_SLEEP = "10";
+		process.env.CHIT_TEST_SLEEP = "10";
 		try {
 			const started = Date.now();
 			await expect(
@@ -573,7 +573,7 @@ describe("CodexExecAdapter: no-progress watchdog", () => {
 			).rejects.toThrow(/made no progress for 200ms/);
 			expect(Date.now() - started).toBeLessThan(4000);
 		} finally {
-			delete process.env.HANDOFF_TEST_SLEEP;
+			delete process.env.CHIT_TEST_SLEEP;
 		}
 	});
 
@@ -581,7 +581,7 @@ describe("CodexExecAdapter: no-progress watchdog", () => {
 		// The fake drips a line every ~120ms for ~600ms total, longer than the 400ms
 		// timeout. It can only complete if each chunk resets the watchdog; without
 		// the per-chunk reset it would be killed mid-drip.
-		process.env.HANDOFF_TEST_DRIP = "1";
+		process.env.CHIT_TEST_DRIP = "1";
 		try {
 			const result = await new CodexExecAdapter({ noProgressTimeoutMs: 400 }).call({
 				participantId: "codex",
@@ -592,7 +592,7 @@ describe("CodexExecAdapter: no-progress watchdog", () => {
 			});
 			expect(result.output).toBe("DRIP: done");
 		} finally {
-			delete process.env.HANDOFF_TEST_DRIP;
+			delete process.env.CHIT_TEST_DRIP;
 		}
 	}, 15000);
 });
