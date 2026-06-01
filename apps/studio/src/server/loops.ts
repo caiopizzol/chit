@@ -1,4 +1,4 @@
-// Server-side read path for the convergence log (design/convergence-log.md). Studio
+// Server-side read path for the convergence log. Studio
 // reads .chit/loops/<loopId>.jsonl under the invocation cwd and serves loop
 // summaries plus a single loop's records. The browser only ever sees the
 // safe-slug loopId, never a filesystem path (same rule as the docId table for

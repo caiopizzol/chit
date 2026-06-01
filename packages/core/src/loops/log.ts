@@ -6,8 +6,7 @@
 //
 // Browser-safe: types + validate/serialize/parse only. The node-backed
 // append/read (fs) lives in apps/cli. The file is append-only JSONL: a `loop`
-// header line, one `iteration` line per round, then a `stop` line. See
-// design/convergence-log.md.
+// header line, one `iteration` line per round, then a `stop` line.
 
 import type { AdapterUsage } from "../audit/events.ts";
 

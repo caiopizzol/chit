@@ -19,8 +19,6 @@ That also installs the lefthook pre-commit hook (staged Biome formatting).
 - `apps/studio` (`@chit-run/studio`) - the local visual editor.
 - `packages/core` (`@chit-run/core`) - browser-safe shared model, parser, and graph logic.
 - `examples/` - canonical chit manifests.
-- `design/` - living technical contracts the code cites (not the published docs).
-- `research/` - historical proposals and superseded notes (non-authoritative).
 - `fixtures/traps/` - deliberately-broken manifests used as test fixtures.
 
 ## Run it

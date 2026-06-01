@@ -9,7 +9,7 @@
 //    copy. This is NOT an XSS/extension boundary: same-origin script and
 //    devtools can still read sessionStorage. The real boundary is the
 //    server's defense-in-depth chain (Host allowlist + same-origin app
-//    shell + Bearer token + no CORS, per design/studio.md).
+//    shell + Bearer token + no CORS).
 // 4. Returns the bootstrap to the caller.
 //
 // The runtime path uses real window and sessionStorage. The processing

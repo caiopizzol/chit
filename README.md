@@ -86,9 +86,7 @@ apps/site     @chit-run/site, the landing page and Fumadocs docs
 apps/studio   @chit-run/studio, the local visual editor
 packages/core @chit-run/core, browser-safe parser/model/graph logic
 examples/     canonical chit manifests
-design/       living technical contracts
 fixtures/     test fixtures
-research/     historical notes, non-authoritative
 ```
 
 ## Development
