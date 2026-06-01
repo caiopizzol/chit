@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import "./landing.css";
 
 export const metadata: Metadata = {
-	title: { absolute: "chit - a thin runtime for multi-agent workflows" },
-	description: "A thin runtime for multi-agent workflows. Stop being the glue between your agents.",
+	title: { absolute: "chit - versioned, cross-vendor agent routines" },
+	description:
+		"Turn the agent handoff you already run by hand into a versioned, cross-vendor routine with an audit trail. Stop being the glue between your agents.",
 };
 
 export default function Home() {
@@ -96,9 +97,9 @@ export default function Home() {
 					{"\n  "}
 					<span className="pass-line">agents: resolved</span>
 					{"\n  "}
-					<span className="warn-line">permissions: needs override</span>
+					<span className="pass-line">permissions: read_only enforced</span>
 					{
-						"\n    claude requires filesystem read_only;\n    claude-cli cannot enforce it\n\nexecution:\n  level 0:  ask_codex, ask_claude\n  level 1:  out\n\n"
+						"\n    codex via --sandbox read-only;\n    claude via --permission-mode plan\n\nexecution:\n  level 0:  ask_codex, ask_claude\n  level 1:  out\n\n"
 					}
 					<span className="pass-line">run passes</span>
 					{"\n"}
@@ -150,13 +151,12 @@ export default function Home() {
 							fill="#F4F2EA"
 							stroke="#0A0A0A"
 							strokeWidth="1.5"
-							strokeDasharray="3,3"
 						/>
 						<text x="315" y="186" textAnchor="middle" fontSize="12" fill="#0A0A0A" fontWeight="600">
 							ask_claude
 						</text>
 						<text x="315" y="202" textAnchor="middle" fontSize="10" fill="#2A2A2A">
-							claude-cli · warn
+							claude-cli
 						</text>
 						<rect
 							x="480"
@@ -191,7 +191,8 @@ export default function Home() {
 						<div className="ind" />
 						<div className="label">WARN</div>
 						<div className="body">
-							permission gap · claude-cli cannot enforce filesystem read_only
+							unenforced permission · an adapter that cannot enforce a declared permission needs
+							--allow-unenforced-permissions
 						</div>
 					</div>
 					<div className="receipt-line fail">
@@ -215,9 +216,9 @@ export default function Home() {
 						<code>chit</code> binary.
 					</p>
 					<pre className="terminal">
-						<span className="cmd">$ bunx @chit-run/cli --help</span>
+						<span className="cmd">$ bunx @chit-run/cli@latest --help</span>
 						{"\n"}
-						<span className="cmd">$ bun install -g @chit-run/cli</span>
+						<span className="cmd">$ bun install -g @chit-run/cli@latest</span>
 						{"\n"}
 						<span className="cmd">$ chit --help</span>
 					</pre>

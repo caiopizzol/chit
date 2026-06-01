@@ -2,7 +2,7 @@
 
 [![release](https://img.shields.io/npm/v/%40chit-run%2Fcli?label=release)](https://www.npmjs.com/package/@chit-run/cli)
 
-A thin runtime for multi-agent workflows. Stop being the glue between your agents.
+Versioned, cross-vendor agent routines with an audit trail. Stop being the glue between your agents.
 
 Website and docs: https://chit.run
 
