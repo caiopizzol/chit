@@ -2,6 +2,8 @@
 
 A thin runtime for multi-agent workflows. Stop being the glue between your agents.
 
+Website and docs: https://chit.run
+
 ## What this is
 
 A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, where a reviewer checks, where you check. The runtime reads the chit and runs it inside your Claude Code, MCP, or CLI session. You stop being the copy-paste layer between two terminals.
@@ -26,19 +28,19 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (Claude Cod
 
 - **CLI.** `chit run | show | install | list | uninstall | studio | loop-log | converge | audit`.
 - **Claude Code skill.** Install a chit as a slash-invocable skill.
-- **MCP (stepwise).** `chit_start`, then `chit_run_step` per step with a live heartbeat, so each handoff is a separate visible tool call you can watch and cancel. See [the MCP docs](apps/site/content/docs/mcp.mdx).
+- **MCP (stepwise).** `chit_start`, then `chit_run_step` per step with a live heartbeat, so each handoff is a separate visible tool call you can watch and cancel. See [the MCP docs](https://chit.run/docs/mcp).
 - **Studio.** A local web editor for chits (graph view + inspector) plus a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. `chit studio [path]`. Early.
 
 ## The implement/check loop
 
 chit runs the recurring routine of "one agent implements, another reviews, repeat until it converges or needs you." Two modes:
 
-- **Supervised.** Your Claude Code chat implements; a chit `per_scope` Codex advisor reviews each round (`examples/implementation-check-thread.json`, which has the reviewer inspect the git diff directly). The chat owns the loop and the human checkpoint. Pattern: [supervised convergence](apps/site/content/docs/supervised-convergence.mdx).
-- **Autonomous.** `chit converge` runs both agents: a write-capable Claude implements, a read-only Codex reviews (`examples/converge.json`), looping to convergence. You set the task, run it against a git worktree, then inspect the loop log and audit transcript and run the final gates yourself. Manifests cannot loop, so the iteration lives in the driver, not the chit. Operating guide: [self-hosting](apps/site/content/docs/self-hosting.mdx).
+- **Supervised.** Your Claude Code chat implements; a chit `per_scope` Codex advisor reviews each round (`examples/implementation-check-thread.json`, which has the reviewer inspect the git diff directly). The chat owns the loop and the human checkpoint. Pattern: [supervised convergence](https://chit.run/docs/supervised-convergence).
+- **Autonomous.** `chit converge` runs both agents: a write-capable Claude implements, a read-only Codex reviews (`examples/converge.json`), looping to convergence. You set the task, run it against a git worktree, then inspect the loop log and audit transcript and run the final gates yourself. Manifests cannot loop, so the iteration lives in the driver, not the chit. Operating guide: [self-hosting](https://chit.run/docs/self-hosting).
 
 A run can record a convergence log (`chit loop-log`, written to `.chit/loops/<id>.jsonl`) that Studio's Loops drawer renders.
 
-An audited run also records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. `chit converge` audits by default; `chit run --audit` and the MCP `chit_start audit:true` are opt-in (blobs can hold secrets). Read it with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. Retention is bounded by default. See [the audit-log docs](apps/site/content/docs/audit-log.mdx).
+An audited run also records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. `chit converge` audits by default; `chit run --audit` and the MCP `chit_start audit:true` are opt-in (blobs can hold secrets). Read it with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. Retention is bounded by default. See [the audit-log docs](https://chit.run/docs/audit-log).
 
 ## Repository layout
 
