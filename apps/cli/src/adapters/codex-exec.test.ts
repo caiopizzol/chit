@@ -402,6 +402,67 @@ describe("CodexExecAdapter: command construction", () => {
 			writeFakeBin("codex", FAKE_CODEX);
 		}
 	});
+
+	// The sandbox is derived from the participant's declared filesystem permission
+	// so codex can be a write-capable implementer, not only a read-only reviewer.
+	async function sandboxFor(filesystem: "read_only" | "write" | undefined): Promise<string> {
+		writeFakeBin("codex", FAKE_CODEX_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, `argv-sandbox-${filesystem ?? "omitted"}.txt`);
+		process.env.CHIT_TEST_ARGS_FILE = argsFile;
+		try {
+			await new CodexExecAdapter({}).call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				...(filesystem && { filesystem }),
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("--sandbox");
+			return argv[argv.indexOf("--sandbox") + 1] ?? "";
+		} finally {
+			delete process.env.CHIT_TEST_ARGS_FILE;
+			writeFakeBin("codex", FAKE_CODEX);
+		}
+	}
+
+	test("read_only filesystem selects --sandbox read-only", async () => {
+		expect(await sandboxFor("read_only")).toBe("read-only");
+	});
+
+	test("write filesystem selects --sandbox workspace-write", async () => {
+		expect(await sandboxFor("write")).toBe("workspace-write");
+	});
+
+	test("an omitted filesystem permission defaults to --sandbox read-only", async () => {
+		expect(await sandboxFor(undefined)).toBe("read-only");
+	});
+
+	test("resume omits --sandbox even for a write participant (inherits session sandbox)", async () => {
+		// codex exec resume inherits the original session's sandbox, so re-passing
+		// --sandbox would error. A write filesystem on resume must not add it.
+		writeFakeBin("codex", FAKE_CODEX_ARGS_RECORDER);
+		const argsFile = join(TMPDIR, "argv-sandbox-resume-write.txt");
+		process.env.CHIT_TEST_ARGS_FILE = argsFile;
+		try {
+			await new CodexExecAdapter({}).call({
+				participantId: "codex",
+				agentId: "codex",
+				stepId: "ask",
+				input: "x",
+				cwd: TMPDIR,
+				session: { threadId: "prior" },
+				filesystem: "write",
+			});
+			const argv = readFileSync(argsFile, "utf-8").trim().split("\n");
+			expect(argv).toContain("resume");
+			expect(argv).not.toContain("--sandbox");
+		} finally {
+			delete process.env.CHIT_TEST_ARGS_FILE;
+			writeFakeBin("codex", FAKE_CODEX);
+		}
+	});
 });
 
 describe("CodexExecAdapter: session resume", () => {

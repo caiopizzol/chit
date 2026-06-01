@@ -60,6 +60,48 @@ describe("computeFingerprint", () => {
 		expect(a).not.toBe(b);
 	});
 
+	test("codex-exec: write and read_only fork (effective sandbox differs)", () => {
+		// codex-exec runs --sandbox workspace-write for a write participant and
+		// --sandbox read-only otherwise; the fingerprint hashes that effective
+		// sandbox so a write session can never resume under a read-only sandbox.
+		const write = computeFingerprint({
+			agent: agent({ adapter: "codex-exec" }),
+			participant: participant({ permissions: { filesystem: "write" } }),
+		});
+		const readOnly = computeFingerprint({
+			agent: agent({ adapter: "codex-exec" }),
+			participant: participant({ permissions: { filesystem: "read_only" } }),
+		});
+		expect(write).not.toBe(readOnly);
+	});
+
+	test("non-codex material is unchanged: introducing the codex sandbox field must not fork claude sessions", () => {
+		// The codex sandbox key is OMITTED for non-codex adapters, so a claude-cli
+		// fingerprint is byte-identical to what it was before the field existed. This
+		// golden hash is pinned to a fully-explicit claude-cli config (not the shared
+		// fixtures) and matches the pre-field release's hash for the same input. If a
+		// future change shifts non-codex material, this breaks loudly -- which is the
+		// point: every existing claude per-scope session would otherwise be forced to
+		// start fresh on upgrade.
+		const fp = computeFingerprint({
+			agent: {
+				id: "claude",
+				adapter: "claude-cli",
+				model: "claude-opus-4-8",
+				passModelOnResume: false,
+				strictMcp: true,
+				builtIn: true,
+			},
+			participant: {
+				agent: "claude",
+				role: "implementer",
+				session: "per_scope",
+				permissions: { filesystem: "read_only" },
+			},
+		});
+		expect(fp).toBe("03eb60d957a7d9db");
+	});
+
 	test("different base URL in env produces different fingerprint", () => {
 		const a = computeFingerprint({
 			agent: agent({ env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" } }),

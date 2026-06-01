@@ -34,12 +34,14 @@ export interface AdapterCallRequest {
 	// does no per-event work), while the audit wrapper sets it to record
 	// adapter.event. Both adapters implement it.
 	onEvent?: (event: AdapterEvent) => void;
-	// The calling participant's declared filesystem permission. Adapters that can
-	// enforce read_only consult it per call: claude-cli runs with
-	// `--permission-mode plan` when read_only (codex-exec always sandboxes, so it
-	// ignores this). Threaded per call, not baked into the adapter, so one adapter
-	// instance can serve participants with different permissions. Optional: when
-	// omitted the adapter keeps its permissive default (claude can write).
+	// The calling participant's declared filesystem permission. Both adapters
+	// consult it per call to pick their role: claude-cli runs with
+	// `--permission-mode plan` when read_only, and codex-exec derives its OS
+	// sandbox (`--sandbox read-only` for read_only/omitted, `--sandbox
+	// workspace-write` for write). Threaded per call, not baked into the adapter,
+	// so one adapter instance can serve participants with different permissions.
+	// Optional: when omitted each adapter keeps its default (claude can write;
+	// codex stays sandboxed read-only).
 	filesystem?: FilesystemPermission;
 }
 

@@ -20,7 +20,7 @@
 
 import { listAudit, type RunSummary } from "../../audit/reader.ts";
 import type { AuditStore } from "../../audit/store.ts";
-import { isStale } from "../../jobs/health.ts";
+import { formatDuration, isStale, jobTiming } from "../../jobs/health.ts";
 import type { JobStore } from "../../jobs/store.ts";
 import type { JobRecord } from "../../jobs/types.ts";
 import { type ConvergeStatus, describeConverge } from "./converge-engine.ts";
@@ -69,20 +69,45 @@ export interface JobStatusSummary {
 	stopStatus?: JobRecord["stopStatus"];
 	auditRefs: string[];
 	createdAt: string;
+	// Programmatic timing (omitted when not derivable; see jobTiming).
+	elapsedMs?: number;
+	lastHeartbeatAgeMs?: number;
+	phaseElapsedMs?: number;
 	nextAction: string;
+}
+
+// Running-job nextAction prose: name the phase and how long the job (and the
+// current phase) have been going, so a long job is legible at a glance instead
+// of a bare "in progress". Falls back to "in progress" when no timing is known.
+function runningNextAction(job: JobRecord, timing: ReturnType<typeof jobTiming>): string {
+	const parts: string[] = [];
+	if (timing.elapsedMs !== undefined) parts.push(`running for ${formatDuration(timing.elapsedMs)}`);
+	if (job.phase) {
+		parts.push(
+			timing.phaseElapsedMs !== undefined
+				? `${job.phase} for ${formatDuration(timing.phaseElapsedMs)}`
+				: job.phase,
+		);
+	}
+	const lead = parts.length > 0 ? parts.join(", ") : "in progress";
+	return `${lead}; chit_job_status / chit_job_cancel "${job.jobId}"`;
 }
 
 function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary {
 	const stale = isStale(job, nowMs);
 	const display = stale ? "stale" : job.state;
+	const timing = jobTiming(job, nowMs);
+	// Only point at a transcript when one actually exists; a failed/empty job
+	// must not tell the operator to open <ref> that was never recorded.
+	const latestRef = job.auditRefs.at(-1);
 	const nextAction =
 		display === "running"
-			? `in progress${job.phase ? ` (${job.phase})` : ""}; chit_job_status / chit_job_cancel "${job.jobId}"`
+			? runningNextAction(job, timing)
 			: display === "queued"
 				? "queued; the worker is starting"
 				: display === "stale"
 					? `worker appears dead; chit_job_status "${job.jobId}" to inspect, then start a fresh job`
-					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; chit_job_status "${job.jobId}" or chit_audit_show <ref>`;
+					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; chit_job_status "${job.jobId}"${latestRef ? ` or chit_audit_show ${latestRef}` : ""}`;
 	return {
 		jobId: job.jobId,
 		loopId: job.loopId,
@@ -95,6 +120,11 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 		...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 		auditRefs: job.auditRefs,
 		createdAt: job.createdAt,
+		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),
+		...(timing.lastHeartbeatAgeMs !== undefined && {
+			lastHeartbeatAgeMs: timing.lastHeartbeatAgeMs,
+		}),
+		...(timing.phaseElapsedMs !== undefined && { phaseElapsedMs: timing.phaseElapsedMs }),
 		nextAction,
 	};
 }

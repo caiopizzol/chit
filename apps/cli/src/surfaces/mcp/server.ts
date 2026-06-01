@@ -24,7 +24,7 @@ import { listAudit, showAudit } from "../../audit/reader.ts";
 import { AuditStore } from "../../audit/store.ts";
 import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
-import { isStale, pidAlive } from "../../jobs/health.ts";
+import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore } from "../../jobs/store.ts";
 import type { JobRecord } from "../../jobs/types.ts";
@@ -827,14 +827,28 @@ function describeJob(job: JobRecord) {
 	} catch {
 		// loop log not readable yet (worker still starting) or removed; omit detail
 	}
+	const timing = jobTiming(job, now);
+	// Running prose names the phase and how long it (and the job) have run, so a
+	// long job is legible without diffing timestamps. Terminal prose points at a
+	// transcript only when one was actually recorded (a failed/empty job has no
+	// auditRef to open, so it must not claim otherwise).
+	const latestRef = job.auditRefs.at(-1);
+	const runningDetail = [
+		timing.elapsedMs !== undefined ? `running for ${formatDuration(timing.elapsedMs)}` : undefined,
+		job.phase
+			? timing.phaseElapsedMs !== undefined
+				? `${job.phase} for ${formatDuration(timing.phaseElapsedMs)}`
+				: job.phase
+			: undefined,
+	].filter(Boolean);
 	const nextAction =
 		display === "running"
-			? "in progress; chit_job_cancel to stop, or wait and poll again"
+			? `${runningDetail.length > 0 ? `${runningDetail.join(", ")}; ` : ""}chit_job_cancel to stop, or wait and poll again`
 			: display === "queued"
 				? "queued; the worker is starting"
 				: display === "stale"
-					? "worker appears dead; inspect with chit_job_status (and chit_audit_show <auditRef> for transcripts), then start a fresh job"
-					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; open a transcript with chit_audit_show <auditRef>`;
+					? `worker appears dead; inspect with chit_job_status${latestRef ? ` (chit_audit_show ${latestRef} for the transcript)` : ""}, then start a fresh job`
+					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; ${latestRef ? `open a transcript with chit_audit_show ${latestRef}` : "no audit transcript was recorded"}`;
 	return {
 		jobId: job.jobId,
 		loopId: job.loopId,
@@ -856,6 +870,12 @@ function describeJob(job: JobRecord) {
 		...(job.startedAt !== undefined && { startedAt: job.startedAt }),
 		...(job.endedAt !== undefined && { endedAt: job.endedAt }),
 		...(job.lastHeartbeatAt !== undefined && { lastHeartbeatAt: job.lastHeartbeatAt }),
+		...(job.phaseStartedAt !== undefined && { phaseStartedAt: job.phaseStartedAt }),
+		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),
+		...(timing.lastHeartbeatAgeMs !== undefined && {
+			lastHeartbeatAgeMs: timing.lastHeartbeatAgeMs,
+		}),
+		...(timing.phaseElapsedMs !== undefined && { phaseElapsedMs: timing.phaseElapsedMs }),
 		...(latest !== undefined && { latest }),
 		nextAction,
 	};
@@ -865,7 +885,7 @@ server.registerTool(
 	"chit_job_status",
 	{
 		description:
-			"Show one background job: state (queued/running/completed/cancelled/failed, or derived `stale` when the worker is gone), current phase, loop id, iterations, last verdict, audit refs, and the latest iteration's changed files / workspace warnings / usage. Read-only.",
+			"Show one background job: state (queued/running/completed/cancelled/failed, or derived `stale` when the worker is gone), current phase, timing fields (elapsedMs, lastHeartbeatAgeMs, phaseElapsedMs), loop id, iterations, last verdict, audit refs, and the latest iteration's changed files / workspace warnings / usage. Read-only.",
 		inputSchema: { job_id: z.string() },
 	},
 	async ({ job_id }) => {

@@ -51,6 +51,10 @@ export interface JobRecord {
 	lastHeartbeatAt?: string;
 
 	phase?: JobPhase;
+	// When the current phase began (ISO 8601), set on every phase change and
+	// cleared with `phase` at a terminal state. Lets a reader report how long the
+	// job has been in its current phase (phaseElapsedMs) without guessing.
+	phaseStartedAt?: string;
 	iteration?: number; // current (running) or last completed iteration number
 
 	// Cancellation intent, persisted BEFORE any signal so the reason survives a

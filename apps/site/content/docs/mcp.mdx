@@ -86,7 +86,7 @@ Start a converge loop as a background job. Inputs: `task`, `scope`, `cwd?`, `man
 
 ### chit_job_status
 
-Inspect one job. Input: `job_id`. Returns the job's `state` (`queued` / `running` / `completed` / `cancelled` / `failed`) plus a derived `stale` (a running job whose worker is gone or silent), the current `phase`, `iterationsCompleted`, `lastVerdict`, `stopStatus`, `auditRefs`, and the latest iteration's `changedFiles` / `workspaceWarnings` / `usage` (read from the loop log). Read-only.
+Inspect one job. Input: `job_id`. Returns the job's `state` (`queued` / `running` / `completed` / `cancelled` / `failed`) plus a derived `stale` (a running job whose worker is gone or silent), the current `phase`, `iterationsCompleted`, `lastVerdict`, `stopStatus`, `auditRefs`, and the latest iteration's `changedFiles` / `workspaceWarnings` / `usage` (read from the loop log). For operating long jobs it also reports timing in milliseconds: `elapsedMs` (run duration), `lastHeartbeatAgeMs` (how long since the worker last beat, while in flight), and `phaseElapsedMs` (how long it has been in the current phase). Read-only.
 
 ### chit_job_cancel
 

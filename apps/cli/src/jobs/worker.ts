@@ -89,7 +89,15 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 	const workerToken = crypto.randomUUID();
 	const setPhase = (phase: JobPhase) => {
 		try {
-			store.update(jobId, (c) => ({ ...c, phase, lastHeartbeatAt: iso(now()) }));
+			store.update(jobId, (c) => ({
+				...c,
+				phase,
+				// Reset the phase clock only on a real transition, so the duplicate
+				// "implementing" (the pre-iteration write plus the implement step.started
+				// trace) does not keep restarting the age.
+				...(c.phase !== phase && { phaseStartedAt: iso(now()) }),
+				lastHeartbeatAt: iso(now()),
+			}));
 		} catch {
 			// best effort; a lost job file surfaces elsewhere
 		}
@@ -126,6 +134,7 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 			workerToken,
 			lastHeartbeatAt: iso(now()),
 			phase: "starting",
+			phaseStartedAt: iso(now()),
 		}));
 
 		const resolved = resolveExecute(job);
@@ -172,6 +181,7 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 				...c,
 				iteration: i,
 				phase: "implementing",
+				...(c.phase !== "implementing" && { phaseStartedAt: iso(now()) }),
 				lastHeartbeatAt: iso(now()),
 			}));
 
@@ -202,6 +212,13 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 			}
 
 			if (!iter.ok) {
+				// A failed run can still have produced an audit transcript before it
+				// broke. Preserve that ref so the terminal job points at its receipt
+				// instead of reporting empty auditRefs while a transcript sits on disk.
+				if (iter.auditRunId) {
+					const ref = iter.auditRunId;
+					store.update(jobId, (c) => ({ ...c, auditRefs: [...c.auditRefs, ref] }));
+				}
 				if (controller.signal.aborted) {
 					stopLoopSafely(job, "cancelled", "cancelled mid-iteration (signal)");
 					finish(store, jobId, now, "cancelled", { stopStatus: "cancelled" });
@@ -216,6 +233,7 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 			store.update(jobId, (c) => ({
 				...c,
 				phase: "recording",
+				...(c.phase !== "recording" && { phaseStartedAt: iso(now()) }),
 				iterationsCompleted: i,
 				lastVerdict: iter.verdict,
 				auditRefs: iter.auditRunId ? [...c.auditRefs, iter.auditRunId] : c.auditRefs,
@@ -267,7 +285,8 @@ function stopLoopSafely(
 	}
 }
 
-// Write the terminal job state with endedAt and clear the live phase.
+// Write the terminal job state with endedAt and clear the live phase (and its
+// clock): a terminal job is in no phase, so phaseElapsedMs should not be derived.
 function finish(
 	store: JobStore,
 	jobId: string,
@@ -280,6 +299,7 @@ function finish(
 		state,
 		endedAt: iso(now()),
 		phase: undefined,
+		phaseStartedAt: undefined,
 		lastHeartbeatAt: iso(now()),
 		...(extra.stopStatus !== undefined && { stopStatus: extra.stopStatus }),
 		...(extra.failure !== undefined && { failure: extra.failure }),

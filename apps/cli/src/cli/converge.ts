@@ -280,13 +280,16 @@ export interface ConvergeIterationContext {
 // discriminated union on `ok`:
 //   - ok: false  -> the manifest run failed gracefully; `failure` is the reason
 //     string (no iteration record was appended). The caller stops the loop.
+//     `auditRunId` is still present when the audited execute recorded a clean
+//     transcript before the run failed, so a failed iteration can still point at
+//     its receipt instead of leaving a transcript on disk orphaned.
 //   - ok: true   -> the iteration record was appended; the parsed verdict and
 //     metrics are returned, plus `reviewText` (the next prior_review) and
 //     `stopStatus` (converged for proceed, blocked for block, undefined for
 //     revise -> continue). `decision` == verdict (the autonomous driver follows
 //     the reviewer). `auditRunId` is present only when the run was audited.
 export type ConvergeIterationResult =
-	| { ok: false; failure: string }
+	| { ok: false; failure: string; auditRunId?: string }
 	| {
 			ok: true;
 			verdict: LoopVerdict;
@@ -356,10 +359,14 @@ export async function runConvergeIteration(
 
 	if (!result.ok) {
 		// A step failed gracefully. Hand the reason back so the caller can close
-		// the loop as blocked; a failed run appends no iteration record.
+		// the loop as blocked; a failed run appends no iteration record. Pass the
+		// auditRunId through when the audited execute still recorded a clean
+		// transcript, so the caller (the background worker) can keep the link in
+		// auditRefs rather than leave the transcript orphaned on disk.
 		return {
 			ok: false,
 			failure: `manifest run failed at step "${result.failedStep}": ${result.error}`,
+			...(result.auditRunId && { auditRunId: result.auditRunId }),
 		};
 	}
 

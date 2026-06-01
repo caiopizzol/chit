@@ -119,11 +119,11 @@ The fingerprint hashes enough of the `(agent, participant)` pair that a meaningf
 
 Adapters declare per-permission enforceability:
 
-- `codex-exec` enforces `filesystem: read_only` via `--sandbox read-only`.
-- `claude-cli` does not currently enforce filesystem; it depends on Claude's own tool permissions.
+- `codex-exec` enforces `filesystem` with an OS sandbox: `read_only` runs `--sandbox read-only`, `write` runs `--sandbox workspace-write`.
+- `claude-cli` enforces `filesystem: read_only` via `--permission-mode plan`, a Claude permission boundary that blocks writes from inside Claude (not an OS sandbox).
 - A generic subprocess adapter cannot enforce; install fails when `read_only` is requested unless the flag is set.
 
-In practice: any manifest using a `claude-cli` participant requires `--allow-unenforced-permissions` today. Codex-only manifests run cleanly. When claude-cli is taught to restrict tools, the gap closes without manifest changes.
+In practice: both built-in adapters enforce `read_only` today, so manifests using them run cleanly. `--allow-unenforced-permissions` is only needed for an adapter that declares it cannot enforce a requested permission.
 
 ## Deferred details
 

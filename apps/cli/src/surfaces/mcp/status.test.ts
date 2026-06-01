@@ -128,6 +128,102 @@ describe("buildStatus", () => {
 		expect(byId.done?.stopStatus).toBe("converged");
 	});
 
+	test("running job: timing fields + nextAction names the phase and ages", () => {
+		const jobStore = emptyJobStore();
+		jobStore.create({
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 0,
+			auditRefs: [],
+			jobId: "run1",
+			loopId: "run1",
+			state: "running",
+			createdAt: "2026-06-01T10:55:00.000Z",
+			startedAt: new Date(NOW - 120_000).toISOString(),
+			pid: process.pid,
+			lastHeartbeatAt: new Date(NOW - 5_000).toISOString(),
+			phase: "implementing",
+			phaseStartedAt: new Date(NOW - 30_000).toISOString(),
+		});
+		const status = buildStatus(
+			new RunStore(),
+			new ConvergeStore(),
+			emptyAuditStore(),
+			jobStore,
+			5,
+			NOW,
+		);
+		const j = status.jobs.find((x) => x.jobId === "run1");
+		expect(j?.elapsedMs).toBe(120_000);
+		expect(j?.lastHeartbeatAgeMs).toBe(5_000);
+		expect(j?.phaseElapsedMs).toBe(30_000);
+		// Human-readable nextAction names the phase and how long it has run.
+		expect(j?.nextAction).toContain("running for 2m");
+		expect(j?.nextAction).toContain("implementing for 30s");
+	});
+
+	test("terminal job with no audit refs does not tell the operator to open a transcript", () => {
+		const jobStore = emptyJobStore();
+		jobStore.create({
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 0,
+			auditRefs: [],
+			jobId: "fail1",
+			loopId: "fail1",
+			state: "failed",
+			createdAt: "2026-06-01T10:50:00.000Z",
+			failure: "boom",
+		});
+		const status = buildStatus(
+			new RunStore(),
+			new ConvergeStore(),
+			emptyAuditStore(),
+			jobStore,
+			5,
+			NOW,
+		);
+		const j = status.jobs.find((x) => x.jobId === "fail1");
+		expect(j?.nextAction).not.toContain("chit_audit_show");
+	});
+
+	test("terminal job WITH an audit ref points at that exact ref", () => {
+		const jobStore = emptyJobStore();
+		jobStore.create({
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 1,
+			auditRefs: ["aud-xyz"],
+			jobId: "done1",
+			loopId: "done1",
+			state: "completed",
+			createdAt: "2026-06-01T10:50:00.000Z",
+			stopStatus: "converged",
+		});
+		const status = buildStatus(
+			new RunStore(),
+			new ConvergeStore(),
+			emptyAuditStore(),
+			jobStore,
+			5,
+			NOW,
+		);
+		const j = status.jobs.find((x) => x.jobId === "done1");
+		expect(j?.nextAction).toContain("chit_audit_show aud-xyz");
+	});
+
 	test("summarizes a pending run as not-complete with its ready step", () => {
 		expect(summarizeRunForStatus(fakeRun("r1"))).toEqual({
 			run_id: "r1",

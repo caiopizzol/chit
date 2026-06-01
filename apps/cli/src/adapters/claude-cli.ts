@@ -179,6 +179,17 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 				if (noProgress) throw new Error(`claude --print made no progress for ${noProgressMs}ms`);
 
 				if (exitCode !== 0) {
+					// Rate limiting is the common nonzero exit in practice. Surface a concise,
+					// operator-friendly error instead of dumping the raw stderr/stdout tail
+					// (which is often a multi-line API error blob). The raw rate_limit_event
+					// stays in the audit (onEvent recorded it live as it arrived); this only
+					// shapes the thrown failure string.
+					const rateLimit = detectClaudeRateLimit(`${stdoutText}\n${stderrText}`);
+					if (rateLimit !== undefined) {
+						throw new Error(
+							`claude --print rate limited${rateLimit ? `: ${rateLimit}` : ` (exit ${exitCode})`}`,
+						);
+					}
 					const cleaned = sanitize(stderrText || stdoutText, sensitive);
 					const tail = cleaned.trim().split("\n").slice(-5).join("\n");
 					throw new Error(`claude --print exited ${exitCode}: ${tail.slice(0, 500)}`);
@@ -355,4 +366,71 @@ function parseClaudeResult(stdout: string): ClaudePrintResult | undefined {
 		if (evt.type === "result") result = evt as ClaudePrintResult;
 	}
 	return result;
+}
+
+// A claude stream-json rate-limit event, read tolerantly. claude surfaces
+// throttling as a `rate_limit_event`; the rate-limit detail may sit in a nested
+// `rate_limit` object or at the top level depending on CLI version, so both are
+// checked. Only a small set of known scalar fields is read.
+interface RateLimitEvent {
+	type?: unknown;
+	rate_limit?: { status?: unknown; resetsAt?: unknown; retryAfter?: unknown };
+	rate_limit_info?: {
+		status?: unknown;
+		resetsAt?: unknown;
+		retryAfter?: unknown;
+		resetInSeconds?: unknown;
+		isUsingOverage?: unknown;
+	};
+	status?: unknown;
+	resetsAt?: unknown;
+	retryAfter?: unknown;
+	resetInSeconds?: unknown;
+	isUsingOverage?: unknown;
+}
+
+// Scan the stream for a rate-limit event and return a CONCISE detail string for
+// the operator-facing error (e.g. "status=rejected, resets 2026-06-01T12:00:00Z"),
+// "" when a rate-limit event is present but carries no usable detail, or
+// undefined when there is no rate-limit event at all. It deliberately extracts
+// only known scalar fields rather than echoing the JSON, so the thrown message
+// can never balloon into a raw event dump. The last event wins (a later,
+// definitive event overrides an earlier warning).
+function detectClaudeRateLimit(stdout: string): string | undefined {
+	const pickStr = (v: unknown): string | undefined =>
+		typeof v === "string" && v.trim() !== ""
+			? v.trim().replace(/\s+/g, " ").slice(0, 120)
+			: undefined;
+	const pickNum = (v: unknown): number | undefined =>
+		typeof v === "number" && Number.isFinite(v) ? v : undefined;
+	let found = false;
+	let detail = "";
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let evt: RateLimitEvent;
+		try {
+			evt = JSON.parse(trimmed) as RateLimitEvent;
+		} catch {
+			continue;
+		}
+		if (evt.type !== "rate_limit_event") continue;
+		found = true;
+		const rl: RateLimitEvent =
+			evt.rate_limit_info && typeof evt.rate_limit_info === "object"
+				? evt.rate_limit_info
+				: evt.rate_limit && typeof evt.rate_limit === "object"
+					? evt.rate_limit
+					: evt;
+		const parts: string[] = [];
+		const status = pickStr(rl.status);
+		if (status) parts.push(`status=${status}`);
+		const resetsAt = pickStr(rl.resetsAt);
+		if (resetsAt) parts.push(`resets ${resetsAt}`);
+		const retryAfter = pickNum(rl.retryAfter) ?? pickNum(rl.resetInSeconds);
+		if (retryAfter !== undefined) parts.push(`retry after ${retryAfter}s`);
+		if (rl.isUsingOverage === false) parts.push("overage disabled");
+		detail = parts.join(", ");
+	}
+	return found ? detail : undefined;
 }

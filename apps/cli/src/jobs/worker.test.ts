@@ -29,8 +29,11 @@ afterEach(() => {
 });
 
 // A scripted execute: one entry per iteration. {verdict} -> a successful run whose
-// review carries that verdict; {fail} -> a graceful manifest failure (ok:false).
-function fakeExecute(outcomes: Array<{ verdict?: LoopVerdict; fail?: string }>): ConvergeExecute {
+// review carries that verdict; {fail} -> a graceful manifest failure (ok:false),
+// optionally carrying an auditRunId (a transcript recorded before the run failed).
+function fakeExecute(
+	outcomes: Array<{ verdict?: LoopVerdict; fail?: string; auditRunId?: string }>,
+): ConvergeExecute {
 	let i = 0;
 	return async () => {
 		const o = outcomes[Math.min(i, outcomes.length - 1)];
@@ -42,6 +45,7 @@ function fakeExecute(outcomes: Array<{ verdict?: LoopVerdict; fail?: string }>):
 				error: o.fail,
 				outputs: {} as Record<string, string>,
 				trace: [],
+				...(o.auditRunId && { auditRunId: o.auditRunId }),
 			};
 		}
 		const review = `looks fine\n\`\`\`json\n${JSON.stringify({
@@ -142,6 +146,27 @@ describe("background converge worker", () => {
 		expect(job?.state).toBe("failed");
 		expect(job?.failure).toContain("step exploded");
 		expect(readLoop(cwd, "j1").at(-1)).toMatchObject({ type: "stop", status: "blocked" });
+	});
+
+	test("manifest run failure preserves the audit transcript ref in auditRefs", async () => {
+		// Regression: a failed run that still produced a transcript must keep the
+		// ref, so the failed job points at its receipt instead of an empty auditRefs.
+		seedJob();
+		await runJobWorker(
+			"j1",
+			runDeps(fakeExecute([{ fail: "step exploded", auditRunId: "audit-fail-1" }])),
+		);
+		const job = store.get("j1");
+		expect(job?.state).toBe("failed");
+		expect(job?.auditRefs).toEqual(["audit-fail-1"]);
+	});
+
+	test("clears phase and phaseStartedAt at a terminal state", async () => {
+		seedJob();
+		await runJobWorker("j1", runDeps(fakeExecute([{ verdict: "proceed" }])));
+		const job = store.get("j1");
+		expect(job?.phase).toBeUndefined();
+		expect(job?.phaseStartedAt).toBeUndefined();
 	});
 
 	test("cancel intent before an iteration -> cancelled with no iteration record", async () => {

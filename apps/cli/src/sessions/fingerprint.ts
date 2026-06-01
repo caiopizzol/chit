@@ -38,6 +38,19 @@ export function computeFingerprint(input: FingerprintInput): string {
 		// strict-on, so only an explicit false differs (no spurious fork); on other
 		// adapters strictMcp has no runtime effect, so it hashes as null.
 		strictMcp: agent.adapter === "claude-cli" ? agent.strictMcp !== false : null,
+		// The OS sandbox codex-exec runs under is derived from the participant's
+		// filesystem permission (write -> workspace-write, else read-only) on the
+		// FRESH call; a resume omits --sandbox and inherits whatever the original
+		// call established. Hash that effective sandbox so a session never resumes
+		// under a sandbox that no longer matches the declared permission -- in
+		// particular, a codex `write` session created before write was honored (when
+		// codex always ran read-only) must not resume read-only now. The key is
+		// OMITTED for non-codex adapters (not hashed as null) so introducing it does
+		// not shift their material and spuriously fork existing claude sessions.
+		...(agent.adapter === "codex-exec" && {
+			codexSandbox:
+				participant.permissions.filesystem === "write" ? "workspace-write" : "read-only",
+		}),
 		baseUrl,
 		role: participant.role,
 		session: participant.session,

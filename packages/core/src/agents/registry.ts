@@ -27,7 +27,10 @@ export class RegistryError extends Error {
 const ADAPTERS: Record<AdapterKind, AdapterDescriptor> = {
 	"codex-exec": {
 		kind: "codex-exec",
-		// Hard OS sandbox: codex exec always runs with `--sandbox read-only`.
+		// Hard OS sandbox: a read_only participant runs with `--sandbox read-only`
+		// (a write participant gets `--sandbox workspace-write`). The sandbox is
+		// derived per call from the participant's filesystem permission, so codex
+		// genuinely enforces read_only when asked.
 		capabilities: { enforces_filesystem_read_only: true },
 	},
 	"claude-cli": {

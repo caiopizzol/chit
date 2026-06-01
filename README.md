@@ -47,7 +47,7 @@ Manifests are static DAGs and cannot loop, so the iteration lives in an orchestr
 
 ## Safety
 
-- Codex reviews in a hard OS sandbox (`codex exec --sandbox read-only`).
+- Codex runs in a hard OS sandbox chosen by its declared `filesystem` permission: `read_only` runs `--sandbox read-only`, `write` runs `--sandbox workspace-write`.
 - Claude read-only is enforced by Claude plan-mode permissions (`--permission-mode plan`), not an OS sandbox.
 - The chit-spawned `claude` is launched with strict MCP isolation by default, so it does not inherit your MCP servers.
 - Audit transcripts contain full prompts and outputs and can hold secrets; auditing is on for converge and opt-in elsewhere, under your local state dir.

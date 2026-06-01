@@ -359,9 +359,10 @@ Permission enforcement: each participant's declared permissions are checked
 against the chosen adapter's capabilities at install time. If the adapter
 cannot enforce a permission, the run is rejected unless
 --allow-unenforced-permissions is set. Both built-in adapters enforce
-filesystem read_only today: codex-exec via --sandbox read-only (a hard OS
-sandbox), claude-cli via --permission-mode plan (Claude plan-mode permissions,
-not an OS/filesystem sandbox).
+filesystem read_only today: codex-exec via an OS sandbox (--sandbox read-only
+for a reviewer, --sandbox workspace-write for a write-capable implementer),
+claude-cli via --permission-mode plan (a Claude plan-mode permission, not an
+OS/filesystem sandbox).
 
 Limitations in this build:
 - file[] inputs are not yet supported via the CLI.

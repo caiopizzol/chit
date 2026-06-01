@@ -837,6 +837,32 @@ describe("runConvergeIteration (single-iteration primitive)", () => {
 		expect(readLoop(cwd, loopId).filter((r) => r.type === "iteration")).toHaveLength(0);
 	});
 
+	test("a failed run still surfaces auditRunId when the run was audited", async () => {
+		// A graceful failure can still have a clean audit transcript on disk (the
+		// audited execute recorded it before the step failed). The primitive must
+		// pass that ref through so the caller can keep the link instead of orphaning it.
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT4b" });
+		const execute: ConvergeExecute = async () => ({
+			ok: false,
+			failedStep: "review",
+			error: "codex exited 1",
+			outputs: { implement: "partial" },
+			trace: [],
+			auditRunId: "audit-on-failure",
+		});
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+		expect(res.ok).toBe(false);
+		if (res.ok) throw new Error("expected failed iteration");
+		expect(res.auditRunId).toBe("audit-on-failure");
+	});
+
 	test("an execute throw propagates and appends no iteration record", async () => {
 		// A run that THROWS (not a graceful ok:false) must propagate out of the
 		// primitive so the caller can close the loop as blocked; no iteration record

@@ -25,7 +25,7 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools,
 
 ## Safety model
 
-- **Codex is hard-sandboxed.** A read-only reviewer runs `codex exec --sandbox read-only`, an OS-level sandbox.
+- **Codex is hard-sandboxed.** Codex runs in an OS-level sandbox chosen by its declared permission: a read-only reviewer runs `codex exec --sandbox read-only`; a write-capable implementer runs `--sandbox workspace-write`.
 - **Claude read-only is permission-level.** A read-only `claude` runs with `--permission-mode plan`, which blocks writes from inside Claude. It is a Claude plan-mode permission, not an OS sandbox.
 - **Strict MCP isolation.** The chit-spawned `claude` is launched isolated from your MCP servers by default, so a run does not inherit ambient tools.
 - **Audit sensitivity.** Audit transcripts hold full prompts and outputs and can contain secrets. They live under your local state dir; auditing is on for converge and opt-in elsewhere.

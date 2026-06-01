@@ -70,6 +70,16 @@ if [ -n "$CHIT_TEST_CLAUDE_DRIP" ]; then
   echo '{"type":"result","session_id":"drip-claude","result":"DRIP: claude done","subtype":"success","is_error":false}'
   exit 0
 fi
+# Rate-limit gate: stream a rate_limit_event, write a noisy raw API error to
+# stderr, then exit nonzero. Stands in for a throttled claude. The adapter must
+# surface a CONCISE "rate limited" error built from the event, not the raw stderr.
+if [ -n "$CHIT_TEST_CLAUDE_RATE_LIMIT" ]; then
+  cat > /dev/null
+  echo '{"type":"system","subtype":"init","session_id":"rl-claude"}'
+  echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","isUsingOverage":false,"resetInSeconds":42}}'
+  echo 'API Error: 429 rate_limit_error key=sk-ant-shhh' >&2
+  exit 1
+fi
 if [ -n "$CHIT_TEST_CLAUDE_ENV_FILE" ]; then
   printf 'CLAUDECODE=%s\\n' "$CLAUDECODE" > "$CHIT_TEST_CLAUDE_ENV_FILE"
 fi
@@ -217,6 +227,62 @@ describe("ClaudeCliAdapter: stdin and parsing", () => {
 			).rejects.toThrow(/claude stream produced no result event/);
 		} finally {
 			delete process.env.CHIT_TEST_CLAUDE_NO_RESULT;
+		}
+	});
+
+	test("normalizes a rate-limit nonzero exit to a concise error, not a raw dump", async () => {
+		process.env.CHIT_TEST_CLAUDE_RATE_LIMIT = "1";
+		try {
+			const adapter = new ClaudeCliAdapter({});
+			const err = await adapter
+				.call({
+					participantId: "claude",
+					agentId: "claude",
+					stepId: "ask",
+					input: "x",
+					cwd: TMPDIR,
+				})
+				.then(
+					() => {
+						throw new Error("expected the call to reject");
+					},
+					(e: Error) => e,
+				);
+			// Concise, operator-facing message with the useful detail from the event.
+			expect(err.message).toContain("claude --print rate limited");
+			expect(err.message).toContain("status=rejected");
+			expect(err.message).toContain("overage disabled");
+			expect(err.message).toContain("retry after 42s");
+			// The raw stderr API blob must NOT leak into the operator-facing string.
+			expect(err.message).not.toContain("API Error");
+			expect(err.message).not.toContain("rate_limit_error");
+			expect(err.message).not.toContain("sk-ant");
+		} finally {
+			delete process.env.CHIT_TEST_CLAUDE_RATE_LIMIT;
+		}
+	});
+
+	test("preserves the raw rate_limit_event for the audit while sanitizing the error", async () => {
+		// onEvent still sees the verbatim event (the audit keeps the raw body); only
+		// the thrown failure string is the sanitized, concise one.
+		process.env.CHIT_TEST_CLAUDE_RATE_LIMIT = "1";
+		const events: { type: string; raw: string }[] = [];
+		try {
+			await expect(
+				new ClaudeCliAdapter({}).call({
+					participantId: "claude",
+					agentId: "claude",
+					stepId: "ask",
+					input: "x",
+					cwd: TMPDIR,
+					onEvent: (e) => events.push(e),
+				}),
+			).rejects.toThrow(/claude --print rate limited/);
+			const rl = events.find((e) => e.type === "rate_limit_event");
+			expect(rl).toBeDefined();
+			expect(JSON.parse(rl?.raw ?? "{}").rate_limit_info.status).toBe("rejected");
+		} finally {
+			delete process.env.CHIT_TEST_CLAUDE_RATE_LIMIT;
 		}
 	});
 

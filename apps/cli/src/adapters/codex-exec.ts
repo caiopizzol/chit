@@ -1,4 +1,4 @@
-import type { AdapterUsage } from "@chit-run/core";
+import type { AdapterUsage, FilesystemPermission } from "@chit-run/core";
 import type {
 	AdapterCallRequest,
 	AdapterCallResult,
@@ -62,7 +62,7 @@ export class CodexExecAdapter implements RuntimeAdapter {
 		const sensitive = findSensitiveValues(this.config.env);
 		try {
 			const priorThreadId = getCodexThreadId(req.session);
-			const cmd = this.buildCommand(priorThreadId);
+			const cmd = this.buildCommand(priorThreadId, req.filesystem);
 
 			const proc = Bun.spawn({
 				cmd,
@@ -165,13 +165,17 @@ export class CodexExecAdapter implements RuntimeAdapter {
 		}
 	}
 
-	private buildCommand(priorThreadId: string | undefined): string[] {
+	private buildCommand(
+		priorThreadId: string | undefined,
+		filesystem: FilesystemPermission | undefined,
+	): string[] {
 		// `codex exec resume` accepts --skip-git-repo-check (verified against the
 		// real CLI). Without it, resume fails outside a trusted git directory
 		// with "Not inside a trusted directory". It does NOT accept --sandbox
-		// (the sandbox setting is inherited from the original session config),
-		// and -m / -c are also dropped: resume inherits the original model and
-		// reasoning effort; passing them on resume errors in some codex versions.
+		// (the sandbox setting is inherited from the original session's config, so
+		// the role is fixed at the fresh call), and -m / -c are also dropped:
+		// resume inherits the original model and reasoning effort; passing them on
+		// resume errors in some codex versions.
 		if (priorThreadId) {
 			return ["codex", "exec", "resume", "--json", "--skip-git-repo-check", priorThreadId, "-"];
 		}
@@ -181,7 +185,14 @@ export class CodexExecAdapter implements RuntimeAdapter {
 		if (this.config.reasoningEffort) {
 			cmd.push("-c", `model_reasoning_effort="${this.config.reasoningEffort}"`);
 		}
-		cmd.push("--sandbox", "read-only", "--skip-git-repo-check", "-");
+		// Derive the OS sandbox from the participant's declared filesystem
+		// permission so codex can be either a read-only reviewer or a write-capable
+		// implementer. read_only (or an omitted permission) keeps the hard
+		// `read-only` sandbox; `write` opens `workspace-write` so codex can edit the
+		// workspace. This is the fresh-call role: resume inherits whichever sandbox
+		// the original call established (above), so it never re-passes --sandbox.
+		const sandbox = filesystem === "write" ? "workspace-write" : "read-only";
+		cmd.push("--sandbox", sandbox, "--skip-git-repo-check", "-");
 		return cmd;
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isStale } from "./health.ts";
+import { formatDuration, isStale, jobTiming } from "./health.ts";
 import type { JobRecord } from "./types.ts";
 
 const NOW = Date.parse("2026-06-01T12:00:00.000Z");
@@ -51,5 +51,69 @@ describe("isStale", () => {
 		for (const state of ["completed", "cancelled", "failed"] as const) {
 			expect(isStale(job({ state, lastHeartbeatAt: ancient }), NOW)).toBe(false);
 		}
+	});
+});
+
+describe("jobTiming", () => {
+	const minuteAgo = new Date(NOW - 60_000).toISOString();
+	const tenSecAgo = new Date(NOW - 10_000).toISOString();
+
+	test("running: elapsed from startedAt, heartbeat age, and phase age", () => {
+		const t = jobTiming(
+			job({
+				state: "running",
+				startedAt: minuteAgo,
+				lastHeartbeatAt: tenSecAgo,
+				phase: "implementing",
+				phaseStartedAt: tenSecAgo,
+			}),
+			NOW,
+		);
+		expect(t.elapsedMs).toBe(60_000);
+		expect(t.lastHeartbeatAgeMs).toBe(10_000);
+		expect(t.phaseElapsedMs).toBe(10_000);
+	});
+
+	test("falls back to createdAt for elapsed when startedAt is absent", () => {
+		const t = jobTiming(job({ state: "queued", createdAt: minuteAgo }), NOW);
+		expect(t.elapsedMs).toBe(60_000);
+	});
+
+	test("terminal: elapsed spans startedAt->endedAt; heartbeat age omitted", () => {
+		const t = jobTiming(
+			job({
+				state: "completed",
+				startedAt: minuteAgo,
+				endedAt: tenSecAgo,
+				lastHeartbeatAt: tenSecAgo,
+			}),
+			NOW,
+		);
+		expect(t.elapsedMs).toBe(50_000); // minuteAgo -> tenSecAgo
+		expect(t.lastHeartbeatAgeMs).toBeUndefined();
+	});
+
+	test("phase age omitted when no phase is active", () => {
+		const t = jobTiming(
+			job({ state: "running", startedAt: minuteAgo, phaseStartedAt: tenSecAgo }),
+			NOW,
+		);
+		expect(t.phaseElapsedMs).toBeUndefined();
+	});
+
+	test("unparseable timestamps yield no fields rather than NaN", () => {
+		const t = jobTiming(job({ state: "running", startedAt: "not-a-date" }), NOW);
+		expect(t.elapsedMs).toBeUndefined();
+	});
+});
+
+describe("formatDuration", () => {
+	test("formats seconds, minutes, and hours compactly", () => {
+		expect(formatDuration(0)).toBe("0s");
+		expect(formatDuration(45_000)).toBe("45s");
+		expect(formatDuration(60_000)).toBe("1m");
+		expect(formatDuration(192_000)).toBe("3m12s");
+		expect(formatDuration(3_600_000)).toBe("1h");
+		expect(formatDuration(3_840_000)).toBe("1h4m");
 	});
 });
