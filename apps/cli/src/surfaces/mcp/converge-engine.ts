@@ -11,7 +11,7 @@
 // (the audited execute boundary, the prior_review to thread forward, and the
 // live AbortController for an in-flight iteration).
 
-import type { AdapterUsage, LoopRecord, LoopStopStatus, LoopVerdict } from "@chit/core";
+import type { AdapterUsage, LoopRecord, LoopStopStatus, LoopVerdict } from "@chit-run/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
