@@ -31,6 +31,7 @@ import {
 	uninstall,
 } from "../surfaces/lifecycle.ts";
 import { runAudit } from "./audit.ts";
+import { runCampaign } from "./campaign.ts";
 import { runConverge } from "./converge.ts";
 import { runLoopLog } from "./loop-log.ts";
 
@@ -271,6 +272,7 @@ const HELP = `Usage:
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
   chit converge --task <text> --scope <id> [options]   (chit converge --help)
   chit audit <list|show> [options]   (chit audit --help)
+  chit campaign <start|status|run|inspect> [flags]   (chit campaign --help; experimental)
   chit -h | --help
 
 run options:
@@ -357,6 +359,8 @@ export async function runMain(argv: string[]): Promise<number> {
 	if (argv[0] === "converge") return runConverge(argv.slice(1));
 	// audit reads the persisted audit transcripts; read-only, its own parsing.
 	if (argv[0] === "audit") return runAudit(argv.slice(1));
+	// campaign is the experimental coordinator over converge runs; its own parsing.
+	if (argv[0] === "campaign") return runCampaign(argv.slice(1));
 
 	let args: ParsedArgs;
 	try {
