@@ -33,6 +33,10 @@ jobs:
       - run: bun run check
       - run: bun run typecheck
       - run: bun run test
+      # Build the bundle up front so npm sees dist/chit.js when it reads the
+      # manifest (prepack builds it too, which keeps local npm pack working).
+      - name: Build CLI bundle
+        run: bun --filter @chit-run/cli build
       - name: Release
         if: ${{ env.NPM_TOKEN != '' }}
         env:
