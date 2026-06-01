@@ -21,7 +21,7 @@
 		"codex"
 	],
 	"bin": {
-		"chit": "./dist/chit.js"
+		"chit": "dist/chit.js"
 	},
 	"files": [
 		"dist"

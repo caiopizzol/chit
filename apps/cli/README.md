@@ -12,8 +12,8 @@ Bun. The CLI runs under the Bun runtime, so use `bunx` (or install Bun first).
 
 ```sh
 bunx @chit-run/cli --help
-bunx @chit-run/cli show examples/consult.json
-bunx @chit-run/cli run examples/consult.json --input question="..."
+bunx @chit-run/cli show path/to/your-manifest.json
+bunx @chit-run/cli run path/to/your-manifest.json --input question="..."
 ```
 
 The installed binary is `chit`:
@@ -21,6 +21,12 @@ The installed binary is `chit`:
 ```sh
 chit run <manifest.json> [options]
 ```
+
+Manifests are small JSON files you write. Example manifests live in the source repo under `examples/` (they are not bundled with this package); see the docs to write your own.
+
+## chit studio
+
+`chit studio`, the local visual editor, needs the Studio client assets, which ship only in a source checkout and not in this npm package. From a published install the `studio` command is not functional in this version. To use Studio, clone the repo and run `bun run studio:preview`.
 
 ## Docs
 

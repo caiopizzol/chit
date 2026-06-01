@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Browser-core build check.
 #
-# Bundles every module in @chit/core and greps the output for patterns that
+# Bundles every module in @chit-run/core and greps the output for patterns that
 # indicate Node-only IO leaked into the bundle. If the bundle contains any
 # of these strings, a `bun build --target=browser` of the same entry points
 # would produce code that crashes at runtime in a browser.
 #
-# Run via: bun --filter '@chit/core' check:browser
+# Run via: bun --filter '@chit-run/core' check:browser
 #
 # Acceptance criteria: zero matches for any of the FORBIDDEN patterns below.
 
@@ -70,7 +70,7 @@ done
 if [ $FAILED -eq 1 ]; then
   echo ""
   echo "Fix: move the offending code into a runtime-only package (apps/cli)."
-  echo "Browser-core consumers must import only from @chit/core."
+  echo "Browser-core consumers must import only from @chit-run/core."
   exit 1
 fi
 
