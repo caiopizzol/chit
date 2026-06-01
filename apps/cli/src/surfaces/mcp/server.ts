@@ -22,6 +22,16 @@ import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
 import { listAudit, showAudit } from "../../audit/reader.ts";
 import { AuditStore } from "../../audit/store.ts";
+import {
+	advanceCampaign,
+	type CampaignEngineDeps,
+	cancelCampaign,
+	describeCampaign,
+	startCampaign,
+} from "../../campaigns/engine.ts";
+import { PlanError } from "../../campaigns/plan.ts";
+import { CampaignStore, CampaignStoreError } from "../../campaigns/store.ts";
+import { createTaskWorktree, realGit, WorktreeError } from "../../campaigns/worktree.ts";
 import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
@@ -680,6 +690,95 @@ function spawnJobWorker(jobId: string, cwd: string): void {
 	child.unref();
 }
 
+// Launch one detached background converge job: validate the manifest, reserve the
+// loop, create the durable job record, spawn the worker. Shared by chit_converge_run
+// (one job) and the campaign engine (one per runnable task), so both refuse the
+// same manifests and produce identical job/loop state. Returns the ids + any
+// unenforced-permission warnings, or a single error string.
+function launchConvergeJob(p: {
+	task: string;
+	scope: string;
+	cwd: string; // absolute
+	manifestPath?: string; // absolute or relative to cwd; undefined -> bundled default
+	maxIterations: number;
+	loopId?: string;
+	force?: boolean;
+	allowUnenforced: boolean;
+}): { ok: true; jobId: string; loopId: string; warnings: string[] } | { ok: false; error: string } {
+	let raw: unknown;
+	let manifestAbs: string | undefined;
+	if (p.manifestPath) {
+		manifestAbs = isAbsolute(p.manifestPath) ? p.manifestPath : resolve(p.cwd, p.manifestPath);
+		try {
+			raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
+		} catch (e) {
+			return {
+				ok: false,
+				error: `could not read manifest at ${manifestAbs}: ${(e as Error).message}`,
+			};
+		}
+	} else {
+		raw = DEFAULT_CONVERGE_MANIFEST;
+	}
+	const prep = prepareConvergeExecute(raw, getRegistry(), p.scope, p.cwd, p.allowUnenforced);
+	if (!prep.ok) return { ok: false, error: prep.error };
+
+	const loopId = p.loopId ?? crypto.randomUUID();
+	try {
+		startLoop(p.cwd, {
+			scope: p.scope,
+			task: p.task,
+			maxIterations: p.maxIterations,
+			loopId,
+			force: p.force,
+		});
+	} catch (e) {
+		if (e instanceof LoopStoreError) {
+			return {
+				ok: false,
+				error: `${e.message}. Use chit_converge_next to continue a foreground loop, or start a background job with force=true or a new loop_id.`,
+			};
+		}
+		return { ok: false, error: (e as Error).message };
+	}
+
+	const jobId = crypto.randomUUID();
+	const job: JobRecord = {
+		jobId,
+		loopId,
+		repoKey: repoKey(p.cwd),
+		cwd: p.cwd,
+		scope: p.scope,
+		task: p.task,
+		...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
+		maxIterations: p.maxIterations,
+		allowUnenforced: p.allowUnenforced,
+		state: "queued",
+		createdAt: new Date().toISOString(),
+		iterationsCompleted: 0,
+		auditRefs: [],
+	};
+	try {
+		jobStore.create(job);
+	} catch (e) {
+		stopLoop(p.cwd, loopId, { status: "blocked", reason: "could not create job record" });
+		return { ok: false, error: (e as Error).message };
+	}
+	try {
+		spawnJobWorker(jobId, p.cwd);
+	} catch (e) {
+		jobStore.update(jobId, (c) => ({
+			...c,
+			state: "failed",
+			failure: `could not spawn worker: ${(e as Error).message}`,
+			endedAt: new Date().toISOString(),
+		}));
+		stopLoop(p.cwd, loopId, { status: "blocked", reason: "worker spawn failed" });
+		return { ok: false, error: `could not spawn background worker: ${(e as Error).message}` };
+	}
+	return { ok: true, jobId, loopId, warnings: prep.warnings };
+}
+
 server.registerTool(
 	"chit_converge_run",
 	{
@@ -718,86 +817,24 @@ server.registerTool(
 		allow_unenforced_permissions,
 	}) => {
 		const runCwd = resolve(cwd ?? process.cwd());
-		let raw: unknown;
-		let manifestAbs: string | undefined;
-		if (manifest_path) {
-			manifestAbs = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
-			try {
-				raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
-			} catch (e) {
-				return errorResult(`could not read manifest at ${manifestAbs}: ${(e as Error).message}`);
-			}
-		} else {
-			raw = DEFAULT_CONVERGE_MANIFEST;
-		}
-		// Validate synchronously so a bad manifest / unknown agent / unenforceable
-		// permission is an immediate error, not a job that fails in the background.
-		const prep = prepareConvergeExecute(
-			raw,
-			getRegistry(),
-			scope,
-			runCwd,
-			allow_unenforced_permissions,
-		);
-		if (!prep.ok) return errorResult(prep.error);
-
-		const loopId = loop_id ?? crypto.randomUUID();
-		// Reserve the loop (the loud "already exists" check for v1's start-only
-		// contract). startLoop refuses an existing loop log unless force.
-		try {
-			startLoop(runCwd, { scope, task, maxIterations: max_iterations, loopId, force });
-		} catch (e) {
-			if (e instanceof LoopStoreError) {
-				return errorResult(
-					`${e.message}. Use chit_converge_next to continue a foreground loop, or start a background job with force=true or a new loop_id.`,
-				);
-			}
-			return errorResult((e as Error).message);
-		}
-
-		const jobId = crypto.randomUUID();
-		const job: JobRecord = {
-			jobId,
-			loopId,
-			repoKey: repoKey(runCwd),
-			cwd: runCwd,
-			scope,
+		const r = launchConvergeJob({
 			task,
-			...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
+			scope,
+			cwd: runCwd,
+			...(manifest_path !== undefined && { manifestPath: manifest_path }),
 			maxIterations: max_iterations,
+			...(loop_id !== undefined && { loopId: loop_id }),
+			force,
 			allowUnenforced: allow_unenforced_permissions,
-			state: "queued",
-			createdAt: new Date().toISOString(),
-			iterationsCompleted: 0,
-			auditRefs: [],
-		};
-		try {
-			jobStore.create(job);
-		} catch (e) {
-			stopLoop(runCwd, loopId, { status: "blocked", reason: "could not create job record" });
-			return errorResult((e as Error).message);
-		}
-		try {
-			spawnJobWorker(jobId, runCwd);
-		} catch (e) {
-			// The worker never started: mark the job failed and close the reserved
-			// loop so neither is left dangling.
-			jobStore.update(jobId, (c) => ({
-				...c,
-				state: "failed",
-				failure: `could not spawn worker: ${(e as Error).message}`,
-				endedAt: new Date().toISOString(),
-			}));
-			stopLoop(runCwd, loopId, { status: "blocked", reason: "worker spawn failed" });
-			return errorResult(`could not spawn background worker: ${(e as Error).message}`);
-		}
+		});
+		if (!r.ok) return errorResult(r.error);
 		return jsonResult({
-			jobId,
-			loopId,
+			jobId: r.jobId,
+			loopId: r.loopId,
 			repo: repoRoot(runCwd),
 			state: "queued",
-			nextAction: `running in the background; poll chit_job_status "${jobId}" (or chit_status), cancel with chit_job_cancel "${jobId}"`,
-			...(prep.warnings.length > 0 && { warnings: prep.warnings }),
+			nextAction: `running in the background; poll chit_job_status "${r.jobId}" (or chit_status), cancel with chit_job_cancel "${r.jobId}"`,
+			...(r.warnings.length > 0 && { warnings: r.warnings }),
 		});
 	},
 );
@@ -881,6 +918,37 @@ function describeJob(job: JobRecord) {
 	};
 }
 
+// Request cancellation of one job: persist the intent FIRST (survives a worker
+// restart / stale detection), then signal the worker's process group, but never a
+// stale job's possibly-reused pid. Shared by chit_job_cancel and the campaign
+// engine's cancelJob so both cancel identically.
+type CancelResult =
+	| { status: "missing" }
+	| { status: "terminal"; state: JobRecord["state"] }
+	| { status: "requested"; state: JobRecord["state"]; signaled: boolean };
+function requestJobCancel(jobId: string): CancelResult {
+	const job = jobStore.get(jobId);
+	if (!job) return { status: "missing" };
+	if (job.state !== "queued" && job.state !== "running") {
+		return { status: "terminal", state: job.state };
+	}
+	const updated = jobStore.update(jobId, (c) => ({
+		...c,
+		cancelRequestedAt: new Date().toISOString(),
+		...(c.state === "running" && { phase: "cancelling" as const }),
+	}));
+	let signaled = false;
+	if (!isStale(updated, Date.now()) && updated.pgid !== undefined && pidAlive(updated.pid)) {
+		try {
+			process.kill(-updated.pgid, "SIGTERM");
+			signaled = true;
+		} catch {
+			// ESRCH: the worker already exited. The persisted intent still stands.
+		}
+	}
+	return { status: "requested", state: updated.state, signaled };
+}
+
 server.registerTool(
 	"chit_job_status",
 	{
@@ -903,44 +971,235 @@ server.registerTool(
 		inputSchema: { job_id: z.string() },
 	},
 	async ({ job_id }) => {
-		const job = jobStore.get(job_id);
-		if (!job) return errorResult(`unknown job_id ${job_id}`);
-		if (job.state !== "queued" && job.state !== "running") {
+		const r = requestJobCancel(job_id);
+		if (r.status === "missing") return errorResult(`unknown job_id ${job_id}`);
+		if (r.status === "terminal") {
 			return jsonResult({
 				jobId: job_id,
-				state: job.state,
+				state: r.state,
 				cancelled: false,
-				note: `job already ${job.state}`,
+				note: `job already ${r.state}`,
 			});
-		}
-		// Intent first: persist cancelRequestedAt before signaling, so a worker that
-		// restarts or is stale-detected still has the reason on record.
-		const updated = jobStore.update(job_id, (c) => ({
-			...c,
-			cancelRequestedAt: new Date().toISOString(),
-			...(c.state === "running" && { phase: "cancelling" as const }),
-		}));
-		// Then signal the worker's process group (best effort): the in-flight
-		// iteration aborts; a queued worker will see the intent before iteration 1.
-		// Only signal a job that is NOT stale: a stale job's pid may have been reused
-		// by an unrelated process, and process.kill(-pgid) would hit that group. For
-		// a stale job the persisted intent stands; the worker is already gone.
-		let signaled = false;
-		if (!isStale(updated, Date.now()) && updated.pgid !== undefined && pidAlive(updated.pid)) {
-			try {
-				process.kill(-updated.pgid, "SIGTERM");
-				signaled = true;
-			} catch {
-				// ESRCH: the worker already exited. The persisted intent still stands.
-			}
 		}
 		return jsonResult({
 			jobId: job_id,
-			state: updated.state,
+			state: r.state,
 			cancelRequested: true,
-			signaled,
+			signaled: r.signaled,
 			note: "cancellation requested; the worker stops at the next safe point and records a clean cancelled stop",
 		});
+	},
+);
+
+// --- campaign tools --------------------------------------------------------
+//
+// A campaign is a THIN COORDINATOR over background converge jobs: it plans a task
+// graph, creates one worktree per task, and launches a chit_converge_run job per
+// runnable task. It owns no execution. start launches the first wave; advance
+// reconciles finished jobs and launches the next wave; status is READ-ONLY
+// (inspection is safe -- never spawns or mutates); cancel stops active jobs. No
+// daemon, no auto-merge: the deliverable is reviewable worktree artifacts.
+
+// Engine deps wired to the real job/worktree/loop machinery. allowUnenforced is
+// false: both built-in adapters enforce their declared permission (codex via the
+// OS sandbox, claude via plan mode), so a built-in-adapter campaign never hits an
+// enforcement gap; a manifest with an unenforceable permission fails that task
+// loudly via launchConvergeJob.
+const campaignDeps: CampaignEngineDeps = {
+	git: realGit,
+	createWorktree: (repo, cid, tid, sha) => createTaskWorktree(realGit, repo, cid, tid, sha),
+	launchJob: (p) => {
+		const r = launchConvergeJob({
+			task: p.task,
+			scope: p.scope,
+			cwd: p.cwd,
+			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
+			maxIterations: p.maxIterations,
+			loopId: p.loopId,
+			allowUnenforced: false,
+		});
+		if (!r.ok) throw new Error(r.error);
+		return { jobId: r.jobId, loopId: r.loopId };
+	},
+	getJob: (id) => jobStore.get(id),
+	cancelJob: (id) => {
+		requestJobCancel(id);
+	},
+	isStale: (job) => isStale(job, Date.now()),
+	loopDetail: (worktreePath, loopId) => {
+		try {
+			const iters = readLoop(worktreePath, loopId).filter((r) => r.type === "iteration");
+			const last = iters.at(-1);
+			if (last && last.type === "iteration") {
+				return { changedFiles: last.changedFiles, workspaceWarnings: last.workspaceWarnings ?? [] };
+			}
+		} catch {
+			// loop log not readable (worker still starting, or removed); no detail
+		}
+		return { changedFiles: [], workspaceWarnings: [] };
+	},
+	now: () => Date.now(),
+};
+
+const campaignTaskSchema = z.object({
+	id: z.string().describe("Unique task id within the campaign (a safe slug)"),
+	title: z.string().describe("Short task title"),
+	body: z.string().describe("The task brief handed to the converge implementer"),
+	dependencies: z
+		.array(z.string())
+		.optional()
+		.describe("Task ids that must reach review_ready before this task runs"),
+	claimedPaths: z
+		.array(z.string())
+		.optional()
+		.describe(
+			"Paths this task will touch (globs: dir/**, dir/, or a file). Required unless allowPathOverlap; tasks with overlapping claims never run concurrently.",
+		),
+	allowPathOverlap: z
+		.boolean()
+		.optional()
+		.describe("Opt-in to running with no/overlapping claims; the task then runs alone."),
+	manifestPath: z
+		.string()
+		.optional()
+		.describe("Per-task converge manifest override (absolute or relative to cwd)."),
+});
+
+function campaignError(e: unknown) {
+	if (e instanceof PlanError || e instanceof WorktreeError || e instanceof CampaignStoreError) {
+		return errorResult(e.message);
+	}
+	return errorResult((e as Error).message);
+}
+
+server.registerTool(
+	"chit_campaign_start",
+	{
+		description:
+			"Start a campaign: run several converge tasks in parallel, each in its own git worktree, as background jobs. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_campaign_status and call chit_campaign_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Manifest resolution per task: task.manifestPath > campaign manifest_path > the bundled default converge manifest.",
+		inputSchema: {
+			tasks: z
+				.array(campaignTaskSchema)
+				.min(1)
+				.describe("The task graph (an explicit, reviewed list)"),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)"),
+			max_parallel: z.number().int().min(1).default(2).describe("Max concurrent tasks. Default 2."),
+			base_branch: z.string().optional().describe("Ref task worktrees branch from. Default: HEAD."),
+			manifest_path: z
+				.string()
+				.optional()
+				.describe("Campaign-level default converge manifest (absolute or relative to cwd)."),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.default(3)
+				.describe("Per-task iteration budget. Default 3."),
+		},
+	},
+	async ({ tasks, cwd, max_parallel, base_branch, manifest_path, max_iterations }) => {
+		const runCwd = resolve(cwd ?? process.cwd());
+		// Resolve manifest paths to absolute against the campaign cwd up front, so the
+		// per-task worktree never re-resolves a relative path against the wrong base.
+		const campaignManifest =
+			manifest_path !== undefined
+				? isAbsolute(manifest_path)
+					? manifest_path
+					: resolve(runCwd, manifest_path)
+				: undefined;
+		const planned = tasks.map((t) => ({
+			...t,
+			...(t.manifestPath !== undefined && {
+				manifestPath: isAbsolute(t.manifestPath) ? t.manifestPath : resolve(runCwd, t.manifestPath),
+			}),
+		}));
+		const store = new CampaignStore(runCwd);
+		try {
+			const campaign = startCampaign(store, campaignDeps, {
+				id: crypto.randomUUID(),
+				cwd: runCwd,
+				tasks: planned,
+				maxParallel: max_parallel,
+				...(base_branch !== undefined && { baseBranch: base_branch }),
+				...(campaignManifest !== undefined && { manifestPath: campaignManifest }),
+				maxIterations: max_iterations,
+			});
+			return jsonResult(describeCampaign(campaign, campaignDeps));
+		} catch (e) {
+			return campaignError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_campaign_status",
+	{
+		description:
+			"Read-only campaign overview: each task's status, live job state/phase, branch/worktree, changed files, audit refs, plus how many tasks are runnable now and the next action. Inspection is safe: this NEVER launches jobs, creates worktrees, or mutates state (use chit_campaign_advance to make progress).",
+		inputSchema: {
+			campaign_id: z.string(),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)"),
+		},
+	},
+	async ({ campaign_id, cwd }) => {
+		const store = new CampaignStore(resolve(cwd ?? process.cwd()));
+		const campaign = store.get(campaign_id);
+		if (!campaign) return errorResult(`unknown campaign_id ${campaign_id}`);
+		return jsonResult(describeCampaign(campaign, campaignDeps));
+	},
+);
+
+server.registerTool(
+	"chit_campaign_advance",
+	{
+		description:
+			"Advance a campaign: reconcile finished jobs into task state (converged -> review_ready; blocked/max-iterations/failed/stale -> failed; dependents proceed only past a review_ready task), then launch the next runnable wave. The only progression trigger besides start. Call it when chit_campaign_status reports runnable tasks or a finished job.",
+		inputSchema: {
+			campaign_id: z.string(),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)"),
+		},
+	},
+	async ({ campaign_id, cwd }) => {
+		const store = new CampaignStore(resolve(cwd ?? process.cwd()));
+		try {
+			const campaign = advanceCampaign(store, campaignDeps, campaign_id);
+			return jsonResult(describeCampaign(campaign, campaignDeps));
+		} catch (e) {
+			return campaignError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_campaign_cancel",
+	{
+		description:
+			"Cancel a campaign: request cancellation of every active task job (intent-first, the same safety as chit_job_cancel) and mark pending tasks cancelled. Running jobs settle cleanly in the background. Worktrees are left in place for inspection.",
+		inputSchema: {
+			campaign_id: z.string(),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)"),
+		},
+	},
+	async ({ campaign_id, cwd }) => {
+		const store = new CampaignStore(resolve(cwd ?? process.cwd()));
+		try {
+			const campaign = cancelCampaign(store, campaignDeps, campaign_id);
+			return jsonResult(describeCampaign(campaign, campaignDeps));
+		} catch (e) {
+			return campaignError(e);
+		}
 	},
 );
 

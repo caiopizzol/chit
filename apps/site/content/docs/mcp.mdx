@@ -92,6 +92,28 @@ Inspect one job. Input: `job_id`. Returns the job's `state` (`queued` / `running
 
 Cancel a job from any turn. Input: `job_id`. Persists the cancel intent first (so it survives a worker restart), then signals the worker's process group. A queued job is cancelled before it starts; a running job stops at the next safe point and records a clean `cancelled` stop. A finished job is reported back unchanged. `chit_status` lists active and recent jobs alongside the in-memory runs.
 
+## Campaigns
+
+A **campaign** runs several converge tasks in parallel, one per git worktree, as background jobs. It is a thin coordinator over the background jobs above: it plans a task graph, creates a worktree per task, and launches a `chit_converge_run` job per runnable task. It owns no execution and never auto-merges; the deliverable is a set of reviewable worktree branches. There is no daemon: progress happens only at explicit tool calls. Campaign state is durable under the state dir, keyed by repo (not in the reviewed tree).
+
+You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPaths` (the files it will touch); tasks with overlapping claims never run concurrently (they serialize into later waves), so parallel tasks cannot race on the same files. A task may declare `dependencies` (task ids that must reach `review_ready` first). The converge manifest per task resolves as task `manifestPath` > campaign `manifest_path` > the bundled default, so a campaign can mix model pairs (a Codex-writer task beside a Claude-writer task) by pointing each at the right manifest.
+
+### chit_campaign_start
+
+Plan the graph, create worktrees + launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath?}`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the campaign overview (see status).
+
+### chit_campaign_status
+
+Read-only overview: each task's status, live job state/phase, branch/worktree path, changed files, audit refs, plus `runnableCount` and a `nextAction`. **Inspection is safe**: this never launches jobs, creates worktrees, or mutates state. Inputs: `campaign_id`, `cwd?`.
+
+### chit_campaign_advance
+
+The progression trigger. Reconciles finished jobs into task state (`converged` -> `review_ready`; `blocked` / `max-iterations` / failed / stale -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished job or runnable tasks. Inputs: `campaign_id`, `cwd?`.
+
+### chit_campaign_cancel
+
+Request cancellation of every active task job (intent-first, same safety as `chit_job_cancel`) and mark pending tasks cancelled. Running jobs settle cleanly in the background; worktrees are left in place for inspection. Inputs: `campaign_id`, `cwd?`.
+
 ## Audit tools
 
 The audit tools read the local audit transcripts that audited runs write (`chit converge`, `chit run --audit`, MCP `chit_run_start audit:true`, and MCP converge), so a run's prompts, outputs, usage, and timeline are inspectable from the chat. Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
