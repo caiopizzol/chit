@@ -1,0 +1,10 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"module": "Preserve",
+		"moduleDetection": "force",
+		"verbatimModuleSyntax": true,
+		"allowImportingTsExtensions": true,
+		"types": ["bun"]
+	}
+}

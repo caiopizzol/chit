@@ -1,14 +1,10 @@
 {
 	"compilerOptions": {
-		"lib": ["ESNext"],
 		"target": "ESNext",
-		"module": "Preserve",
-		"moduleDetection": "force",
+		"lib": ["ESNext"],
 		"moduleResolution": "bundler",
-		"allowImportingTsExtensions": true,
-		"verbatimModuleSyntax": true,
-		"noEmit": true,
 		"strict": true,
+		"noEmit": true,
 		"skipLibCheck": true,
 		"noFallthroughCasesInSwitch": true
 	}
