@@ -12,18 +12,22 @@
 		"typecheck": "bun --filter '*' typecheck",
 		"check": "biome check .",
 		"check:fix": "biome check --write .",
+		"check:staged:fix": "biome check --write --staged --no-errors-on-unmatched",
+		"prepare": "lefthook install",
 		"check:browser": "bun --filter '@chit/core' check:browser",
 		"cli": "bun --cwd apps/cli src/cli/run.ts",
 		"docs:dev": "bun --filter chit-docs dev",
 		"docs:build": "bun --filter chit-docs build",
 		"docs:preview": "bun --filter chit-docs preview",
 		"docs:typecheck": "bun --filter chit-docs typecheck",
+		"docs:deploy": "bun --filter chit-docs deploy",
 		"studio:build": "bun --filter chit-studio build:client",
 		"studio:preview": "bun run studio:build && bun --cwd apps/cli src/cli/run.ts studio examples/consult.json"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",
 		"@types/bun": "^1.3.14",
+		"lefthook": "^2.1.9",
 		"typescript": "^6.0.3"
 	}
 }
