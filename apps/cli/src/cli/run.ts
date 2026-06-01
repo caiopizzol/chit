@@ -92,6 +92,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
 	if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
 		return emptyArgs("help");
 	}
+	// `-h`/`--help` after a subcommand yields top-level help, so `chit run --help`
+	// prints usage instead of treating "--help" as a manifest path. Per-subcommand
+	// help text is future work.
+	if (argv.includes("-h") || argv.includes("--help")) {
+		return emptyArgs("help");
+	}
 	if (argv[0] === "run") return parseRunArgs(argv);
 	if (argv[0] === "install") return parseInstallArgs(argv);
 	if (argv[0] === "show") return parseShowArgs(argv);
