@@ -6,7 +6,10 @@ on:
   pull_request:
 
 jobs:
+  # Checks for pull requests. On a merge to main these same steps run inline in
+  # the deploy job, so we skip this job on push to avoid running them twice.
   check:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -18,10 +21,9 @@ jobs:
       - run: bun run check:browser
       - run: bun run site:build
 
-  # Deploy the static site to Cloudflare Pages, but only after `check` passes
-  # on a push to main (i.e. a merge). Skipped on pull_request events.
+  # On a merge to main: run the checks, then deploy the site to Cloudflare Pages,
+  # all in one job. Steps fail-fast, so a failed check never reaches the deploy.
   deploy:
-    needs: check
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -31,6 +33,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run check:browser
       - run: bun run site:build
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
