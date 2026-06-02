@@ -28,7 +28,7 @@ export const DEFAULT_CONVERGE_MANIFEST: unknown = {
 		},
 		reviewer: {
 			agent: "codex",
-			role: "You are a skeptical implementation reviewer for a convergence loop. Claude just edited the repository at your cwd. Inspect the current git diff and the changed files, and verify the work against the task. Base your verdict on the TASK changes. Untracked generated build artifacts (e.g. __pycache__, *.pyc) are workspace hygiene, not task changes: note them at most as a minor aside and do NOT revise solely because of them. chit keeps its own control-plane state outside the repo, so it never appears in the diff. Run non-mutating checks if useful. Do not edit. Do not agree for the sake of agreeing. Use prior context from this scope. Cite file:line and command results.",
+			role: "You are a skeptical implementation reviewer for a convergence loop. The implementer just edited the repository at your cwd. Inspect the current git diff and the changed files, and verify the work against the task. Base your verdict on the TASK changes. Untracked generated build artifacts (e.g. __pycache__, *.pyc) are workspace hygiene, not task changes: note them at most as a minor aside and do NOT revise solely because of them. chit keeps its own control-plane state outside the repo, so it never appears in the diff. Run non-mutating checks if useful. Do not edit. Do not agree for the sake of agreeing. Use prior context from this scope. Cite file:line and command results.",
 			session: "per_scope",
 			permissions: { filesystem: "read_only" },
 		},
@@ -44,12 +44,12 @@ export const DEFAULT_CONVERGE_MANIFEST: unknown = {
 		review: {
 			call: "reviewer",
 			prompt:
-				'Task under review:\n{{ inputs.task }}\n\nClaude\'s summary of what it just implemented:\n{{ steps.implement.output }}\n\nInspect the current git diff and the changed files at your cwd. Verify the change against the task and run non-mutating checks if useful. Return prose with:\n1. Verdict: proceed / revise / block.\n2. Findings ordered by severity, with file:line.\n3. What Claude should fix next if the verdict is revise.\n4. Remaining risk if proceeding.\n\nThen, as the LAST thing in your reply, emit a single machine-readable fenced JSON block that the driver parses (the prose above is for humans). Use exactly these keys:\n```json\n{"verdict": "proceed | revise | block", "findingCount": 0, "checksRun": "the non-mutating checks you ran, or \'none\'", "risk": "remaining risk if proceeding"}\n```\nfindingCount is the integer number of findings; checksRun is a short human string.',
+				'Task under review:\n{{ inputs.task }}\n\nThe implementer\'s summary of what it just implemented:\n{{ steps.implement.output }}\n\nInspect the current git diff and the changed files at your cwd. Verify the change against the task and run non-mutating checks if useful. Return prose with:\n1. Verdict: proceed / revise / block.\n2. Findings ordered by severity, with file:line.\n3. What the implementer should fix next if the verdict is revise.\n4. Remaining risk if proceeding.\n\nThen, as the LAST thing in your reply, emit a single machine-readable fenced JSON block that the driver parses (the prose above is for humans). Use exactly these keys:\n```json\n{"verdict": "proceed | revise | block", "findingCount": 0, "checksRun": "the non-mutating checks you ran, or \'none\'", "risk": "remaining risk if proceeding"}\n```\nfindingCount is the integer number of findings; checksRun is a short human string.',
 		},
 
 		out: {
 			format:
-				"## Converge iteration\n\n### Implementer (Claude)\n{{ steps.implement.output }}\n\n### Reviewer (Codex)\n{{ steps.review.output }}",
+				"## Converge iteration\n\n### Implementer\n{{ steps.implement.output }}\n\n### Reviewer\n{{ steps.review.output }}",
 		},
 	},
 
