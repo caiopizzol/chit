@@ -9,7 +9,7 @@ import { RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
-import { buildStatus, summarizeRunForStatus } from "./status.ts";
+import { buildStatus, publicRunSummary, publicTimeline, summarizeRunForStatus } from "./status.ts";
 
 const NOW = Date.parse("2026-06-01T11:00:00.000Z");
 
@@ -285,5 +285,35 @@ describe("buildStatus", () => {
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["r1"]);
 		expect(status.recent).toEqual([]);
+	});
+
+	test("publicRunSummary presents run_id and drops the internal loopId", () => {
+		const r = publicRunSummary({
+			runId: "run-1",
+			manifestId: "m",
+			surface: "mcp",
+			loopId: "internal-loop",
+			iteration: 2,
+			status: "converged",
+			stepCount: 4,
+		} as unknown as Parameters<typeof publicRunSummary>[0]);
+		expect(r.run_id).toBe("run-1");
+		const asRec = r as unknown as Record<string, unknown>;
+		expect(asRec.loopId).toBeUndefined();
+		expect(asRec.runId).toBeUndefined(); // the camelCase id is not surfaced either
+		expect(r.iteration).toBe(2); // an informational number, not a handle, survives
+	});
+
+	test("publicTimeline strips the per-event runId and loopId, keeps the rest", () => {
+		const out = publicTimeline([
+			{ type: "run.started", runId: "r1", loopId: "internal-loop", manifestId: "m" },
+			{ type: "step.started", runId: "r1", stepId: "implement" },
+		]);
+		const json = JSON.stringify(out);
+		expect(json).not.toContain("runId");
+		expect(json).not.toContain("loopId");
+		expect((out[0] as Record<string, unknown>).manifestId).toBe("m"); // metadata survives
+		expect((out[0] as Record<string, unknown>).type).toBe("run.started"); // discriminant survives
+		expect((out[1] as Record<string, unknown>).stepId).toBe("implement"); // step id is fine
 	});
 });

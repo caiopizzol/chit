@@ -225,8 +225,11 @@ export interface TimelineOptions {
 function readBody(store: AuditStore, runId: string, ref: string): string {
 	try {
 		return store.readBlob(runId, ref);
-	} catch (err) {
-		return `<blob unavailable: ${(err as Error).message}>`;
+	} catch {
+		// Generic, id/path-free: the blob-store error message embeds the run id and an
+		// absolute path, which must not reach a reader body (the MCP surface is run_id
+		// only, and the detail is low-value -- the blob is simply missing).
+		return "<blob unavailable>";
 	}
 }
 

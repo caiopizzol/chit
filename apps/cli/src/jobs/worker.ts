@@ -235,7 +235,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 		} catch (e) {
 			if (e instanceof LockError) {
 				finish(store, jobId, now, "failed", {
-					failure: `loop "${job.loopId}" is locked by another advancer; not started`,
+					failure: "run is locked by another advancer; not started",
 				});
 				return;
 			}
@@ -438,17 +438,21 @@ async function defaultRunOnce(
 	} catch (e) {
 		return { ok: false, error: `could not load manifest at ${path}: ${(e as Error).message}` };
 	}
+	// Load the registry ONCE and validate + run against the same object, so a
+	// concurrent agents.json edit cannot make the worker authorize against one
+	// registry and execute adapters from another.
+	const registry = loadRegistry();
 	// Re-validate governance in this process. launchRun validated at enqueue, but
 	// the manifest file may have changed since; re-run the same checks (with the
 	// persisted allow-unenforced decision) so a now-invalid manifest cannot run.
-	const auth = validateOneShotAuth(manifest, loadRegistry(), {
+	const auth = validateOneShotAuth(manifest, registry, {
 		...(job.scope !== undefined && { scope: job.scope }),
 		allowUnenforced: job.allowUnenforced,
 	});
 	if (!auth.ok) return { ok: false, error: auth.error };
 	return runManifestOnce(manifest, {
 		inputs: job.inputs,
-		registry: loadRegistry(),
+		registry,
 		invocationCwd: job.cwd,
 		surface: "mcp",
 		...(job.scope !== undefined && { scope: job.scope }),

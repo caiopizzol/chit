@@ -160,11 +160,11 @@ export async function runNextIteration(
 ): Promise<NextResult> {
 	if (session.terminalStatus !== undefined) {
 		throw new ConvergeEngineError(
-			`loop "${session.loopId}" is already ${session.terminalStatus}; start a new loop to continue`,
+			`this run is already ${session.terminalStatus}; start a new run to continue`,
 		);
 	}
 	if (session.active !== undefined) {
-		throw new ConvergeEngineError(`an iteration is already running for loop "${session.loopId}"`);
+		throw new ConvergeEngineError("an iteration is already running for this run");
 	}
 
 	// chit owns the controller for this iteration so chit_converge_cancel can stop

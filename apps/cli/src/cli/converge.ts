@@ -569,6 +569,16 @@ export function prepareConvergeExecute(
 	} catch (e) {
 		return { ok: false, error: (e as Error).message };
 	}
+	// A converge run drives the manifest's loop policy. Reject a non-loop manifest
+	// rather than running it under loop semantics via the implement/review fallback:
+	// every background/batch re-read of a loop job flows through here, so this is the
+	// single guard that keeps a one-shot manifest from being driven as a loop.
+	if (manifest.policy.kind !== "loop") {
+		return {
+			ok: false,
+			error: `manifest "${manifest.id}" declares policy "${manifest.policy.kind}", not loop; a converge run requires a loop manifest`,
+		};
+	}
 	const shapeError = validateConvergeManifest(manifest);
 	if (shapeError) return { ok: false, error: shapeError };
 	const unknown = findUnknownAgents(manifest, registry);

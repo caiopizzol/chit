@@ -17,13 +17,13 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { type NormalizedManifest, parseManifest } from "@chit-run/core";
+import { type LoopRecord, type NormalizedManifest, parseManifest } from "@chit-run/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadRegistry } from "../../agents/parse.ts";
 import { listAudit, showAudit } from "../../audit/reader.ts";
-import { AuditStore } from "../../audit/store.ts";
+import { AuditStore, AuditStoreError } from "../../audit/store.ts";
 import {
 	advanceBatch,
 	type BatchEngineDeps,
@@ -45,7 +45,7 @@ import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
-import { JobStore } from "../../jobs/store.ts";
+import { JobStore, JobStoreError } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey } from "../../loops/location.ts";
@@ -71,7 +71,7 @@ import {
 	type StepControllers,
 	startRun,
 } from "./engine.ts";
-import { buildStatus } from "./status.ts";
+import { buildStatus, publicRunSummary, publicTimeline } from "./status.ts";
 
 // AbortControllers for in-flight steps, so chit_cancel can stop a running step
 // even after the model's turn is interrupted (the server keeps running).
@@ -107,6 +107,39 @@ function jsonResult(obj: unknown) {
 }
 function errorResult(message: string) {
 	return { content: [{ type: "text" as const, text: `error: ${message}` }], isError: true };
+}
+
+// A raw node filesystem error (readFileSync / appendFileSync / readdirSync /
+// openSync / mkdirSync ...) is an ErrnoException: its `code` is an errno (ENOENT,
+// EACCES, EIO, EROFS, ENOSPC, ...) and BOTH its `.path` property and its message
+// embed the absolute path it touched. The storage classes below wrap MOST of these,
+// but any one that escapes a store un-typed must not leak the path through the
+// fallback. The `.path` check keeps this to filesystem errors: a network error
+// (ECONNREFUSED, ...) also has an errno `code` but no `.path`, and its message is
+// caller-relevant with no local path, so it passes through.
+function isNodeFsError(e: unknown): boolean {
+	if (!(e instanceof Error)) return false;
+	const err = e as { code?: unknown; path?: unknown };
+	return typeof err.code === "string" && /^E[A-Z]+$/.test(err.code) && typeof err.path === "string";
+}
+
+// Map an error to a user-safe MCP message. Storage-layer errors (the loop log, the
+// audit store, the job store, a lock, or any raw filesystem error) put absolute
+// paths and internal ids (the loop-log key, the audit run id) in their messages; the
+// unified surface must never surface those, so they collapse to a run-scoped reason.
+// Every other error (a validation failure, a manifest/adapter run error) is about the
+// caller's own run and passes through.
+export function safeMcpError(e: unknown): string {
+	if (e instanceof LoopStoreError) return "the run's loop log could not be read or written";
+	if (e instanceof AuditStoreError) return "the audit transcript could not be read";
+	if (e instanceof JobStoreError) return "the run record could not be read or written";
+	// A LockError carries the absolute lock-file path (and the rm hint), so it must
+	// never reach the user raw; collapse it to a run-scoped, retryable reason.
+	if (e instanceof LockError) return "the run is locked by another operation; retry shortly";
+	// A raw filesystem error from any store that did not wrap it (its message embeds
+	// the absolute state path). Genericize rather than leak the path.
+	if (isNodeFsError(e)) return "a local filesystem operation failed";
+	return (e as Error).message;
 }
 
 function readySummary(run: Run) {
@@ -150,7 +183,13 @@ server.registerTool(
 		},
 	},
 	async ({ limit }) => {
-		return jsonResult({ runs: listAudit(auditStore, limit) });
+		try {
+			return jsonResult({ runs: listAudit(auditStore, limit).map(publicRunSummary) });
+		} catch (e) {
+			// A filesystem failure in the audit store must not surface its absolute
+			// path; reduce it to a run-scoped reason like every other storage error.
+			return errorResult(safeMcpError(e));
+		}
 	},
 );
 
@@ -175,9 +214,17 @@ server.registerTool(
 	},
 	async ({ run_id, verbose, include_bodies }) => {
 		try {
-			return jsonResult(showAudit(auditStore, run_id, { includeBodies: include_bodies, verbose }));
+			const shown = showAudit(auditStore, run_id, { includeBodies: include_bodies, verbose });
+			// Present the receipt under run_id only: the summary via publicRunSummary
+			// and the timeline with each event's runId/loopId stripped (publicTimeline),
+			// so no row carries a second handle.
+			return jsonResult({
+				...shown,
+				summary: publicRunSummary(shown.summary),
+				timeline: publicTimeline(shown.timeline),
+			});
 		} catch (e) {
-			return errorResult((e as Error).message);
+			return errorResult(safeMcpError(e));
 		}
 	},
 );
@@ -245,14 +292,14 @@ function spawnJobWorker(jobId: string, cwd: string): void {
 	// ENOENT after this returns). An unhandled 'error' would CRASH the server, and
 	// the job would sit queued forever. Catch it, mark the still-queued job failed so
 	// chit_status surfaces the failure instead of a phantom queued run.
-	child.once("error", (e) => {
+	child.once("error", () => {
 		try {
 			jobStore.update(jobId, (c) =>
 				c.state === "queued"
 					? {
 							...c,
 							state: "failed",
-							failure: `worker failed to start: ${e.message}`,
+							failure: "worker failed to start",
 							endedAt: new Date().toISOString(),
 						}
 					: c,
@@ -314,12 +361,15 @@ function launchConvergeJob(p: {
 		});
 	} catch (e) {
 		if (e instanceof LoopStoreError) {
+			// Run-scoped message only: a LoopStoreError carries the loop-log path (which
+			// embeds the internal loop id), so do NOT pass e.message through to the user.
 			return {
 				ok: false,
-				error: `${e.message}. Use chit_next to continue a foreground loop, or start a fresh run.`,
+				error:
+					"could not reserve this run's loop (it may already be in progress); continue the existing run with chit_next, or start a fresh run",
 			};
 		}
-		return { ok: false, error: (e as Error).message };
+		return { ok: false, error: safeMcpError(e) };
 	}
 
 	const runId = crypto.randomUUID();
@@ -342,20 +392,29 @@ function launchConvergeJob(p: {
 	try {
 		jobStore.create(job);
 	} catch (e) {
-		stopLoop(p.cwd, loopId, { status: "blocked", reason: "could not create job record" });
-		return { ok: false, error: (e as Error).message };
+		// Best-effort cleanup: the job record never persisted, so close the loop we
+		// reserved. If even that write fails, still return the original error rather
+		// than throwing a raw store error past this Result-typed boundary.
+		try {
+			stopLoop(p.cwd, loopId, { status: "blocked", reason: "could not create job record" });
+		} catch {}
+		return { ok: false, error: safeMcpError(e) };
 	}
 	try {
 		spawnJobWorker(runId, p.cwd);
-	} catch (e) {
-		jobStore.update(runId, (c) => ({
-			...c,
-			state: "failed",
-			failure: `could not spawn worker: ${(e as Error).message}`,
-			endedAt: new Date().toISOString(),
-		}));
-		stopLoop(p.cwd, loopId, { status: "blocked", reason: "worker spawn failed" });
-		return { ok: false, error: `could not spawn background worker: ${(e as Error).message}` };
+	} catch {
+		// Best-effort cleanup after a spawn failure; never let a cleanup-write error
+		// escape (the caller trusts this function to return a Result, not throw).
+		try {
+			jobStore.update(runId, (c) => ({
+				...c,
+				state: "failed",
+				failure: "worker failed to spawn",
+				endedAt: new Date().toISOString(),
+			}));
+			stopLoop(p.cwd, loopId, { status: "blocked", reason: "worker spawn failed" });
+		} catch {}
+		return { ok: false, error: "could not spawn the background worker" };
 	}
 	// run_id == the durable record's runId. The return keeps the legacy `jobId`
 	// field name for the still-present old tools (Union-A); 4b switches to run_id.
@@ -432,18 +491,21 @@ function launchOneShotJob(p: {
 	try {
 		jobStore.create(job);
 	} catch (e) {
-		return { ok: false, error: (e as Error).message };
+		return { ok: false, error: safeMcpError(e) };
 	}
 	try {
 		spawnJobWorker(runId, p.cwd);
-	} catch (e) {
-		jobStore.update(runId, (c) => ({
-			...c,
-			state: "failed",
-			failure: `could not spawn worker: ${(e as Error).message}`,
-			endedAt: new Date().toISOString(),
-		}));
-		return { ok: false, error: `could not spawn background worker: ${(e as Error).message}` };
+	} catch {
+		// Best-effort cleanup; never let a cleanup-write error escape this Result.
+		try {
+			jobStore.update(runId, (c) => ({
+				...c,
+				state: "failed",
+				failure: "worker failed to spawn",
+				endedAt: new Date().toISOString(),
+			}));
+		} catch {}
+		return { ok: false, error: "could not spawn the background worker" };
 	}
 	return { ok: true, jobId: runId, warnings: auth.warnings };
 }
@@ -803,7 +865,7 @@ server.registerTool(
 					loopSteps: prep.loopSteps,
 				});
 			} catch (e) {
-				return errorResult((e as Error).message);
+				return errorResult(safeMcpError(e));
 			}
 			runController.registerLoop(session, Date.now());
 			return jsonResult({
@@ -848,7 +910,7 @@ server.registerTool(
 				audit,
 			});
 		} catch (e) {
-			return errorResult((e as Error).message);
+			return errorResult(safeMcpError(e));
 		}
 		runController.registerOneShot(run, Date.now());
 		return jsonResult(oneShotRunView(run));
@@ -948,7 +1010,9 @@ server.registerTool(
 						`run "${run_id}" is being advanced by a background job; stop it with chit_cancel or wait, then retry`,
 					);
 				}
-				throw e;
+				// A non-lock failure acquiring the lock is a storage/fs error: sanitize
+				// it rather than throwing a raw store error past the handler.
+				return errorResult(safeMcpError(e));
 			}
 			heartbeat(`${run_id} · iteration ${session.iteration + 1} · starting`);
 			try {
@@ -984,12 +1048,12 @@ server.registerTool(
 					changedFiles: result.changedFiles,
 					workspaceWarnings: result.workspaceWarnings,
 					...(result.usage && { usage: result.usage }),
-					...(result.auditRunId && { auditRunId: result.auditRunId }),
+					...(result.auditRunId && { auditRef: result.auditRunId }),
 					...(result.stopStatus && { stopStatus: result.stopStatus }),
 					...loopRunView(session),
 				});
 			} catch (e) {
-				return errorResult((e as Error).message);
+				return errorResult(safeMcpError(e));
 			} finally {
 				releaseLock(loopLock);
 				runController.touchLoop(run_id, now);
@@ -999,6 +1063,21 @@ server.registerTool(
 		return errorResult(`unknown run_id ${run_id}`);
 	},
 );
+
+// Present loop-log records for a trace under run_id only: the header record carries
+// the internal loop-log key (loopId) and state-dir hash (repoKey), neither a public
+// handle; iteration and stop records carry no ids. run_id is the top-level handle.
+export function publicLoopRecords(records: LoopRecord[]): unknown[] {
+	return records.map((r) => {
+		if (r.type === "loop") {
+			const { loopId: _loopId, repoKey: _repoKey, ...rest } = r;
+			void _loopId;
+			void _repoKey;
+			return rest;
+		}
+		return r;
+	});
+}
 
 // The history of any run: a one-shot's step transcript, or a loop/background
 // run's durable loop log. Read-only.
@@ -1019,7 +1098,7 @@ server.registerTool(
 			if (job.policy === "loop") {
 				let records: unknown[] = [];
 				try {
-					records = readLoop(job.cwd, job.loopId);
+					records = publicLoopRecords(readLoop(job.cwd, job.loopId));
 				} catch {
 					// loop log not readable yet (worker still starting) or removed
 				}
@@ -1039,9 +1118,19 @@ server.registerTool(
 		if (resolved.run.kind === "loop") {
 			const session = resolved.run.session;
 			try {
-				return jsonResult({ run_id, execution: "loop", ...traceConverge(session) });
+				// Re-present the converge trace under run_id, dropping the internal loopId
+				// the engine view carries and sanitizing the loop-log records.
+				const t = traceConverge(session);
+				return jsonResult({
+					run_id,
+					execution: "loop",
+					status: t.status,
+					active: t.active,
+					auditRefs: t.auditRefs,
+					records: publicLoopRecords(t.records),
+				});
 			} catch (e) {
-				return errorResult((e as Error).message);
+				return errorResult(safeMcpError(e));
 			}
 		}
 		const run = resolved.run.run;
@@ -1077,7 +1166,12 @@ server.registerTool(
 		const resolved = runController.resolve(run_id, Date.now());
 		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
 		if (resolved.mode === "background") {
-			const r = requestJobCancel(run_id);
+			let r: ReturnType<typeof requestJobCancel>;
+			try {
+				r = requestJobCancel(run_id);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
 			if (r.status === "terminal") {
 				return jsonResult({ run_id, cancelled: false, note: `run already ${r.state}` });
 			}
@@ -1089,7 +1183,14 @@ server.registerTool(
 			});
 		}
 		if (resolved.run.kind === "loop") {
-			const cancel = cancelConverge(resolved.run.session);
+			// Cancelling an idle loop writes a stop record (stopLoop), which can throw a
+			// LoopStoreError carrying the loop-log path; sanitize rather than leak it.
+			let cancel: ReturnType<typeof cancelConverge>;
+			try {
+				cancel = cancelConverge(resolved.run.session);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
 			return jsonResult({ run_id, cancel, run: loopRunView(resolved.run.session) });
 		}
 		// one-shot: abort every currently-running step (a wave may have several).
@@ -1191,7 +1292,7 @@ function batchError(e: unknown) {
 	if (e instanceof PlanError || e instanceof WorktreeError || e instanceof BatchStoreError) {
 		return errorResult(e.message);
 	}
-	return errorResult((e as Error).message);
+	return errorResult(safeMcpError(e));
 }
 
 server.registerTool(
@@ -1275,8 +1376,12 @@ server.registerTool(
 		},
 	},
 	async ({ limit, cwd }) => {
-		const store = new BatchStore(resolve(cwd ?? process.cwd()));
-		return jsonResult({ batches: listBatches(store, limit) });
+		try {
+			const store = new BatchStore(resolve(cwd ?? process.cwd()));
+			return jsonResult({ batches: listBatches(store, limit) });
+		} catch (e) {
+			return batchError(e);
+		}
 	},
 );
 
@@ -1294,10 +1399,14 @@ server.registerTool(
 		},
 	},
 	async ({ batch_id, cwd }) => {
-		const store = new BatchStore(resolve(cwd ?? process.cwd()));
-		const batch = store.get(batch_id);
-		if (!batch) return errorResult(`unknown batch_id ${batch_id}`);
-		return jsonResult(describeBatch(batch, batchDeps));
+		try {
+			const store = new BatchStore(resolve(cwd ?? process.cwd()));
+			const batch = store.get(batch_id);
+			if (!batch) return errorResult(`unknown batch_id ${batch_id}`);
+			return jsonResult(describeBatch(batch, batchDeps));
+		} catch (e) {
+			return batchError(e);
+		}
 	},
 );
 

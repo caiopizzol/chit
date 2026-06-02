@@ -49,7 +49,15 @@ export class RunController {
 	resolve(runId: string, now: number): ResolvedRun | undefined {
 		const fg = this.store.find(runId, now);
 		if (fg) return { mode: "foreground", run: fg };
-		const job = this.jobs.get(runId);
+		// A malformed run_id makes JobStore.get throw (its path guard rejects
+		// traversal/unsafe ids); treat that as not-found so resolve never throws and
+		// the caller reports a clean "unknown run_id" instead of leaking a store error.
+		let job: ReturnType<JobStore["get"]>;
+		try {
+			job = this.jobs.get(runId);
+		} catch {
+			return undefined;
+		}
 		if (job) return { mode: "background", job };
 		return undefined;
 	}

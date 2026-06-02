@@ -138,4 +138,13 @@ describe("RunController run_id resolution", () => {
 		const ctrl = new RunController(new ControllerStore(), jobs);
 		expect(ctrl.resolve("nope", 0)).toBeUndefined();
 	});
+
+	test("a malformed run_id resolves to nothing, not a thrown store error", () => {
+		// JobStore.get rejects an unsafe id (path traversal) by throwing; resolve must
+		// treat that as not-found so chit_status/trace/cancel report "unknown run_id"
+		// rather than leaking a JobStoreError with the raw id/path.
+		const ctrl = new RunController(new ControllerStore(), jobs);
+		expect(() => ctrl.resolve("../evil", 0)).not.toThrow();
+		expect(ctrl.resolve("../evil", 0)).toBeUndefined();
+	});
 });

@@ -89,6 +89,61 @@ export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSumm
 	};
 }
 
+// An audit run re-presented for the unified surface: identified by run_id (the
+// audit run id IS a run id), with the internal loop-log key (loopId) dropped. The
+// receipt names iteration (a number) and status, never a second handle. Shared by
+// the chit_status `recent` slice and the chit_audit_* tools so the MCP surface is
+// run_id-only; the raw RunSummary (with loopId) stays for the CLI audit command.
+export interface PublicRunSummary {
+	run_id: string;
+	manifestId: string;
+	surface: string;
+	scope?: string;
+	iteration?: number;
+	startedAt?: string;
+	status: string;
+	stepCount: number;
+	usage?: RunSummary["usage"];
+	openCall?: RunSummary["openCall"];
+}
+
+// Strip the per-event run/loop handles from an audit timeline for the MCP surface:
+// every audit event carries runId (redundant -- the whole chit_audit_show is one
+// run, identified once by the summary's run_id), and run.started / loop-iteration
+// events also carry loopId. No row should present a second handle.
+export function publicTimeline(timeline: readonly unknown[]): unknown[] {
+	return timeline.map((e) => {
+		if (e === null || typeof e !== "object") return e;
+		const {
+			runId: _runId,
+			loopId: _loopId,
+			...rest
+		} = e as {
+			runId?: unknown;
+			loopId?: unknown;
+			[k: string]: unknown;
+		};
+		void _runId;
+		void _loopId;
+		return rest;
+	});
+}
+
+export function publicRunSummary(s: RunSummary): PublicRunSummary {
+	return {
+		run_id: s.runId,
+		manifestId: s.manifestId,
+		surface: s.surface,
+		...(s.scope !== undefined && { scope: s.scope }),
+		...(s.iteration !== undefined && { iteration: s.iteration }),
+		...(s.startedAt !== undefined && { startedAt: s.startedAt }),
+		status: s.status,
+		stepCount: s.stepCount,
+		...(s.usage !== undefined && { usage: s.usage }),
+		...(s.openCall !== undefined && { openCall: s.openCall }),
+	};
+}
+
 // A compact per-job line for the overview. `display` derives stale (a running job
 // whose worker is gone or silent) so a dead worker is visible without rewriting
 // the stored state. Iteration detail (changed files, usage) lives in the loop log;
@@ -179,7 +234,7 @@ export interface ChitStatus {
 	// Durable background jobs (cross-session): every in-flight job (queued/running,
 	// including stale) plus the most recent terminal ones (capped by recentLimit).
 	jobs: JobStatusSummary[];
-	recent: RunSummary[];
+	recent: PublicRunSummary[];
 }
 
 // Newest-first by start time. Sorting by startedAtMs (always set on both Run and
@@ -233,7 +288,7 @@ export function buildStatus(
 			loops: byNewest(loops.map((c) => c.session)).map(summarizeLoopForStatus),
 		},
 		jobs: jobsForStatus(jobStore, recentLimit, nowMs),
-		recent: recentRuns(auditStore, recentLimit),
+		recent: recentRuns(auditStore, recentLimit).map(publicRunSummary),
 	};
 }
 

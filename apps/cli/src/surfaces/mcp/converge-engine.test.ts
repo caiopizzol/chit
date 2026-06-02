@@ -149,8 +149,12 @@ describe("runNextIteration: verdict-driven stops", () => {
 		expect(r.stopStatus).toBe("converged");
 		expect(session.terminalStatus).toBe("converged");
 		expect(stopRecord("L1")?.status).toBe("converged");
-		// Terminal: another next throws rather than appending past the stop.
+		// Terminal: another next throws rather than appending past the stop. The
+		// error is surfaced verbatim by chit_next, so it must be run-scoped: no
+		// internal loop id (run_id is the only handle a caller holds).
 		await expect(runNextIteration(session)).rejects.toBeInstanceOf(ConvergeEngineError);
+		await expect(runNextIteration(session)).rejects.toThrow(/already converged/);
+		await expect(runNextIteration(session)).rejects.not.toThrow(/loop "|loopId|L1/);
 	});
 
 	test("block closes the loop blocked", async () => {

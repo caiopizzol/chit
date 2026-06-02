@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type NormalizedRegistry, parseManifest } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
+import { prepareConvergeExecute } from "../cli/converge.ts";
 import type { AdapterCallRequest, AdapterMap } from "../runtime/types.ts";
 import { runManifestOnce, validateOneShotAuth } from "./run-once.ts";
 
@@ -156,5 +157,49 @@ describe("validateOneShotAuth", () => {
 		// allowUnenforced so the enforcement gap does not mask the scope check.
 		expect(validateOneShotAuth(SCOPED, KNOWN, { allowUnenforced: true }).ok).toBe(false);
 		expect(validateOneShotAuth(SCOPED, KNOWN, { scope: "s", allowUnenforced: true }).ok).toBe(true);
+	});
+
+	test("rejects a loop-policy manifest (a one-shot run must not drive a loop)", () => {
+		const loop = parseManifest({
+			schema: 1,
+			id: "loopy",
+			description: "loop",
+			policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+			inputs: { task: { type: "string" } },
+			participants: { e: { agent: "echo", role: "echo", session: "stateless" } },
+			steps: {
+				implement: { call: "e", prompt: "{{ inputs.task }}" },
+				review: { call: "e", prompt: "check {{ steps.implement.output }}" },
+			},
+			output: "review",
+		});
+		const r = validateOneShotAuth(loop, KNOWN, { allowUnenforced: true });
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("not one-shot");
+	});
+});
+
+describe("prepareConvergeExecute policy guard", () => {
+	// The loop chokepoint: every background/batch converge re-read flows through
+	// here, so it must reject a one-shot manifest rather than run it as a loop via
+	// the implement/review fallback.
+	test("rejects a one-shot (non-loop) manifest", () => {
+		const r = prepareConvergeExecute(
+			{
+				schema: 1,
+				id: "os",
+				description: "one-shot",
+				inputs: { q: { type: "string" } },
+				participants: { e: { agent: "echo", role: "x", session: "stateless" } },
+				steps: { a: { call: "e", prompt: "{{ inputs.q }}" } },
+				output: "a",
+			},
+			{ agents: { echo: {} } } as unknown as NormalizedRegistry,
+			"scope",
+			"/tmp",
+			true,
+		);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("not loop");
 	});
 });

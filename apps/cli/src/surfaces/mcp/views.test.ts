@@ -1,8 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { AuditStoreError } from "../../audit/store.ts";
+import { LockError } from "../../jobs/lock.ts";
+import { JobStoreError } from "../../jobs/store.ts";
 import type { LoopJobRecord } from "../../jobs/types.ts";
+import { LoopStoreError } from "../../loops/log-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
-import { backgroundRunView, loopRunView, oneShotRunView } from "./server.ts";
+import {
+	backgroundRunView,
+	loopRunView,
+	oneShotRunView,
+	publicLoopRecords,
+	safeMcpError,
+} from "./server.ts";
 
 // The unified run views are the run_id surface: one public id and one vocabulary
 // (chit_next / chit_status / chit_trace / chit_cancel). These tests pin the
@@ -127,5 +137,72 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(v.display).toBe("completed");
 		expect(v.nextAction).toContain("chit_trace");
 		expectNoLeakage(v);
+	});
+
+	test("loop trace records are sanitized: the header drops loopId/repoKey, no leak", () => {
+		// chit_trace returns the loop log; its header record carries the internal
+		// loopId + repoKey. publicLoopRecords strips those, keeping iteration/stop
+		// records (which carry no ids) intact.
+		const raw = [
+			{
+				type: "loop",
+				schema: 1,
+				loopId: "internal-loop-key",
+				scope: "sc",
+				task: "t",
+				repo: "/repo",
+				repoKey: "deadbeef",
+				startedAt: "2026-06-02T00:00:00.000Z",
+				maxIterations: 3,
+			},
+			{ type: "iteration", n: 1, changedFiles: ["a.ts"], verdict: "proceed", auditRef: "aud-1" },
+			{ type: "stop", status: "converged", reason: "reviewer returned proceed", iterations: 1 },
+		] as unknown as Parameters<typeof publicLoopRecords>[0];
+		const out = publicLoopRecords(raw);
+		expectNoLeakage(out);
+		const header = out[0] as Record<string, unknown>;
+		expect(header.loopId).toBeUndefined();
+		expect(header.repoKey).toBeUndefined();
+		expect(header.task).toBe("t"); // informational fields survive
+		expect(out[1]).toEqual(raw[1]); // iteration record passes through unchanged
+	});
+
+	test("safeMcpError reduces storage errors to run-scoped text, passes others through", () => {
+		// Storage-layer messages embed absolute paths + internal ids (loopId, the
+		// audit run id); they must never reach an MCP error.
+		expect(
+			safeMcpError(new LoopStoreError('loop log at /abs/.chit/loops/L1 declares loopId "L1"')),
+		).not.toMatch(/L1|loopId|\/abs/);
+		expect(
+			safeMcpError(new AuditStoreError('no audit log for run "r1" at /abs/audit/r1')),
+		).not.toMatch(/r1|\/abs/);
+		expect(safeMcpError(new JobStoreError('no run "j1"'))).not.toMatch(/j1/);
+		// A LockError embeds the absolute lock path + an `rm <path>` hint; it must
+		// collapse to a retryable run-scoped reason, never the path.
+		expect(
+			safeMcpError(
+				new LockError(
+					'could not acquire lock /abs/.chit/jobs/j1.lock after 4 attempts. rm "/abs/.chit/jobs/j1.lock"',
+				),
+			),
+		).not.toMatch(/\/abs|\.lock|j1|rm /);
+		// A raw node filesystem error (ErrnoException: an E* `code` + a `.path`, with the
+		// absolute path in the message) is what escapes a store that did not wrap it. It
+		// must be genericized, never passed through with the path.
+		const fsErr = Object.assign(
+			new Error("ENOENT: no such file or directory, open '/abs/.chit/loops/x/y.jsonl'"),
+			{ code: "ENOENT", path: "/abs/.chit/loops/x/y.jsonl", syscall: "open" },
+		);
+		expect(safeMcpError(fsErr)).not.toMatch(/\/abs|\.jsonl|ENOENT/);
+		// A network error has an errno code but NO `.path`; its message is caller-relevant
+		// with no local path, so it passes through unchanged (not mistaken for a fs leak).
+		const netErr = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+			code: "ECONNREFUSED",
+		});
+		expect(safeMcpError(netErr)).toBe("connect ECONNREFUSED 127.0.0.1:443");
+		// A run-logic error (the caller's manifest/inputs) passes through unchanged.
+		expect(safeMcpError(new Error("step implement failed: bad input"))).toBe(
+			"step implement failed: bad input",
+		);
 	});
 });

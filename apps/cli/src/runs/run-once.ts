@@ -58,6 +58,16 @@ export function validateOneShotAuth(
 	registry: NormalizedRegistry,
 	opts: { scope?: string; allowUnenforced: boolean },
 ): { ok: true; warnings: string[] } | { ok: false; error: string } {
+	// A one-shot run executes the manifest exactly once. Reject a loop-policy
+	// manifest rather than silently running it under the wrong engine -- the
+	// manifest file may have changed since enqueue, and a caller (or batch) must not
+	// drive a loop manifest as a single pass.
+	if (manifest.policy.kind !== "one-shot") {
+		return {
+			ok: false,
+			error: `manifest "${manifest.id}" declares policy "${manifest.policy.kind}", not one-shot; a one-shot run requires a one-shot manifest`,
+		};
+	}
 	const unknown = findUnknownAgents(manifest, registry);
 	if (unknown.length > 0) {
 		return {
