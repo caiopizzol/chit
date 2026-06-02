@@ -9,7 +9,9 @@ import {
 	cancelBatch,
 	cleanupBatch,
 	describeBatch,
+	listBatches,
 	startBatch,
+	summarizeBatch,
 } from "./engine.ts";
 import type { TaskInput } from "./plan.ts";
 import { BatchStore } from "./store.ts";
@@ -337,5 +339,61 @@ describe("cleanupBatch", () => {
 		// both launched, so both removable; none skipped
 		expect(r.removable.map((e) => e.id).sort()).toEqual(["a", "b"]);
 		expect(r.skipped).toHaveLength(0);
+	});
+});
+
+describe("listBatches", () => {
+	test("summarizeBatch counts review_ready and failed tasks", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a"), task("b")],
+			maxParallel: 2,
+		});
+		// a converges (review_ready); b goes stale (failed)
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		const bJobId = present(jobs.launched[1], "second job").jobId;
+		deps.isStale = (job) => job.jobId === bJobId;
+		advanceBatch(store, deps, "c1");
+		const s = summarizeBatch(present(store.get("c1"), "batch c1"));
+		expect(s).toMatchObject({
+			id: "c1",
+			taskCount: 2,
+			reviewReady: 1,
+			failed: 1,
+		});
+		expect(s.cleanedAt).toBeUndefined();
+	});
+
+	test("lists every batch in the repo, newest-created first", () => {
+		deps.now = () => 1000;
+		startBatch(store, deps, { id: "old", cwd, tasks: [task("a")], maxParallel: 1 });
+		deps.now = () => 2000;
+		startBatch(store, deps, { id: "new", cwd, tasks: [task("a")], maxParallel: 1 });
+		const ids = listBatches(store).map((b) => b.id);
+		expect(ids).toEqual(["new", "old"]);
+	});
+
+	test("respects the limit (newest first)", () => {
+		deps.now = () => 1000;
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		deps.now = () => 2000;
+		startBatch(store, deps, { id: "c2", cwd, tasks: [task("a")], maxParallel: 1 });
+		deps.now = () => 3000;
+		startBatch(store, deps, { id: "c3", cwd, tasks: [task("a")], maxParallel: 1 });
+		expect(listBatches(store, 2).map((b) => b.id)).toEqual(["c3", "c2"]);
+	});
+
+	test("surfaces cleanedAt once a batch has been cleaned up", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1"); // -> ready_for_review
+		cleanupBatch(store, deps, "c1", { confirm: true });
+		const s = summarizeBatch(present(store.get("c1"), "batch c1"));
+		expect(s.cleanedAt).toBeDefined();
+	});
+
+	test("returns an empty list for a repo with no batches", () => {
+		expect(listBatches(store)).toEqual([]);
 	});
 });

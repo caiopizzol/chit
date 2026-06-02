@@ -28,6 +28,7 @@ import {
 	cancelBatch,
 	cleanupBatch,
 	describeBatch,
+	listBatches,
 	startBatch,
 } from "../../batches/engine.ts";
 import { PlanError } from "../../batches/plan.ts";
@@ -1139,6 +1140,30 @@ server.registerTool(
 		} catch (e) {
 			return batchError(e);
 		}
+	},
+);
+
+server.registerTool(
+	"chit_batch_list",
+	{
+		description:
+			"List the batches in this repo, newest first: id, status, task count, how many tasks are review_ready / failed, and whether it has been cleaned up. Use it to recover a batch id you lost, then chit_batch_status <id> for the full view. Read-only.",
+		inputSchema: {
+			limit: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Return at most this many batches (newest first). Default: all."),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)"),
+		},
+	},
+	async ({ limit, cwd }) => {
+		const store = new BatchStore(resolve(cwd ?? process.cwd()));
+		return jsonResult({ batches: listBatches(store, limit) });
 	},
 );
 

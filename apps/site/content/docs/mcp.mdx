@@ -102,6 +102,10 @@ You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPa
 
 Plan the graph, create worktrees + launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath?}`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the batch overview (see status).
 
+### chit_batch_list
+
+List the batches in this repo, newest first: `id`, `status`, task count, how many tasks are `review_ready` / `failed`, `createdAt`, and `cleanedAt` if it has been cleaned up. Use it to recover a batch id you lost, then `chit_batch_status` for the full view. Read-only. Inputs: `limit?` (newest N), `cwd?`.
+
 ### chit_batch_status
 
 Read-only overview: each task's status, live job state/phase, branch/worktree path, changed files, audit refs, plus `runnableCount` and a `nextAction`. **Inspection is safe**: this never launches jobs, creates worktrees, or mutates state. Inputs: `batch_id`, `cwd?`.

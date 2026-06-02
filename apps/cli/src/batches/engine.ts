@@ -518,3 +518,40 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 		updatedAt: c.updatedAt,
 	};
 }
+
+// --- list (recover batch ids; compact, read-only) --------------------------
+
+// A one-line summary per batch for the list view, so an operator who lost a
+// batch id can find it again without reading state files. Counts come straight
+// off the stored task statuses (no job reads), so this is cheap.
+export interface BatchSummary {
+	id: string;
+	status: Batch["status"];
+	taskCount: number;
+	reviewReady: number;
+	failed: number;
+	createdAt: string;
+	updatedAt: string;
+	cleanedAt?: string;
+}
+
+export function summarizeBatch(c: Batch): BatchSummary {
+	const summary: BatchSummary = {
+		id: c.id,
+		status: c.status,
+		taskCount: c.tasks.length,
+		reviewReady: c.tasks.filter((t) => t.status === "review_ready").length,
+		failed: c.tasks.filter((t) => t.status === "failed").length,
+		createdAt: c.createdAt,
+		updatedAt: c.updatedAt,
+	};
+	if (c.cleanedAt !== undefined) summary.cleanedAt = c.cleanedAt;
+	return summary;
+}
+
+// All batches for the repo, newest-created first, capped by `limit` when given.
+// Read-only over the store (BatchStore.list already skips corrupt files).
+export function listBatches(store: BatchStore, limit?: number): BatchSummary[] {
+	const all = store.list().map(summarizeBatch);
+	return limit !== undefined ? all.slice(0, limit) : all;
+}
