@@ -17,6 +17,7 @@ import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
 	type ConvergeIterationResult,
+	type LoopSteps,
 	runConvergeIteration,
 } from "../../cli/converge.ts";
 import { readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
@@ -33,6 +34,10 @@ export interface ConvergeSession {
 	task: string;
 	maxIterations: number;
 	execute: ConvergeExecute;
+	// The implementer/reviewer step ids resolved from the manifest's loop policy,
+	// so each iteration reads the right outputs even for a non-default-named loop.
+	implementStep: string;
+	reviewStep: string;
 	// Count of COMPLETED (appended) iterations. The next iteration is this + 1.
 	iteration: number;
 	// The last review text, threaded into the next iteration as prior_review.
@@ -63,6 +68,10 @@ export interface StartConvergeOptions {
 	loopId?: string;
 	force?: boolean;
 	execute: ConvergeExecute;
+	// The manifest's resolved loop steps (from prepareConvergeExecute). Defaults to
+	// the converge constants when omitted, so callers that don't yet resolve a
+	// policy keep their prior behavior.
+	loopSteps?: LoopSteps;
 	// Wall-clock now, injectable for deterministic tests. Defaults to Date.now.
 	now?: () => number;
 }
@@ -85,6 +94,8 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		task: opts.task,
 		maxIterations: opts.maxIterations,
 		execute: opts.execute,
+		implementStep: opts.loopSteps?.implementStep ?? "implement",
+		reviewStep: opts.loopSteps?.reviewStep ?? "review",
 		iteration: 0,
 		priorReview: "",
 		auditRefs: [],
@@ -177,6 +188,8 @@ export async function runNextIteration(
 				task: session.task,
 				prior_review: session.priorReview,
 				execute: session.execute,
+				implementStep: session.implementStep,
+				reviewStep: session.reviewStep,
 				signal: controller.signal,
 			});
 		} catch (e) {

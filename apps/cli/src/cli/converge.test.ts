@@ -13,8 +13,10 @@ import {
 	type ConvergeIO,
 	convergeLoop,
 	makeAuditedExecute,
+	resolveLoopPolicy,
 	runConverge,
 	runConvergeIteration,
+	validateConvergeManifest,
 } from "./converge.ts";
 
 let cwd: string;
@@ -1057,5 +1059,111 @@ describe("converge: makeAuditedExecute (audit wiring)", () => {
 		const runs = auditStore.listRuns();
 		expect(runs).not.toContain("OLD"); // pruned by the default 30-day maxAge
 		expect(runs).toContain(result.auditRunId as string); // the just-written run is kept
+	});
+});
+
+describe("loop policy resolution (Stage 2: policy-driven step ids)", () => {
+	// A minimal converge-shaped manifest with the given top-level extras, parsed.
+	function parseConverge(extra: Record<string, unknown>) {
+		return parseManifest({
+			schema: 1,
+			id: "c",
+			description: "converge-shaped",
+			inputs: { task: { type: "string" }, prior_review: { type: "string", optional: true } },
+			participants: {
+				impl: { agent: "claude", role: "implement", session: "per_scope" },
+				rev: { agent: "codex", role: "review", session: "per_scope" },
+			},
+			steps: {
+				implement: { call: "impl", prompt: "{{ inputs.task }}" },
+				review: { call: "rev", prompt: "{{ steps.implement.output }}" },
+				out: { format: "{{ steps.review.output }}" },
+			},
+			output: "out",
+			...extra,
+		});
+	}
+
+	test("a converge manifest WITH no policy falls back to implement/review (zero behavior change)", () => {
+		const m = parseConverge({});
+		expect(m.policy).toEqual({ kind: "one-shot" });
+		// The driver still resolves the implement/review defaults, and the manifest
+		// validates as converge-shaped through the fallback.
+		expect(resolveLoopPolicy(m)).toEqual({ implementStep: "implement", reviewStep: "review" });
+		expect(validateConvergeManifest(m)).toBeNull();
+	});
+
+	test("a loop policy resolves to its declared step ids", () => {
+		const m = parseConverge({
+			policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+		});
+		expect(resolveLoopPolicy(m)).toEqual({ implementStep: "implement", reviewStep: "review" });
+		expect(validateConvergeManifest(m)).toBeNull();
+	});
+
+	test("runConvergeIteration keys outputs + checkDuration on the configured steps, not literals", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "POL1" });
+		const review = reviewJson("proceed", { findingCount: 1, checksRun: "bun test" });
+		// The run reports its outputs/trace under NON-default step names (build/check).
+		// A driver still hardwired to implement/review would read undefined here.
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { build: "built the slice", check: review },
+			trace: [{ type: "step.completed", stepId: "check", output: review, durationMs: 1234 }],
+		});
+
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+			implementStep: "build",
+			reviewStep: "check",
+		});
+
+		if (!res.ok) throw new Error("expected ok iteration");
+		// Verdict parsed from outputs["check"], not outputs["review"].
+		expect(res.verdict).toBe("proceed");
+		expect(res.findingCount).toBe(1);
+		const it = firstIteration(loopId);
+		// implementSummary came from outputs["build"], not outputs["implement"].
+		expect(it.implementSummary).toContain("built the slice");
+		// checkDurationMs measured the "check" step, not a literal "review".
+		expect(it.checkDurationMs).toBe(1234);
+	});
+
+	test("default step ids: a run reporting build/check is NOT misread as implement/review", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "POL2" });
+		const review = reviewJson("proceed");
+		// No implementStep/reviewStep on the context -> defaults implement/review.
+		// The run's outputs are under build/check, so the defaults find nothing:
+		// proves the reads are genuinely keyed (an empty review text fails safe to
+		// block, and the implement summary is empty).
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { build: "built it", check: review },
+			trace: [{ type: "step.completed", stepId: "check", output: review, durationMs: 99 }],
+		});
+
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+		});
+
+		if (!res.ok) throw new Error("expected ok iteration");
+		// outputs["review"] was absent -> empty text -> fail-safe block verdict.
+		expect(res.verdict).toBe("block");
+		const it = firstIteration(loopId);
+		// outputs["implement"] absent -> empty summary -> the "(no summary)" fallback.
+		expect(it.implementSummary).toBe("(no summary)");
+		expect(it.checkDurationMs).toBe(0); // no "review" step in the trace
 	});
 });

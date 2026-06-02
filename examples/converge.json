@@ -43,5 +43,7 @@
 		}
 	},
 
-	"output": "out"
+	"output": "out",
+
+	"policy": { "kind": "loop", "implementStep": "implement", "reviewStep": "review" }
 }

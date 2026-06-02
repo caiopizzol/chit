@@ -53,6 +53,13 @@ describe("example manifests", () => {
 		expect(m.dependencies.implement).toEqual([]);
 		expect(m.dependencies.review).toEqual(["implement"]);
 		expect(m.dependencies.out).toEqual(["implement", "review"]);
+
+		// Declares the loop execution policy naming its implement/review steps.
+		expect(m.policy).toEqual({
+			kind: "loop",
+			implementStep: "implement",
+			reviewStep: "review",
+		});
 	});
 
 	test("converge-codex-writer swaps the agents but keeps the permission roles", () => {

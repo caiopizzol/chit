@@ -346,3 +346,35 @@ describe("describeConverge / traceConverge", () => {
 		expect(t.records.filter((r) => r.type === "iteration").length).toBe(1);
 	});
 });
+
+describe("loop policy: non-default step ids (Stage 2)", () => {
+	test("runNextIteration keys outputs/checkDuration on the session's policy steps", async () => {
+		const review = reviewJson("proceed", { findingCount: 1, checksRun: "bun test" });
+		// The run reports outputs/trace under build/check, not implement/review.
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { build: "built the slice", check: review },
+			trace: [{ type: "step.completed", stepId: "check", output: review, durationMs: 777 }],
+		});
+		const session = startConvergeSession({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 1,
+			execute,
+			loopId: "POLICY1",
+			loopSteps: { implementStep: "build", reviewStep: "check" },
+		});
+
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error(`expected iteration, got ${r.kind}`);
+		// Verdict parsed from outputs["check"], not a missing outputs["review"].
+		expect(r.verdict).toBe("proceed");
+		expect(r.findingCount).toBe(1);
+		const it = iterations(session.loopId)[0];
+		// implementSummary from outputs["build"]; checkDuration from the "check" step.
+		expect(it?.implementSummary).toContain("built the slice");
+		expect(it?.checkDurationMs).toBe(777);
+	});
+});

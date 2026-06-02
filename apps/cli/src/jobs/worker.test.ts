@@ -89,7 +89,11 @@ function seedJob(over: Partial<JobRecord> = {}): JobRecord {
 
 const runDeps = (execute: ConvergeExecute) => ({
 	jobStore: store,
-	resolveExecute: () => ({ ok: true as const, execute }),
+	resolveExecute: () => ({
+		ok: true as const,
+		execute,
+		loopSteps: { implementStep: "implement", reviewStep: "review" },
+	}),
 	installSignalHandlers: false,
 	heartbeatMs: 1_000_000,
 	now: () => 1000,
@@ -198,5 +202,41 @@ describe("background converge worker", () => {
 		// still running, no iterations appended
 		expect(store.get("j1")?.state).toBe("running");
 		expect(readLoop(cwd, "j1").filter((r) => r.type === "iteration")).toHaveLength(0);
+	});
+});
+
+describe("background worker: non-default loop policy steps (Stage 2)", () => {
+	test("reads outputs + check duration from the resolved policy steps, not literals", async () => {
+		seedJob();
+		const review = `looks fine\n\`\`\`json\n${JSON.stringify({
+			verdict: "proceed",
+			findingCount: 0,
+			checksRun: "tests",
+			risk: "none",
+		})}\n\`\`\``;
+		// The run reports under build/check; a worker hardwired to implement/review
+		// would misread this as an empty review (fail-safe block) + "(no summary)".
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { build: "built the slice", check: review },
+			trace: [{ type: "step.completed", stepId: "check", output: review, durationMs: 555 }],
+		});
+		await runJobWorker("j1", {
+			jobStore: store,
+			resolveExecute: () => ({
+				ok: true as const,
+				execute,
+				loopSteps: { implementStep: "build", reviewStep: "check" },
+			}),
+			installSignalHandlers: false,
+			heartbeatMs: 1_000_000,
+			now: () => 1000,
+		});
+		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "converged" });
+		const it = readLoop(cwd, "j1").find((r) => r.type === "iteration");
+		if (it?.type !== "iteration") throw new Error("no iteration record");
+		expect(it.implementSummary).toContain("built the slice");
+		expect(it.checkDurationMs).toBe(555);
 	});
 });

@@ -431,6 +431,7 @@ server.registerTool(
 				loopId: loop_id,
 				force,
 				execute: prep.execute,
+				loopSteps: prep.loopSteps,
 			});
 		} catch (e) {
 			return errorResult((e as Error).message);

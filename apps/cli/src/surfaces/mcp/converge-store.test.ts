@@ -11,6 +11,8 @@ function fakeSession(loopId: string, active = false): ConvergeSession {
 		task: "t",
 		maxIterations: 3,
 		execute: async () => ({ ok: true, output: "", outputs: {}, trace: [] }),
+		implementStep: "implement",
+		reviewStep: "review",
 		iteration: 0,
 		priorReview: "",
 		auditRefs: [],

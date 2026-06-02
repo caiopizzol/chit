@@ -65,11 +65,28 @@ const defaultIO: ConvergeIO = {
 const JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const VERDICTS: ReadonlySet<string> = new Set(["proceed", "revise", "block"]);
 
-// The converge contract: the driver depends on call steps named exactly these.
-// It reads outputs.review and records the review step's own trace duration as
-// the check duration (not the whole-run wall time, which includes implement).
+// The converge contract: the driver needs to know which call steps are the
+// implementer and the reviewer. These are the DEFAULTS, used when a manifest
+// declares no loop policy (a converge-shaped manifest authored before the
+// policy field, or any manifest run through this driver without one). A manifest
+// with `policy: { kind: "loop", implementStep, reviewStep }` overrides them.
 const IMPLEMENT_STEP_ID = "implement";
 const REVIEW_STEP_ID = "review";
+
+// The implementer/reviewer step ids the driver should key on for this manifest:
+// the loop policy's steps when declared, else the defaults. Keeping the default
+// fallback means a converge-shaped manifest with no policy still runs exactly as
+// before (zero behavior change).
+export interface LoopSteps {
+	implementStep: string;
+	reviewStep: string;
+}
+export function resolveLoopPolicy(manifest: NormalizedManifest): LoopSteps {
+	if (manifest.policy.kind === "loop") {
+		return { implementStep: manifest.policy.implementStep, reviewStep: manifest.policy.reviewStep };
+	}
+	return { implementStep: IMPLEMENT_STEP_ID, reviewStep: REVIEW_STEP_ID };
+}
 
 // implementSummary in the log is a digest, not the full transcript. Cap it so
 // a long Claude summary does not bloat the .jsonl record.
@@ -112,6 +129,10 @@ export interface ConvergeLoopOptions {
 	loopId?: string;
 	force?: boolean;
 	execute: ConvergeExecute;
+	// The implementer/reviewer step ids (from the manifest's loop policy). Default
+	// to the converge constants when absent.
+	implementStep?: string;
+	reviewStep?: string;
 }
 
 export interface ConvergeResult {
@@ -174,9 +195,11 @@ function parseReview(reviewText: string): ParsedReview {
 
 // The review step's own duration from the run trace — the check duration. 0 if
 // the trace has no completed review step (e.g. an injected fake without one).
-function reviewDurationMs(trace: TraceEvent[]): number {
+// Keyed on the configured reviewStep, not a literal, so a loop policy with a
+// non-default reviewer step name still measures the right step.
+function reviewDurationMs(trace: TraceEvent[], reviewStep: string): number {
 	for (const e of trace) {
-		if (e.type === "step.completed" && e.stepId === REVIEW_STEP_ID) return e.durationMs;
+		if (e.type === "step.completed" && e.stepId === reviewStep) return e.durationMs;
 	}
 	return 0;
 }
@@ -267,6 +290,11 @@ export interface ConvergeIterationContext {
 	task: string;
 	prior_review: string;
 	execute: ConvergeExecute;
+	// The implementer/reviewer step ids to read from the run's outputs and trace.
+	// Default to the converge constants (implement/review) when absent, so callers
+	// that don't yet resolve a manifest's loop policy keep their prior behavior.
+	implementStep?: string;
+	reviewStep?: string;
 	// When present, threaded to execute so the iteration's manifest run can be
 	// cancelled mid-flight. Absent for the CLI driver (uncancellable, as before).
 	signal?: AbortSignal;
@@ -370,12 +398,14 @@ export async function runConvergeIteration(
 		};
 	}
 
-	const reviewText = result.outputs.review ?? "";
+	const implementStep = ctx.implementStep ?? IMPLEMENT_STEP_ID;
+	const reviewStep = ctx.reviewStep ?? REVIEW_STEP_ID;
+	const reviewText = result.outputs[reviewStep] ?? "";
 	const review = parseReview(reviewText);
 	const usage = sumTraceUsage(result.trace);
 	const { changedFiles, workspaceWarnings } = gitWorkspace(ctx.cwd);
 	appendIteration(ctx.cwd, ctx.loopId, {
-		implementSummary: capSummary(result.outputs.implement ?? ""),
+		implementSummary: capSummary(result.outputs[implementStep] ?? ""),
 		changedFiles,
 		workspaceWarnings,
 		checksRun: review.checksRun,
@@ -384,7 +414,7 @@ export async function runConvergeIteration(
 		// Autonomous driver: it follows the reviewer, so decision == verdict.
 		decision: review.verdict,
 		// The check (review) step's own duration, not the whole-run wall time.
-		checkDurationMs: reviewDurationMs(result.trace),
+		checkDurationMs: reviewDurationMs(result.trace, reviewStep),
 		// Total token/cost across the run's calls (implement + review).
 		...(usage && { usage }),
 		// Link to the audit transcript for this iteration's run, when audited.
@@ -437,6 +467,8 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 				task: opts.task,
 				prior_review: priorReview,
 				execute: opts.execute,
+				...(opts.implementStep && { implementStep: opts.implementStep }),
+				...(opts.reviewStep && { reviewStep: opts.reviewStep }),
 			});
 		} catch (e) {
 			if (e instanceof ConvergeExecuteError) {
@@ -516,7 +548,7 @@ export function buildExecute(
 }
 
 export type PrepareConvergeResult =
-	| { ok: true; execute: ConvergeExecute; warnings: string[] }
+	| { ok: true; execute: ConvergeExecute; loopSteps: LoopSteps; warnings: string[] }
 	| { ok: false; error: string };
 
 // Load + validate a converge manifest and build its audited execute. Shared by
@@ -560,7 +592,12 @@ export function prepareConvergeExecute(
 	const warnings = gaps.map(
 		(g) => `unenforced permission: participant "${g.participantId}" requires ${g.permission}`,
 	);
-	return { ok: true, execute: buildExecute(manifest, registry, scope, cwd), warnings };
+	return {
+		ok: true,
+		execute: buildExecute(manifest, registry, scope, cwd),
+		loopSteps: resolveLoopPolicy(manifest),
+		warnings,
+	};
 }
 
 // Wrap a base adapter map into a converge execute that records each manifest run
@@ -624,15 +661,22 @@ export function makeAuditedExecute(
 }
 
 // --manifest is generic, but the driver assumes a converge-shaped manifest: it
-// depends on call steps named `implement` and `review` and reads outputs.review.
-// Validate that contract up front so a non-converge manifest fails clearly
-// instead of silently writing a garbage loop log. Returns an error string, or
-// null when the manifest satisfies the contract.
+// reads the implementer and reviewer step outputs. Those step ids come from the
+// manifest's loop policy when declared, else the implement/review defaults
+// (resolveLoopPolicy). Validate that contract up front so a non-converge manifest
+// fails clearly instead of silently writing a garbage loop log. Returns an error
+// string, or null when the manifest satisfies the contract.
 export function validateConvergeManifest(manifest: NormalizedManifest): string | null {
-	for (const id of [IMPLEMENT_STEP_ID, REVIEW_STEP_ID]) {
+	// Validate the steps this manifest will actually key on: its loop policy's
+	// steps when declared (core already guarantees those are call steps), else the
+	// default implement/review (the contract for a converge manifest with no
+	// policy). Core's parsePolicy validates loop-policy steps, so this primarily
+	// enforces the fallback contract for a no-policy converge-shaped manifest.
+	const { implementStep, reviewStep } = resolveLoopPolicy(manifest);
+	for (const id of [implementStep, reviewStep]) {
 		const step = manifest.steps[id];
 		if (!step) {
-			return `manifest "${manifest.id}" is not converge-shaped: missing call step "${id}" (converge needs call steps named "implement" and "review")`;
+			return `manifest "${manifest.id}" is not converge-shaped: missing call step "${id}" (a converge manifest needs implement/review call steps, or a loop policy naming them)`;
 		}
 		if (step.kind !== "call") {
 			return `manifest "${manifest.id}" is not converge-shaped: step "${id}" must be a call step, not ${step.kind}`;
@@ -804,6 +848,7 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 
 	let result: ConvergeResult;
 	try {
+		const loopSteps = resolveLoopPolicy(manifest);
 		result = await convergeLoop({
 			cwd: parsed.cwd,
 			scope: parsed.scope,
@@ -811,6 +856,8 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 			maxIterations: parsed.maxIterations,
 			loopId: parsed.loopId,
 			execute: buildExecute(manifest, registry, parsed.scope, parsed.cwd),
+			implementStep: loopSteps.implementStep,
+			reviewStep: loopSteps.reviewStep,
 		});
 	} catch (e) {
 		// Any failure from the loop exits cleanly with a `chit converge:` message

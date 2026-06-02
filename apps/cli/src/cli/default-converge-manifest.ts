@@ -54,4 +54,6 @@ export const DEFAULT_CONVERGE_MANIFEST: unknown = {
 	},
 
 	output: "out",
+
+	policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 };

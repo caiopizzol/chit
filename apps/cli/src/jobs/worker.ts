@@ -21,6 +21,7 @@ import { loadRegistry } from "../agents/parse.ts";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
+	type LoopSteps,
 	prepareConvergeExecute,
 	runConvergeIteration,
 } from "../cli/converge.ts";
@@ -31,7 +32,9 @@ import { acquireLock, LockError, type LockOptions, releaseLock } from "./lock.ts
 import type { JobStore } from "./store.ts";
 import type { JobPhase, JobRecord, JobState } from "./types.ts";
 
-type ExecuteResolution = { ok: true; execute: ConvergeExecute } | { ok: false; error: string };
+type ExecuteResolution =
+	| { ok: true; execute: ConvergeExecute; loopSteps: LoopSteps }
+	| { ok: false; error: string };
 
 export interface JobWorkerDeps {
 	jobStore: JobStore;
@@ -71,7 +74,9 @@ function defaultResolveExecute(job: JobRecord): ExecuteResolution {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
 	const prep = prepareConvergeExecute(raw, loadRegistry(), job.scope, job.cwd, job.allowUnenforced);
-	return prep.ok ? { ok: true, execute: prep.execute } : { ok: false, error: prep.error };
+	return prep.ok
+		? { ok: true, execute: prep.execute, loopSteps: prep.loopSteps }
+		: { ok: false, error: prep.error };
 }
 
 // Run the job to a terminal state. Safe to call once per worker process; if the
@@ -194,10 +199,14 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 					task: job.task,
 					prior_review: priorReview,
 					execute: resolved.execute,
+					implementStep: resolved.loopSteps.implementStep,
+					reviewStep: resolved.loopSteps.reviewStep,
 					signal: controller.signal,
 					onTrace: (e: TraceEvent) => {
-						if (e.type === "step.started" && e.stepId === "implement") setPhase("implementing");
-						else if (e.type === "step.started" && e.stepId === "review") setPhase("reviewing");
+						if (e.type === "step.started" && e.stepId === resolved.loopSteps.implementStep)
+							setPhase("implementing");
+						else if (e.type === "step.started" && e.stepId === resolved.loopSteps.reviewStep)
+							setPhase("reviewing");
 					},
 				});
 			} catch (e) {
