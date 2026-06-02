@@ -19,7 +19,7 @@ describe("example manifests", () => {
 			readdirSync(EXAMPLES)
 				.filter((file) => file.endsWith(".json"))
 				.sort(),
-		).toEqual(["consult.json", "converge.json"]);
+		).toEqual(["consult.json", "converge-codex-writer.json", "converge.json"]);
 	});
 
 	test("consult normalizes to parallel fan-out", () => {
@@ -50,5 +50,19 @@ describe("example manifests", () => {
 		expect(m.dependencies.implement).toEqual([]);
 		expect(m.dependencies.review).toEqual(["implement"]);
 		expect(m.dependencies.out).toEqual(["implement", "review"]);
+	});
+
+	test("converge-codex-writer swaps the agents but keeps the permission roles", () => {
+		const m = parseManifest(loadExample("converge-codex-writer"));
+
+		expect(m.id).toBe("converge-codex-writer");
+		// Same loop shape as converge.json (the loop driver keys on these step ids).
+		expect(m.executionOrder).toEqual([["implement"], ["review"], ["out"]]);
+		// The roles are swapped by vendor, but the permission boundary is unchanged:
+		// the implementer writes, the reviewer is read-only, regardless of agent.
+		expect(m.participants.implementer?.agent).toBe("codex");
+		expect(m.participants.implementer?.permissions.filesystem).toBe("write");
+		expect(m.participants.reviewer?.agent).toBe("claude");
+		expect(m.participants.reviewer?.permissions.filesystem).toBe("read_only");
 	});
 });

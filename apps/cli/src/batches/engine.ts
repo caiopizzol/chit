@@ -500,7 +500,8 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 				? "a job finished; call chit_batch_advance to reconcile and launch newly runnable task(s)"
 				: `call chit_batch_advance to launch ${n} runnable task(s)`;
 	} else {
-		nextAction = "tasks in flight; poll chit_batch_status, or chit_batch_cancel to stop";
+		nextAction =
+			"tasks in flight; watch with chit_batch_status (read-only, never launches), then call chit_batch_advance once it reports a finished job or a runnable task (chit_batch_cancel to stop). Follow nextAction, not the per-task status, to drive the batch.";
 	}
 	void startableBlocked;
 

@@ -790,7 +790,7 @@ server.registerTool(
 	"chit_converge_run",
 	{
 		description:
-			"Start an autonomous converge loop as a BACKGROUND job (a detached worker advances it; you keep chatting). Returns immediately with a job_id and loop_id. Inspect with chit_job_status / chit_status, stop with chit_job_cancel. Use the foreground chit_converge_start/next instead when you want to checkpoint each iteration. v1 starts a NEW loop only: an existing loop_id is refused (use chit_converge_next to continue a foreground loop, or force=true / a new loop_id).",
+			"Start an autonomous converge loop as a BACKGROUND job (a detached worker advances it; you keep chatting). Runs ONE task in the current worktree. Returns immediately with a job_id and loop_id. Inspect with chit_job_status / chit_status, stop with chit_job_cancel. Use the foreground chit_converge_start/next instead when you want to checkpoint each iteration. For SEVERAL tasks in parallel, do NOT launch multiple chit_converge_run jobs in one repo (they share the working tree and collide): use chit_batch_start, which isolates each task in its own git worktree. v1 starts a NEW loop only: an existing loop_id is refused (use chit_converge_next to continue a foreground loop, or force=true / a new loop_id).",
 		inputSchema: {
 			task: z.string().describe("The slice to converge on"),
 			scope: z
@@ -1057,7 +1057,9 @@ const batchTaskSchema = z.object({
 	dependencies: z
 		.array(z.string())
 		.optional()
-		.describe("Task ids that must reach review_ready before this task runs"),
+		.describe(
+			"Task ids that must reach review_ready before this task launches. A launch GATE only: the dependent task still starts from the batch base in its own worktree and does NOT receive its dependencies' changes (no merge). Use it to order work, not to feed one task's output into another.",
+		),
 	claimedPaths: z
 		.array(z.string())
 		.optional()
@@ -1071,7 +1073,9 @@ const batchTaskSchema = z.object({
 	manifestPath: z
 		.string()
 		.optional()
-		.describe("Per-task converge manifest override (absolute or relative to cwd)."),
+		.describe(
+			"Per-task converge manifest override (absolute or relative to cwd). Omit to use the bundled default (write-capable Claude implementer + read-only Codex reviewer). To swap roles (e.g. a Codex implementer), point this at a custom manifest like examples/converge-codex-writer.json.",
+		),
 });
 
 function batchError(e: unknown) {
@@ -1085,7 +1089,7 @@ server.registerTool(
 	"chit_batch_start",
 	{
 		description:
-			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_batch_status and call chit_batch_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest.",
+			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_converge_run instead. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_batch_status and call chit_batch_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer; point manifestPath at a custom manifest like examples/converge-codex-writer.json to swap roles).",
 		inputSchema: {
 			tasks: z
 				.array(batchTaskSchema)
@@ -1173,7 +1177,7 @@ server.registerTool(
 		description:
 			"Read-only batch overview: each task's status, live job state/phase, branch/worktree, changed files, audit refs, plus how many tasks are runnable now and the next action. Inspection is safe: this NEVER launches jobs, creates worktrees, or mutates state (use chit_batch_advance to make progress).",
 		inputSchema: {
-			batch_id: z.string(),
+			batch_id: z.string().describe("The batch id, from chit_batch_start or chit_batch_list"),
 			cwd: z
 				.string()
 				.optional()
@@ -1194,7 +1198,7 @@ server.registerTool(
 		description:
 			"Advance a batch: reconcile finished jobs into task state (converged -> review_ready; blocked/max-iterations/failed/stale -> failed; dependents proceed only past a review_ready task), then launch the next runnable wave. The only progression trigger besides start. Call it when chit_batch_status reports runnable tasks or a finished job.",
 		inputSchema: {
-			batch_id: z.string(),
+			batch_id: z.string().describe("The batch id, from chit_batch_start or chit_batch_list"),
 			cwd: z
 				.string()
 				.optional()
@@ -1218,7 +1222,7 @@ server.registerTool(
 		description:
 			"Cancel a batch: request cancellation of every active task job (intent-first, the same safety as chit_job_cancel) and mark pending tasks cancelled. Running jobs settle cleanly in the background. Worktrees are left in place for inspection.",
 		inputSchema: {
-			batch_id: z.string(),
+			batch_id: z.string().describe("The batch id, from chit_batch_start or chit_batch_list"),
 			cwd: z
 				.string()
 				.optional()
@@ -1242,7 +1246,7 @@ server.registerTool(
 		description:
 			"Retire a batch's worktrees and branches once you are done reviewing them. SAFE BY DEFAULT: with confirm omitted/false it is a DRY RUN that lists which worktrees/branches would be removed and which changed-file diffs that would discard, and removes nothing. With confirm=true it removes them (git worktree remove --force + branch -D). Refuses while any task is still running. NEVER deletes the batch/job/loop/audit receipts -- those stay as durable history.",
 		inputSchema: {
-			batch_id: z.string(),
+			batch_id: z.string().describe("The batch id, from chit_batch_start or chit_batch_list"),
 			confirm: z
 				.boolean()
 				.default(false)
