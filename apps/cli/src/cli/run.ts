@@ -368,7 +368,9 @@ Limitations in this build:
 - file[] inputs are not yet supported via the CLI.
 - claude-cli read-only is enforced by Claude plan-mode permissions, not an
   OS/filesystem sandbox: plan mode blocks writes (file edits and write-capable
-  Bash) from inside claude. Codex remains the hard sandbox.
+  Bash) from inside claude. Codex runs in an OS sandbox sized to the
+  participant's declared filesystem permission (--sandbox read-only for a
+  reviewer, --sandbox workspace-write for a write-capable implementer).
 `;
 
 export async function runMain(argv: string[]): Promise<number> {
