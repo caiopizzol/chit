@@ -32,6 +32,9 @@ describe("example manifests", () => {
 
 		expect(m.inferredRequires.can_pass_files).toBeUndefined();
 		expect(m.inferredRequires.can_provide_stable_scope).toBe(true);
+
+		// No declared policy -> normalizes to one-shot (a single DAG pass).
+		expect(m.policy).toEqual({ kind: "one-shot" });
 	});
 
 	test("converge normalizes to implement, review, then format", () => {

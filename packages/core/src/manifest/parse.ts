@@ -4,6 +4,7 @@ import type {
 	NormalizedInput,
 	NormalizedManifest,
 	NormalizedParticipant,
+	NormalizedPolicy,
 	NormalizedStep,
 	SessionPolicy,
 	TemplateRef,
@@ -28,6 +29,7 @@ const ALLOWED_TOP_KEYS = new Set([
 	"participants",
 	"steps",
 	"output",
+	"policy",
 ]);
 const REQUIRED_TOP_KEYS = [
 	"schema",
@@ -58,6 +60,9 @@ const ALLOWED_FILESYSTEM_VALUES: ReadonlySet<string> = new Set(["read_only", "wr
 
 const ALLOWED_CALL_KEYS = new Set(["call", "prompt"]);
 const ALLOWED_FORMAT_KEYS = new Set(["format"]);
+
+const ALLOWED_POLICY_KINDS: ReadonlySet<string> = new Set(["one-shot", "loop"]);
+const ALLOWED_LOOP_POLICY_KEYS = new Set(["kind", "implementStep", "reviewStep", "maxIterations"]);
 
 const TEMPLATE_REF_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 
@@ -321,6 +326,54 @@ function parseSteps(
 	return out;
 }
 
+// The execution policy. Absent normalizes to one-shot (a single DAG pass) so
+// downstream code never sees `undefined`. A loop policy names the implementer
+// and reviewer call steps and an optional iteration budget; the verdict contract
+// is fixed in the loop driver and is deliberately NOT configurable here.
+function parsePolicy(raw: unknown, steps: Record<string, NormalizedStep>): NormalizedPolicy {
+	if (raw === undefined) return { kind: "one-shot" };
+	if (!isObject(raw)) throw new ManifestError("policy", "must be an object");
+
+	const kind = raw.kind;
+	if (typeof kind !== "string" || !ALLOWED_POLICY_KINDS.has(kind)) {
+		throw new ManifestError("policy.kind", 'must be "one-shot" or "loop"');
+	}
+
+	if (kind === "one-shot") {
+		for (const k of Object.keys(raw)) {
+			if (k !== "kind") throw new ManifestError(`policy.${k}`, "unknown field for one-shot policy");
+		}
+		return { kind: "one-shot" };
+	}
+
+	for (const k of Object.keys(raw)) {
+		if (!ALLOWED_LOOP_POLICY_KEYS.has(k))
+			throw new ManifestError(`policy.${k}`, "unknown field for loop policy");
+	}
+
+	const requireCallStep = (value: unknown, field: string): string => {
+		const id = reqNonEmptyString(value, `policy.${field}`);
+		const step = steps[id];
+		if (!step) throw new ManifestError(`policy.${field}`, `references unknown step "${id}"`);
+		if (step.kind !== "call")
+			throw new ManifestError(`policy.${field}`, `step "${id}" must be a call step`);
+		return id;
+	};
+
+	const implementStep = requireCallStep(raw.implementStep, "implementStep");
+	const reviewStep = requireCallStep(raw.reviewStep, "reviewStep");
+
+	const policy: NormalizedPolicy = { kind: "loop", implementStep, reviewStep };
+	if (raw.maxIterations !== undefined) {
+		const n = raw.maxIterations;
+		if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
+			throw new ManifestError("policy.maxIterations", "must be an integer >= 1");
+		}
+		policy.maxIterations = n;
+	}
+	return policy;
+}
+
 function computeInferredRequires(
 	inputs: Record<string, NormalizedInput>,
 	participants: Record<string, NormalizedParticipant>,
@@ -424,6 +477,8 @@ export function parseManifest(raw: unknown): NormalizedManifest {
 		throw new ManifestError("output", `references unknown step "${output}"`);
 	}
 
+	const policy = parsePolicy(raw.policy, steps);
+
 	const inferredRequires = computeInferredRequires(inputs, participants);
 	const requires: Record<string, true> = { ...inferredRequires, ...declaredRequires };
 
@@ -441,6 +496,7 @@ export function parseManifest(raw: unknown): NormalizedManifest {
 		participants,
 		steps,
 		output,
+		policy,
 		dependencies,
 		executionOrder,
 	};

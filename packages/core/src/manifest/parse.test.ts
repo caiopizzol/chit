@@ -245,3 +245,144 @@ describe("reserved ids (prototype-pollution guard)", () => {
 		expectManifestError(raw, "inputs.prototype", "reserved");
 	});
 });
+
+describe("execution policy", () => {
+	// A manifest with two call steps + a format step, so loop policies have real
+	// implement/review steps to reference.
+	const LOOP_BASE = {
+		schema: 1,
+		id: "loopish",
+		description: "loop-shaped manifest",
+		inputs: { task: { type: "string" } },
+		participants: {
+			impl: { agent: "claude", role: "implement", session: "per_scope" },
+			rev: { agent: "codex", role: "review", session: "per_scope" },
+		},
+		steps: {
+			implement: { call: "impl", prompt: "{{ inputs.task }}" },
+			review: { call: "rev", prompt: "{{ steps.implement.output }}" },
+			out: { format: "{{ steps.review.output }}" },
+		},
+		output: "out",
+	};
+
+	test("absent policy normalizes to one-shot (never undefined)", () => {
+		const m = parseManifest(VALID_BASE);
+		expect(m.policy).toEqual({ kind: "one-shot" });
+	});
+
+	test("explicit one-shot policy", () => {
+		const m = parseManifest({ ...VALID_BASE, policy: { kind: "one-shot" } });
+		expect(m.policy).toEqual({ kind: "one-shot" });
+	});
+
+	test("valid loop policy normalizes with its step ids and budget", () => {
+		const m = parseManifest({
+			...LOOP_BASE,
+			policy: { kind: "loop", implementStep: "implement", reviewStep: "review", maxIterations: 5 },
+		});
+		expect(m.policy).toEqual({
+			kind: "loop",
+			implementStep: "implement",
+			reviewStep: "review",
+			maxIterations: 5,
+		});
+	});
+
+	test("loop policy without maxIterations omits the field (driver default applies)", () => {
+		const m = parseManifest({
+			...LOOP_BASE,
+			policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+		});
+		expect(m.policy).toEqual({ kind: "loop", implementStep: "implement", reviewStep: "review" });
+	});
+
+	test("loop policy accepts non-default step names (not hardwired to implement/review)", () => {
+		const m = parseManifest({
+			...LOOP_BASE,
+			steps: {
+				build: { call: "impl", prompt: "{{ inputs.task }}" },
+				check: { call: "rev", prompt: "{{ steps.build.output }}" },
+				out: { format: "{{ steps.check.output }}" },
+			},
+			policy: { kind: "loop", implementStep: "build", reviewStep: "check" },
+		});
+		expect(m.policy).toMatchObject({ implementStep: "build", reviewStep: "check" });
+	});
+
+	test("rejects unknown policy kind", () => {
+		expectManifestError({ ...VALID_BASE, policy: { kind: "fanout" } }, "policy.kind");
+	});
+
+	test("rejects extra field on one-shot policy", () => {
+		expectManifestError(
+			{ ...VALID_BASE, policy: { kind: "one-shot", implementStep: "s" } },
+			"policy.implementStep",
+		);
+	});
+
+	test("rejects loop policy referencing an unknown step", () => {
+		expectManifestError(
+			{ ...LOOP_BASE, policy: { kind: "loop", implementStep: "nope", reviewStep: "review" } },
+			"policy.implementStep",
+			"unknown step",
+		);
+	});
+
+	test("rejects loop policy whose step is a format (non-call) step", () => {
+		expectManifestError(
+			{ ...LOOP_BASE, policy: { kind: "loop", implementStep: "implement", reviewStep: "out" } },
+			"policy.reviewStep",
+			"call step",
+		);
+	});
+
+	test("rejects loop policy with an unknown field", () => {
+		expectManifestError(
+			{
+				...LOOP_BASE,
+				policy: { kind: "loop", implementStep: "implement", reviewStep: "review", verdict: "x" },
+			},
+			"policy.verdict",
+		);
+	});
+
+	test("rejects a non-object policy (null, array, string)", () => {
+		for (const bad of [null, [], "loop"]) {
+			expectManifestError({ ...VALID_BASE, policy: bad }, "policy", "must be an object");
+		}
+	});
+
+	test("rejects a policy with no kind, or a non-string kind", () => {
+		expectManifestError({ ...VALID_BASE, policy: {} }, "policy.kind");
+		expectManifestError({ ...VALID_BASE, policy: { kind: 1 } }, "policy.kind");
+	});
+
+	test("rejects a loop policy missing implementStep or reviewStep", () => {
+		expectManifestError(
+			{ ...LOOP_BASE, policy: { kind: "loop", reviewStep: "review" } },
+			"policy.implementStep",
+		);
+		expectManifestError(
+			{ ...LOOP_BASE, policy: { kind: "loop", implementStep: "implement" } },
+			"policy.reviewStep",
+		);
+	});
+
+	test("rejects non-integer / < 1 / non-number maxIterations", () => {
+		for (const bad of [0, -1, 1.5, "3", null]) {
+			expectManifestError(
+				{
+					...LOOP_BASE,
+					policy: {
+						kind: "loop",
+						implementStep: "implement",
+						reviewStep: "review",
+						maxIterations: bad,
+					},
+				},
+				"policy.maxIterations",
+			);
+		}
+	});
+});
