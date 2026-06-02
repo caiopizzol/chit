@@ -32,7 +32,8 @@ const jetbrains = localFont({
 export const metadata: Metadata = {
 	metadataBase: new URL(siteUrl),
 	title: { default: "chit", template: "%s - chit" },
-	description: "A thin runtime for multi-agent workflows. Stop being the glue between your agents.",
+	description:
+		"Versioned, cross-vendor agent routines with an audit trail. Stop being the glue between your agents.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

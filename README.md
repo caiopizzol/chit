@@ -10,7 +10,7 @@ Website and docs: https://chit.run
 
 A chit is a small JSON file that declares a routine you already run by hand: which agents take part, in what order, what context flows between them, and where a reviewer checks the work. The runtime reads the chit and runs it, primarily inside a Claude Code conversation over MCP. You stay in the loop and step in where judgment matters.
 
-The routine chit is built for is an implement/check loop: one agent implements a slice, another reviews the diff, repeat until it converges or needs you. The roles are assigned in the chit, not fixed to a vendor: either Claude or Codex can implement or review, and the permission you grant a participant decides whether it can write. The bundled default pairs a write-capable Claude implementer with a read-only Codex reviewer. Every run leaves a receipt you can read.
+chit is built for the implement/check loop: one agent implements a slice, another reviews the diff, repeat until it converges or needs you. The roles are assigned in the chit, not fixed to a vendor: either Claude or Codex can implement or review, and the permission you grant a participant decides whether it can write. The bundled default pairs a write-capable Claude implementer with a read-only Codex reviewer. Every run leaves a receipt you can read.
 
 You run it in one of three modes:
 

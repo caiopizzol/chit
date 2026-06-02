@@ -1,11 +1,11 @@
 ---
 title: Overview
-description: A thin runtime for multi-agent workflows. Stop being the glue between your agents.
+description: Versioned, cross-vendor agent routines with an audit trail. Stop being the glue between your agents.
 ---
 
 A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, and where a reviewer checks the work. The runtime reads the chit and runs it, primarily inside a Claude Code conversation over MCP. You stay in the loop and step in where judgment matters.
 
-The routine chit is built for is an implement/check loop: one agent implements, another reviews, and chit records what happened. The roles are assigned in the chit, not fixed to a vendor: either Claude or Codex can implement or review, and the permission you grant a participant decides whether it can write. The bundled default pairs a write-capable Claude implementer with a read-only Codex reviewer. Three things you get: a versioned routine, cross-vendor agents, and an audit trail.
+chit is built for the implement/check loop: one agent implements, another reviews, and chit records what happened. The roles are assigned in the chit, not fixed to a vendor: either Claude or Codex can implement or review, and the permission you grant a participant decides whether it can write. The bundled default pairs a write-capable Claude implementer with a read-only Codex reviewer. Three things you get: a versioned routine, cross-vendor agents, and an audit trail.
 
 The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools, a CLI command, a Claude Code skill) are thin shims that call the runtime with a manifest and inputs. MCP is the primary surface; the CLI is support tooling.
 

@@ -11,7 +11,7 @@ export function GET() {
 	const body = [
 		"# chit",
 		"",
-		"A thin runtime for multi-agent workflows.",
+		"Versioned, cross-vendor agent routines with an audit trail.",
 		"",
 		"## Docs",
 		"",
