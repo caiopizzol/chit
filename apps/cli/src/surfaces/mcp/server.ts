@@ -23,15 +23,21 @@ import { loadRegistry } from "../../agents/parse.ts";
 import { listAudit, showAudit } from "../../audit/reader.ts";
 import { AuditStore } from "../../audit/store.ts";
 import {
-	advanceCampaign,
-	type CampaignEngineDeps,
-	cancelCampaign,
-	describeCampaign,
-	startCampaign,
-} from "../../campaigns/engine.ts";
-import { PlanError } from "../../campaigns/plan.ts";
-import { CampaignStore, CampaignStoreError } from "../../campaigns/store.ts";
-import { createTaskWorktree, realGit, WorktreeError } from "../../campaigns/worktree.ts";
+	advanceBatch,
+	type BatchEngineDeps,
+	cancelBatch,
+	cleanupBatch,
+	describeBatch,
+	startBatch,
+} from "../../batches/engine.ts";
+import { PlanError } from "../../batches/plan.ts";
+import { BatchStore, BatchStoreError } from "../../batches/store.ts";
+import {
+	createTaskWorktree,
+	realGit,
+	removeTaskWorktree,
+	WorktreeError,
+} from "../../batches/worktree.ts";
 import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
@@ -692,7 +698,7 @@ function spawnJobWorker(jobId: string, cwd: string): void {
 
 // Launch one detached background converge job: validate the manifest, reserve the
 // loop, create the durable job record, spawn the worker. Shared by chit_converge_run
-// (one job) and the campaign engine (one per runnable task), so both refuse the
+// (one job) and the batch engine (one per runnable task), so both refuse the
 // same manifests and produce identical job/loop state. Returns the ids + any
 // unenforced-permission warnings, or a single error string.
 function launchConvergeJob(p: {
@@ -920,7 +926,7 @@ function describeJob(job: JobRecord) {
 
 // Request cancellation of one job: persist the intent FIRST (survives a worker
 // restart / stale detection), then signal the worker's process group, but never a
-// stale job's possibly-reused pid. Shared by chit_job_cancel and the campaign
+// stale job's possibly-reused pid. Shared by chit_job_cancel and the batch
 // engine's cancelJob so both cancel identically.
 type CancelResult =
 	| { status: "missing" }
@@ -991,9 +997,9 @@ server.registerTool(
 	},
 );
 
-// --- campaign tools --------------------------------------------------------
+// --- batch tools --------------------------------------------------------
 //
-// A campaign is a THIN COORDINATOR over background converge jobs: it plans a task
+// A batch is a THIN COORDINATOR over background converge jobs: it plans a task
 // graph, creates one worktree per task, and launches a chit_converge_run job per
 // runnable task. It owns no execution. start launches the first wave; advance
 // reconciles finished jobs and launches the next wave; status is READ-ONLY
@@ -1002,12 +1008,14 @@ server.registerTool(
 
 // Engine deps wired to the real job/worktree/loop machinery. allowUnenforced is
 // false: both built-in adapters enforce their declared permission (codex via the
-// OS sandbox, claude via plan mode), so a built-in-adapter campaign never hits an
+// OS sandbox, claude via plan mode), so a built-in-adapter batch never hits an
 // enforcement gap; a manifest with an unenforceable permission fails that task
 // loudly via launchConvergeJob.
-const campaignDeps: CampaignEngineDeps = {
+const batchDeps: BatchEngineDeps = {
 	git: realGit,
 	createWorktree: (repo, cid, tid, sha) => createTaskWorktree(realGit, repo, cid, tid, sha),
+	removeWorktree: (repo, worktreePath, branch) =>
+		removeTaskWorktree(realGit, repo, worktreePath, branch),
 	launchJob: (p) => {
 		const r = launchConvergeJob({
 			task: p.task,
@@ -1041,8 +1049,8 @@ const campaignDeps: CampaignEngineDeps = {
 	now: () => Date.now(),
 };
 
-const campaignTaskSchema = z.object({
-	id: z.string().describe("Unique task id within the campaign (a safe slug)"),
+const batchTaskSchema = z.object({
+	id: z.string().describe("Unique task id within the batch (a safe slug)"),
 	title: z.string().describe("Short task title"),
 	body: z.string().describe("The task brief handed to the converge implementer"),
 	dependencies: z
@@ -1065,21 +1073,21 @@ const campaignTaskSchema = z.object({
 		.describe("Per-task converge manifest override (absolute or relative to cwd)."),
 });
 
-function campaignError(e: unknown) {
-	if (e instanceof PlanError || e instanceof WorktreeError || e instanceof CampaignStoreError) {
+function batchError(e: unknown) {
+	if (e instanceof PlanError || e instanceof WorktreeError || e instanceof BatchStoreError) {
 		return errorResult(e.message);
 	}
 	return errorResult((e as Error).message);
 }
 
 server.registerTool(
-	"chit_campaign_start",
+	"chit_batch_start",
 	{
 		description:
-			"Start a campaign: run several converge tasks in parallel, each in its own git worktree, as background jobs. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_campaign_status and call chit_campaign_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Manifest resolution per task: task.manifestPath > campaign manifest_path > the bundled default converge manifest.",
+			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_batch_status and call chit_batch_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest.",
 		inputSchema: {
 			tasks: z
-				.array(campaignTaskSchema)
+				.array(batchTaskSchema)
 				.min(1)
 				.describe("The task graph (an explicit, reviewed list)"),
 			cwd: z
@@ -1091,7 +1099,7 @@ server.registerTool(
 			manifest_path: z
 				.string()
 				.optional()
-				.describe("Campaign-level default converge manifest (absolute or relative to cwd)."),
+				.describe("Batch-level default converge manifest (absolute or relative to cwd)."),
 			max_iterations: z
 				.number()
 				.int()
@@ -1102,9 +1110,9 @@ server.registerTool(
 	},
 	async ({ tasks, cwd, max_parallel, base_branch, manifest_path, max_iterations }) => {
 		const runCwd = resolve(cwd ?? process.cwd());
-		// Resolve manifest paths to absolute against the campaign cwd up front, so the
+		// Resolve manifest paths to absolute against the batch cwd up front, so the
 		// per-task worktree never re-resolves a relative path against the wrong base.
-		const campaignManifest =
+		const batchManifest =
 			manifest_path !== undefined
 				? isAbsolute(manifest_path)
 					? manifest_path
@@ -1116,89 +1124,118 @@ server.registerTool(
 				manifestPath: isAbsolute(t.manifestPath) ? t.manifestPath : resolve(runCwd, t.manifestPath),
 			}),
 		}));
-		const store = new CampaignStore(runCwd);
+		const store = new BatchStore(runCwd);
 		try {
-			const campaign = startCampaign(store, campaignDeps, {
+			const batch = startBatch(store, batchDeps, {
 				id: crypto.randomUUID(),
 				cwd: runCwd,
 				tasks: planned,
 				maxParallel: max_parallel,
 				...(base_branch !== undefined && { baseBranch: base_branch }),
-				...(campaignManifest !== undefined && { manifestPath: campaignManifest }),
+				...(batchManifest !== undefined && { manifestPath: batchManifest }),
 				maxIterations: max_iterations,
 			});
-			return jsonResult(describeCampaign(campaign, campaignDeps));
+			return jsonResult(describeBatch(batch, batchDeps));
 		} catch (e) {
-			return campaignError(e);
+			return batchError(e);
 		}
 	},
 );
 
 server.registerTool(
-	"chit_campaign_status",
+	"chit_batch_status",
 	{
 		description:
-			"Read-only campaign overview: each task's status, live job state/phase, branch/worktree, changed files, audit refs, plus how many tasks are runnable now and the next action. Inspection is safe: this NEVER launches jobs, creates worktrees, or mutates state (use chit_campaign_advance to make progress).",
+			"Read-only batch overview: each task's status, live job state/phase, branch/worktree, changed files, audit refs, plus how many tasks are runnable now and the next action. Inspection is safe: this NEVER launches jobs, creates worktrees, or mutates state (use chit_batch_advance to make progress).",
 		inputSchema: {
-			campaign_id: z.string(),
+			batch_id: z.string(),
 			cwd: z
 				.string()
 				.optional()
 				.describe("Any path in the target repo (defaults to the server cwd)"),
 		},
 	},
-	async ({ campaign_id, cwd }) => {
-		const store = new CampaignStore(resolve(cwd ?? process.cwd()));
-		const campaign = store.get(campaign_id);
-		if (!campaign) return errorResult(`unknown campaign_id ${campaign_id}`);
-		return jsonResult(describeCampaign(campaign, campaignDeps));
+	async ({ batch_id, cwd }) => {
+		const store = new BatchStore(resolve(cwd ?? process.cwd()));
+		const batch = store.get(batch_id);
+		if (!batch) return errorResult(`unknown batch_id ${batch_id}`);
+		return jsonResult(describeBatch(batch, batchDeps));
 	},
 );
 
 server.registerTool(
-	"chit_campaign_advance",
+	"chit_batch_advance",
 	{
 		description:
-			"Advance a campaign: reconcile finished jobs into task state (converged -> review_ready; blocked/max-iterations/failed/stale -> failed; dependents proceed only past a review_ready task), then launch the next runnable wave. The only progression trigger besides start. Call it when chit_campaign_status reports runnable tasks or a finished job.",
+			"Advance a batch: reconcile finished jobs into task state (converged -> review_ready; blocked/max-iterations/failed/stale -> failed; dependents proceed only past a review_ready task), then launch the next runnable wave. The only progression trigger besides start. Call it when chit_batch_status reports runnable tasks or a finished job.",
 		inputSchema: {
-			campaign_id: z.string(),
+			batch_id: z.string(),
 			cwd: z
 				.string()
 				.optional()
 				.describe("Any path in the target repo (defaults to the server cwd)"),
 		},
 	},
-	async ({ campaign_id, cwd }) => {
-		const store = new CampaignStore(resolve(cwd ?? process.cwd()));
+	async ({ batch_id, cwd }) => {
+		const store = new BatchStore(resolve(cwd ?? process.cwd()));
 		try {
-			const campaign = advanceCampaign(store, campaignDeps, campaign_id);
-			return jsonResult(describeCampaign(campaign, campaignDeps));
+			const batch = advanceBatch(store, batchDeps, batch_id);
+			return jsonResult(describeBatch(batch, batchDeps));
 		} catch (e) {
-			return campaignError(e);
+			return batchError(e);
 		}
 	},
 );
 
 server.registerTool(
-	"chit_campaign_cancel",
+	"chit_batch_cancel",
 	{
 		description:
-			"Cancel a campaign: request cancellation of every active task job (intent-first, the same safety as chit_job_cancel) and mark pending tasks cancelled. Running jobs settle cleanly in the background. Worktrees are left in place for inspection.",
+			"Cancel a batch: request cancellation of every active task job (intent-first, the same safety as chit_job_cancel) and mark pending tasks cancelled. Running jobs settle cleanly in the background. Worktrees are left in place for inspection.",
 		inputSchema: {
-			campaign_id: z.string(),
+			batch_id: z.string(),
 			cwd: z
 				.string()
 				.optional()
 				.describe("Any path in the target repo (defaults to the server cwd)"),
 		},
 	},
-	async ({ campaign_id, cwd }) => {
-		const store = new CampaignStore(resolve(cwd ?? process.cwd()));
+	async ({ batch_id, cwd }) => {
+		const store = new BatchStore(resolve(cwd ?? process.cwd()));
 		try {
-			const campaign = cancelCampaign(store, campaignDeps, campaign_id);
-			return jsonResult(describeCampaign(campaign, campaignDeps));
+			const batch = cancelBatch(store, batchDeps, batch_id);
+			return jsonResult(describeBatch(batch, batchDeps));
 		} catch (e) {
-			return campaignError(e);
+			return batchError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_batch_cleanup",
+	{
+		description:
+			"Retire a batch's worktrees and branches once you are done reviewing them. SAFE BY DEFAULT: with confirm omitted/false it is a DRY RUN that lists which worktrees/branches would be removed and which changed-file diffs that would discard, and removes nothing. With confirm=true it removes them (git worktree remove --force + branch -D). Refuses while any task is still running. NEVER deletes the batch/job/loop/audit receipts -- those stay as durable history.",
+		inputSchema: {
+			batch_id: z.string(),
+			confirm: z
+				.boolean()
+				.default(false)
+				.describe(
+					"false (default) = dry run, report only. true = actually remove worktrees + branches.",
+				),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)"),
+		},
+	},
+	async ({ batch_id, confirm, cwd }) => {
+		const store = new BatchStore(resolve(cwd ?? process.cwd()));
+		try {
+			return jsonResult(cleanupBatch(store, batchDeps, batch_id, { confirm }));
+		} catch (e) {
+			return batchError(e);
 		}
 	},
 );

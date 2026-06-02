@@ -1,11 +1,11 @@
-// Git worktree management for campaign tasks: one isolated worktree + branch per
-// task, created off the campaign's resolved base SHA so every task starts from
+// Git worktree management for batch tasks: one isolated worktree + branch per
+// task, created off the batch's resolved base SHA so every task starts from
 // the same point. Conservative by design and with an injectable GitRunner so the
-// engine is testable without touching real git. Salvaged from the campaign-v0
+// engine is testable without touching real git. Salvaged from the batch-v0
 // prototype; the worktree path is the agreed v1 layout.
 //
 // Worktrees are NEVER auto-removed: they ARE the review artifacts a human
-// inspects after the campaign. Cleanup is a separate, explicit step.
+// inspects after the batch. Cleanup is a separate, explicit step.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -45,20 +45,20 @@ function gitErr(r: GitResult): string {
 }
 
 // Where a task's worktree and branch live. The agreed v1 layout:
-//   ~/worktrees/chit/<campaignId>/<taskId>   (absolute, recorded in state)
-//   branch: chit-campaign/<campaignId>/<taskId>
+//   ~/worktrees/chit/<batchId>/<taskId>   (absolute, recorded in state)
+//   branch: chit-batch/<batchId>/<taskId>
 export function taskWorktree(
-	campaignId: string,
+	batchId: string,
 	taskId: string,
 ): { worktreePath: string; branch: string } {
 	return {
-		worktreePath: join(homedir(), "worktrees", "chit", campaignId, taskId),
-		branch: `chit-campaign/${campaignId}/${taskId}`,
+		worktreePath: join(homedir(), "worktrees", "chit", batchId, taskId),
+		branch: `chit-batch/${batchId}/${taskId}`,
 	};
 }
 
 // Resolve a ref (branch/SHA) to a concrete commit SHA in the repo, so every task
-// branches from one fixed base even if the repo's HEAD moves mid-campaign.
+// branches from one fixed base even if the repo's HEAD moves mid-batch.
 export function resolveBaseSha(git: GitRunner, repo: string, ref: string): string {
 	const r = git(["rev-parse", ref], repo);
 	if (r.code !== 0) {
@@ -67,7 +67,7 @@ export function resolveBaseSha(git: GitRunner, repo: string, ref: string): strin
 	return r.stdout.trim();
 }
 
-// The repo's top-level path, so a campaign started from a subdir still creates
+// The repo's top-level path, so a batch started from a subdir still creates
 // worktrees against the real repo root.
 export function repoToplevel(git: GitRunner, cwd: string): string {
 	const r = git(["rev-parse", "--show-toplevel"], cwd);
@@ -84,11 +84,11 @@ export function repoToplevel(git: GitRunner, cwd: string): string {
 export function createTaskWorktree(
 	git: GitRunner,
 	repo: string,
-	campaignId: string,
+	batchId: string,
 	taskId: string,
 	baseSha: string,
 ): { worktreePath: string; branch: string } {
-	const { worktreePath, branch } = taskWorktree(campaignId, taskId);
+	const { worktreePath, branch } = taskWorktree(batchId, taskId);
 
 	if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo).code === 0) {
 		throw new WorktreeError(`branch ${JSON.stringify(branch)} already exists`);
@@ -103,4 +103,31 @@ export function createTaskWorktree(
 		throw new WorktreeError(`git worktree add failed: ${gitErr(r)}`);
 	}
 	return { worktreePath, branch };
+}
+
+// Retire a task's worktree + branch. Used by chit_batch_cleanup AFTER the
+// human is done reviewing: the converged diff lives uncommitted in the worktree,
+// so removal is destructive of that diff -- the caller gates this behind an
+// explicit confirm and a dry-run. `--force` is required precisely because the
+// worktree is expected to be dirty (the diff); branch -D because the diff was
+// never committed (the branch sits at base). Best-effort and idempotent: a
+// missing worktree/branch is not an error (already cleaned).
+export function removeTaskWorktree(
+	git: GitRunner,
+	repo: string,
+	worktreePath: string,
+	branch: string,
+): { ok: true } | { ok: false; error: string } {
+	if (existsSync(worktreePath)) {
+		const r = git(["worktree", "remove", "--force", worktreePath], repo);
+		if (r.code !== 0) return { ok: false, error: `git worktree remove failed: ${gitErr(r)}` };
+	} else {
+		// The worktree dir is gone but git may still track it; prune stale entries.
+		git(["worktree", "prune"], repo);
+	}
+	if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo).code === 0) {
+		const b = git(["branch", "-D", branch], repo);
+		if (b.code !== 0) return { ok: false, error: `git branch -D failed: ${gitErr(b)}` };
+	}
+	return { ok: true };
 }

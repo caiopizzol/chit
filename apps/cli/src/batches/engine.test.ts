@@ -4,15 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JobRecord } from "../jobs/types.ts";
 import {
-	advanceCampaign,
-	type CampaignEngineDeps,
-	cancelCampaign,
-	describeCampaign,
-	startCampaign,
+	advanceBatch,
+	type BatchEngineDeps,
+	cancelBatch,
+	cleanupBatch,
+	describeBatch,
+	startBatch,
 } from "./engine.ts";
 import type { TaskInput } from "./plan.ts";
-import { CampaignStore } from "./store.ts";
-import type { Campaign, CampaignTask } from "./types.ts";
+import { BatchStore } from "./store.ts";
+import type { Batch, BatchTask } from "./types.ts";
 import type { GitRunner } from "./worktree.ts";
 
 // A fake job world: launchJob registers a running job; tests then flip a job's
@@ -66,10 +67,11 @@ class FakeJobs {
 let cwd: string;
 let stateDir: string;
 let savedXdg: string | undefined;
-let store: CampaignStore;
+let store: BatchStore;
 let jobs: FakeJobs;
-let deps: CampaignEngineDeps;
+let deps: BatchEngineDeps;
 let wtSeq = 0;
+let removedWorktrees: Array<{ repo: string; worktreePath: string; branch: string }> = [];
 
 const fakeGit: GitRunner = (args) => {
 	if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
@@ -84,15 +86,20 @@ beforeEach(() => {
 	stateDir = mkdtempSync(join(tmpdir(), "chit-eng-state-"));
 	savedXdg = process.env.XDG_STATE_HOME;
 	process.env.XDG_STATE_HOME = stateDir;
-	store = new CampaignStore(cwd);
+	store = new BatchStore(cwd);
 	jobs = new FakeJobs();
 	wtSeq = 0;
+	removedWorktrees = [];
 	deps = {
 		git: fakeGit,
 		createWorktree: (_repo, cid, tid) => ({
 			worktreePath: `/wt/${cid}/${tid}-${++wtSeq}`,
-			branch: `chit-campaign/${cid}/${tid}`,
+			branch: `chit-batch/${cid}/${tid}`,
 		}),
+		removeWorktree: (repo, worktreePath, branch) => {
+			removedWorktrees.push({ repo, worktreePath, branch });
+			return { ok: true };
+		},
 		launchJob: jobs.launch,
 		getJob: jobs.get,
 		cancelJob: jobs.cancel,
@@ -118,15 +125,15 @@ function present<T>(v: T | undefined, what: string): T {
 	return v;
 }
 const firstJob = () => present(jobs.launched[0], "first launched job").jobId;
-const taskOf = (c: Campaign, id: string): CampaignTask =>
+const taskOf = (c: Batch, id: string): BatchTask =>
 	present(
 		c.tasks.find((t) => t.id === id),
 		`task ${id}`,
 	);
 
-describe("startCampaign", () => {
+describe("startBatch", () => {
 	test("launches the initial wave of independent tasks up to the cap", () => {
-		const c = startCampaign(store, deps, {
+		const c = startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			tasks: [task("a"), task("b"), task("c")],
@@ -141,8 +148,8 @@ describe("startCampaign", () => {
 		expect(running.every((t) => t.worktreePath && t.branch && t.jobId)).toBe(true);
 	});
 
-	test("resolves the per-task manifest override (task > campaign > default)", () => {
-		startCampaign(store, deps, {
+	test("resolves the per-task manifest override (task > batch > default)", () => {
+		startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			manifestPath: "/camp.json",
@@ -150,12 +157,12 @@ describe("startCampaign", () => {
 			maxParallel: 2,
 		});
 		const byScope = Object.fromEntries(jobs.launched.map((l) => [l.scope, l.manifestPath]));
-		expect(byScope["campaign-c1-a"]).toBe("/task.json"); // task override
-		expect(byScope["campaign-c1-b"]).toBe("/camp.json"); // campaign default
+		expect(byScope["batch-c1-a"]).toBe("/task.json"); // task override
+		expect(byScope["batch-c1-b"]).toBe("/camp.json"); // batch default
 	});
 
 	test("a dependent task does not launch until its dependency is review_ready", () => {
-		const c = startCampaign(store, deps, {
+		const c = startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			tasks: [task("a"), task("b", { dependencies: ["a"] })],
@@ -167,9 +174,9 @@ describe("startCampaign", () => {
 	});
 });
 
-describe("advanceCampaign", () => {
+describe("advanceBatch", () => {
 	test("reconciles a converged job to review_ready and launches the dependent", () => {
-		startCampaign(store, deps, {
+		startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			tasks: [task("a"), task("b", { dependencies: ["a"] })],
@@ -181,7 +188,7 @@ describe("advanceCampaign", () => {
 			lastVerdict: "proceed",
 			auditRefs: ["r1"],
 		});
-		const c = advanceCampaign(store, deps, "c1");
+		const c = advanceBatch(store, deps, "c1");
 		const a = taskOf(c, "a");
 		const b = taskOf(c, "b");
 		expect(a.status).toBe("review_ready");
@@ -194,14 +201,14 @@ describe("advanceCampaign", () => {
 	});
 
 	test("a blocked/max-iterations job fails the task and does NOT proceed dependents", () => {
-		startCampaign(store, deps, {
+		startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			tasks: [task("a"), task("b", { dependencies: ["a"] })],
 			maxParallel: 2,
 		});
 		jobs.finish(firstJob(), { stopStatus: "max-iterations" });
-		const c = advanceCampaign(store, deps, "c1");
+		const c = advanceBatch(store, deps, "c1");
 		expect(c.tasks.find((t) => t.id === "a")?.status).toBe("failed");
 		expect(c.tasks.find((t) => t.id === "b")?.status).toBe("pending"); // not launched
 		expect(c.status).toBe("needs_human"); // b is blocked by a's failure
@@ -209,40 +216,40 @@ describe("advanceCampaign", () => {
 
 	test("advance immediately after start does NOT fail a just-launched queued job", () => {
 		// Regression: a freshly launched job is "queued" (worker not yet running).
-		// Reconcile must treat queued as in-flight, not terminal, or a valid campaign
+		// Reconcile must treat queued as in-flight, not terminal, or a valid batch
 		// self-fails on the first advance.
-		startCampaign(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
-		const c = advanceCampaign(store, deps, "c1"); // jobs still queued
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
+		const c = advanceBatch(store, deps, "c1"); // jobs still queued
 		expect(c.tasks.every((t) => t.status === "running")).toBe(true);
 		expect(c.status).toBe("running");
 	});
 
-	test("campaign loop ids are globally unique (campaign-namespaced, not bare task id)", () => {
-		startCampaign(store, deps, { id: "camp-uuid", cwd, tasks: [task("docs")], maxParallel: 1 });
+	test("batch loop ids are globally unique (batch-namespaced, not bare task id)", () => {
+		startBatch(store, deps, { id: "camp-uuid", cwd, tasks: [task("docs")], maxParallel: 1 });
 		const job = jobs.get(firstJob());
 		expect(job?.loopId).toBe("camp-uuid-docs"); // not just "docs"
 	});
 
 	test("a stale running job is settled failed", () => {
-		startCampaign(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
 		deps.isStale = () => true; // worker went dark
-		const c = advanceCampaign(store, deps, "c1");
+		const c = advanceBatch(store, deps, "c1");
 		expect(c.tasks[0]?.status).toBe("failed");
 		expect(c.tasks[0]?.error).toMatch(/stale/);
 	});
 
 	test("all converged -> ready_for_review", () => {
-		startCampaign(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
 		for (const l of jobs.launched) jobs.finish(l.jobId, { stopStatus: "converged" });
-		const c = advanceCampaign(store, deps, "c1");
+		const c = advanceBatch(store, deps, "c1");
 		expect(c.status).toBe("ready_for_review");
 		expect(c.tasks.every((t) => t.status === "review_ready")).toBe(true);
 	});
 });
 
-describe("describeCampaign is read-only", () => {
+describe("describeBatch is read-only", () => {
 	test("does not launch or mutate; reports nextAction", () => {
-		startCampaign(store, deps, {
+		startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			tasks: [task("a"), task("b", { dependencies: ["a"] })],
@@ -250,28 +257,85 @@ describe("describeCampaign is read-only", () => {
 		});
 		const launchedBefore = jobs.launched.length;
 		jobs.finish(firstJob(), { stopStatus: "converged" });
-		const view = describeCampaign(present(store.get("c1"), "campaign c1"), deps);
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
 		// describe launched nothing even though a is now reconcilable + b runnable
 		expect(jobs.launched.length).toBe(launchedBefore);
-		expect(view.nextAction).toMatch(/chit_campaign_advance/);
+		expect(view.nextAction).toMatch(/chit_batch_advance/);
 		// a's task status on disk is still "running" (describe did not reconcile)
 		expect(store.get("c1")?.tasks.find((t) => t.id === "a")?.status).toBe("running");
 	});
 });
 
-describe("cancelCampaign", () => {
-	test("cancels active jobs and marks the campaign cancelled", () => {
-		startCampaign(store, deps, {
+describe("cancelBatch", () => {
+	test("cancels active jobs and marks the batch cancelled", () => {
+		startBatch(store, deps, {
 			id: "c1",
 			cwd,
 			tasks: [task("a"), task("b", { dependencies: ["a"] })],
 			maxParallel: 2,
 		});
 		const runningJobId = firstJob();
-		const c = cancelCampaign(store, deps, "c1");
+		const c = cancelBatch(store, deps, "c1");
 		expect(c.status).toBe("cancelled");
 		expect(jobs.cancelled).toContain(runningJobId);
 		expect(c.tasks.find((t) => t.id === "a")?.status).toBe("cancelled");
 		expect(c.tasks.find((t) => t.id === "b")?.status).toBe("cancelled"); // pending -> cancelled
+	});
+});
+
+describe("cleanupBatch", () => {
+	// Drive a batch to ready_for_review (both tasks converged) for cleanup.
+	function readyBatch(): void {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
+		for (const l of jobs.launched) jobs.finish(l.jobId, { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1");
+	}
+
+	test("dry run (default) reports the plan and removes NOTHING", () => {
+		readyBatch();
+		const r = cleanupBatch(store, deps, "c1", { confirm: false });
+		expect(r.confirmed).toBe(false);
+		expect(r.removable.map((e) => e.id).sort()).toEqual(["a", "b"]);
+		expect(r.removable[0]?.changedFiles).toEqual(["f.ts"]); // diff that would be discarded
+		expect(r.receiptsKept).toBe(true);
+		expect(removedWorktrees).toHaveLength(0); // nothing removed on a dry run
+		expect(store.get("c1")?.cleanedAt).toBeUndefined();
+	});
+
+	test("confirm removes worktrees + branches (from the main repo) and records cleanedAt", () => {
+		readyBatch();
+		const r = cleanupBatch(store, deps, "c1", { confirm: true });
+		expect(r.confirmed).toBe(true);
+		expect(r.removable.every((e) => e.removed)).toBe(true);
+		expect(removedWorktrees).toHaveLength(2);
+		// removal runs against the main repo, never the worktree being removed
+		expect(removedWorktrees.every((w) => w.repo === store.get("c1")?.repo)).toBe(true);
+		expect(store.get("c1")?.cleanedAt).toBeDefined();
+	});
+
+	test("refuses while a task is still running", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		// a's job is queued/running (not converged) -> task still running
+		expect(() => cleanupBatch(store, deps, "c1", { confirm: true })).toThrow(/live worker/);
+		expect(removedWorktrees).toHaveLength(0);
+	});
+
+	test("skips tasks that never launched (no worktree)", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a"), task("b", { dependencies: ["a"] })],
+			maxParallel: 2,
+		});
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1"); // a review_ready, b now running
+		jobs.finish(present(jobs.launched[1], "second launched job").jobId, {
+			stopStatus: "converged",
+		});
+		advanceBatch(store, deps, "c1"); // b review_ready -> ready_for_review
+		const r = cleanupBatch(store, deps, "c1", { confirm: false });
+		// both launched, so both removable; none skipped
+		expect(r.removable.map((e) => e.id).sort()).toEqual(["a", "b"]);
+		expect(r.skipped).toHaveLength(0);
 	});
 });

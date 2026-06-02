@@ -28,10 +28,10 @@ function scriptedGit(handlers: Array<{ match: (args: string[]) => boolean; resul
 }
 
 describe("taskWorktree layout", () => {
-	test("uses ~/worktrees/chit/<campaignId>/<taskId> and a namespaced branch", () => {
+	test("uses ~/worktrees/chit/<batchId>/<taskId> and a namespaced branch", () => {
 		const { worktreePath, branch } = taskWorktree("camp1", "task-a");
 		expect(worktreePath).toBe(join(homedir(), "worktrees", "chit", "camp1", "task-a"));
-		expect(branch).toBe("chit-campaign/camp1/task-a");
+		expect(branch).toBe("chit-batch/camp1/task-a");
 	});
 });
 

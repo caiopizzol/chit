@@ -7,7 +7,7 @@ import {
 	resolveManifestPath,
 	type TaskInput,
 } from "./plan.ts";
-import type { CampaignTask } from "./types.ts";
+import type { BatchTask } from "./types.ts";
 
 function input(over: Partial<TaskInput> = {}): TaskInput {
 	return { id: "t1", title: "T", body: "do a thing", claimedPaths: ["a/**"], ...over };
@@ -24,7 +24,7 @@ describe("planTasks", () => {
 		expect(tasks[1]?.dependencies).toEqual(["a"]);
 	});
 
-	test("rejects an empty campaign", () => {
+	test("rejects an empty batch", () => {
 		expect(() => planTasks([])).toThrow(/at least one task/);
 	});
 
@@ -88,12 +88,12 @@ describe("normalizeClaim", () => {
 		expect(a?.claimedPaths).toEqual(["src/**"]);
 		expect(b?.claimedPaths).toEqual(["src/file.ts"]);
 		// after normalization the overlap is detected (would have slipped past on raw strings)
-		expect(tasksClaimsOverlap(a as CampaignTask, b as CampaignTask)).toBe(true);
+		expect(tasksClaimsOverlap(a as BatchTask, b as BatchTask)).toBe(true);
 	});
 });
 
 describe("resolveManifestPath", () => {
-	const task = (over: Partial<CampaignTask> = {}): CampaignTask => ({
+	const task = (over: Partial<BatchTask> = {}): BatchTask => ({
 		id: "t",
 		title: "T",
 		body: "b",
@@ -102,12 +102,12 @@ describe("resolveManifestPath", () => {
 		claimedPaths: ["a/**"],
 		...over,
 	});
-	test("task override wins over campaign default", () => {
+	test("task override wins over batch default", () => {
 		expect(resolveManifestPath(task({ manifestPath: "/task.json" }), "/camp.json")).toBe(
 			"/task.json",
 		);
 	});
-	test("falls back to campaign default, then undefined", () => {
+	test("falls back to batch default, then undefined", () => {
 		expect(resolveManifestPath(task(), "/camp.json")).toBe("/camp.json");
 		expect(resolveManifestPath(task(), undefined)).toBeUndefined();
 	});

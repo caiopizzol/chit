@@ -92,27 +92,31 @@ Inspect one job. Input: `job_id`. Returns the job's `state` (`queued` / `running
 
 Cancel a job from any turn. Input: `job_id`. Persists the cancel intent first (so it survives a worker restart), then signals the worker's process group. A queued job is cancelled before it starts; a running job stops at the next safe point and records a clean `cancelled` stop. A finished job is reported back unchanged. `chit_status` lists active and recent jobs alongside the in-memory runs.
 
-## Campaigns
+## Batches
 
-A **campaign** runs several converge tasks in parallel, one per git worktree, as background jobs. It is a thin coordinator over the background jobs above: it plans a task graph, creates a worktree per task, and launches a `chit_converge_run` job per runnable task. It owns no execution and never auto-merges; the deliverable is a set of reviewable worktree branches. There is no daemon: progress happens only at explicit tool calls. Campaign state is durable under the state dir, keyed by repo (not in the reviewed tree).
+A **batch** runs several converge tasks in parallel, one per git worktree, as background jobs. It is a thin coordinator over the background jobs above: it plans a task graph, creates a worktree per task, and launches a `chit_converge_run` job per runnable task. It owns no execution and never auto-merges; the deliverable is a set of reviewable worktree branches. There is no daemon: progress happens only at explicit tool calls. Batch state is durable under the state dir, keyed by repo (not in the reviewed tree).
 
-You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPaths` (the files it will touch); tasks with overlapping claims never run concurrently (they serialize into later waves), so parallel tasks cannot race on the same files. A task may declare `dependencies` (task ids that must reach `review_ready` first). The converge manifest per task resolves as task `manifestPath` > campaign `manifest_path` > the bundled default, so a campaign can mix model pairs (a Codex-writer task beside a Claude-writer task) by pointing each at the right manifest.
+You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPaths` (the files it will touch); tasks with overlapping claims never run concurrently (they serialize into later waves), so parallel tasks cannot race on the same files. A task may declare `dependencies` (task ids that must reach `review_ready` first). The converge manifest per task resolves as task `manifestPath` > batch `manifest_path` > the bundled default, so a batch can mix model pairs (a Codex-writer task beside a Claude-writer task) by pointing each at the right manifest.
 
-### chit_campaign_start
+### chit_batch_start
 
-Plan the graph, create worktrees + launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath?}`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the campaign overview (see status).
+Plan the graph, create worktrees + launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath?}`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the batch overview (see status).
 
-### chit_campaign_status
+### chit_batch_status
 
-Read-only overview: each task's status, live job state/phase, branch/worktree path, changed files, audit refs, plus `runnableCount` and a `nextAction`. **Inspection is safe**: this never launches jobs, creates worktrees, or mutates state. Inputs: `campaign_id`, `cwd?`.
+Read-only overview: each task's status, live job state/phase, branch/worktree path, changed files, audit refs, plus `runnableCount` and a `nextAction`. **Inspection is safe**: this never launches jobs, creates worktrees, or mutates state. Inputs: `batch_id`, `cwd?`.
 
-### chit_campaign_advance
+### chit_batch_advance
 
-The progression trigger. Reconciles finished jobs into task state (`converged` -> `review_ready`; `blocked` / `max-iterations` / failed / stale -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished job or runnable tasks. Inputs: `campaign_id`, `cwd?`.
+The progression trigger. Reconciles finished jobs into task state (`converged` -> `review_ready`; `blocked` / `max-iterations` / failed / stale -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished job or runnable tasks. Inputs: `batch_id`, `cwd?`.
 
-### chit_campaign_cancel
+### chit_batch_cancel
 
-Request cancellation of every active task job (intent-first, same safety as `chit_job_cancel`) and mark pending tasks cancelled. Running jobs settle cleanly in the background; worktrees are left in place for inspection. Inputs: `campaign_id`, `cwd?`.
+Request cancellation of every active task job (intent-first, same safety as `chit_job_cancel`) and mark pending tasks cancelled. Running jobs settle cleanly in the background; worktrees are left in place for inspection. Inputs: `batch_id`, `cwd?`.
+
+### chit_batch_cleanup
+
+Retire a batch's worktrees and branches once you are done reviewing them. **Safe by default**: with `confirm` omitted/false it is a DRY RUN that lists which worktrees/branches would be removed and which changed-file diffs that would discard, and removes nothing. With `confirm: true` it removes them (`git worktree remove --force` + `branch -D`). Refuses while any task is still running. **Never deletes the batch/job/loop/audit receipts** — those stay as durable history (it records `cleanedAt` on the batch). Inputs: `batch_id`, `confirm?` (default false), `cwd?`.
 
 ## Audit tools
 

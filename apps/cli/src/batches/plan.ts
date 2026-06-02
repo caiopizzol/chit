@@ -1,15 +1,15 @@
-// Validate and normalize an explicit task graph into CampaignTasks. v1 takes a
+// Validate and normalize an explicit task graph into BatchTasks. v1 takes a
 // reviewed task list (NO GitHub coupling, no claim heuristic): the caller hands
 // chit a graph, chit runs it. Validation is conservative and fails loudly so a
-// malformed campaign never launches background jobs.
+// malformed batch never launches background jobs.
 //
 // Rules enforced here:
 //   - task ids are safe slugs, unique.
-//   - every dependency references a task in the same campaign; the graph is acyclic.
+//   - every dependency references a task in the same batch; the graph is acyclic.
 //   - claimedPaths is required and non-empty UNLESS the task sets allowPathOverlap
 //     (an explicit opt-in to running without a declared footprint).
 
-import type { CampaignTask } from "./types.ts";
+import type { BatchTask } from "./types.ts";
 
 export class PlanError extends Error {}
 
@@ -50,7 +50,7 @@ export function normalizeClaim(claim: string, taskId: string): string {
 	return dirGlob ? `${base}/**` : dirSlash ? `${base}/` : base;
 }
 
-// The caller-facing shape of one task in chit_campaign_start.
+// The caller-facing shape of one task in chit_batch_start.
 export interface TaskInput {
 	id: string;
 	title: string;
@@ -61,10 +61,10 @@ export interface TaskInput {
 	manifestPath?: string;
 }
 
-// Validate the inputs and produce pending CampaignTasks. Throws PlanError on the
+// Validate the inputs and produce pending BatchTasks. Throws PlanError on the
 // first structural problem (bad id, unknown/cyclic dependency, missing claims).
-export function planTasks(inputs: TaskInput[]): CampaignTask[] {
-	if (inputs.length === 0) throw new PlanError("a campaign needs at least one task");
+export function planTasks(inputs: TaskInput[]): BatchTask[] {
+	if (inputs.length === 0) throw new PlanError("a batch needs at least one task");
 
 	const ids = new Set<string>();
 	for (const t of inputs) {
@@ -100,7 +100,7 @@ export function planTasks(inputs: TaskInput[]): CampaignTask[] {
 	assertAcyclic(inputs);
 
 	return inputs.map((t) => {
-		const task: CampaignTask = {
+		const task: BatchTask = {
 			id: t.id,
 			title: t.title,
 			body: t.body,
@@ -135,11 +135,11 @@ function assertAcyclic(inputs: TaskInput[]): void {
 	for (const t of inputs) visit(t.id, []);
 }
 
-// Resolve the converge manifest for a task: task override -> campaign default ->
+// Resolve the converge manifest for a task: task override -> batch default ->
 // undefined (the caller then uses the bundled default converge manifest).
 export function resolveManifestPath(
-	task: CampaignTask,
-	campaignDefault: string | undefined,
+	task: BatchTask,
+	batchDefault: string | undefined,
 ): string | undefined {
-	return task.manifestPath ?? campaignDefault;
+	return task.manifestPath ?? batchDefault;
 }
