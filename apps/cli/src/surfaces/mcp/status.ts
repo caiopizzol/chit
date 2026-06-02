@@ -23,7 +23,7 @@ import { listAudit, type RunSummary } from "../../audit/reader.ts";
 import type { AuditStore } from "../../audit/store.ts";
 import { formatDuration, isStale, jobTiming } from "../../jobs/health.ts";
 import type { JobStore } from "../../jobs/store.ts";
-import type { JobRecord } from "../../jobs/types.ts";
+import type { JobRecord, LoopJobRecord } from "../../jobs/types.ts";
 import type { RunController } from "./controller.ts";
 import type { ControlledRun } from "./controller-store.ts";
 import { type ConvergeStatus, describeConverge } from "./converge-engine.ts";
@@ -60,14 +60,16 @@ export function summarizeRunForStatus(run: Run): RunStatusSummary {
 // drill in with chit_job_status / chit_converge_trace / chit_audit_show.
 export interface JobStatusSummary {
 	jobId: string;
-	loopId: string;
 	scope: string;
-	task: string;
 	display: JobRecord["state"] | "stale";
 	phase?: JobRecord["phase"];
-	iterationsCompleted: number;
-	lastVerdict?: JobRecord["lastVerdict"];
-	stopStatus?: JobRecord["stopStatus"];
+	// Loop-only fields: a one-shot background run has no loop identity, no
+	// iterations, and no convergence verdict. Present iff policy === "loop".
+	loopId?: string;
+	task?: string;
+	iterationsCompleted?: number;
+	lastVerdict?: LoopJobRecord["lastVerdict"];
+	stopStatus?: LoopJobRecord["stopStatus"];
 	auditRefs: string[];
 	createdAt: string;
 	// Programmatic timing (omitted when not derivable; see jobTiming).
@@ -91,7 +93,7 @@ function runningNextAction(job: JobRecord, timing: ReturnType<typeof jobTiming>)
 		);
 	}
 	const lead = parts.length > 0 ? parts.join(", ") : "in progress";
-	return `${lead}; chit_job_status / chit_job_cancel "${job.jobId}"`;
+	return `${lead}; chit_job_status / chit_job_cancel "${job.runId}"`;
 }
 
 function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary {
@@ -101,24 +103,29 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 	// Only point at a transcript when one actually exists; a failed/empty job
 	// must not tell the operator to open <ref> that was never recorded.
 	const latestRef = job.auditRefs.at(-1);
+	// stopStatus is loop-only; a one-shot background run has no convergence stop.
+	const stopStatus = job.policy === "loop" ? job.stopStatus : undefined;
 	const nextAction =
 		display === "running"
 			? runningNextAction(job, timing)
 			: display === "queued"
 				? "queued; the worker is starting"
 				: display === "stale"
-					? `worker appears dead; chit_job_status "${job.jobId}" to inspect, then start a fresh job`
-					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; chit_job_status "${job.jobId}"${latestRef ? ` or chit_audit_show ${latestRef}` : ""}`;
+					? `worker appears dead; chit_job_status "${job.runId}" to inspect, then start a fresh job`
+					: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_job_status "${job.runId}"${latestRef ? ` or chit_audit_show ${latestRef}` : ""}`;
+	// Loop-only detail (loopId, task, iterations, verdict, stopStatus) is present
+	// only for a loop run; a one-shot background run omits all of it. Spread in
+	// place so a loop summary keeps its established field order.
 	return {
-		jobId: job.jobId,
-		loopId: job.loopId,
-		scope: job.scope,
-		task: job.task,
+		jobId: job.runId,
+		...(job.policy === "loop" && { loopId: job.loopId }),
+		scope: job.scope ?? "",
+		...(job.policy === "loop" && { task: job.task }),
 		display,
 		...(job.phase !== undefined && { phase: job.phase }),
-		iterationsCompleted: job.iterationsCompleted,
-		...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
-		...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
+		...(job.policy === "loop" && { iterationsCompleted: job.iterationsCompleted }),
+		...(job.policy === "loop" && job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
+		...(job.policy === "loop" && job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 		auditRefs: job.auditRefs,
 		createdAt: job.createdAt,
 		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),

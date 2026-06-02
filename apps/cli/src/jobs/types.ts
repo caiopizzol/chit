@@ -1,50 +1,56 @@
 import type { LoopStopStatus, LoopVerdict } from "@chit-run/core";
 
-// A background converge job: a detached worker advancing one converge loop. The
-// job record is the durable source of truth for the JOB (its lifecycle, the
-// worker's identity, cancellation intent). It SUMMARIZES and POINTS, never
-// duplicating the iteration detail that the loop log owns or the transcript that
-// the audit store owns: iteration changedFiles/workspaceWarnings/verdict are read
-// from the loop log (via loopId); transcripts from the audit store (via auditRefs).
+// A background run: a detached worker executing one run to completion. The job
+// record is the durable source of truth for the JOB (lifecycle, worker identity,
+// cancellation intent), keyed by the ONE public id, runId (== the run_id the user
+// holds). It SUMMARIZES and POINTS, never duplicating transcripts (audit store,
+// via auditRefs) or, for a loop run, the iteration detail the loop log owns.
+//
+// JobRecord is a DISCRIMINATED UNION on `policy`. Background is a durability mode,
+// not converge-only: a one-shot run executes a manifest once; a loop run is the
+// implement/check convergence loop. Loop identity and state (loopId, task,
+// iterations, verdict, loop stop status, maxIterations) live ONLY on the loop
+// variant. A one-shot run has no loop identity, no loop log, no iteration/verdict.
+// Pre-public: there is NO back-compat for old jobId/loop-shaped records (the store
+// skips records that are not a valid runId+policy union).
 
-// queued: record written, worker not yet running. running: worker advancing the
-// loop. completed: reviewer converged (or max-iterations). cancelled: stopped on
-// a persisted cancel request. failed: a manifest run failed. `stale` is NOT a
-// stored state in v1 -- it is DERIVED at read time (running, but the worker is not
-// alive and the heartbeat is old), so a dead worker is surfaced for inspection
-// without a reconciler silently rewriting state.
+// queued: record written, worker not yet running. running: worker executing.
+// completed: a loop converged (or hit max-iterations), or a one-shot run finished
+// ok. cancelled: stopped on a persisted cancel request. failed: the run failed.
+// `stale` is NOT a stored state -- it is DERIVED at read time (running, but the
+// worker is not alive and the heartbeat is old).
 export type JobState = "queued" | "running" | "completed" | "cancelled" | "failed";
 
 // Small, stable phase for "what is it doing right now". starting: worker booting.
-// implementing/reviewing: the current iteration's implement/review step (from the
-// run's trace). recording: appending the iteration + audit. cancelling: a cancel
-// request was seen and the worker is stopping. Cleared on a terminal state.
-export type JobPhase = "starting" | "implementing" | "reviewing" | "recording" | "cancelling";
+// running: a one-shot run's single pass. implementing/reviewing: a loop
+// iteration's implement/review step. recording: appending the iteration + audit.
+// cancelling: a cancel request was seen and the worker is stopping. Cleared on a
+// terminal state.
+export type JobPhase =
+	| "starting"
+	| "running"
+	| "implementing"
+	| "reviewing"
+	| "recording"
+	| "cancelling";
 
-export interface JobRecord {
-	jobId: string;
-	loopId: string;
+export type RunPolicyKind = "one-shot" | "loop";
+
+// Fields every background run carries, regardless of policy.
+export interface BaseJobRecord {
+	runId: string; // the ONE public id (the user's run_id)
+	policy: RunPolicyKind;
 	repoKey: string;
 	cwd: string;
-	scope: string;
-	task: string;
-	// Absolute converge manifest path, or undefined for the embedded default.
-	manifestPath?: string;
-	maxIterations: number;
-	// Whether to run despite an unenforceable declared permission. The worker
-	// rebuilds the execute in its own process, so it needs the same flag the
-	// caller validated against.
-	allowUnenforced: boolean;
 
 	state: JobState;
-	createdAt: string; // ISO 8601, when chit_converge_run wrote the queued record
+	createdAt: string; // ISO 8601, when the queued record was written
 	startedAt?: string; // when the worker transitioned to running
 	endedAt?: string; // when it reached a terminal state
 
 	// Worker identity, for liveness that survives PID reuse: a job is "alive" only
 	// when its pid responds AND the heartbeat is recent AND the record still
-	// carries this worker's token (a reused pid belongs to a different process that
-	// never wrote this token / heartbeat).
+	// carries this worker's token.
 	pid?: number;
 	pgid?: number;
 	workerToken?: string;
@@ -52,21 +58,46 @@ export interface JobRecord {
 
 	phase?: JobPhase;
 	// When the current phase began (ISO 8601), set on every phase change and
-	// cleared with `phase` at a terminal state. Lets a reader report how long the
-	// job has been in its current phase (phaseElapsedMs) without guessing.
+	// cleared with `phase` at a terminal state.
 	phaseStartedAt?: string;
-	iteration?: number; // current (running) or last completed iteration number
 
 	// Cancellation intent, persisted BEFORE any signal so the reason survives a
 	// worker restart or stale detection.
 	cancelRequestedAt?: string;
 
-	// Summary pointers (not the source of truth):
+	auditRefs: string[]; // audit run ids
+	failure?: string; // terminal failure reason
+}
+
+// A background convergence loop (the implement/check routine).
+export interface LoopJobRecord extends BaseJobRecord {
+	policy: "loop";
+	loopId: string; // the loop-log key (internal; never the public handle)
+	scope: string;
+	task: string; // the slice to converge on
+	// Absolute converge manifest path, or undefined for the embedded default.
+	manifestPath?: string;
+	maxIterations: number;
+	// Run despite an unenforceable declared permission (the worker rebuilds the
+	// run in its own process, so it needs the flag the caller validated against).
+	allowUnenforced: boolean;
+	iteration?: number; // current (running) or last completed iteration number
 	iterationsCompleted: number;
 	lastVerdict?: LoopVerdict;
-	auditRefs: string[]; // audit run ids, one per audited iteration
-
-	// Terminal detail:
 	stopStatus?: LoopStopStatus;
-	failure?: string;
 }
+
+// A background one-shot run: a manifest executed once to completion. No loop
+// identity, no loop log, no iterations/verdict. Its history is the audit run.
+export interface OneShotJobRecord extends BaseJobRecord {
+	policy: "one-shot";
+	manifestPath: string; // a one-shot run always names a manifest (the task-form default is a LOOP)
+	manifestId: string; // for display
+	scope?: string;
+	// Persisted at enqueue: the worker runs later in a separate process, so caller
+	// inputs are stored here (as {} when empty), never reconstructed.
+	inputs: Record<string, unknown>;
+	audit: boolean;
+}
+
+export type JobRecord = LoopJobRecord | OneShotJobRecord;

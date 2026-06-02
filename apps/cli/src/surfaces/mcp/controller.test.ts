@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JobStore } from "../../jobs/store.ts";
-import type { JobRecord } from "../../jobs/types.ts";
+import type { LoopJobRecord } from "../../jobs/types.ts";
 import { RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
@@ -42,9 +42,10 @@ function loopSession(loopId: string, over: Partial<ConvergeSession> = {}): Conve
 		...over,
 	} as ConvergeSession;
 }
-function seedJob(over: Partial<JobRecord> = {}): JobRecord {
+function seedJob(over: Partial<LoopJobRecord> = {}): LoopJobRecord {
 	const job = {
-		jobId: "bg1",
+		runId: "bg1",
+		policy: "loop",
 		loopId: "internal-loop-1",
 		repoKey: "k",
 		cwd: "/tmp/x",
@@ -57,7 +58,7 @@ function seedJob(over: Partial<JobRecord> = {}): JobRecord {
 		iterationsCompleted: 0,
 		auditRefs: [],
 		...over,
-	} as JobRecord;
+	} as LoopJobRecord;
 	jobs.create(job);
 	return job;
 }
@@ -93,14 +94,15 @@ describe("RunController run_id resolution", () => {
 
 	test("background loop: durable job is keyed by run_id, its loop id is internal", () => {
 		const ctrl = new RunController(new ControllerStore(), jobs);
-		const job = seedJob({ jobId: "bg1", loopId: "internal-loop-1" });
+		const job = seedJob({ runId: "bg1", loopId: "internal-loop-1" });
 		const r = ctrl.resolve("bg1", 0);
 		expect(r?.mode).toBe("background");
 		if (r?.mode !== "background") throw new Error("expected background");
+		if (r.job.policy !== "loop") throw new Error("expected loop job");
 		// run_id IS the job id; the loop id is a separate, internal field.
-		expect(r.job.jobId).toBe("bg1");
+		expect(r.job.runId).toBe("bg1");
 		expect(r.job.loopId).toBe("internal-loop-1");
-		expect(r.job.loopId).not.toBe(r.job.jobId);
+		expect(r.job.loopId).not.toBe(r.job.runId);
 		// You cannot resolve a run by its INTERNAL loop id — only by run_id.
 		expect(ctrl.resolve(job.loopId, 0)).toBeUndefined();
 	});
@@ -110,7 +112,7 @@ describe("RunController run_id resolution", () => {
 		const store1 = new ControllerStore();
 		const ctrl1 = new RunController(store1, jobs);
 		ctrl1.registerOneShot(oneShotRun("fg1"), 0);
-		seedJob({ jobId: "bg1", loopId: "internal-loop-1" });
+		seedJob({ runId: "bg1", loopId: "internal-loop-1" });
 		expect(ctrl1.resolve("fg1", 0)?.mode).toBe("foreground");
 		expect(ctrl1.resolve("bg1", 0)?.mode).toBe("background");
 
@@ -124,7 +126,7 @@ describe("RunController run_id resolution", () => {
 
 	test("trace exposes audit refs but run_id is never one of them", () => {
 		const ctrl = new RunController(new ControllerStore(), jobs);
-		seedJob({ jobId: "bg1", auditRefs: ["aud-1", "aud-2"] });
+		seedJob({ runId: "bg1", auditRefs: ["aud-1", "aud-2"] });
 		const r = ctrl.resolve("bg1", 0);
 		if (r?.mode !== "background") throw new Error("expected background");
 		expect(r.job.auditRefs).toEqual(["aud-1", "aud-2"]);

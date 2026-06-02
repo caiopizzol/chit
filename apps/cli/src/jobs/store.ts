@@ -24,8 +24,60 @@ import type { JobRecord } from "./types.ts";
 
 export class JobStoreError extends Error {}
 
-// A jobId becomes a filename, so constrain it: no separators, traversal, dotfiles.
-const SAFE_JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+// A runId becomes a filename, so constrain it: no separators, traversal, dotfiles.
+const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+const JOB_STATES: ReadonlySet<string> = new Set([
+	"queued",
+	"running",
+	"completed",
+	"cancelled",
+	"failed",
+]);
+
+// A durable record is valid only if it is a complete runId+policy union (the
+// current shape). Pre-public, there is NO back-compat for old jobId/loop-shaped
+// records: list() skips them and get() treats them as absent, rather than
+// coercing a stale shape into the new union.
+//
+// "Valid" must mean "safe to read": readers (status.ts, the MCP views) are
+// documented as never-throwing and dereference base fields (auditRefs.at(-1),
+// state) and, after narrowing, variant fields unconditionally. So the guard
+// checks the discriminant AND every field a narrowed reader relies on, not just
+// runId+policy -- a half-written `{runId, policy}` must NOT pass and then crash a
+// reader. `expectedRunId`, when known by the caller, also pins the record to the
+// file it came from (runId is the filename), so a renamed/mismatched file reads
+// as absent.
+function isValidJobRecord(raw: unknown, expectedRunId?: string): raw is JobRecord {
+	if (raw === null || typeof raw !== "object") return false;
+	const r = raw as Record<string, unknown>;
+	if (typeof r.runId !== "string" || !SAFE_RUN_ID.test(r.runId)) return false;
+	if (expectedRunId !== undefined && r.runId !== expectedRunId) return false;
+	if (r.policy !== "loop" && r.policy !== "one-shot") return false;
+	// Base fields every reader dereferences regardless of policy.
+	if (typeof r.repoKey !== "string" || typeof r.cwd !== "string") return false;
+	if (typeof r.state !== "string" || !JOB_STATES.has(r.state)) return false;
+	if (typeof r.createdAt !== "string") return false;
+	if (!Array.isArray(r.auditRefs) || !r.auditRefs.every((x) => typeof x === "string")) return false;
+	// Variant-required fields the narrowed readers rely on.
+	if (r.policy === "loop") {
+		return (
+			typeof r.loopId === "string" &&
+			typeof r.scope === "string" &&
+			typeof r.task === "string" &&
+			typeof r.maxIterations === "number" &&
+			typeof r.iterationsCompleted === "number" &&
+			typeof r.allowUnenforced === "boolean"
+		);
+	}
+	return (
+		typeof r.manifestPath === "string" &&
+		typeof r.manifestId === "string" &&
+		typeof r.inputs === "object" &&
+		r.inputs !== null &&
+		typeof r.audit === "boolean"
+	);
+}
 
 // Jobs live under ~/.local/state/chit/jobs (XDG-aware), with loop locks beside
 // them under jobs/locks. Mirrors the audit and loops state dirs.
@@ -37,68 +89,78 @@ export function defaultJobsDir(): string {
 export class JobStore {
 	constructor(private readonly baseDir: string = defaultJobsDir()) {}
 
-	private path(jobId: string): string {
-		if (!SAFE_JOB_ID.test(jobId))
-			throw new JobStoreError(`invalid job id ${JSON.stringify(jobId)}`);
-		return join(this.baseDir, `${jobId}.json`);
+	private path(runId: string): string {
+		if (!SAFE_RUN_ID.test(runId))
+			throw new JobStoreError(`invalid run id ${JSON.stringify(runId)}`);
+		return join(this.baseDir, `${runId}.json`);
 	}
 
-	private lockPath(jobId: string): string {
-		return `${this.path(jobId)}.lock`;
+	private lockPath(runId: string): string {
+		return `${this.path(runId)}.lock`;
 	}
 
 	// The loop lock path for a loopId: one advancer (foreground or background) per
-	// loop. Lives beside the jobs so it is in the same state tree.
+	// loop. Lives beside the jobs so it is in the same state tree. Loop runs only.
 	loopLockPath(loopId: string): string {
-		if (!SAFE_JOB_ID.test(loopId))
+		if (!SAFE_RUN_ID.test(loopId))
 			throw new JobStoreError(`invalid loop id ${JSON.stringify(loopId)}`);
 		mkdirSync(join(this.baseDir, "locks"), { recursive: true });
 		return join(this.baseDir, "locks", `${loopId}.lock`);
 	}
 
-	// Write a brand-new job record. Refuses to clobber an existing job id.
+	// Write a brand-new job record. Refuses to clobber an existing run id.
 	create(record: JobRecord): void {
 		mkdirSync(this.baseDir, { recursive: true });
-		const path = this.path(record.jobId);
-		withFileLock(this.lockPath(record.jobId), () => {
+		const path = this.path(record.runId);
+		withFileLock(this.lockPath(record.runId), () => {
 			if (existsSync(path))
-				throw new JobStoreError(`job ${JSON.stringify(record.jobId)} already exists`);
+				throw new JobStoreError(`run ${JSON.stringify(record.runId)} already exists`);
 			writeAtomic(path, record);
 		});
 	}
 
-	get(jobId: string): JobRecord | undefined {
-		const path = this.path(jobId);
+	// Fetch a run by id. Returns undefined if absent OR not a valid runId+policy
+	// record (a stale pre-union file is treated as not found, never coerced).
+	get(runId: string): JobRecord | undefined {
+		const path = this.path(runId);
 		if (!existsSync(path)) return undefined;
 		try {
-			return JSON.parse(readFileSync(path, "utf-8")) as JobRecord;
+			const raw: unknown = JSON.parse(readFileSync(path, "utf-8"));
+			return isValidJobRecord(raw, runId) ? raw : undefined;
 		} catch {
 			return undefined;
 		}
 	}
 
 	// Read-modify-write a job under its lock. `mutate` receives the current record
-	// and returns the next one; the write is atomic. Throws if the job is missing.
-	update(jobId: string, mutate: (current: JobRecord) => JobRecord): JobRecord {
-		const path = this.path(jobId);
-		return withFileLock(this.lockPath(jobId), () => {
-			if (!existsSync(path)) throw new JobStoreError(`no job ${JSON.stringify(jobId)}`);
-			const current = JSON.parse(readFileSync(path, "utf-8")) as JobRecord;
-			const next = mutate(current);
+	// and returns the next one; the write is atomic. Throws if the job is missing
+	// or not a valid union record.
+	update(runId: string, mutate: (current: JobRecord) => JobRecord): JobRecord {
+		const path = this.path(runId);
+		return withFileLock(this.lockPath(runId), () => {
+			if (!existsSync(path)) throw new JobStoreError(`no run ${JSON.stringify(runId)}`);
+			const raw: unknown = JSON.parse(readFileSync(path, "utf-8"));
+			if (!isValidJobRecord(raw, runId))
+				throw new JobStoreError(`run ${JSON.stringify(runId)} is not a valid record`);
+			const next = mutate(raw);
 			writeAtomic(path, next);
 			return next;
 		});
 	}
 
-	// All jobs, newest-created first. Skips any unreadable/corrupt file so one bad
-	// record never breaks the operator overview.
+	// All jobs, newest-created first. Skips any unreadable/corrupt file AND any
+	// stale pre-union record, so one bad file never breaks the operator overview.
 	list(): JobRecord[] {
 		if (!existsSync(this.baseDir)) return [];
 		const jobs: JobRecord[] = [];
 		for (const name of readdirSync(this.baseDir)) {
 			if (!name.endsWith(".json")) continue;
 			try {
-				jobs.push(JSON.parse(readFileSync(join(this.baseDir, name), "utf-8")) as JobRecord);
+				const raw: unknown = JSON.parse(readFileSync(join(this.baseDir, name), "utf-8"));
+				// Pin the record to its filename: runId IS the file name, so a record
+				// whose runId disagrees with the file is corrupt and is skipped.
+				const id = name.slice(0, -".json".length);
+				if (isValidJobRecord(raw, id)) jobs.push(raw);
 			} catch {
 				// skip corrupt/mid-write file
 			}

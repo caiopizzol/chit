@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { JobRecord } from "../../jobs/types.ts";
+import type { LoopJobRecord } from "../../jobs/types.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
 import { backgroundRunView, loopRunView, oneShotRunView } from "./server.ts";
@@ -27,11 +27,12 @@ function loopSession(over: Partial<ConvergeSession> = {}): ConvergeSession {
 		...over,
 	} as unknown as ConvergeSession;
 }
-function job(over: Partial<JobRecord> = {}): JobRecord {
+function job(over: Partial<LoopJobRecord> = {}): LoopJobRecord {
 	// A live running job by default: this process's pid + a fresh heartbeat, so
 	// isStale() is false and display is "running" (not derived-stale).
 	return {
-		jobId: "j1",
+		runId: "j1",
+		policy: "loop",
 		loopId: "internal-loop",
 		repoKey: "k",
 		cwd: "/tmp/x",
@@ -46,7 +47,7 @@ function job(over: Partial<JobRecord> = {}): JobRecord {
 		iterationsCompleted: 0,
 		auditRefs: [],
 		...over,
-	} as JobRecord;
+	} as LoopJobRecord;
 }
 
 // Serialize a view and assert it never leaks an internal id or an old verb.
@@ -109,7 +110,7 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 	});
 
 	test("background view is keyed by run_id (== job id), drops the job/loop handles", () => {
-		const v = backgroundRunView(job({ jobId: "bg-7", auditRefs: ["aud-1"] }));
+		const v = backgroundRunView(job({ runId: "bg-7", auditRefs: ["aud-1"] }));
 		expect(v.run_id).toBe("bg-7");
 		expect(v.mode).toBe("background");
 		expect(v.execution).toBe("job");
@@ -121,7 +122,7 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 
 	test("a finished background view points at chit_trace for the history", () => {
 		const v = backgroundRunView(
-			job({ jobId: "bg-9", state: "completed", stopStatus: "converged" }),
+			job({ runId: "bg-9", state: "completed", stopStatus: "converged" }),
 		);
 		expect(v.display).toBe("completed");
 		expect(v.nextAction).toContain("chit_trace");

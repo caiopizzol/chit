@@ -30,7 +30,7 @@ import { stopLoop } from "../loops/log-store.ts";
 import type { TraceEvent } from "../runtime/types.ts";
 import { acquireLock, LockError, type LockOptions, releaseLock } from "./lock.ts";
 import type { JobStore } from "./store.ts";
-import type { JobPhase, JobRecord, JobState } from "./types.ts";
+import type { JobPhase, JobState, LoopJobRecord } from "./types.ts";
 
 type ExecuteResolution =
 	| { ok: true; execute: ConvergeExecute; loopSteps: LoopSteps }
@@ -41,7 +41,7 @@ export interface JobWorkerDeps {
 	// Build the converge execute for a job. Default: load the registry, read the
 	// job's manifest (or the embedded default), and prepareConvergeExecute. Tests
 	// inject a fake execute to drive iterations without real agents.
-	resolveExecute?: (job: JobRecord) => ExecuteResolution;
+	resolveExecute?: (job: LoopJobRecord) => ExecuteResolution;
 	now?: () => number;
 	// Heartbeat cadence; tests set it very high to disable the timer.
 	heartbeatMs?: number;
@@ -59,7 +59,7 @@ function iso(ms: number): string {
 // a terminal verdict: the JOB completed (the stopStatus carries the nuance).
 // `cancelled` is the only stop that maps to a cancelled job; a broken manifest run
 // is handled on its own branch as `failed`.
-function defaultResolveExecute(job: JobRecord): ExecuteResolution {
+function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	let raw: unknown;
 	if (job.manifestPath) {
 		const path = isAbsolute(job.manifestPath)
@@ -90,6 +90,18 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 
 	const job = store.get(jobId);
 	if (job?.state !== "queued") return;
+	// The loop run path. One-shot background execution (runOneShotJob) lands in the
+	// next slice; no one-shot job is launched yet, so this only guards a record that
+	// somehow has a non-loop policy. Below, `job` narrows to LoopJobRecord.
+	if (job.policy !== "loop") {
+		store.update(jobId, (c) => ({
+			...c,
+			state: "failed",
+			failure: "one-shot background runs are not yet supported",
+			endedAt: iso(now()),
+		}));
+		return;
+	}
 
 	const workerToken = crypto.randomUUID();
 	const setPhase = (phase: JobPhase) => {
@@ -283,7 +295,7 @@ export async function runJobWorker(jobId: string, deps: JobWorkerDeps): Promise<
 // Best-effort stop record. A failure to write the stop must not mask the terminal
 // job state we are about to write; the open loop is still inspectable via the job.
 function stopLoopSafely(
-	job: JobRecord,
+	job: LoopJobRecord,
 	status: Parameters<typeof stopLoop>[2]["status"],
 	reason: string,
 ): void {
@@ -301,7 +313,7 @@ function finish(
 	jobId: string,
 	now: () => number,
 	state: JobState,
-	extra: { stopStatus?: JobRecord["stopStatus"]; failure?: string },
+	extra: { stopStatus?: LoopJobRecord["stopStatus"]; failure?: string },
 ): void {
 	store.update(jobId, (c) => ({
 		...c,

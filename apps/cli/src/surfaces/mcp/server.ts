@@ -44,7 +44,7 @@ import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.t
 import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore } from "../../jobs/store.ts";
-import type { JobRecord } from "../../jobs/types.ts";
+import type { JobRecord, LoopJobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey, repoRoot } from "../../loops/location.ts";
 import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
@@ -758,9 +758,10 @@ function launchConvergeJob(p: {
 		return { ok: false, error: (e as Error).message };
 	}
 
-	const jobId = crypto.randomUUID();
-	const job: JobRecord = {
-		jobId,
+	const runId = crypto.randomUUID();
+	const job: LoopJobRecord = {
+		runId,
+		policy: "loop",
 		loopId,
 		repoKey: repoKey(p.cwd),
 		cwd: p.cwd,
@@ -781,9 +782,9 @@ function launchConvergeJob(p: {
 		return { ok: false, error: (e as Error).message };
 	}
 	try {
-		spawnJobWorker(jobId, p.cwd);
+		spawnJobWorker(runId, p.cwd);
 	} catch (e) {
-		jobStore.update(jobId, (c) => ({
+		jobStore.update(runId, (c) => ({
 			...c,
 			state: "failed",
 			failure: `could not spawn worker: ${(e as Error).message}`,
@@ -792,7 +793,9 @@ function launchConvergeJob(p: {
 		stopLoop(p.cwd, loopId, { status: "blocked", reason: "worker spawn failed" });
 		return { ok: false, error: `could not spawn background worker: ${(e as Error).message}` };
 	}
-	return { ok: true, jobId, loopId, warnings: prep.warnings };
+	// run_id == the durable record's runId. The return keeps the legacy `jobId`
+	// field name for the still-present old tools (Union-A); 4b switches to run_id.
+	return { ok: true, jobId: runId, loopId, warnings: prep.warnings };
 }
 
 server.registerTool(
@@ -856,36 +859,18 @@ server.registerTool(
 );
 
 // Compact, durable per-job view: lifecycle state (with derived `stale` when a
-// running worker is gone/silent), the live phase, and the latest iteration's
-// changed files / workspace warnings / usage read from the loop log (the job
-// record points, the loop log details).
+// running worker is gone/silent), the live phase, and timing. A loop run also
+// surfaces its latest iteration's changed files / usage from the loop log; a
+// one-shot run has no loop log (its history is the audit run). Dispatches on
+// policy so loop-only fields appear only for loop runs.
 function describeJob(job: JobRecord) {
 	const now = Date.now();
 	const stale = isStale(job, now);
 	const display = stale ? "stale" : job.state;
-	let latest:
-		| { iteration: number; changedFiles: string[]; workspaceWarnings: string[]; usage?: unknown }
-		| undefined;
-	try {
-		const iters = readLoop(job.cwd, job.loopId).filter((r) => r.type === "iteration");
-		const last = iters.at(-1);
-		if (last && last.type === "iteration") {
-			latest = {
-				iteration: last.n,
-				changedFiles: last.changedFiles,
-				workspaceWarnings: last.workspaceWarnings ?? [],
-				...(last.usage !== undefined && { usage: last.usage }),
-			};
-		}
-	} catch {
-		// loop log not readable yet (worker still starting) or removed; omit detail
-	}
 	const timing = jobTiming(job, now);
-	// Running prose names the phase and how long it (and the job) have run, so a
-	// long job is legible without diffing timestamps. Terminal prose points at a
-	// transcript only when one was actually recorded (a failed/empty job has no
-	// auditRef to open, so it must not claim otherwise).
 	const latestRef = job.auditRefs.at(-1);
+	// Running prose names the phase and how long it (and the job) have run, so a
+	// long job is legible without diffing timestamps.
 	const runningDetail = [
 		timing.elapsedMs !== undefined ? `running for ${formatDuration(timing.elapsedMs)}` : undefined,
 		job.phase
@@ -894,28 +879,15 @@ function describeJob(job: JobRecord) {
 				: job.phase
 			: undefined,
 	].filter(Boolean);
-	const nextAction =
-		display === "running"
-			? `${runningDetail.length > 0 ? `${runningDetail.join(", ")}; ` : ""}chit_job_cancel to stop, or wait and poll again`
-			: display === "queued"
-				? "queued; the worker is starting"
-				: display === "stale"
-					? `worker appears dead; inspect with chit_job_status${latestRef ? ` (chit_audit_show ${latestRef} for the transcript)` : ""}, then start a fresh job`
-					: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; ${latestRef ? `open a transcript with chit_audit_show ${latestRef}` : "no audit transcript was recorded"}`;
-	return {
-		jobId: job.jobId,
-		loopId: job.loopId,
-		scope: job.scope,
-		task: job.task,
+	// Fields every job carries, regardless of policy.
+	const base = {
+		runId: job.runId,
+		policy: job.policy,
 		state: job.state,
 		display,
 		stale,
 		alive: pidAlive(job.pid),
 		...(job.phase !== undefined && { phase: job.phase }),
-		...(job.iteration !== undefined && { iteration: job.iteration }),
-		iterationsCompleted: job.iterationsCompleted,
-		...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
-		...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 		...(job.failure !== undefined && { failure: job.failure }),
 		...(job.cancelRequestedAt !== undefined && { cancelRequestedAt: job.cancelRequestedAt }),
 		auditRefs: job.auditRefs,
@@ -929,7 +901,61 @@ function describeJob(job: JobRecord) {
 			lastHeartbeatAgeMs: timing.lastHeartbeatAgeMs,
 		}),
 		...(timing.phaseElapsedMs !== undefined && { phaseElapsedMs: timing.phaseElapsedMs }),
-		...(latest !== undefined && { latest }),
+	};
+
+	if (job.policy === "loop") {
+		let latest:
+			| { iteration: number; changedFiles: string[]; workspaceWarnings: string[]; usage?: unknown }
+			| undefined;
+		try {
+			const iters = readLoop(job.cwd, job.loopId).filter((r) => r.type === "iteration");
+			const last = iters.at(-1);
+			if (last && last.type === "iteration") {
+				latest = {
+					iteration: last.n,
+					changedFiles: last.changedFiles,
+					workspaceWarnings: last.workspaceWarnings ?? [],
+					...(last.usage !== undefined && { usage: last.usage }),
+				};
+			}
+		} catch {
+			// loop log not readable yet (worker still starting) or removed; omit detail
+		}
+		const nextAction =
+			display === "running"
+				? `${runningDetail.length > 0 ? `${runningDetail.join(", ")}; ` : ""}chit_job_cancel to stop, or wait and poll again`
+				: display === "queued"
+					? "queued; the worker is starting"
+					: display === "stale"
+						? `worker appears dead; inspect with chit_job_status${latestRef ? ` (chit_audit_show ${latestRef} for the transcript)` : ""}, then start a fresh job`
+						: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; ${latestRef ? `open a transcript with chit_audit_show ${latestRef}` : "no audit transcript was recorded"}`;
+		return {
+			...base,
+			loopId: job.loopId,
+			scope: job.scope,
+			task: job.task,
+			...(job.iteration !== undefined && { iteration: job.iteration }),
+			iterationsCompleted: job.iterationsCompleted,
+			...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
+			...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
+			...(latest !== undefined && { latest }),
+			nextAction,
+		};
+	}
+
+	// One-shot: no loop log; the history is the single audit run.
+	const nextAction =
+		display === "running"
+			? `${runningDetail.length > 0 ? `${runningDetail.join(", ")}; ` : ""}chit_job_cancel to stop, or wait and poll again`
+			: display === "queued"
+				? "queued; the worker is starting"
+				: display === "stale"
+					? `worker appears dead; inspect with chit_job_status${latestRef ? ` (chit_audit_show ${latestRef} for the transcript)` : ""}`
+					: `${display}; ${latestRef ? `open a transcript with chit_audit_show ${latestRef}` : "no audit transcript was recorded"}`;
+	return {
+		...base,
+		manifestId: job.manifestId,
+		...(job.scope !== undefined && { scope: job.scope }),
 		nextAction,
 	};
 }
@@ -1068,21 +1094,25 @@ export function loopRunView(session: ConvergeSession) {
 // unified verbs. Drops the jobId/loopId handles and the job-tool nextAction prose.
 export function backgroundRunView(job: JobRecord) {
 	const dj = describeJob(job);
-	const { jobId, loopId, nextAction, ...rest } = dj;
-	void jobId;
-	void loopId;
-	void nextAction;
+	// Strip the internal handles (runId re-presented as run_id; loopId never a
+	// public handle) and the old-verb prose; everything else is fine to surface.
+	const { runId: _runId, nextAction: _next, ...rest0 } = dj;
+	const { loopId: _loop, ...rest } = rest0 as typeof rest0 & { loopId?: string };
+	void _runId;
+	void _next;
+	void _loop;
 	const live = dj.display === "running" || dj.display === "queued";
+	const stopSuffix = job.policy === "loop" && job.stopStatus ? ` (${job.stopStatus})` : "";
 	return {
-		run_id: job.jobId,
+		run_id: job.runId,
 		mode: "background" as const,
 		execution: "job" as const,
 		...rest,
 		nextAction: live
-			? `running in the background; chit_status "${job.jobId}" to poll, chit_cancel "${job.jobId}" to stop`
+			? `running in the background; chit_status "${job.runId}" to poll, chit_cancel "${job.runId}" to stop`
 			: dj.display === "stale"
-				? `worker appears dead; chit_trace "${job.jobId}" for what it recorded, then start a fresh run`
-				: `${dj.display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; chit_trace "${job.jobId}" for the history`,
+				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run`
+				: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history`,
 	};
 }
 
@@ -1102,13 +1132,25 @@ server.registerTool(
 		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
 		if (resolved.mode === "background") {
 			const job = resolved.job;
-			let records: unknown[] = [];
-			try {
-				records = readLoop(job.cwd, job.loopId);
-			} catch {
-				// loop log not readable yet (worker still starting) or removed
+			if (job.policy === "loop") {
+				let records: unknown[] = [];
+				try {
+					records = readLoop(job.cwd, job.loopId);
+				} catch {
+					// loop log not readable yet (worker still starting) or removed
+				}
+				return jsonResult({ run_id, execution: "job", policy: "loop", records });
 			}
-			return jsonResult({ run_id, execution: "job", records });
+			// A one-shot background run has no loop log; its history is the audit run.
+			return jsonResult({
+				run_id,
+				execution: "job",
+				policy: "one-shot",
+				auditRefs: job.auditRefs,
+				note: job.auditRefs.length
+					? `chit_audit_show ${job.auditRefs.at(-1)} for the transcript`
+					: "no audit transcript recorded",
+			});
 		}
 		if (resolved.run.kind === "loop") {
 			const session = resolved.run.session;

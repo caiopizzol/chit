@@ -9,7 +9,7 @@
 // first wave; advance reconciles finished jobs and launches the next wave;
 // describe is READ-ONLY (never launches or mutates); cancel stops active jobs.
 
-import type { JobRecord } from "../jobs/types.ts";
+import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
 import { planTasks, resolveManifestPath, type TaskInput } from "./plan.ts";
 import { deriveBatchStatus, isBlocked, isStartable, selectRunnable } from "./schedule.ts";
@@ -298,6 +298,14 @@ function reconcile(c: Batch, deps: BatchEngineDeps): Batch {
 			settleTask(t, "failed", deps, { failure: "job record not found" });
 			continue;
 		}
+		if (job.policy !== "loop") {
+			// A batch task always launches a loop (converge) run, so a non-loop job
+			// here is an invariant violation, not a real outcome. Settle it failed
+			// rather than misreport convergence fields a one-shot run does not have.
+			settleTask(t, "failed", deps, { failure: "batch task job is not a loop run" });
+			continue;
+		}
+		// `job` is a LoopJobRecord from here (the batch only runs loop policy).
 		// A queued OR running job is still in flight: leave the task running UNLESS
 		// the worker is gone/silent (isStale covers both a queued worker that never
 		// started and a running worker that went dark). A just-launched queued job is
@@ -340,13 +348,14 @@ function settleTask(
 	t: BatchTask,
 	status: Extract<TaskStatus, "review_ready" | "failed" | "cancelled">,
 	deps: BatchEngineDeps,
-	extra: { job?: JobRecord; failure?: string },
+	extra: { job?: LoopJobRecord; failure?: string },
 ): void {
 	t.status = status;
+	// Loop detail comes from an actual loop job's loop log (keyed by its loopId).
+	// With no loop job in hand (the record vanished, or a non-loop job was
+	// rejected upstream), there is no loop detail to read.
 	const detail =
-		t.worktreePath && t.jobId
-			? deps.loopDetail(t.worktreePath, jobLoopId(t, extra.job))
-			: undefined;
+		t.worktreePath && extra.job ? deps.loopDetail(t.worktreePath, extra.job.loopId) : undefined;
 	const result: TaskResult = {
 		iterations: extra.job?.iterationsCompleted ?? 0,
 		changedFiles: detail?.changedFiles ?? [],
@@ -357,10 +366,6 @@ function settleTask(
 	if (extra.job?.lastVerdict !== undefined) result.lastVerdict = extra.job.lastVerdict;
 	t.result = result;
 	if (status === "failed" && extra.failure !== undefined) t.error = extra.failure;
-}
-
-function jobLoopId(t: BatchTask, job?: JobRecord): string {
-	return job?.loopId ?? t.id;
 }
 
 // Launch the next runnable wave: create a worktree + job per selected task,

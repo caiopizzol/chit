@@ -6,7 +6,7 @@ import type { LoopVerdict } from "@chit-run/core";
 import type { ConvergeExecute } from "../cli/converge.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import { JobStore } from "./store.ts";
-import type { JobRecord } from "./types.ts";
+import type { LoopJobRecord } from "./types.ts";
 import { runJobWorker } from "./worker.ts";
 
 let cwd: string;
@@ -64,12 +64,13 @@ function fakeExecute(
 	};
 }
 
-function seedJob(over: Partial<JobRecord> = {}): JobRecord {
+function seedJob(over: Partial<LoopJobRecord> = {}): LoopJobRecord {
 	const loopId = over.loopId ?? "j1";
 	// chit_converge_run reserves the loop (startLoop) before spawning the worker.
 	startLoop(cwd, { scope: "s", task: "t", maxIterations: over.maxIterations ?? 3, loopId });
 	const job = {
-		jobId: "j1",
+		runId: "j1",
+		policy: "loop",
 		loopId,
 		repoKey: "k",
 		cwd,
@@ -82,7 +83,7 @@ function seedJob(over: Partial<JobRecord> = {}): JobRecord {
 		iterationsCompleted: 0,
 		auditRefs: [],
 		...over,
-	} as JobRecord;
+	} as LoopJobRecord;
 	store.create(job);
 	return job;
 }

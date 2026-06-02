@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditStore } from "../../audit/store.ts";
 import { JobStore } from "../../jobs/store.ts";
-import type { JobRecord } from "../../jobs/types.ts";
+import type { LoopJobRecord } from "../../jobs/types.ts";
 import { RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
@@ -79,7 +79,8 @@ describe("buildStatus", () => {
 
 	test("durable jobs: in-flight always shown, terminal capped, stale derived", () => {
 		const jobStore = emptyJobStore();
-		const base: Omit<JobRecord, "jobId" | "loopId" | "state" | "createdAt"> = {
+		const base: Omit<LoopJobRecord, "runId" | "loopId" | "state" | "createdAt"> = {
+			policy: "loop",
 			repoKey: "k",
 			cwd: "/repo",
 			scope: "s",
@@ -92,7 +93,7 @@ describe("buildStatus", () => {
 		// a live running job (fresh heartbeat, this process's pid => alive)
 		jobStore.create({
 			...base,
-			jobId: "live",
+			runId: "live",
 			loopId: "live",
 			state: "running",
 			createdAt: "2026-06-01T10:03:00.000Z",
@@ -102,7 +103,7 @@ describe("buildStatus", () => {
 		// a stale running job (heartbeat ancient => derived stale)
 		jobStore.create({
 			...base,
-			jobId: "stale",
+			runId: "stale",
 			loopId: "stale",
 			state: "running",
 			createdAt: "2026-06-01T10:02:00.000Z",
@@ -111,7 +112,7 @@ describe("buildStatus", () => {
 		});
 		jobStore.create({
 			...base,
-			jobId: "done",
+			runId: "done",
 			loopId: "done",
 			state: "completed",
 			createdAt: "2026-06-01T10:01:00.000Z",
@@ -137,7 +138,8 @@ describe("buildStatus", () => {
 			allowUnenforced: false,
 			iterationsCompleted: 0,
 			auditRefs: [],
-			jobId: "run1",
+			policy: "loop",
+			runId: "run1",
 			loopId: "run1",
 			state: "running",
 			createdAt: "2026-06-01T10:55:00.000Z",
@@ -168,7 +170,8 @@ describe("buildStatus", () => {
 			allowUnenforced: false,
 			iterationsCompleted: 0,
 			auditRefs: [],
-			jobId: "fail1",
+			policy: "loop",
+			runId: "fail1",
 			loopId: "fail1",
 			state: "failed",
 			createdAt: "2026-06-01T10:50:00.000Z",
@@ -190,7 +193,8 @@ describe("buildStatus", () => {
 			allowUnenforced: false,
 			iterationsCompleted: 1,
 			auditRefs: ["aud-xyz"],
-			jobId: "done1",
+			policy: "loop",
+			runId: "done1",
 			loopId: "done1",
 			state: "completed",
 			createdAt: "2026-06-01T10:50:00.000Z",

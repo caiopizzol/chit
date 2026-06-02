@@ -10,7 +10,8 @@ const DEAD_PID = 2_147_480_000;
 
 function job(over: Partial<JobRecord>): JobRecord {
 	return {
-		jobId: "j",
+		runId: "j",
+		policy: "loop",
 		loopId: "j",
 		repoKey: "k",
 		cwd: "/r",

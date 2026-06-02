@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JobRecord } from "../jobs/types.ts";
+import type { LoopJobRecord } from "../jobs/types.ts";
 import {
 	advanceBatch,
 	type BatchEngineDeps,
@@ -21,7 +21,7 @@ import type { GitRunner } from "./worktree.ts";
 // A fake job world: launchJob registers a running job; tests then flip a job's
 // state to simulate the background worker finishing.
 class FakeJobs {
-	jobs = new Map<string, JobRecord>();
+	jobs = new Map<string, LoopJobRecord>();
 	launched: Array<{ jobId: string; cwd: string; manifestPath?: string; scope: string }> = [];
 	cancelled: string[] = [];
 	private seq = 0;
@@ -39,7 +39,8 @@ class FakeJobs {
 		// "running". Mirror that here so the reconcile path is tested against reality
 		// (a just-launched queued job must NOT be reconciled as failed).
 		this.jobs.set(jobId, {
-			jobId,
+			runId: jobId,
+			policy: "loop",
 			loopId: p.loopId,
 			repoKey: "k",
 			cwd: p.cwd,
@@ -55,12 +56,12 @@ class FakeJobs {
 		this.launched.push({ jobId, cwd: p.cwd, manifestPath: p.manifestPath, scope: p.scope });
 		return { jobId, loopId: p.loopId };
 	};
-	get = (jobId: string): JobRecord | undefined => this.jobs.get(jobId);
+	get = (jobId: string): LoopJobRecord | undefined => this.jobs.get(jobId);
 	cancel = (jobId: string): void => {
 		this.cancelled.push(jobId);
 	};
 	// Test helper: settle a job to a terminal state.
-	finish(jobId: string, over: Partial<JobRecord>): void {
+	finish(jobId: string, over: Partial<LoopJobRecord>): void {
 		const j = this.jobs.get(jobId);
 		if (j) this.jobs.set(jobId, { ...j, state: "completed", iterationsCompleted: 1, ...over });
 	}
@@ -353,7 +354,7 @@ describe("listBatches", () => {
 		// a converges (review_ready); b goes stale (failed)
 		jobs.finish(firstJob(), { stopStatus: "converged" });
 		const bJobId = present(jobs.launched[1], "second job").jobId;
-		deps.isStale = (job) => job.jobId === bJobId;
+		deps.isStale = (job) => job.runId === bJobId;
 		advanceBatch(store, deps, "c1");
 		const s = summarizeBatch(present(store.get("c1"), "batch c1"));
 		expect(s).toMatchObject({
