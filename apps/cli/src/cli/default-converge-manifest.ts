@@ -1,5 +1,5 @@
 // The default converge manifest, embedded so `chit converge` (no --manifest)
-// and the MCP `chit_converge_start` (no manifest_path) work from the published
+// and the MCP `chit_start` with a `task` (no manifest_path) work from the published
 // binary, which ships only dist/ (not examples/). Kept identical to
 // examples/converge.json by a drift-guard test (default-converge-manifest.test.ts);
 // examples/converge.json stays as the canonical example users read and copy.
@@ -8,7 +8,7 @@ export const DEFAULT_CONVERGE_MANIFEST: unknown = {
 	schema: 1,
 	id: "converge",
 	description:
-		"Autonomous convergence: a write-capable Claude implements a slice, then a read-only Codex reviews the diff and returns proceed/revise/block. Drive it in a loop with the `chit converge` CLI driver, or stepwise from the MCP - one chit_run_start per iteration, same scope so both agents keep their thread, feeding the prior review back in via inputs.prior_review. The human sequences and checkpoints (inspect the diff each round, stop if it goes sideways); chit runs the agents. Run against an isolated worktree, not the main checkout.",
+		"Autonomous convergence: a write-capable Claude implements a slice, then a read-only Codex reviews the diff and returns proceed/revise/block. Drive it in a loop with the `chit converge` CLI driver, or stepwise from the MCP - one chit_next per iteration, same scope so both agents keep their thread, feeding the prior review back in via inputs.prior_review. The human sequences and checkpoints (inspect the diff each round, stop if it goes sideways); chit runs the agents. Run against an isolated worktree, not the main checkout.",
 
 	inputs: {
 		task: { type: "string" },

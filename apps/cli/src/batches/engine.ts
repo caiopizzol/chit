@@ -422,9 +422,9 @@ export interface BatchTaskView {
 	dependencies: string[];
 	branch?: string;
 	worktreePath?: string;
-	jobId?: string;
-	// Live job state for a running task, or the recorded result for a terminal one.
-	jobState?: JobRecord["state"] | "stale";
+	run_id?: string; // the durable background run advancing this task (run_id == its job id)
+	// Live run state for a running task, or the recorded result for a terminal one.
+	runState?: JobRecord["state"] | "stale";
 	phase?: JobRecord["phase"];
 	stopStatus?: TaskResult["stopStatus"];
 	lastVerdict?: TaskResult["lastVerdict"];
@@ -459,12 +459,12 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 			dependencies: t.dependencies,
 			...(t.branch !== undefined && { branch: t.branch }),
 			...(t.worktreePath !== undefined && { worktreePath: t.worktreePath }),
-			...(t.jobId !== undefined && { jobId: t.jobId }),
+			...(t.jobId !== undefined && { run_id: t.jobId }),
 		};
 		if (t.status === "running" && t.jobId) {
 			const job = deps.getJob(t.jobId);
 			if (job) {
-				view.jobState = job.state === "running" && deps.isStale(job) ? "stale" : job.state;
+				view.runState = job.state === "running" && deps.isStale(job) ? "stale" : job.state;
 				if (job.phase !== undefined) view.phase = job.phase;
 			}
 		}

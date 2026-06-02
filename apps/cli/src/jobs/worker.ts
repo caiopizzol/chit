@@ -249,7 +249,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 			// Close cleanly with NO further iteration on a persisted cancel intent OR
 			// a signal that already aborted us during startup (handler installed above).
 			if (store.get(jobId)?.cancelRequestedAt || controller.signal.aborted) {
-				stopLoopSafely(job, "cancelled", "cancelled via chit_job_cancel");
+				stopLoopSafely(job, "cancelled", "cancelled via chit_cancel");
 				finish(store, jobId, now, "cancelled", { stopStatus: "cancelled" });
 				return;
 			}

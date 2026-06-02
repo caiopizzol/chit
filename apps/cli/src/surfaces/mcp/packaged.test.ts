@@ -50,4 +50,47 @@ describe("packaged chit binary", () => {
 		expect(out).toContain('"name":"chit"');
 		expect(out).toContain('"tools"');
 	}, 20000);
+
+	// The release-boundary contract: the packaged binary exposes EXACTLY the 13
+	// unified tools and ZERO of the removed run/converge/job tool names.
+	test("tools/list is exactly the 13 unified tools, with no removed names", async () => {
+		const proc = Bun.spawn(["bun", DIST, "mcp"], { stdin: "pipe", stdout: "pipe" });
+		const init = {
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: {
+				protocolVersion: "2024-11-05",
+				capabilities: {},
+				clientInfo: { name: "packaged-smoke", version: "0" },
+			},
+		};
+		const list = { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} };
+		proc.stdin.write(`${JSON.stringify(init)}\n`);
+		proc.stdin.write(`${JSON.stringify(list)}\n`);
+		proc.stdin.end();
+		const out = await new Response(proc.stdout).text();
+		await proc.exited;
+		// Extract the registered tool names from the `name` field of each tool entry
+		// (precise: a description mentioning a tool is not a `"name":"..."` match).
+		const names = [...out.matchAll(/"name":"(chit_[a-z_]+)"/g)].map((m) => m[1] as string);
+		const unique = [...new Set(names)].sort();
+		expect(unique).toEqual([
+			"chit_audit_list",
+			"chit_audit_show",
+			"chit_batch_advance",
+			"chit_batch_cancel",
+			"chit_batch_cleanup",
+			"chit_batch_list",
+			"chit_batch_start",
+			"chit_batch_status",
+			"chit_cancel",
+			"chit_next",
+			"chit_start",
+			"chit_status",
+			"chit_trace",
+		]);
+		// No removed run/converge/job tool families survive anywhere in the surface.
+		expect(unique.some((n) => /^chit_(run|converge|job)_/.test(n))).toBe(false);
+	}, 20000);
 });

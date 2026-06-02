@@ -211,11 +211,7 @@ export async function runNextIteration(
 			if (controller.signal.aborted) {
 				// Cancelled mid-run: runConvergeIteration appended NO record (it appends
 				// only on a successful run). Close the loop cleanly as cancelled.
-				stopTerminal(
-					session,
-					"cancelled",
-					"cancelled via MCP (client abort or chit_converge_cancel)",
-				);
+				stopTerminal(session, "cancelled", "cancelled via MCP (client abort or chit_cancel)");
 				return { kind: "cancelled", iteration };
 			}
 			// A real manifest failure (not a cancellation): close blocked, exactly as
@@ -286,7 +282,7 @@ export function cancelConverge(session: ConvergeSession): CancelResult {
 		session.active.abort();
 		return { state: "cancelling" };
 	}
-	stopTerminal(session, "cancelled", "cancelled via chit_converge_cancel (no iteration running)");
+	stopTerminal(session, "cancelled", "cancelled via chit_cancel (no iteration running)");
 	return { state: "closed" };
 }
 

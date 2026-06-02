@@ -15,7 +15,7 @@
 // Pure and side-effect-free BY DESIGN: it does NOT sweep or touch the in-memory
 // stores. Touching on a status poll would keep runs alive forever (defeating
 // idle eviction); sweeping would make a read destructive. Eviction stays tied to
-// chit_run_start / chit_converge_start, where it belongs. The active sections read
+// chit_start, where it belongs. The active sections read
 // only in-memory state (no disk), so they never throw; only `recent` touches
 // disk, via listAudit, which is already robust to a corrupt or mid-write log.
 
@@ -26,11 +26,11 @@ import type { JobStore } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord } from "../../jobs/types.ts";
 import type { RunController } from "./controller.ts";
 import type { ControlledRun } from "./controller-store.ts";
-import { type ConvergeStatus, describeConverge } from "./converge-engine.ts";
+import type { ConvergeSession } from "./converge-engine.ts";
 import { isComplete, type Run, readySteps } from "./engine.ts";
 
 // A compact per-run line for the overview. Deliberately omits the (possibly
-// large) final output and per-step detail: drill into one run with chit_run_trace,
+// large) final output and per-step detail: drill into one run with chit_trace,
 // or chit_audit_show when audited (the run id IS the audit run id).
 export interface RunStatusSummary {
 	run_id: string;
@@ -39,7 +39,7 @@ export interface RunStatusSummary {
 	// Step ids ready to run now; empty when the run is complete.
 	ready: string[];
 	// True when this run is being audited cleanly, so chit_audit_show <run_id>
-	// has a transcript. Mirrors chit_run_next's audit pointer.
+	// has a transcript. Mirrors chit_next's audit pointer.
 	audited: boolean;
 }
 
@@ -54,18 +54,53 @@ export function summarizeRunForStatus(run: Run): RunStatusSummary {
 	};
 }
 
+// A compact per-loop line for the overview, presented under run_id with the
+// unified verbs (a foreground loop's run_id IS its loop-log key; the key never
+// surfaces as a separate handle). Iteration detail lives in the loop log; drill in
+// with chit_trace.
+export interface LoopStatusSummary {
+	run_id: string;
+	scope: string;
+	status: string; // running | open | converged | blocked | max-iterations | cancelled
+	iterationsCompleted: number;
+	cancellable: boolean;
+	lastVerdict?: ConvergeSession["lastVerdict"];
+	auditRefs: string[];
+	nextAction: string;
+}
+
+export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSummary {
+	const stopped = session.terminalStatus !== undefined;
+	const status = session.terminalStatus ?? (session.active ? "running" : "open");
+	const nextAction = stopped
+		? `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
+		: session.active
+			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
+			: `chit_next "${session.loopId}" to run the next iteration; chit_cancel "${session.loopId}" to stop`;
+	return {
+		run_id: session.loopId,
+		scope: session.scope,
+		status,
+		iterationsCompleted: session.iteration,
+		cancellable: !stopped,
+		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
+		auditRefs: session.auditRefs,
+		nextAction,
+	};
+}
+
 // A compact per-job line for the overview. `display` derives stale (a running job
 // whose worker is gone or silent) so a dead worker is visible without rewriting
 // the stored state. Iteration detail (changed files, usage) lives in the loop log;
-// drill in with chit_job_status / chit_converge_trace / chit_audit_show.
+// drill in with chit_status / chit_trace / chit_audit_show.
 export interface JobStatusSummary {
-	jobId: string;
+	run_id: string;
 	scope: string;
 	display: JobRecord["state"] | "stale";
 	phase?: JobRecord["phase"];
 	// Loop-only fields: a one-shot background run has no loop identity, no
-	// iterations, and no convergence verdict. Present iff policy === "loop".
-	loopId?: string;
+	// iterations, and no convergence verdict. Present iff policy === "loop". The
+	// internal loop-log key is NOT surfaced (the run_id is the only handle).
 	task?: string;
 	iterationsCompleted?: number;
 	lastVerdict?: LoopJobRecord["lastVerdict"];
@@ -93,7 +128,7 @@ function runningNextAction(job: JobRecord, timing: ReturnType<typeof jobTiming>)
 		);
 	}
 	const lead = parts.length > 0 ? parts.join(", ") : "in progress";
-	return `${lead}; chit_job_status / chit_job_cancel "${job.runId}"`;
+	return `${lead}; chit_status / chit_cancel "${job.runId}"`;
 }
 
 function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary {
@@ -111,14 +146,13 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 			: display === "queued"
 				? "queued; the worker is starting"
 				: display === "stale"
-					? `worker appears dead; chit_job_status "${job.runId}" to inspect, then start a fresh job`
-					: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_job_status "${job.runId}"${latestRef ? ` or chit_audit_show ${latestRef}` : ""}`;
+					? `worker appears dead; chit_status "${job.runId}" to inspect, then start a fresh run`
+					: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_status "${job.runId}"${latestRef ? ` or chit_audit_show ${latestRef}` : ""}`;
 	// Loop-only detail (loopId, task, iterations, verdict, stopStatus) is present
 	// only for a loop run; a one-shot background run omits all of it. Spread in
 	// place so a loop summary keeps its established field order.
 	return {
-		jobId: job.runId,
-		...(job.policy === "loop" && { loopId: job.loopId }),
+		run_id: job.runId,
 		scope: job.scope ?? "",
 		...(job.policy === "loop" && { task: job.task }),
 		display,
@@ -140,7 +174,7 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 export interface ChitStatus {
 	active: {
 		runs: RunStatusSummary[];
-		loops: ConvergeStatus[];
+		loops: LoopStatusSummary[];
 	};
 	// Durable background jobs (cross-session): every in-flight job (queued/running,
 	// including stale) plus the most recent terminal ones (capped by recentLimit).
@@ -176,9 +210,8 @@ function recentRuns(auditStore: AuditStore, recentLimit: number): RunSummary[] {
 }
 
 // Assemble the overview. `recentLimit` caps the durable history slice (newest
-// first; 0 omits it). Active runs and loops are returned newest-first, and each
-// loop reuses the SAME control-plane view as chit_converge_status, so the
-// overview and the per-loop tool never disagree.
+// first; 0 omits it). Active runs and loops are returned newest-first, each under
+// its run_id with the unified verbs (chit_next/chit_cancel/chit_trace).
 export function buildStatus(
 	controller: RunController,
 	auditStore: AuditStore,
@@ -197,7 +230,7 @@ export function buildStatus(
 	return {
 		active: {
 			runs: byNewest(runs.map((c) => c.run)).map(summarizeRunForStatus),
-			loops: byNewest(loops.map((c) => c.session)).map(describeConverge),
+			loops: byNewest(loops.map((c) => c.session)).map(summarizeLoopForStatus),
 		},
 		jobs: jobsForStatus(jobStore, recentLimit, nowMs),
 		recent: recentRuns(auditStore, recentLimit),

@@ -120,7 +120,7 @@ describe("buildStatus", () => {
 		});
 
 		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
-		const byId = Object.fromEntries(status.jobs.map((j) => [j.jobId, j]));
+		const byId = Object.fromEntries(status.jobs.map((j) => [j.run_id, j]));
 		expect(byId.live?.display).toBe("running");
 		expect(byId.stale?.display).toBe("stale");
 		expect(byId.done?.display).toBe("completed");
@@ -150,7 +150,7 @@ describe("buildStatus", () => {
 			phaseStartedAt: new Date(NOW - 30_000).toISOString(),
 		});
 		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
-		const j = status.jobs.find((x) => x.jobId === "run1");
+		const j = status.jobs.find((x) => x.run_id === "run1");
 		expect(j?.elapsedMs).toBe(120_000);
 		expect(j?.lastHeartbeatAgeMs).toBe(5_000);
 		expect(j?.phaseElapsedMs).toBe(30_000);
@@ -178,7 +178,7 @@ describe("buildStatus", () => {
 			failure: "boom",
 		});
 		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
-		const j = status.jobs.find((x) => x.jobId === "fail1");
+		const j = status.jobs.find((x) => x.run_id === "fail1");
 		expect(j?.nextAction).not.toContain("chit_audit_show");
 	});
 
@@ -201,7 +201,7 @@ describe("buildStatus", () => {
 			stopStatus: "converged",
 		});
 		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
-		const j = status.jobs.find((x) => x.jobId === "done1");
+		const j = status.jobs.find((x) => x.run_id === "done1");
 		expect(j?.nextAction).toContain("chit_audit_show aud-xyz");
 	});
 
@@ -238,10 +238,10 @@ describe("buildStatus", () => {
 		);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["new", "old"]);
-		expect(status.active.loops.map((l) => l.loopId)).toEqual(["loop-new", "loop-old"]);
-		// each loop carries the same control-plane view chit_converge_status returns
+		expect(status.active.loops.map((l) => l.run_id)).toEqual(["loop-new", "loop-old"]);
+		// each loop is presented under run_id with the unified verbs
 		expect(status.active.loops[0]?.status).toBe("open");
-		expect(status.active.loops[0]?.nextAction).toContain("chit_converge_next");
+		expect(status.active.loops[0]?.nextAction).toContain("chit_next");
 	});
 
 	test("a loop restarted in place still sorts newest by its new startedAtMs", () => {
@@ -259,7 +259,7 @@ describe("buildStatus", () => {
 			NOW,
 		);
 
-		expect(status.active.loops.map((l) => l.loopId)).toEqual(["loop-a", "loop-b"]);
+		expect(status.active.loops.map((l) => l.run_id)).toEqual(["loop-a", "loop-b"]);
 	});
 
 	test("recent_limit of 0 returns no recent runs", () => {

@@ -99,7 +99,7 @@ export function startRun(runId: string, opts: StartRunOptions): Run {
 	const needsScope = Object.values(manifest.participants).some((p) => p.session === "per_scope");
 	if (needsScope && opts.scope === undefined) {
 		throw new RuntimeError(
-			`manifest "${manifest.id}" has per_scope participant(s); a scope is required (pass scope to chit_run_start)`,
+			`manifest "${manifest.id}" has per_scope participant(s); a scope is required (pass scope to chit_start)`,
 		);
 	}
 
