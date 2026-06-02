@@ -5,13 +5,13 @@ description: A thin runtime for multi-agent workflows. Stop being the glue betwe
 
 A chit is a small declared file that captures a routine you already run by hand: which agents take part, in what order, what context flows between them, and where a reviewer checks the work. The runtime reads the chit and runs it, primarily inside a Claude Code conversation over MCP. You stay in the loop and step in where judgment matters.
 
-Claude implements. Codex reviews. chit records what happened. Three things you get: a versioned routine, cross-vendor agents, and an audit trail.
+The routine chit is built for is an implement/check loop: one agent implements, another reviews, and chit records what happened. The roles are assigned in the chit, not fixed to a vendor: either Claude or Codex can implement or review, and the permission you grant a participant decides its sandbox. The bundled default pairs a write-capable Claude implementer with a read-only Codex reviewer. Three things you get: a versioned routine, cross-vendor agents, and an audit trail.
 
 The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools, a CLI command, a Claude Code skill) are thin shims that call the runtime with a manifest and inputs. MCP is the primary surface; the CLI is support tooling.
 
 ## What this is not
 
-- Not a workflow engine. No schedulers, triggers, cron, databases, SaaS connectors.
+- Not a general workflow engine. No hosted scheduler, no cron, no SaaS connectors, no databases.
 - Not a code generator. Manifests are interpreted, not compiled.
 - Not an agent framework. We do not define how agents reason; we define how they hand work to each other.
 - Not a chat tool. The word is *chit*, not *chat*.
@@ -22,6 +22,14 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools,
 1. **Agents.** A registry of invocable participants (Codex CLI, Claude CLI, others via adapters).
 2. **Chits.** JSON manifests wiring agents into handoff graphs for a task.
 3. **Surfaces.** Shims that expose a chit as MCP tools, a CLI command, or a Claude Code skill.
+
+## Three ways to run it
+
+The same chit, three execution modes; you choose how much to watch.
+
+- **Foreground.** Checkpoint every iteration. chit runs one round at a time (`chit_converge_start` / `chit_converge_next`); you read the diff and the verdict, then advance.
+- **Background job.** Run one task unattended. `chit_converge_run` converges in a detached worker against a git worktree; check on it with `chit_job_status` and read the receipt.
+- **Batch.** Run several tasks in parallel, one worktree each, with declared dependencies. `chit_batch_start` coordinates the waves; the deliverable is a set of reviewable branches.
 
 ## Safety model
 
@@ -36,7 +44,7 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools,
 - Manifests are static DAGs: no loops, no conditionals, no dynamic routing. Iteration lives in an orchestrator on top.
 - Studio cannot run a chit; it is a read-and-inspect editor, and it needs a source checkout in this version.
 - No client-facing token stream over MCP: a long step shows a latest-state heartbeat, not the model's live tokens.
-- chit is not a general workflow engine: no schedulers, queues, or hosted execution.
+- chit is not a general workflow engine: no hosted scheduler, no cron, no SaaS connectors, no dynamic router.
 
 ## Where to go next
 
@@ -48,4 +56,4 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools,
 
 ## Status
 
-Early, and honest about it. The runtime, the CLI, the MCP surface (stepwise, converge, and audit tools), the Claude Code skill, Studio in a source checkout, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.
+Early, and honest about it. The runtime, the CLI, the MCP surface (stepwise run, converge, background jobs, batches, and audit tools), the Claude Code skill, Studio in a source checkout, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.

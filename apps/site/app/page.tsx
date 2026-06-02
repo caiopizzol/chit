@@ -202,6 +202,32 @@ export default function Home() {
 					</div>
 				</div>
 
+				<h2>Run it three ways.</h2>
+				<p className="lede">The same chit, three execution modes. You choose how much to watch.</p>
+				<div className="modes">
+					<div className="mode-line">
+						<div className="label">Foreground</div>
+						<div className="body">
+							Checkpoint every iteration. chit runs one round; you read the diff and the verdict,
+							then advance.
+						</div>
+					</div>
+					<div className="mode-line">
+						<div className="label">Background</div>
+						<div className="body">
+							Run one task unattended. chit converges in a detached worker against a git worktree.
+							Check on it later; read the receipt.
+						</div>
+					</div>
+					<div className="mode-line">
+						<div className="label">Batch</div>
+						<div className="body">
+							Run several tasks in parallel, one worktree each, with declared dependencies. The
+							deliverable is a set of reviewable branches.
+						</div>
+					</div>
+				</div>
+
 				<blockquote>
 					No chit, no work.
 					<br />

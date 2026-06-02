@@ -10,13 +10,17 @@ Website and docs: https://chit.run
 
 A chit is a small JSON file that declares a routine you already run by hand: which agents take part, in what order, what context flows between them, and where a reviewer checks the work. The runtime reads the chit and runs it, primarily inside a Claude Code conversation over MCP. You stay in the loop and step in where judgment matters.
 
-Claude implements. Codex reviews. chit records what happened.
+The routine chit is built for is an implement/check loop: one agent implements a slice, another reviews the diff, repeat until it converges or needs you. The roles are assigned in the chit, not fixed to a vendor: either Claude or Codex can implement or review, and the permission you grant a participant decides its sandbox. The bundled default pairs a write-capable Claude implementer with a read-only Codex reviewer. Every run leaves a receipt you can read.
 
-Three things you get: a versioned routine, cross-vendor agents, and an audit trail.
+You run it in one of three modes:
+
+- **Foreground.** Checkpoint every iteration. chit runs one round at a time; you read the diff and the verdict, then advance.
+- **Background job.** Run one task unattended. chit converges in a detached worker against a git worktree; check on it later and read the receipt.
+- **Batch.** Run several tasks in parallel, one per worktree, with declared dependencies. chit coordinates the waves; the deliverable is a set of reviewable branches.
 
 chit, not chat. Chat is one agent at a time with you in the middle, holding the thread. A chit takes the middle out: the routine is a declared file, the runtime moves the work between agents, and an audited run leaves a receipt you can read.
 
-chit is not an agent framework, a workflow engine, a SaaS dashboard, a dynamic router, or a chat tool. It is the declared routine between your agents.
+chit is not a general workflow engine: no hosted scheduler, no cron, no SaaS connectors, no dynamic router. It is the declared routine between your agents, with a receipt.
 
 ## Quickstart (MCP, inside Claude Code)
 
@@ -34,14 +38,14 @@ Then, in a Claude Code conversation, in a git worktree:
 
 > Use chit to converge on this task: <a small, scoped change>. Run a couple of iterations and show me the audit trail.
 
-chit drives the loop with its converge tools: a write-capable Claude implements the slice, a read-only Codex reviews the diff, and each iteration is recorded. Read the receipt with the audit tools. The implementer edits files, so run it against a git worktree, not your main checkout. Upgrade later with the same command: `bun install -g @chit-run/cli@latest` (during 0.x, `bun update -g` will not cross a minor).
+chit drives the loop with its converge tools: by default a write-capable Claude implements the slice and a read-only Codex reviews the diff, and each iteration is recorded. Read the receipt with the audit tools. The implementer edits files, so run it against a git worktree, not your main checkout. Upgrade later with the same command: `bun install -g @chit-run/cli@latest` (during 0.x, `bun update -g` will not cross a minor).
 
 ## The implement/check loop
 
-The routine chit is built for: one agent implements, another reviews, repeat until it converges or needs you. Two modes, both with a human checkpoint:
+The routine chit is built for: one agent implements, another reviews, repeat until it converges or needs you. The roles live in the chit, so either agent can take either side; the permission you grant decides the sandbox. Two ways to drive it, both with a human checkpoint:
 
-- **Supervised.** Your Claude Code chat implements with its full context; a read-only Codex advisor reviews each round. You own the loop.
-- **Autonomous.** chit runs both agents: a write-capable Claude implements a slice in a git worktree, a read-only Codex reviews, looping to convergence. Drive it from the chat with the `chit_converge_*` MCP tools, then inspect the loop log and the audit transcript.
+- **Supervised.** Your Claude Code chat is the implementer, with its full context; a read-only advisor reviews each round. You own the loop.
+- **Autonomous.** chit runs both agents itself in a git worktree, looping to convergence. Drive it from the chat with the `chit_converge_*` MCP tools (foreground, one iteration per call), or hand it off as a background job with `chit_converge_run`. Several tasks at once become a batch (one worktree each, with dependencies). Inspect the loop log and the audit transcript after.
 
 Manifests are static DAGs and cannot loop, so the iteration lives in an orchestrator on top, never in the chit. See [self-hosting](https://chit.run/docs/self-hosting).
 

@@ -276,6 +276,38 @@
 	font-family: var(--font-chit-body), "Inter", sans-serif;
 }
 
+.landing .modes {
+	border-top: 1px solid var(--ink);
+	margin: 16px 0 0;
+}
+.landing .mode-line {
+	display: grid;
+	grid-template-columns: 124px 1fr;
+	gap: 12px;
+	padding: 14px 0;
+	border-bottom: 1px dashed var(--ink);
+	align-items: baseline;
+}
+.landing .mode-line .label {
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	font-size: 11px;
+	color: var(--ink);
+}
+.landing .mode-line .body {
+	color: var(--ink);
+	font-family: var(--font-chit-body), "Inter", sans-serif;
+	font-size: 14px;
+}
+@media (max-width: 560px) {
+	.landing .mode-line {
+		grid-template-columns: 1fr;
+		gap: 4px;
+	}
+}
+
 .landing .graph {
 	background: var(--sheet);
 	border: 1px solid var(--ink);
