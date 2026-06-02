@@ -1,7 +1,7 @@
 {
 	"schema": 1,
 	"id": "converge-codex-writer",
-	"description": "Role-swapped convergence: a write-capable Codex implements a slice, then a read-only Claude reviews the diff and returns proceed/revise/block. Same loop as converge.json with the implementer and reviewer agents swapped - proof that roles are assigned in the chit, not fixed to a vendor, and that the permission (write vs read_only), not the vendor, decides whether a participant can write. Point a batch task's manifestPath (or chit_converge_run's manifest_path) at this to run a Codex implementer. Run against an isolated worktree, not the main checkout.",
+	"description": "Role-swapped convergence: a write-capable Codex implements a slice, then a read-only Claude reviews the diff and returns proceed/revise/block. Same loop as converge.json with the implementer and reviewer agents swapped - proof that roles are assigned in the chit, not fixed to a vendor, and that the permission (write vs read_only), not the vendor, decides whether a participant can write. Point a batch task's manifestPath (or chit_start's manifest_path) at this to run a Codex implementer. Run against an isolated worktree, not the main checkout.",
 
 	"inputs": {
 		"task": { "type": "string" },

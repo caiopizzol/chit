@@ -30,6 +30,6 @@ Manifests are static DAGs. No loops, no conditionals, no dynamic routing. This i
 Iteration still happens, but it lives in an orchestrator on top of the runtime, never inside the manifest. The recurring "one agent implements, another reviews, repeat" loop runs in two modes:
 
 - **Supervised** - your Claude Code chat owns the loop and the human checkpoint; a chit reviewer checks each round.
-- **Autonomous** - converge runs both agents to convergence against a git worktree (driven MCP-native with the `chit_converge_*` tools, or from a terminal with `chit converge`), and you inspect the result.
+- **Autonomous** - a loop run drives both agents to convergence against a git worktree (MCP-native with `chit_start` then `chit_next`, or from a terminal with `chit converge`), and you inspect the result.
 
 See [supervised convergence](/docs/supervised-convergence) and [self-hosting](/docs/self-hosting) for the loop in practice.

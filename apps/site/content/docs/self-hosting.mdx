@@ -10,7 +10,7 @@ chit builds chit with its own loop. This is the operating guide: which mode to u
 Both modes share one shape: an implementer writes a slice, a reviewer checks it, and a human checkpoints. They differ in who implements.
 
 - **Supervised.** The Claude Code chat implements with its full tools and context; a per-scope Codex advisor reviews each round and inspects the git diff. The chat owns the loop and the checkpoint. Reach for this on nuanced, cross-package, or exploratory slices, where the chat's reasoning and live tools earn their keep.
-- **Autonomous (converge).** The chat sets a task; chit runs both agents, looping to convergence (`examples/converge.json`). Drive it MCP-native from the chat with `chit_converge_start` then `chit_converge_next` per iteration, or from a terminal with `chit converge`. The chat does not implement and does not babysit each handoff. Reach for this on well-scoped, self-contained slices, and to keep building the self-hosting habit.
+- **Autonomous (converge).** The chat sets a task; chit runs both agents, looping to convergence (`examples/converge.json`). Drive it MCP-native from the chat with `chit_start` then `chit_next` per iteration, or from a terminal with `chit converge`. The chat does not implement and does not babysit each handoff. Reach for this on well-scoped, self-contained slices, and to keep building the self-hosting habit.
 
 The mode is a per-slice choice, not a default. When in doubt on a gnarly change, supervised produces cleaner results faster; on a tight, well-specified change, autonomous is the better demonstration and offloads the writing.
 
@@ -31,25 +31,25 @@ Treat the reviewer as an independent second opinion, not ground truth: verify ea
 ## Running an autonomous slice
 
 1. Branch into a worktree so a wedged or abandoned run stays isolated.
-2. Drive the loop. MCP-native from the chat (the primary path): `chit_converge_start` with the task, scope, and the worktree as `cwd`, then `chit_converge_next` once per iteration, checkpointing between. Or from a terminal:
+2. Drive the loop. MCP-native from the chat (the primary path): `chit_start` with the task, scope, and the worktree as `cwd`, then `chit_next` once per iteration, checkpointing between. Or from a terminal:
 
    ```sh
    chit converge --task "<the slice>" --scope <stable-id> --cwd <worktree>
    ```
 
    Either way it loops implement and check to the reviewer's verdict (`proceed` converges, `block` stops, anything else revises and retries up to the budget, default 3; an unparseable verdict is treated as `block`, never an implicit proceed). It records the loop under chit's state dir (keyed by repo, not in the working tree) and audits each iteration by default.
-3. Inspect what happened: `chit_converge_trace` (or read the loop log), and open a transcript with `chit_audit_show` / `chit audit show <runId>` (the run id is on the iteration's `auditRef`). The transcript carries the prompts, outputs, live adapter events, usage, and the recorded per-participant config.
+3. Inspect what happened: `chit_trace` (or read the loop log), and open a transcript with `chit_audit_show` / `chit audit show <runId>` (the run id is on the iteration's `auditRef`). The transcript carries the prompts, outputs, live adapter events, usage, and the recorded per-participant config.
 4. Run the final gates yourself (see above). The reviewer could not.
 5. Checkpoint with the human. Push only on explicit approval.
 
-The `chit_converge_*` tools own the loop, so prefer them over driving raw `chit_run_start` / `chit_run_step` by hand for autonomous work. The stepwise tools are for the supervised single check, or for watching and cancelling one long handoff.
+`chit_start` and `chit_next` drive the loop; `chit_status` and `chit_trace` inspect it, and `chit_cancel` stops it. The same two tools run a non-loop manifest as a one-shot DAG pass when you want a plain run rather than the implement/review loop.
 
 ## Running unattended: jobs and batches
 
-Foreground converge (one `chit_converge_next` per iteration) keeps you in the loop on every round. When a slice is well-specified enough to leave alone, the same loop runs unattended:
+Foreground (one `chit_next` per iteration) keeps you in the loop on every round. When a slice is well-specified enough to leave alone, the same loop runs unattended:
 
-- **Background job.** `chit_converge_run` launches the converge loop in a detached worker against a git worktree and returns immediately. The worker survives an MCP reconnect. Check on it with `chit_job_status`, stop it with `chit_job_cancel` (intent-first: it records the cancel, then signals the worker), and read each iteration's receipt with the audit tools. One task, no babysitting.
-- **Batch.** `chit_batch_start` runs several converge tasks in parallel, one git worktree per task, as background jobs. (For a single unattended task, use `chit_converge_run`; don't launch several of those in one repo, since they share the working tree and collide. Batch exists precisely to isolate each task.) You hand it a reviewed task graph; each task declares the files it will touch (`claimedPaths`, so claim-overlapping tasks serialize rather than race) and optional `dependencies`. Dependencies are a launch gate, not integration: a task launches only once its dependencies reach `review_ready`, but its worktree branches from the batch base and does not contain their changes, so a task never sees another task's diff (merging is yours). To run a Codex implementer on a task, point its `manifestPath` at a swapped manifest like `examples/converge-codex-writer.json`. There is no daemon: progress happens only when you call `chit_batch_advance`, and `chit_batch_status` is read-only (follow its `nextAction`, not the per-task status, to drive the batch). The deliverable is a set of reviewable worktree branches; chit never auto-merges. If you lose a batch id, `chit_batch_list` recovers it. Retire the worktrees with `chit_batch_cleanup` (dry-run by default; it never deletes receipts).
+- **Background.** `chit_start` with `mode: "background"` launches the loop in a detached worker against a git worktree and returns immediately. The worker survives an MCP reconnect. Check on it with `chit_status`, stop it with `chit_cancel` (intent-first: it records the cancel, then signals the worker), and read each iteration's receipt with the audit tools. One task, no babysitting.
+- **Batch.** `chit_batch_start` runs several loop tasks in parallel, one git worktree per task, as background runs. (For a single unattended task, use `chit_start` with `mode: "background"`; don't launch several of those in one repo, since they share the working tree and collide. Batch exists precisely to isolate each task.) You hand it a reviewed task graph; each task declares the files it will touch (`claimedPaths`, so claim-overlapping tasks serialize rather than race) and optional `dependencies`. Dependencies are a launch gate, not integration: a task launches only once its dependencies reach `review_ready`, but its worktree branches from the batch base and does not contain their changes, so a task never sees another task's diff (merging is yours). To run a Codex implementer on a task, point its `manifestPath` at a swapped manifest like `examples/converge-codex-writer.json`. There is no daemon: progress happens only when you call `chit_batch_advance`, and `chit_batch_status` is read-only (follow its `nextAction`, not the per-task status, to drive the batch). The deliverable is a set of reviewable worktree branches; chit never auto-merges. If you lose a batch id, `chit_batch_list` recovers it. Retire the worktrees with `chit_batch_cleanup` (dry-run by default; it never deletes receipts).
 
 The orchestrator's job does not change in either mode: you still run the final gates yourself and push only on explicit approval. Unattended means chit does the writing and reviewing without you watching each round, not that the work merges itself.
 
@@ -64,4 +64,4 @@ The orchestrator's job does not change in either mode: you still run the final g
 - [Supervised convergence](/docs/supervised-convergence): the supervised pattern.
 - `examples/converge.json`: the autonomous loop manifest.
 - [Audit log](/docs/audit-log): reading transcripts with `chit audit`.
-- [MCP surface](/docs/mcp): the stepwise MCP surface and its one invariant.
+- [MCP surface](/docs/mcp): the run tools and the one invariant.

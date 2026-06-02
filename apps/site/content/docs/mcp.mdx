@@ -1,9 +1,19 @@
 ---
 title: MCP surface
-description: Run a chit manifest one step at a time inside a chat, with a heartbeat on each long step
+description: Start, advance, and inspect chit runs from inside a chat, with one run id and a heartbeat on each long step
 ---
 
-The MCP surface exposes chit inside a chat through two tool families. Stepwise manifest tools run a manifest one step at a time, with a live heartbeat on each long step. Converge tools drive the autonomous implement/review loop one iteration at a time. Each is the conversational counterpart to a CLI command that otherwise runs to completion in one shot (`chit run` and `chit converge`), so a model and the human watching it can drive and inspect it from the chat.
+The MCP surface is the primary way to operate chit. It runs the same runtime as the CLI, exposed as tools a model can call from inside Claude Code, so you and the model drive and inspect a run from the chat instead of a second terminal.
+
+The model is small and worth holding in your head:
+
+- A **chit** is a declared routine (a manifest). A **run** executes one chit.
+- A manifest's **policy** decides what a run is: **one-shot** (a single pass over the step DAG) or **loop** (a write-capable implementer and a read-only reviewer iterate until the reviewer says proceed, blocks, or the budget runs out).
+- A **mode** decides where the run lives: **foreground** (this chat supervises it, one unit per call) or **background** (a detached worker drives it to completion and it survives a reconnect).
+- A **batch** coordinates several background runs, one per git worktree.
+- **Audit** reads the receipts a run leaves behind.
+
+You hold one id: the **run_id** that `chit_start` returns. Everything else (`chit_next`, `chit_status`, `chit_trace`, `chit_cancel`) takes that id.
 
 Install the CLI, then register the MCP server with `chit mcp`:
 
@@ -12,95 +22,101 @@ bun install -g @chit-run/cli@latest
 claude mcp add chit --scope local -- chit mcp
 ```
 
-`chit mcp` runs the stdio MCP server from the installed `chit` binary (the same binary as `chit run`, `chit converge`, `chit audit`). Upgrade with the same command, `bun install -g @chit-run/cli@latest` (during 0.x, `bun update -g` will not cross a minor). From a source checkout the equivalent is `claude mcp add chit --scope local -- bun <repo>/apps/cli/src/cli/run.ts mcp`.
+`chit mcp` runs the stdio MCP server from the installed `chit` binary (the same binary as `chit run`, `chit audit`). Upgrade with the same command, `bun install -g @chit-run/cli@latest` (during 0.x, `bun update -g` will not cross a minor). From a source checkout the equivalent is `claude mcp add chit --scope local -- bun <repo>/apps/cli/src/cli/run.ts mcp`.
 
-Source: `apps/cli/src/surfaces/mcp/` (`server.ts` is the tools, `engine.ts` is the stepwise run engine, `converge-engine.ts` is the single-iteration converge driver).
+Source: `apps/cli/src/surfaces/mcp/` (`server.ts` registers the tools; `engine.ts` is the one-shot run engine; `converge-engine.ts` is the single-iteration loop driver; `controller.ts` resolves a run_id to its run).
 
 ## Execution model
 
 A run is a stepwise projection of a manifest DAG. chit, not the model, decides what is legal to run next.
 
-- **chit owns the order.** A step is ready only when every step in its `manifest.dependencies` is `done`. `chit_run_step` rejects anything else ("not ready; waiting on: X"). The model drives, but it cannot invent routing. There are no dynamic, model-decided handoffs; the static-DAG thesis holds.
-- **A step runs exactly once.** `chit_run_step` marks the record `running` synchronously before the first await, so a concurrent call on the same step is rejected ("already running"). On settle the record is terminal: `done | failed | cancelled`. Re-running a terminal step is refused.
+- **chit owns the order.** A step is ready only when every step in its `manifest.dependencies` is `done`. `chit_next` runs only ready steps. The model drives, but it cannot invent routing. There are no dynamic, model-decided handoffs; the static-DAG thesis holds.
+- **`chit_next` advances one unit and returns.** It never drains by surprise. For a one-shot run, one unit is the currently-ready wave (every step whose dependencies are met), or a single `step_id` if you name one. For a loop run, one unit is one implement-to-review iteration. To drive a foreground run to completion, call `chit_next` until it reports complete; to run unattended, start it with `mode: "background"`.
+- **A step runs exactly once.** A step marks itself `running` before its first await, so a concurrent advance on the same step is rejected. On settle the record is terminal: `done | failed | cancelled`.
 - **Completion is all-steps-done**, not just the output step. An independent pending or failed branch keeps the run incomplete.
-- **`chit_run_step` blocks** until its step settles. The heartbeat renders on that in-flight tool call, so a model turn is pinned for the step's whole duration.
-- **Sessions.** `per_scope` participants need a `scope`. `chit_run_start` rejects a `per_scope` manifest started without one rather than silently running stateless. Within a run, a `per_scope` participant resumes its own session across steps, so a later step can reference its own earlier output without it being re-passed.
+- **`chit_next` blocks** until its unit settles. The heartbeat renders on that in-flight tool call, so a model turn is pinned for the unit's whole duration.
+- **Sessions.** `per_scope` participants, and every loop run, need a `scope`. `chit_start` refuses a `per_scope` or loop run started without one rather than silently running stateless. Within a run, a `per_scope` participant resumes its own session across steps.
 
-## Tools
+### What the ids mean
 
-All results are JSON in a single text block. `describeRun` (embedded in most results) is `{ run_id, manifest, complete, ready[], output? }`, where each `ready` entry is `{ step, kind, participant?, agent?, session? }` and `output` is the final output (present only when `complete`).
+One public id, and it never shifts meaning.
 
-### chit_run_start
+- **run_id** is the only handle you pass. `chit_start` returns it; `chit_next` / `chit_status` / `chit_trace` / `chit_cancel` take it. For a foreground run it lives in this session's memory; for a background run it is the durable record's id, so it resolves after a reconnect.
+- **audit refs** are receipt ids. A run records one per audited step or iteration; they appear in `chit_trace` and `chit_status` output and you open them with `chit_audit_show`. A run is never its own audit ref.
+- **loop ids and job ids are internal.** They key the loop log and the durable job record on disk. chit never asks you for one and never returns one as a handle. If you see an id in a control or status result, it is the run_id.
 
-Start a run. Inputs: `manifest_path` (absolute, or relative to cwd), `inputs` (string to string map, default `{}`), `scope?`, `cwd?` (passed to agents; defaults to the server cwd), `allow_unenforced_permissions` (default `true`). Returns `describeRun` with the initial ready set. Errors: unreadable or invalid manifest, unknown agent, enforcement gap without the flag, `per_scope` without `scope`.
+### Foreground vs background
 
-### chit_run_next
+`mode` is a property of a run, not a different kind of run.
 
-List the steps ready to run next (or report completion). Input: `run_id`. Returns `describeRun`.
+- **Foreground** (default) means this chat supervises the run. You advance it one unit at a time with `chit_next` and watch each unit settle. A foreground run lives in memory: a new session starts with none, and an idle one is evicted after an hour. Use it when you want to review every unit.
+- **Background** means a detached worker drives the run to completion on its own while you keep working. Its state is durable (the job record, loop log, and audit transcripts are on disk), so you inspect or stop it from any later turn, and it survives an MCP reconnect. Use it when the task is scoped enough to run unattended. Poll with `chit_status`, stop with `chit_cancel`.
 
-### chit_run_step
+### One-shot vs loop
 
-Run one ready step, blocking until it settles; emits a heartbeat while it runs. Inputs: `run_id`, `step_id`. On success returns `{ ran, durationMs, step_output, ...describeRun }`. On cancellation returns `{ cancelled: true, step, durationMs, ...describeRun }` (a clean result, not an error). Rejects out-of-order, duplicate-running, or terminal steps.
+`policy` is a property of the manifest, declared once, that decides what a run does.
 
-### chit_run_cancel
+- **One-shot** (the default when a manifest declares no policy) is a single pass over the DAG. Each ready wave runs once; the run completes when every step is done. Pass `inputs`, not a `task`.
+- **Loop** is the converge pattern: an implementer step and a reviewer step run in turn, and chit reads the reviewer's verdict (`proceed | revise | block`) each round. `proceed` converges, `block` stops, an exhausted `max_iterations` budget stops as `max-iterations`. A loop run takes a `task` and a `scope`, not `inputs`. The bundled default loop is a write-capable Claude implementer and a read-only Codex reviewer; `chit_start` with a bare `task` uses it.
 
-Cancel a step that is currently running. Inputs: `run_id`, `step_id`. Aborts the step's registered controller, the adapter kills the agent's child process, and the step settles `cancelled` (terminal, blocks dependents). Returns `{ step, cancelled, reason?, ...describeRun }` where `cancelled` is `true` if it stopped a running step, else `reason` is `already_done` or `not_running`.
+## Start and advance a run
 
-### chit_run_trace
+All results are JSON in a single text block. Most embed a run view: `{ run_id, mode, execution, ... , nextAction }`, where `mode` is `foreground | background`, `execution` is `one-shot | loop | job`, and `nextAction` names the next tool to call.
 
-The transcript so far. Input: `run_id`. Returns `{ run_id, manifest, complete, trace[] }`, each trace entry `{ step, kind, participant, agent, status, durationMs, output, error }`.
+### chit_start
 
-## Converge tools
+Open a run and return its `run_id`. Inputs:
 
-The converge tools drive `chit converge` (a write-capable implementer slices the task, a read-only reviewer checks the diff) one iteration at a time, so each iteration is a separate, cancellable tool call and the loop is inspectable between calls. They sit on the same single-iteration primitive and write the same loop log (under chit's state dir, keyed by repo) as the CLI, so a loop driven over MCP is identical on disk to one driven by `chit converge`. The loop log is the durable state; the server keeps an idle-evicting in-memory session for the loop's run-time pieces, never a second source of truth for iterations.
+- `task?` - a slice to converge on with the built-in loop. A loop run requires it; omit it when `manifest_path` names a one-shot manifest.
+- `manifest_path?` - a manifest `.json` (absolute, or relative to `cwd`). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop.
+- `mode` - `foreground` (default) or `background`.
+- `scope?` - session scope id. Required for a loop run and for any `per_scope` manifest.
+- `cwd?` - repo / working dir (defaults to the server cwd; also where a loop log is written).
+- `inputs` - manifest inputs as string key/value pairs, default `{}` (one-shot runs).
+- `audit` - persist a full audit transcript (prompts/outputs/usage as blobs), default `false` since blobs can hold secrets. Background runs are always audited.
+- `max_iterations` - loop iteration budget, default `3` (loop runs only).
+- `allow_unenforced_permissions` - run even when a declared permission cannot be enforced (emits warnings), default `false` (such a manifest is otherwise refused).
 
-`describeConverge` (the control-plane view, embedded as `loop` in `chit_converge_next` and `chit_converge_cancel` results) is `{ loop_id, scope, cwd, task, max_iterations, iteration, status, active, cancellable, last_verdict?, last_decision?, failure?, audit_refs[], next_action }`, where `status` is `open | running | converged | blocked | max-iterations | cancelled` and `iteration` counts completed iterations.
+Returns the run view with the initial ready set (one-shot) or the open loop (loop). Errors: unreadable or invalid manifest, a one-shot manifest given a `task`, a loop run with no `scope`, unknown agent, enforcement gap without the flag.
 
-### chit_converge_start
+### chit_next
 
-Open a loop. Inputs: `task`, `scope`, `cwd?` (defaults to the server cwd; also where the loop log is written), `manifest_path?` (default: the built-in converge manifest), `max_iterations` (default 3), `loop_id?`, `force` (overwrite an existing log), `allow_unenforced_permissions` (default `false`). Audit is always on, so the loop records link to the audit transcript. Returns `describeConverge` (plus `warnings[]` for unenforced permissions). Errors mirror `chit converge`: unreadable or invalid manifest, non-converge shape, unknown agent, enforcement gap without the flag, existing log without `force`.
+Advance the run by one unit and return control; emits a heartbeat while the unit runs. Inputs: `run_id`, and `step_id?` (one-shot only: advance just that ready step instead of the whole ready wave).
 
-### chit_converge_next
+- One-shot: runs the ready wave (or the named step). Returns `{ ran[], ...run view }`, each `ran` entry `{ step, durationMs, output }` or `{ step, cancelled: true, durationMs }`. When nothing is ready, the run is complete.
+- Loop: runs one implement-to-review iteration. Returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, workspaceWarnings, usage?, auditRef?, stopStatus?, ...run view }`. A set `stopStatus` means the loop also stopped this round. A cancelled iteration returns `{ cancelled: true, iteration, ...run view }` and records a clean `cancelled` stop, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, ...run view }` and closes the loop `blocked`.
 
-Run exactly one implement to review iteration, blocking until it settles; emits a heartbeat while it runs. Input: `loop_id`. A normal iteration returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, workspaceWarnings, usage?, auditRunId?, stopStatus?, loop }` (`changedFiles` is the task-relevant diff; `workspaceWarnings` flags untracked generated artifacts left in the tree; `usage` is the iteration's token/cost when the adapters reported it). A set `stopStatus` means the loop also stopped this round: `proceed` converges, `block` blocks, exhausting the budget is `max-iterations`. A cancelled iteration returns `{ cancelled: true, iteration, loop }` and records a clean `cancelled` stop with no iteration record, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, loop }` and closes the loop `blocked`. It rejects a loop that already stopped or already has an iteration in flight (the loop log is single-writer).
+`chit_next` rejects a run that has already finished, and a loop that already has an iteration in flight (one advancer per loop; a foreground call and a background worker cannot advance the same loop at once).
 
-### chit_converge_status
+## Inspect and stop a run
 
-Compact control-plane view, answering "what should I do next?". Input: `loop_id`. Returns `describeConverge` from the in-memory session alone (no loop-log read), so it is cheap to poll.
+### chit_status
 
-### chit_converge_cancel
+Run status. With a `run_id`: that run's status, and whether it is foreground (supervised by this session) or a durable background run. With no `run_id`: the operator overview of what is active in this server now plus a compact list of recently finished runs (newest first). Read-only: it never sweeps or touches the in-memory stores, so polling never keeps a run alive. Inputs: `run_id?`, `recent_limit?` (overview only, default 5; 0 for none). Active foreground state is per-session; background runs and recent history are durable across reconnect.
 
-Cancel a loop. Input: `loop_id`. If an iteration is in flight, aborts it (it settles as a clean `cancelled` stop); if the loop is open but idle, closes it `cancelled` now; a loop that already stopped is reported back unchanged. Returns `{ cancel: { state }, loop }`, where `state` is `cancelling`, `closed`, or `already`.
+### chit_trace
 
-### chit_converge_trace
+The history of a run. Input: `run_id`. For a one-shot run, the step transcript: `{ run_id, execution: "one-shot", complete, trace[] }`, each entry `{ step, kind, participant, agent, status, durationMs, output, error }`. For a loop or background run, the iteration log read from the durable loop log: `{ run_id, execution, records[] }`, where `records` are the header, each iteration (summary, changed files, verdict, decision, usage, audit ref), and the stop record. Audit refs appear here; the run_id is the only handle. Read-only.
 
-Diagnostic history, answering "what happened?". Input: `loop_id`. Reads straight from the durable loop log (not a second source of truth) and adds the live state. Returns `{ loop_id, status, active, audit_refs[], records[] }`, where `records` are the loop-log records: the header, each iteration (summary, changed files, verdict, decision, usage, audit ref), and the stop record.
+### chit_cancel
 
-## Background jobs
+Cancel a run by `run_id`, foreground or background. Input: `run_id`.
 
-The converge tools above are foreground: one blocking iteration per call, so you checkpoint each round. A background **job** is the other mode: a detached worker advances the loop on its own while you keep working, and you inspect or stop it from any later turn. Use foreground converge when you want to review every iteration; use a job when the task is scoped enough to run unattended. A job's state is durable (it survives an MCP reconnect): the job record lives under the state dir, the iterations in the loop log, the transcripts in the audit store.
+- Foreground one-shot: aborts every running step; each settles `cancelled` (terminal, blocks dependents).
+- Foreground loop: if an iteration is in flight, aborts it (it settles as a clean `cancelled` stop); if the loop is open but idle, closes it `cancelled`.
+- Background: records the cancel intent first (so it survives a worker restart), then signals the worker's process group; the worker stops at the next safe point and records a clean `cancelled` stop.
 
-### chit_converge_run
+A run that already finished is reported back unchanged.
 
-Start a converge loop as a background job. Inputs: `task`, `scope`, `cwd?`, `manifest_path?`, `max_iterations?` (default 3), `loop_id?`, `force?`, `allow_unenforced_permissions?`. Validates the manifest synchronously, reserves the loop, spawns the detached worker, and returns immediately with `{ jobId, loopId, repo, state: "queued", nextAction, warnings? }`. v1 starts a NEW loop only: an existing `loop_id` is refused (continue a foreground loop with `chit_converge_next`, or pass `force: true` / a new `loop_id`).
+## Run several tasks in parallel
 
-### chit_job_status
+A **batch** runs several loop tasks in parallel, one per git worktree, as background runs. It is a thin coordinator: it plans a task graph, creates a worktree per task, and launches a background run per runnable task. It owns no execution and never auto-merges; the deliverable is a set of reviewable worktree branches. There is no daemon: progress happens only at explicit tool calls. Batch state is durable under the state dir, keyed by repo (not in the reviewed tree).
 
-Inspect one job. Input: `job_id`. Returns the job's `state` (`queued` / `running` / `completed` / `cancelled` / `failed`) plus a derived `stale` (a running job whose worker is gone or silent), the current `phase`, `iterationsCompleted`, `lastVerdict`, `stopStatus`, `auditRefs`, and the latest iteration's `changedFiles` / `workspaceWarnings` / `usage` (read from the loop log). For operating long jobs it also reports timing in milliseconds: `elapsedMs` (run duration), `lastHeartbeatAgeMs` (how long since the worker last beat, while in flight), and `phaseElapsedMs` (how long it has been in the current phase). Read-only.
-
-### chit_job_cancel
-
-Cancel a job from any turn. Input: `job_id`. Persists the cancel intent first (so it survives a worker restart), then signals the worker's process group. A queued job is cancelled before it starts; a running job stops at the next safe point and records a clean `cancelled` stop. A finished job is reported back unchanged. `chit_status` lists active and recent jobs alongside the in-memory runs.
-
-## Batches
-
-A **batch** runs several converge tasks in parallel, one per git worktree, as background jobs. It is a thin coordinator over the background jobs above: it plans a task graph, creates a worktree per task, and launches a `chit_converge_run` job per runnable task. It owns no execution and never auto-merges; the deliverable is a set of reviewable worktree branches. There is no daemon: progress happens only at explicit tool calls. Batch state is durable under the state dir, keyed by repo (not in the reviewed tree).
-
-You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPaths` (the files it will touch); tasks with overlapping claims never run concurrently (they serialize into later waves), so parallel tasks cannot race on the same files. A task may declare `dependencies` (task ids that must reach `review_ready` first). Dependencies are a **launch gate, not integration**: each task's worktree branches from the batch base (`base_branch`), so a dependent task starts from that base and does *not* receive its dependencies' changes. Use dependencies to order work; merging the resulting branches is yours. The converge manifest per task resolves as task `manifestPath` > batch `manifest_path` > the bundled default (a write-capable Claude implementer + read-only Codex reviewer). A batch can mix model pairs by pointing tasks at different manifests: e.g. a Codex-writer task using [`examples/converge-codex-writer.json`](https://github.com/caiopizzol/chit/blob/main/examples/converge-codex-writer.json) beside a default Claude-writer task.
+You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPaths` (the files it will touch); tasks with overlapping claims never run concurrently (they serialize into later waves), so parallel tasks cannot race on the same files. A task may declare `dependencies` (task ids that must reach `review_ready` first). Dependencies are a **launch gate, not integration**: each task's worktree branches from the batch base (`base_branch`), so a dependent task starts from that base and does *not* receive its dependencies' changes. Use dependencies to order work; merging the resulting branches is yours. The manifest per task resolves as task `manifestPath` > batch `manifest_path` > the bundled default (a write-capable Claude implementer and a read-only Codex reviewer). A batch can mix model pairs by pointing tasks at different manifests: e.g. a Codex-writer task using [`examples/converge-codex-writer.json`](https://github.com/caiopizzol/chit/blob/main/examples/converge-codex-writer.json) beside a default Claude-writer task.
 
 ### chit_batch_start
 
-Plan the graph, create worktrees + launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath?}`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the batch overview (see status).
+Plan the graph, create worktrees, launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{ id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath? }`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the batch overview (see status).
 
 ### chit_batch_list
 
@@ -108,48 +124,48 @@ List the batches in this repo, newest first: `id`, `status`, task count, how man
 
 ### chit_batch_status
 
-Read-only overview: each task's status, live job state/phase, branch/worktree path, changed files, audit refs, plus `runnableCount` and a `nextAction`. **Inspection is safe**: this never launches jobs, creates worktrees, or mutates state. Inputs: `batch_id`, `cwd?`.
+Read-only overview: each task's status, live run state/phase, branch/worktree path, changed files, audit refs, plus `runnableCount` and a `nextAction`. **Inspection is safe**: this never launches runs, creates worktrees, or mutates state. Inputs: `batch_id`, `cwd?`.
 
 ### chit_batch_advance
 
-The progression trigger. Reconciles finished jobs into task state (`converged` -> `review_ready`; `blocked` / `max-iterations` / failed / stale -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished job or runnable tasks. Inputs: `batch_id`, `cwd?`.
+The progression trigger. Reconciles finished runs into task state (`converged` -> `review_ready`; `blocked` / `max-iterations` / failed / stale -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished run or runnable tasks. Inputs: `batch_id`, `cwd?`.
 
 ### chit_batch_cancel
 
-Request cancellation of every active task job (intent-first, same safety as `chit_job_cancel`) and mark pending tasks cancelled. Running jobs settle cleanly in the background; worktrees are left in place for inspection. Inputs: `batch_id`, `cwd?`.
+Request cancellation of every active task run (intent-first, the same safety as `chit_cancel`) and mark pending tasks cancelled. Running runs settle cleanly in the background; worktrees are left in place for inspection. Inputs: `batch_id`, `cwd?`.
 
 ### chit_batch_cleanup
 
-Retire a batch's worktrees and branches once you are done reviewing them. **Safe by default**: with `confirm` omitted/false it is a DRY RUN that lists which worktrees/branches would be removed and which changed-file diffs that would discard, and removes nothing. With `confirm: true` it removes them (`git worktree remove --force` + `branch -D`). Refuses while any task is still running. **Never deletes the batch/job/loop/audit receipts** — those stay as durable history (it records `cleanedAt` on the batch). Inputs: `batch_id`, `confirm?` (default false), `cwd?`.
+Retire a batch's worktrees and branches once you are done reviewing them. **Safe by default**: with `confirm` omitted/false it is a DRY RUN that lists which worktrees/branches would be removed and which changed-file diffs that would discard, and removes nothing. With `confirm: true` it removes them (`git worktree remove --force` + `branch -D`). Refuses while any task is still running. **Never deletes the batch / run / audit receipts** - those stay as durable history (it records `cleanedAt` on the batch). Inputs: `batch_id`, `confirm?` (default false), `cwd?`.
 
-## Audit tools
+## Read receipts
 
-The audit tools read the local audit transcripts that audited runs write (`chit converge`, `chit run --audit`, MCP `chit_run_start audit:true`, and MCP converge), so a run's prompts, outputs, usage, and timeline are inspectable from the chat. Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
+The audit tools read the local transcripts that audited runs write: `chit run --audit`, an audited MCP run (`chit_start audit: true`), and every background run (always audited). Same reader as the CLI `chit audit list/show`. Read-only: a run with no `run.completed` event is reported `incomplete` with the reason from the timeline alone (an open call killed mid-flight, a failed step, or an abandoned run). Bodies are read only through blob refs a run's own events carry, never a caller-supplied path, so inspection can never serve an arbitrary file.
 
 ### chit_audit_list
 
-List audited runs, newest first. Input: `limit?`. Returns `{ runs[] }`, each run `{ runId, manifestId, surface, scope?, loopId?, iteration?, startedAt?, status, stepCount, usage?, openCall? }`, where `status` is the `run.completed` status or `incomplete`, and `openCall` (when present) names a step whose adapter call started but never completed (killed mid-call).
+List audited runs, newest first. Input: `limit?`. Returns `{ runs[] }`, each run `{ run_id, manifestId, surface, scope?, iteration?, startedAt?, status, stepCount, usage?, openCall? }`, where `status` is the `run.completed` status or `incomplete`, and `openCall` (when present) names a step whose adapter call started but never completed (killed mid-call).
 
 ### chit_audit_show
 
-Show one run. Inputs: `run_id`, `include_bodies` (default `false`). Returns `{ summary, incompleteReason?, participants?, timeline[] }`: the summary above, the reason when incomplete, the participant config recorded at start, and the structured event timeline. Prompt/output/event bodies are attached to their timeline entries (`input`/`output`/`raw`) only when `include_bodies` is true, since they can be large or hold secrets. Errors on an invalid or missing run id.
+Show one run. Inputs: `run_id`, `include_bodies` (default `false`), `verbose` (default `false`). Returns `{ summary, incompleteReason?, participants?, timeline[], note? }`: the summary above, the reason when incomplete, the participant config recorded at start, and the structured event timeline. Without `verbose` the timeline is a receipt (the raw per-call adapter events are hidden, and `note` says how many). Prompt/output/event bodies attach to their timeline entries (`input`/`output`/`raw`) only when `include_bodies` is true, since they can be large or hold secrets.
 
 ## Observability (heartbeat)
 
-While a call step runs, `chit_run_step` emits, every ~5s, both a progress notification (with `progressToken`) and a logging notification carrying the same latest-state text: `"<step> · <participant> (<agent>) still running · Ns elapsed"`. Claude Code renders the latest heartbeat live in the collapsed tool call; the full transcript is `chit_run_trace`.
+While a call step runs, `chit_next` emits, every ~5s, both a progress notification (with `progressToken`) and a logging notification carrying the same latest-state text. Claude Code renders the latest heartbeat live in the collapsed tool call; the full transcript is `chit_trace`.
 
-There is no within-step streaming of the agent's output to the MCP client. The heartbeat is latest-state text, not a token stream, and `chit_run_step` returns only the step's final output. On an audited run the adapter does capture the agent's live event stream as `adapter.event` records, but that feeds the [audit log](/docs/audit-log), not the MCP client.
+There is no within-step streaming of the agent's output to the MCP client. The heartbeat is latest-state text, not a token stream, and `chit_next` returns only the unit's final result. On an audited run the adapter does capture the agent's live event stream as `adapter.event` records, but that feeds the [audit log](/docs/audit-log), not the MCP client.
 
 ## Cancellation
 
-Cancellation has two reachable paths. The portable one is `chit_run_cancel`: `chit_run_step` owns an `AbortController` per run and step, registered for the whole call; `chit_run_cancel` aborts it, both adapters (`claude-cli`, `codex-exec`) kill their child process on abort and reject, and the engine discriminates on `signal.aborted` to settle the step `cancelled`. It is proven end-to-end against codex, where a concurrent `chit_run_cancel` killed an in-flight step in ~6s rather than the ~220s it would otherwise have taken. The second path is ambient: in Claude Code, pressing **Esc** during a blocking `chit_run_step` propagates request cancellation through the call's folded-in `extra.signal`, which aborts the same controller. A live probe confirmed this (a long codex step, Esc after the first heartbeat, settled `cancelled` "aborted by client" in ~5.4s, with no `chit_run_cancel` call). Esc behavior is client-specific, so `chit_run_cancel` stays the portable backup.
+Cancellation has two reachable paths. The portable one is `chit_cancel`: each in-flight unit owns an `AbortController` registered for the whole call; `chit_cancel` aborts it, both adapters (`claude-cli`, `codex-exec`) kill their child process on abort and reject, and the engine settles the unit `cancelled`. The second path is ambient: in Claude Code, pressing **Esc** during a blocking `chit_next` propagates request cancellation through the call's folded-in `extra.signal`, which aborts the same controller. A live probe confirmed a long codex step settling `cancelled` in ~5s on Esc, with no `chit_cancel` call. Esc behavior is client-specific, so `chit_cancel` stays the portable backup.
 
-`chit_converge_next` follows the same contract: it folds the request's `extra.signal` into the in-flight iteration's abort, so Esc (or `chit_converge_cancel`) cancels the running implement or review. A cancelled iteration records a clean `cancelled` stop with no iteration record, so the loop log never carries a fake-successful round.
+A cancelled loop iteration records a clean `cancelled` stop with no iteration record, so the loop log never carries a fake-successful round.
 
 ## Limits
 
-- Runs live in an in-memory store (`run-store.ts`). A server restart or reconnect loses them. The store is idle-evicting: a run untouched for more than 1h is dropped on the next `chit_run_start` sweep, unless it still has a `running` step (those are never evicted). Cleanup is opportunistic, so memory is bounded by future starts, not by wall-clock alone.
-- Converge sessions live in the same kind of in-memory store, idle-evicted on the next `chit_converge_start` sweep (a loop with an in-flight iteration is never evicted). The durable loop log persists regardless; only the in-memory session is dropped, after which `chit_converge_status` and `chit_converge_trace` no longer find that `loop_id`.
+- Foreground runs live in an in-memory store. A server restart or reconnect loses them. The store is idle-evicting: a run untouched for more than 1h is dropped on the next `chit_start` sweep, unless it still has work in flight (those are never evicted). A background run is durable and is not affected.
+- After a foreground run is evicted, `chit_status` / `chit_trace` no longer find that `run_id`. A background run's loop log and audit transcripts persist regardless.
 - `inputs` are string to string. `file[]` inputs are not expressible via MCP.
 - Concurrent `per_scope` steps would hit the session store's read-modify-write race, so keep same-scope steps serial.
 

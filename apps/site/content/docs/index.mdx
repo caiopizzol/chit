@@ -27,8 +27,8 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools,
 
 The same chit, three execution modes; you choose how much to watch.
 
-- **Foreground.** Checkpoint every iteration. chit runs one round at a time (`chit_converge_start` / `chit_converge_next`); you read the diff and the verdict, then advance.
-- **Background job.** Run one task unattended. `chit_converge_run` converges in a detached worker against a git worktree; check on it with `chit_job_status` and read the receipt.
+- **Foreground.** Checkpoint every iteration. chit runs one round at a time (`chit_start`, then `chit_next` per iteration); you read the diff and the verdict, then advance.
+- **Background.** Run one task unattended. `chit_start` with `mode: "background"` converges in a detached worker against a git worktree; check on it with `chit_status` and read the receipt.
 - **Batch.** Run several tasks in parallel, one worktree each, with declared dependencies. `chit_batch_start` coordinates the waves; the deliverable is a set of reviewable branches.
 
 ## Safety model
@@ -56,4 +56,4 @@ The same chit, three execution modes; you choose how much to watch.
 
 ## Status
 
-Early, and honest about it. The runtime, the CLI, the MCP surface (stepwise run, converge, background jobs, batches, and audit tools), the Claude Code skill, Studio in a source checkout, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.
+Early, and honest about it. The runtime, the CLI, the MCP surface (run tools, batch tools, and audit tools), the Claude Code skill, Studio in a source checkout, the convergence log, and the audit log are shipped. Declared human-checkpoint and loop steps inside manifests are not: manifests are static DAGs by design, and iteration lives in an orchestrator on top.

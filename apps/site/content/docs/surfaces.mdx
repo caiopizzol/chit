@@ -15,8 +15,8 @@ claude mcp add chit --scope local -- chit mcp
 
 Three tool groups:
 
-- **Stepwise manifest tools** run a chit one step at a time: `chit_run_start`, then `chit_run_step` per step, each with a live heartbeat.
-- **Converge tools** drive the autonomous implement/review loop one iteration at a time: `chit_converge_start`, `chit_converge_next`, with `chit_converge_status` / `chit_converge_cancel` / `chit_converge_trace`.
+- **Run tools** start and drive any run, with one `run_id` as the handle: `chit_start` opens it, `chit_next` advances one unit (a one-shot wave or a loop iteration, each with a live heartbeat), and `chit_status` / `chit_trace` / `chit_cancel` inspect and stop it.
+- **Batch tools** run several loop tasks in parallel, one git worktree each: `chit_batch_start`, `chit_batch_status`, `chit_batch_advance`, `chit_batch_list`, `chit_batch_cancel`, `chit_batch_cleanup`.
 - **Audit tools** read recorded transcripts: `chit_audit_list`, `chit_audit_show`.
 
 See [the MCP reference](/docs/mcp).

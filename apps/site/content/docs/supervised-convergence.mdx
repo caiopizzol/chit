@@ -28,16 +28,16 @@ One chit run is one turn of the loop. The `while` lives in the chat.
 Per iteration (default budget: 3):
 
 1. The chat implements one small, verifiable slice.
-2. The chat calls the advisor with `chit_run_start` using a stable `scope` per thread, `cwd` set to the repo, and inputs that describe the task plus what changed, then runs the review step with `chit_run_step`.
+2. The chat calls the advisor with `chit_start` (the advisor manifest is a one-shot) using a stable `scope` per thread, `cwd` set to the repo, and inputs that describe the task plus what changed, then advances the review step with `chit_next`.
 3. The chat decides on the `proceed | revise | block` verdict. `proceed` moves to the next slice (or stops if done); `revise` fixes and re-checks (verify each finding first, since Codex is not ground truth); `block` stops and surfaces to the human.
 
 Stop conditions: a `block`; an ambiguous product or design decision; failing tests needing a user choice; any destructive or outward-facing action; or max iterations.
 
-Supervised convergence is currently an operating pattern, not a packaged skill or bundled example. The stable primitive is the MCP stepwise tool set plus a human-driven loop.
+Supervised convergence is currently an operating pattern, not a packaged skill or bundled example. The stable primitive is the MCP run tools plus a human-driven loop.
 
 ## What this is not (and why)
 
-- Not the only mode. The autonomous loop also exists: the `converge` manifest (`examples/converge.json`) runs, by default, a write-capable `claude-cli` implementer plus a read-only `codex-exec` reviewer (the roles are manifest-assigned, not vendor-locked), driven from the MCP one iteration per `chit_run_start` while a human sequences and checkpoints (run under a worktree). Supervised convergence is the lighter-weight mode when you want this conversation's context to do the implementing; reach for the converge manifest (see [self-hosting](/docs/self-hosting)) when you want the agents to run it themselves. The real constraint is unchanged: manifests cannot loop, so the iteration is always driven by an orchestrator, never the manifest.
+- Not the only mode. The autonomous loop also exists: the `converge` manifest (`examples/converge.json`) runs, by default, a write-capable `claude-cli` implementer plus a read-only `codex-exec` reviewer (the roles are manifest-assigned, not vendor-locked), driven from the MCP one iteration at a time (`chit_start` then `chit_next`) while a human sequences and checkpoints (run under a worktree). Supervised convergence is the lighter-weight mode when you want this conversation's context to do the implementing; reach for the converge manifest (see [self-hosting](/docs/self-hosting)) when you want the agents to run it themselves. The real constraint is unchanged: manifests cannot loop, so the iteration is always driven by an orchestrator, never the manifest.
 - Not a manifest loop, conditional, or checkpoint step kind. That would break the static-DAG thesis; the chat loops and checkpoints for free.
 - Not a second headless Claude inside chit. That is weak, context-blind, and drifts from the chat.
 
@@ -49,4 +49,4 @@ Supervised convergence is currently an operating pattern, not a packaged skill o
 
 ## Platform note (others building on top)
 
-The substrate to build on is the [MCP stepwise tool set](/docs/mcp) (`chit_run_start`, `chit_run_next`, `chit_run_step`, `chit_run_cancel`, `chit_run_trace`) with one invariant: **chit governs the declared legal order and runs one bounded handoff to a result; the orchestrator owns the loop and the checkpoint.** Build loop policies (like this one) above that line, not inside the manifest.
+The substrate to build on is the [MCP run tools](/docs/mcp) (`chit_start`, `chit_next`, `chit_status`, `chit_cancel`, `chit_trace`) with one invariant: **chit governs the declared legal order and runs one bounded handoff to a result; the orchestrator owns the loop and the checkpoint.** Build loop policies (like this one) above that line, not inside the manifest.
