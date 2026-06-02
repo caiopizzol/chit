@@ -6,8 +6,8 @@ import type { LoopVerdict } from "@chit-run/core";
 import type { ConvergeExecute } from "../cli/converge.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import { JobStore } from "./store.ts";
-import type { LoopJobRecord } from "./types.ts";
-import { runJobWorker } from "./worker.ts";
+import type { LoopJobRecord, OneShotJobRecord } from "./types.ts";
+import { type JobWorkerDeps, runJobWorker } from "./worker.ts";
 
 let cwd: string;
 let stateDir: string;
@@ -239,5 +239,139 @@ describe("background worker: non-default loop policy steps (Stage 2)", () => {
 		if (it?.type !== "iteration") throw new Error("no iteration record");
 		expect(it.implementSummary).toContain("built the slice");
 		expect(it.checkDurationMs).toBe(555);
+	});
+});
+
+// A one-shot background job: a manifest run once to completion, no loop. Unlike a
+// loop job it reserves no loop (no startLoop) and the worker drives it via the
+// injected runOnce instead of resolveExecute.
+function seedOneShot(over: Partial<OneShotJobRecord> = {}): OneShotJobRecord {
+	const job = {
+		runId: "os1",
+		policy: "one-shot",
+		repoKey: "k",
+		cwd,
+		manifestPath: "/does/not/matter.json", // runOnce is injected, so never read
+		manifestId: "m",
+		inputs: {},
+		audit: true,
+		state: "queued",
+		createdAt: "2026-06-01T10:00:00.000Z",
+		auditRefs: [],
+		...over,
+	} as OneShotJobRecord;
+	store.create(job);
+	return job;
+}
+
+const oneShotDeps = (runOnce: NonNullable<JobWorkerDeps["runOnce"]>): JobWorkerDeps => ({
+	jobStore: store,
+	runOnce,
+	installSignalHandlers: false,
+	heartbeatMs: 1_000_000,
+	now: () => 1000,
+});
+
+describe("background one-shot worker", () => {
+	test("success -> completed, records the single audit ref", async () => {
+		seedOneShot();
+		let seenInputs: unknown;
+		await runJobWorker(
+			"os1",
+			oneShotDeps(async (job) => {
+				seenInputs = job.inputs;
+				return { ok: true, output: "done", auditRunId: "aud-1" };
+			}),
+		);
+		const job = store.get("os1");
+		expect(job).toMatchObject({ state: "completed", policy: "one-shot", auditRefs: ["aud-1"] });
+		expect(job?.phase).toBeUndefined(); // terminal: no live phase
+		expect(seenInputs).toEqual({}); // the persisted inputs are passed through
+	});
+
+	test("failure preserves the audit ref it produced", async () => {
+		seedOneShot();
+		await runJobWorker(
+			"os1",
+			oneShotDeps(async () => ({
+				ok: false,
+				error: "boom",
+				failedStep: "build",
+				auditRunId: "aud-x",
+			})),
+		);
+		expect(store.get("os1")).toMatchObject({
+			state: "failed",
+			failure: "boom",
+			auditRefs: ["aud-x"],
+		});
+	});
+
+	test("a persisted cancel before work -> cancelled, never runs", async () => {
+		seedOneShot();
+		store.update("os1", (c) => ({ ...c, cancelRequestedAt: "2026-06-01T10:05:00.000Z" }));
+		let called = false;
+		await runJobWorker(
+			"os1",
+			oneShotDeps(async () => {
+				called = true;
+				return { ok: true };
+			}),
+		);
+		expect(store.get("os1")?.state).toBe("cancelled");
+		expect(called).toBe(false); // the run is never started once a cancel is pending
+	});
+
+	test("never touches the loop lock (a one-shot run has no loop)", async () => {
+		seedOneShot();
+		// If runOneShotJob acquired a loop lock, this would throw and fail the run.
+		(store as unknown as { loopLockPath: () => string }).loopLockPath = () => {
+			throw new Error("one-shot must not acquire a loop lock");
+		};
+		await runJobWorker(
+			"os1",
+			oneShotDeps(async () => ({ ok: true, auditRunId: "aud-1" })),
+		);
+		expect(store.get("os1")?.state).toBe("completed");
+	});
+
+	test("a cancel persisted during the run -> cancelled even if the run reports ok", async () => {
+		seedOneShot();
+		await runJobWorker(
+			"os1",
+			oneShotDeps(async () => {
+				// A concurrent cancel lands mid-run (intent persisted, no signal in tests).
+				store.update("os1", (c) => ({ ...c, cancelRequestedAt: "2026-06-01T10:05:00.000Z" }));
+				return { ok: true, auditRunId: "aud-1" };
+			}),
+		);
+		const job = store.get("os1");
+		expect(job?.state).toBe("cancelled"); // intent-first: the cancel wins over ok
+		expect(job?.auditRefs).toEqual(["aud-1"]); // the transcript is still preserved
+	});
+
+	test("a throw while a cancel is pending settles cancelled, not failed", async () => {
+		seedOneShot();
+		await runJobWorker(
+			"os1",
+			oneShotDeps(async () => {
+				store.update("os1", (c) => ({ ...c, cancelRequestedAt: "2026-06-01T10:05:00.000Z" }));
+				throw new Error("aborted mid-run");
+			}),
+		);
+		expect(store.get("os1")?.state).toBe("cancelled");
+	});
+
+	test("a double-spawned worker cannot run the manifest twice (claim)", async () => {
+		seedOneShot();
+		let runs = 0;
+		const dep = oneShotDeps(async () => {
+			runs++;
+			return { ok: true, auditRunId: `aud-${runs}` };
+		});
+		await runJobWorker("os1", dep); // first worker claims queued->running and runs
+		await runJobWorker("os1", dep); // second sees non-queued, never runs
+		expect(runs).toBe(1);
+		expect(store.get("os1")?.state).toBe("completed");
 	});
 });

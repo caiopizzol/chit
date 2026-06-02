@@ -148,6 +148,29 @@ export class JobStore {
 		});
 	}
 
+	// Atomically apply `mutate` ONLY if the record is still `queued`, under the
+	// file lock. Returns true if THIS caller won the claim (the record was queued
+	// and is now written), false if it was already claimed, missing, or invalid.
+	// This is the serialization point for a worker that shares no other lock: a
+	// loop run is serialized by its loop lock, but a one-shot run has none, so two
+	// workers spawned for the same job must not both move it past `queued` and run
+	// the manifest twice.
+	claim(runId: string, mutate: (current: JobRecord) => JobRecord): boolean {
+		const path = this.path(runId);
+		return withFileLock(this.lockPath(runId), () => {
+			if (!existsSync(path)) return false;
+			let raw: unknown;
+			try {
+				raw = JSON.parse(readFileSync(path, "utf-8"));
+			} catch {
+				return false;
+			}
+			if (!isValidJobRecord(raw, runId) || raw.state !== "queued") return false;
+			writeAtomic(path, mutate(raw));
+			return true;
+		});
+	}
+
 	// All jobs, newest-created first. Skips any unreadable/corrupt file AND any
 	// stale pre-union record, so one bad file never breaks the operator overview.
 	list(): JobRecord[] {

@@ -90,6 +90,22 @@ describe("JobStore", () => {
 		expect(store.list()).toEqual([]);
 	});
 
+	test("claim wins on a queued job and applies the patch", () => {
+		store.create(rec("c1"));
+		expect(store.claim("c1", (c) => ({ ...c, state: "running" }))).toBe(true);
+		expect(store.get("c1")?.state).toBe("running");
+	});
+
+	test("claim loses on an already-claimed job and writes nothing", () => {
+		store.create(rec("c1", { state: "running" }));
+		expect(store.claim("c1", (c) => ({ ...c, state: "completed" }))).toBe(false);
+		expect(store.get("c1")?.state).toBe("running"); // unchanged
+	});
+
+	test("claim loses on a missing job", () => {
+		expect(store.claim("ghost", (c) => c)).toBe(false);
+	});
+
 	test("rejects an unsafe job id", () => {
 		expect(() => store.get("../evil")).toThrow(JobStoreError);
 		expect(() => store.create(rec("a/b"))).toThrow(JobStoreError);
