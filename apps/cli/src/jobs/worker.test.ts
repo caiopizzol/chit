@@ -255,6 +255,7 @@ function seedOneShot(over: Partial<OneShotJobRecord> = {}): OneShotJobRecord {
 		manifestId: "m",
 		inputs: {},
 		audit: true,
+		allowUnenforced: false,
 		state: "queued",
 		createdAt: "2026-06-01T10:00:00.000Z",
 		auditRefs: [],

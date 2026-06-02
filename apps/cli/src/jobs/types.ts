@@ -98,6 +98,12 @@ export interface OneShotJobRecord extends BaseJobRecord {
 	// inputs are stored here (as {} when empty), never reconstructed.
 	inputs: Record<string, unknown>;
 	audit: boolean;
+	// The enqueue-time allow-unenforced decision, persisted so the worker can
+	// RE-validate governance (unknown agents, enforcement gaps, per_scope scope) in
+	// its own process before running -- closing the window where the manifest file
+	// changes between enqueue and the detached run (the loop carries this for the
+	// same reason).
+	allowUnenforced: boolean;
 }
 
 export type JobRecord = LoopJobRecord | OneShotJobRecord;

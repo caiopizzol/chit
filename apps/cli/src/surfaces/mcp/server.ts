@@ -16,6 +16,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { type NormalizedManifest, parseManifest } from "@chit-run/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -44,10 +45,12 @@ import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.t
 import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore } from "../../jobs/store.ts";
-import type { JobRecord, LoopJobRecord } from "../../jobs/types.ts";
+import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey, repoRoot } from "../../loops/location.ts";
 import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
+import { validateOneShotAuth } from "../../runs/run-once.ts";
+import { prepareInputs } from "../../runtime/render.ts";
 import { type ResolvedRun, RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import {
@@ -703,6 +706,26 @@ function spawnJobWorker(jobId: string, cwd: string): void {
 		detached: true,
 		stdio: "ignore",
 	});
+	// spawn() can succeed synchronously but fail asynchronously (e.g. a bad cwd ->
+	// ENOENT after this returns). An unhandled 'error' would CRASH the server, and
+	// the job would sit queued forever. Catch it, mark the still-queued job failed so
+	// chit_status surfaces the failure instead of a phantom queued run.
+	child.once("error", (e) => {
+		try {
+			jobStore.update(jobId, (c) =>
+				c.state === "queued"
+					? {
+							...c,
+							state: "failed",
+							failure: `worker failed to start: ${e.message}`,
+							endedAt: new Date().toISOString(),
+						}
+					: c,
+			);
+		} catch {
+			// best effort; the job record may have been swept or already terminal
+		}
+	});
 	child.unref();
 }
 
@@ -736,7 +759,13 @@ function launchConvergeJob(p: {
 	} else {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
-	const prep = prepareConvergeExecute(raw, getRegistry(), p.scope, p.cwd, p.allowUnenforced);
+	let registry: ReturnType<typeof getRegistry>;
+	try {
+		registry = getRegistry();
+	} catch (e) {
+		return { ok: false, error: `could not load agent registry: ${(e as Error).message}` };
+	}
+	const prep = prepareConvergeExecute(raw, registry, p.scope, p.cwd, p.allowUnenforced);
 	if (!prep.ok) return { ok: false, error: prep.error };
 
 	const loopId = p.loopId ?? crypto.randomUUID();
@@ -796,6 +825,92 @@ function launchConvergeJob(p: {
 	// run_id == the durable record's runId. The return keeps the legacy `jobId`
 	// field name for the still-present old tools (Union-A); 4b switches to run_id.
 	return { ok: true, jobId: runId, loopId, warnings: prep.warnings };
+}
+
+// Launch one detached background ONE-SHOT job: a manifest run once to completion
+// (no loop). Validates exactly as startRun does for a foreground one-shot (unknown
+// agents, enforcement gaps, per_scope needs a scope, inputs match the schema), so a
+// background run is refused for the same reasons a foreground one is. Validation is
+// at enqueue: the worker re-reads the manifest and runs it via runManifestOnce but
+// does not re-validate, so a bad manifest is rejected here, synchronously, before a
+// detached worker is spawned. A one-shot run reserves no loop, so (unlike a loop
+// job) there is no loop log to close on failure.
+function launchOneShotJob(p: {
+	manifestPath: string; // absolute or relative to cwd (a one-shot run always names a manifest)
+	scope?: string;
+	cwd: string; // absolute
+	inputs: Record<string, unknown>;
+	audit: boolean;
+	allowUnenforced: boolean;
+}): { ok: true; jobId: string; warnings: string[] } | { ok: false; error: string } {
+	const manifestAbs = isAbsolute(p.manifestPath) ? p.manifestPath : resolve(p.cwd, p.manifestPath);
+	let manifest: NormalizedManifest;
+	try {
+		manifest = parseManifest(JSON.parse(readFileSync(manifestAbs, "utf-8")));
+	} catch (e) {
+		return {
+			ok: false,
+			error: `could not load manifest at ${manifestAbs}: ${(e as Error).message}`,
+		};
+	}
+
+	// A malformed agents.json throws from loadRegistry; return it as an error rather
+	// than letting it escape the tool handler (matches the foreground startRun path).
+	let registry: ReturnType<typeof getRegistry>;
+	try {
+		registry = getRegistry();
+	} catch (e) {
+		return { ok: false, error: `could not load agent registry: ${(e as Error).message}` };
+	}
+	// Governance gate (unknown agents, enforcement, per_scope scope), shared with the
+	// worker's re-validation. The same decision is persisted (allowUnenforced) so the
+	// worker re-checks in its own process.
+	const auth = validateOneShotAuth(manifest, registry, {
+		...(p.scope !== undefined && { scope: p.scope }),
+		allowUnenforced: p.allowUnenforced,
+	});
+	if (!auth.ok) return { ok: false, error: auth.error };
+	// Fail fast on bad inputs (unknown/missing/wrong-type), so a detached worker is
+	// not spawned only to fail; the worker re-prepares from the stored inputs.
+	try {
+		prepareInputs(manifest.inputs, p.inputs, p.cwd);
+	} catch (e) {
+		return { ok: false, error: (e as Error).message };
+	}
+
+	const runId = crypto.randomUUID();
+	const job: OneShotJobRecord = {
+		runId,
+		policy: "one-shot",
+		repoKey: repoKey(p.cwd),
+		cwd: p.cwd,
+		manifestPath: manifestAbs,
+		manifestId: manifest.id,
+		...(p.scope !== undefined && { scope: p.scope }),
+		inputs: p.inputs,
+		audit: p.audit,
+		allowUnenforced: p.allowUnenforced,
+		state: "queued",
+		createdAt: new Date().toISOString(),
+		auditRefs: [],
+	};
+	try {
+		jobStore.create(job);
+	} catch (e) {
+		return { ok: false, error: (e as Error).message };
+	}
+	try {
+		spawnJobWorker(runId, p.cwd);
+	} catch (e) {
+		jobStore.update(runId, (c) => ({
+			...c,
+			state: "failed",
+			failure: `could not spawn worker: ${(e as Error).message}`,
+			endedAt: new Date().toISOString(),
+		}));
+		return { ok: false, error: `could not spawn background worker: ${(e as Error).message}` };
+	}
+	return { ok: true, jobId: runId, warnings: auth.warnings };
 }
 
 server.registerTool(
@@ -1115,6 +1230,342 @@ export function backgroundRunView(job: JobRecord) {
 				: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history`,
 	};
 }
+
+// Open a run: the single public entry point. The manifest's policy decides the
+// kind (one-shot DAG vs converge loop); `mode` decides where it runs. `task` (no
+// manifest) converges on a slice with the built-in loop manifest.
+server.registerTool(
+	"chit_start",
+	{
+		description:
+			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), or `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge). mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: poll with chit_status, stop with chit_cancel. For SEVERAL tasks in parallel, use chit_batch_start (it isolates each in its own git worktree).",
+		inputSchema: {
+			task: z
+				.string()
+				.optional()
+				.describe(
+					"A slice to converge on, using the built-in loop manifest. A loop run requires it; omit when manifest_path names a one-shot manifest.",
+				),
+			manifest_path: z
+				.string()
+				.optional()
+				.describe(
+					"Path to a manifest .json (absolute or relative to cwd). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop.",
+				),
+			mode: z
+				.enum(["foreground", "background"])
+				.default("foreground")
+				.describe(
+					"foreground: this session supervises the run (advance with chit_next). background: a detached worker drives it to completion (poll with chit_status).",
+				),
+			scope: z
+				.string()
+				.optional()
+				.describe(
+					"Session scope id. Required for a loop run (both agents keep their thread across iterations) and for any per_scope manifest.",
+				),
+			cwd: z.string().optional().describe("Repo / working dir (defaults to the server cwd)."),
+			inputs: z
+				.record(z.string(), z.string())
+				.default({})
+				.describe("Manifest inputs as string key/value pairs (one-shot runs)."),
+			audit: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Persist a full audit transcript (prompts/outputs/usage as blobs). Off by default: blobs can contain secrets.",
+				),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.default(3)
+				.describe("Loop iteration budget (loop runs only). Default 3."),
+			allow_unenforced_permissions: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Run even when a declared permission cannot be enforced (emits warnings). Default off: such a manifest is refused.",
+				),
+		},
+	},
+	async ({
+		task,
+		manifest_path,
+		mode,
+		scope,
+		cwd,
+		inputs,
+		audit,
+		max_iterations,
+		allow_unenforced_permissions,
+	}) => {
+		if (!task && !manifest_path) {
+			return errorResult("provide `task` (to converge with the built-in loop) or `manifest_path`");
+		}
+		const runCwd = resolve(cwd ?? process.cwd());
+		// Read the manifest once to learn its policy; task-form uses the built-in loop
+		// manifest. Foreground paths reuse this raw; background launchers re-read it
+		// from the path (they store the absolute manifest_path on the job record).
+		let raw: unknown;
+		if (manifest_path) {
+			const path = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
+			try {
+				raw = JSON.parse(readFileSync(path, "utf-8"));
+			} catch (e) {
+				return errorResult(`could not read manifest at ${path}: ${(e as Error).message}`);
+			}
+		} else {
+			raw = DEFAULT_CONVERGE_MANIFEST;
+		}
+		let manifest: NormalizedManifest;
+		try {
+			manifest = parseManifest(raw);
+		} catch (e) {
+			return errorResult(`invalid manifest: ${(e as Error).message}`);
+		}
+
+		if (manifest.policy.kind === "loop") {
+			if (!task) return errorResult("a loop run needs a `task` to converge on");
+			if (scope === undefined) {
+				return errorResult(
+					"a loop run needs a `scope` (both agents keep their thread across iterations)",
+				);
+			}
+			if (mode === "background") {
+				const r = launchConvergeJob({
+					task,
+					scope,
+					cwd: runCwd,
+					...(manifest_path !== undefined && { manifestPath: manifest_path }),
+					maxIterations: max_iterations,
+					allowUnenforced: allow_unenforced_permissions,
+				});
+				if (!r.ok) return errorResult(r.error);
+				const resolved = runController.resolve(r.jobId, Date.now());
+				if (!resolved) return errorResult(`run ${r.jobId} vanished after launch`);
+				return jsonResult({
+					...unifiedRunView(resolved),
+					...(r.warnings.length > 0 && { warnings: r.warnings }),
+				});
+			}
+			runController.sweepLoops(Date.now());
+			const prep = prepareConvergeExecute(
+				raw,
+				getRegistry(),
+				scope,
+				runCwd,
+				allow_unenforced_permissions,
+			);
+			if (!prep.ok) return errorResult(prep.error);
+			let session: ReturnType<typeof startConvergeSession>;
+			try {
+				session = startConvergeSession({
+					cwd: runCwd,
+					scope,
+					task,
+					maxIterations: max_iterations,
+					force: false,
+					execute: prep.execute,
+					loopSteps: prep.loopSteps,
+				});
+			} catch (e) {
+				return errorResult((e as Error).message);
+			}
+			runController.registerLoop(session, Date.now());
+			return jsonResult({
+				...loopRunView(session),
+				...(prep.warnings.length > 0 && { warnings: prep.warnings }),
+			});
+		}
+
+		// One-shot: a single DAG pass over a manifest. It takes inputs, not a task,
+		// and is never the task-form (the built-in default manifest is a loop).
+		if (task) {
+			return errorResult("a one-shot manifest does not take a `task`; pass `inputs` instead");
+		}
+		if (!manifest_path) return errorResult("a one-shot run needs a `manifest_path`");
+		if (mode === "background") {
+			const r = launchOneShotJob({
+				manifestPath: manifest_path,
+				...(scope !== undefined && { scope }),
+				cwd: runCwd,
+				inputs,
+				audit,
+				allowUnenforced: allow_unenforced_permissions,
+			});
+			if (!r.ok) return errorResult(r.error);
+			const resolved = runController.resolve(r.jobId, Date.now());
+			if (!resolved) return errorResult(`run ${r.jobId} vanished after launch`);
+			return jsonResult({
+				...unifiedRunView(resolved),
+				...(r.warnings.length > 0 && { warnings: r.warnings }),
+			});
+		}
+		runController.sweepOneShot(Date.now());
+		let run: Run;
+		try {
+			run = startRun(crypto.randomUUID(), {
+				rawManifest: raw,
+				inputs,
+				registry: getRegistry(),
+				...(scope !== undefined && { scope }),
+				invocationCwd: runCwd,
+				allowUnenforcedPermissions: allow_unenforced_permissions,
+				audit,
+			});
+		} catch (e) {
+			return errorResult((e as Error).message);
+		}
+		runController.registerOneShot(run, Date.now());
+		return jsonResult(oneShotRunView(run));
+	},
+);
+
+// Advance a run by ONE unit and return control. One-shot: run the ready wave (or a
+// single step); loop: one iteration. Never drains by surprise.
+server.registerTool(
+	"chit_next",
+	{
+		description:
+			"Advance a run by ONE unit and return control (never drains). A one-shot run runs the currently-ready WAVE -- every step whose dependencies are met -- or a single `step_id` if given; when nothing is ready the run is complete. A loop run runs one implement->review iteration. Pressing Esc (or chit_cancel) cancels the in-flight unit and settles it cleanly. Inputs: run_id, optional step_id (one-shot only). To drive a run to completion, call chit_next until it reports complete, or start it with mode background.",
+		inputSchema: {
+			run_id: z.string().describe("A run id (from chit_start)"),
+			step_id: z
+				.string()
+				.optional()
+				.describe(
+					"One-shot runs only: advance just this ready step instead of the whole ready wave.",
+				),
+		},
+	},
+	async ({ run_id, step_id }, extra) => {
+		const now = Date.now();
+		let progress = 0;
+		const progressToken = extra._meta?.progressToken;
+		const heartbeat = (message: string) => {
+			progress++;
+			if (progressToken !== undefined) {
+				void extra
+					.sendNotification({
+						method: "notifications/progress",
+						params: { progressToken, progress, message },
+					})
+					.catch(() => {});
+			}
+			void server
+				.sendLoggingMessage({ level: "info", data: message, logger: "chit" })
+				.catch(() => {});
+		};
+
+		// One-shot: run the currently-ready wave (or a single step). The steps in a
+		// ready wave have no dependency on each other, so they run concurrently (as
+		// executeManifest does per level); each gets its own controller (keyed
+		// run_id:step in `controllers`) with the client's Esc folded in, so chit_cancel
+		// and Esc can reach an in-flight step.
+		const run = runController.getOneShot(run_id, now);
+		if (run) {
+			if (isComplete(run)) {
+				return jsonResult({ ...oneShotRunView(run), note: "run already complete" });
+			}
+			const ready = readySteps(run);
+			if (step_id !== undefined && !ready.includes(step_id)) {
+				return errorResult(`step "${step_id}" is not ready (ready: ${ready.join(", ") || "none"})`);
+			}
+			const wave = step_id !== undefined ? [step_id] : ready;
+			if (wave.length === 0) return jsonResult(oneShotRunView(run));
+			try {
+				const ran = await Promise.all(
+					wave.map(async (sid) => {
+						const controller = new AbortController();
+						extra.signal.addEventListener("abort", () => controller.abort(), { once: true });
+						heartbeat(`${sid} · starting`);
+						try {
+							const rec = await runStep(run, sid, heartbeat, controller, controllers);
+							heartbeat(`${sid} · done in ${rec.durationMs}ms`);
+							return { step: sid, durationMs: rec.durationMs, output: rec.output };
+						} catch (e) {
+							const r = run.records[sid];
+							if (r?.status === "cancelled") {
+								return { step: sid, cancelled: true as const, durationMs: r.durationMs };
+							}
+							return { step: sid, error: (e as Error).message };
+						}
+					}),
+				);
+				return jsonResult({ ran, ...oneShotRunView(run) });
+			} finally {
+				// Refresh the idle timer after the wave settles (a multi-minute step's
+				// touch-on-lookup is stale), so a concurrent start sweep does not evict it.
+				runController.touchOneShot(run_id, now);
+			}
+		}
+
+		// Loop: run exactly one implement->review iteration. Hold the per-loop lock
+		// for the iteration so a background worker on the same loop cannot advance it
+		// concurrently (one advancer per loop).
+		const session = runController.getLoop(run_id, now);
+		if (session) {
+			let loopLock: ReturnType<typeof acquireLock>;
+			try {
+				loopLock = acquireLock(jobStore.loopLockPath(run_id), { retryMs: 50, maxAttempts: 4 });
+			} catch (e) {
+				if (e instanceof LockError) {
+					return errorResult(
+						`run "${run_id}" is being advanced by a background job; stop it with chit_cancel or wait, then retry`,
+					);
+				}
+				throw e;
+			}
+			heartbeat(`${run_id} · iteration ${session.iteration + 1} · starting`);
+			try {
+				const result = await runNextIteration(session, extra.signal);
+				if (result.kind === "cancelled") {
+					heartbeat(`${run_id} · iteration ${result.iteration} · cancelled`);
+					return jsonResult({
+						cancelled: true,
+						iteration: result.iteration,
+						...loopRunView(session),
+					});
+				}
+				if (result.kind === "failed") {
+					heartbeat(`${run_id} · iteration ${result.iteration} · failed`);
+					return jsonResult({
+						failed: true,
+						iteration: result.iteration,
+						failure: result.failure,
+						...loopRunView(session),
+					});
+				}
+				heartbeat(
+					`${run_id} · iteration ${result.iteration} · ${result.verdict}${
+						result.stopStatus ? ` · ${result.stopStatus}` : ""
+					}`,
+				);
+				return jsonResult({
+					iteration: result.iteration,
+					verdict: result.verdict,
+					decision: result.decision,
+					findingCount: result.findingCount,
+					checksRun: result.checksRun,
+					changedFiles: result.changedFiles,
+					workspaceWarnings: result.workspaceWarnings,
+					...(result.usage && { usage: result.usage }),
+					...(result.auditRunId && { auditRunId: result.auditRunId }),
+					...(result.stopStatus && { stopStatus: result.stopStatus }),
+					...loopRunView(session),
+				});
+			} catch (e) {
+				return errorResult((e as Error).message);
+			} finally {
+				releaseLock(loopLock);
+				runController.touchLoop(run_id, now);
+			}
+		}
+
+		return errorResult(`unknown run_id ${run_id}`);
+	},
+);
 
 // The history of any run: a one-shot's step transcript, or a loop/background
 // run's durable loop log. Read-only.

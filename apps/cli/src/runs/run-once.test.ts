@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type NormalizedRegistry, parseManifest } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import type { AdapterCallRequest, AdapterMap } from "../runtime/types.ts";
-import { runManifestOnce } from "./run-once.ts";
+import { runManifestOnce, validateOneShotAuth } from "./run-once.ts";
 
 // A minimal one-shot manifest: two parallel call steps + a format step, so a run
 // exercises a real DAG. No declared policy -> one-shot (a single pass).
@@ -118,5 +118,43 @@ describe("runManifestOnce", () => {
 		expect(r.ok).toBe(true);
 		// Exactly the two call steps ran once each (the format step makes no call).
 		expect(calls).toBe(2);
+	});
+});
+
+describe("validateOneShotAuth", () => {
+	// A registry where the manifest's agent resolves (echo present). The empty
+	// REGISTRY above makes every agent unknown, which is the rejection case.
+	const KNOWN = { agents: { echo: {} } } as unknown as NormalizedRegistry;
+	const SCOPED = parseManifest({
+		schema: 1,
+		id: "scoped-run",
+		description: "scoped run",
+		inputs: { q: { type: "string" } },
+		participants: { e: { agent: "echo", role: "echo back", session: "per_scope" } },
+		steps: { a: { call: "e", prompt: "{{ inputs.q }}" } },
+		output: "a",
+	});
+
+	test("rejects an unknown agent", () => {
+		const r = validateOneShotAuth(MANIFEST, REGISTRY, { allowUnenforced: false });
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("unknown agent");
+	});
+
+	test("refuses an unenforceable permission unless allowed, then warns", () => {
+		// The fake echo agent has no enforcing adapter, so the manifest's default
+		// read_only filesystem permission is an enforcement gap.
+		const refused = validateOneShotAuth(MANIFEST, KNOWN, { allowUnenforced: false });
+		expect(refused.ok).toBe(false);
+		if (!refused.ok) expect(refused.error).toContain("cannot enforce");
+		const allowed = validateOneShotAuth(MANIFEST, KNOWN, { allowUnenforced: true });
+		expect(allowed.ok).toBe(true);
+		if (allowed.ok) expect(allowed.warnings.length).toBeGreaterThan(0);
+	});
+
+	test("a per_scope manifest requires a scope", () => {
+		// allowUnenforced so the enforcement gap does not mask the scope check.
+		expect(validateOneShotAuth(SCOPED, KNOWN, { allowUnenforced: true }).ok).toBe(false);
+		expect(validateOneShotAuth(SCOPED, KNOWN, { scope: "s", allowUnenforced: true }).ok).toBe(true);
 	});
 });

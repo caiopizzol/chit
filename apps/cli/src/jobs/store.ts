@@ -75,7 +75,8 @@ function isValidJobRecord(raw: unknown, expectedRunId?: string): raw is JobRecor
 		typeof r.manifestId === "string" &&
 		typeof r.inputs === "object" &&
 		r.inputs !== null &&
-		typeof r.audit === "boolean"
+		typeof r.audit === "boolean" &&
+		typeof r.allowUnenforced === "boolean"
 	);
 }
 

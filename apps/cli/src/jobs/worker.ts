@@ -30,7 +30,7 @@ import {
 } from "../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
 import { stopLoop } from "../loops/log-store.ts";
-import { type RunOnceResult, runManifestOnce } from "../runs/run-once.ts";
+import { type RunOnceResult, runManifestOnce, validateOneShotAuth } from "../runs/run-once.ts";
 import type { TraceEvent } from "../runtime/types.ts";
 import { acquireLock, LockError, type LockOptions, releaseLock } from "./lock.ts";
 import type { JobStore } from "./store.ts";
@@ -438,6 +438,14 @@ async function defaultRunOnce(
 	} catch (e) {
 		return { ok: false, error: `could not load manifest at ${path}: ${(e as Error).message}` };
 	}
+	// Re-validate governance in this process. launchRun validated at enqueue, but
+	// the manifest file may have changed since; re-run the same checks (with the
+	// persisted allow-unenforced decision) so a now-invalid manifest cannot run.
+	const auth = validateOneShotAuth(manifest, loadRegistry(), {
+		...(job.scope !== undefined && { scope: job.scope }),
+		allowUnenforced: job.allowUnenforced,
+	});
+	if (!auth.ok) return { ok: false, error: auth.error };
 	return runManifestOnce(manifest, {
 		inputs: job.inputs,
 		registry: loadRegistry(),

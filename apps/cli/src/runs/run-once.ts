@@ -1,5 +1,7 @@
 import {
 	type AuditSurface,
+	findEnforcementGaps,
+	findUnknownAgents,
 	type NormalizedManifest,
 	type NormalizedRegistry,
 	resolveParticipantSnapshots,
@@ -41,6 +43,51 @@ export interface RunOnceResult {
 	// The audit run id, present ONLY when audit was on AND every audit write
 	// succeeded, so it always points at a complete, readable transcript.
 	auditRunId?: string;
+}
+
+// Governance validation for a one-shot run, shared by the enqueue path (launchRun)
+// and the background worker, which RE-runs it before executing so a manifest that
+// changed between enqueue and the detached run cannot slip past the checks a
+// foreground run enforces. Mirrors startRun's gate: every agent resolves, every
+// declared permission is enforceable (unless explicitly allowed), and a per_scope
+// manifest has a scope. Input validation is NOT here -- executeManifest re-validates
+// inputs on every run. On success, returns the unenforced-permission warnings (only
+// non-empty when gaps exist AND were allowed).
+export function validateOneShotAuth(
+	manifest: NormalizedManifest,
+	registry: NormalizedRegistry,
+	opts: { scope?: string; allowUnenforced: boolean },
+): { ok: true; warnings: string[] } | { ok: false; error: string } {
+	const unknown = findUnknownAgents(manifest, registry);
+	if (unknown.length > 0) {
+		return {
+			ok: false,
+			error: `unknown agent(s): ${unknown
+				.map((u) => `${u.agentId} (participant "${u.participantId}")`)
+				.join(", ")}`,
+		};
+	}
+	const gaps = findEnforcementGaps(manifest, registry);
+	if (gaps.length > 0 && !opts.allowUnenforced) {
+		return {
+			ok: false,
+			error: `cannot enforce permissions for ${gaps
+				.map((g) => `${g.participantId}:${g.permission}`)
+				.join(", ")}; pass allow_unenforced_permissions=true`,
+		};
+	}
+	const needsScope = Object.values(manifest.participants).some((p) => p.session === "per_scope");
+	if (needsScope && opts.scope === undefined) {
+		return {
+			ok: false,
+			error: `manifest "${manifest.id}" has per_scope participant(s); a scope is required`,
+		};
+	}
+	const warnings = gaps.map(
+		(g) =>
+			`participant "${g.participantId}" (agent "${g.agentId}") requires ${g.permission}, but its adapter cannot enforce it`,
+	);
+	return { ok: true, warnings };
 }
 
 // Run a manifest ONCE to completion (a single DAG pass via executeManifest) with
