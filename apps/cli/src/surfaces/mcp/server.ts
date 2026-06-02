@@ -48,9 +48,10 @@ import type { JobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey, repoRoot } from "../../loops/location.ts";
 import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
-import { RunController } from "./controller.ts";
+import { type ResolvedRun, RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import {
+	type ConvergeSession,
 	cancelConverge,
 	describeConverge,
 	runNextIteration,
@@ -657,20 +658,29 @@ server.registerTool(
 	"chit_status",
 	{
 		description:
-			"Operator overview: the stepwise runs and converge loops live in THIS server right now (each loop with its status and next action), plus a compact list of recently audited runs (newest first). Read-only; answers 'what is active and what should I do next?'. Active state is per-session (a new session starts empty, and idle runs are evicted); recent state is durable. Drill into one item with chit_converge_status/chit_run_trace, or chit_audit_show for a run's receipt.",
+			"Run status. With a run_id: that run's status, whether it is foreground (supervised by this session) or a durable background run. With no run_id: the operator overview of what is active in this server now plus a compact list of recently finished runs (newest first). Read-only. Active foreground state is per-session (a new session starts empty, idle runs are evicted); background runs and recent history are durable across reconnect. Drill into history with chit_trace; open a receipt with chit_audit_show.",
 		inputSchema: {
+			run_id: z
+				.string()
+				.optional()
+				.describe("A run id (from chit_start). Omit for the operator overview."),
 			recent_limit: z
 				.number()
 				.int()
 				.min(0)
 				.default(5)
 				.describe(
-					"How many recently audited runs to include (newest first). Default 5; 0 for none.",
+					"Overview only: how many recently finished runs to include (newest first). Default 5; 0 for none.",
 				),
 		},
 	},
-	async ({ recent_limit }) => {
-		return jsonResult(buildStatus(runController, auditStore, jobStore, recent_limit, Date.now()));
+	async ({ run_id, recent_limit }) => {
+		if (run_id === undefined) {
+			return jsonResult(buildStatus(runController, auditStore, jobStore, recent_limit, Date.now()));
+		}
+		const resolved = runController.resolve(run_id, Date.now());
+		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
+		return jsonResult(unifiedRunView(resolved));
 	},
 );
 
@@ -993,6 +1003,180 @@ server.registerTool(
 			cancelRequested: true,
 			signaled: r.signaled,
 			note: "cancellation requested; the worker stops at the next safe point and records a clean cancelled stop",
+		});
+	},
+);
+
+// --- unified run surface (run_id) -----------------------------------------
+//
+// One public id and one vocabulary over every run: chit_start opens a run,
+// chit_next advances it, chit_status / chit_trace inspect it, chit_cancel stops
+// it. A run is foreground (supervised by this session: a one-shot DAG run or a
+// converge loop) or background (a durable job). These views present ONLY run_id
+// and the unified verbs; the internal loop/job ids never appear as a handle.
+
+// The per-run status view for chit_status({run_id}). Dispatches on where the run
+// lives, re-presenting the existing per-kind describe* state under run_id.
+export function unifiedRunView(resolved: ResolvedRun) {
+	if (resolved.mode === "background") return backgroundRunView(resolved.job);
+	return resolved.run.kind === "one-shot"
+		? oneShotRunView(resolved.run.run)
+		: loopRunView(resolved.run.session);
+}
+
+export function oneShotRunView(run: Run) {
+	const complete = isComplete(run);
+	return {
+		run_id: run.runId,
+		mode: "foreground" as const,
+		execution: "one-shot" as const,
+		manifest: run.manifest.id,
+		complete,
+		ready: complete ? [] : readySummary(run),
+		output: complete ? finalOutput(run) : undefined,
+		audit: run.recorder && run.recorder.lastError === undefined ? { run_id: run.runId } : undefined,
+		nextAction: complete
+			? `complete; chit_trace "${run.runId}" for the transcript`
+			: `chit_next "${run.runId}" to run the next ready step(s); chit_cancel "${run.runId}" to stop`,
+	};
+}
+
+export function loopRunView(session: ConvergeSession) {
+	const status = session.terminalStatus ?? (session.active ? "running" : "open");
+	const stopped = session.terminalStatus !== undefined;
+	const nextAction = stopped
+		? `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
+		: session.active
+			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
+			: `chit_next "${session.loopId}" to run the next iteration; chit_cancel "${session.loopId}" to stop`;
+	return {
+		run_id: session.loopId,
+		mode: "foreground" as const,
+		execution: "loop" as const,
+		status,
+		iterationsCompleted: session.iteration,
+		cancellable: !stopped,
+		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
+		...(session.lastDecision !== undefined && { lastDecision: session.lastDecision }),
+		...(session.failure !== undefined && { failure: session.failure }),
+		auditRefs: session.auditRefs,
+		nextAction,
+	};
+}
+
+// A durable background run, re-presented from describeJob under run_id with the
+// unified verbs. Drops the jobId/loopId handles and the job-tool nextAction prose.
+export function backgroundRunView(job: JobRecord) {
+	const dj = describeJob(job);
+	const { jobId, loopId, nextAction, ...rest } = dj;
+	void jobId;
+	void loopId;
+	void nextAction;
+	const live = dj.display === "running" || dj.display === "queued";
+	return {
+		run_id: job.jobId,
+		mode: "background" as const,
+		execution: "job" as const,
+		...rest,
+		nextAction: live
+			? `running in the background; chit_status "${job.jobId}" to poll, chit_cancel "${job.jobId}" to stop`
+			: dj.display === "stale"
+				? `worker appears dead; chit_trace "${job.jobId}" for what it recorded, then start a fresh run`
+				: `${dj.display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; chit_trace "${job.jobId}" for the history`,
+	};
+}
+
+// The history of any run: a one-shot's step transcript, or a loop/background
+// run's durable loop log. Read-only.
+server.registerTool(
+	"chit_trace",
+	{
+		description:
+			"The history of a run: a one-shot run's step transcript, or a loop/background run's iteration log (each iteration's summary, changed files, verdict, usage, and audit ref). Read-only. Inputs: run_id.",
+		inputSchema: {
+			run_id: z.string().describe("A run id (from chit_start)"),
+		},
+	},
+	async ({ run_id }) => {
+		const resolved = runController.resolve(run_id, Date.now());
+		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
+		if (resolved.mode === "background") {
+			const job = resolved.job;
+			let records: unknown[] = [];
+			try {
+				records = readLoop(job.cwd, job.loopId);
+			} catch {
+				// loop log not readable yet (worker still starting) or removed
+			}
+			return jsonResult({ run_id, execution: "job", records });
+		}
+		if (resolved.run.kind === "loop") {
+			const session = resolved.run.session;
+			try {
+				return jsonResult({ run_id, execution: "loop", ...traceConverge(session) });
+			} catch (e) {
+				return errorResult((e as Error).message);
+			}
+		}
+		const run = resolved.run.run;
+		const trace = run.manifest.executionOrder.flat().map((id) => {
+			const r = run.records[id];
+			return {
+				step: id,
+				kind: r?.kind,
+				participant: r?.participantId,
+				agent: r?.agentId,
+				status: r?.status,
+				durationMs: r?.durationMs,
+				output: r?.output,
+				error: r?.error,
+			};
+		});
+		return jsonResult({ run_id, execution: "one-shot", complete: isComplete(run), trace });
+	},
+);
+
+// Cancel any run by run_id: a foreground one-shot's running step(s), a foreground
+// loop's in-flight iteration, or a background run's worker (intent-first).
+server.registerTool(
+	"chit_cancel",
+	{
+		description:
+			"Cancel a run by run_id, whether foreground or background. A foreground run's running step(s) or in-flight iteration abort and settle cancelled; a background run records the cancel intent (surviving a worker restart) then signals its worker, which stops at the next safe point. A run that already finished is reported back unchanged. Inputs: run_id.",
+		inputSchema: {
+			run_id: z.string().describe("A run id (from chit_start)"),
+		},
+	},
+	async ({ run_id }) => {
+		const resolved = runController.resolve(run_id, Date.now());
+		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
+		if (resolved.mode === "background") {
+			const r = requestJobCancel(run_id);
+			if (r.status === "terminal") {
+				return jsonResult({ run_id, cancelled: false, note: `run already ${r.state}` });
+			}
+			return jsonResult({
+				run_id,
+				cancelRequested: true,
+				signaled: r.status === "requested" && r.signaled,
+				note: "cancellation requested; the worker stops at the next safe point and records a clean cancelled stop",
+			});
+		}
+		if (resolved.run.kind === "loop") {
+			const cancel = cancelConverge(resolved.run.session);
+			return jsonResult({ run_id, cancel, run: loopRunView(resolved.run.session) });
+		}
+		// one-shot: abort every currently-running step (a wave may have several).
+		const run = resolved.run.run;
+		const running = Object.values(run.records)
+			.filter((r) => r.status === "running")
+			.map((r) => r.stepId);
+		for (const stepId of running) cancelStep(run, stepId, controllers);
+		return jsonResult({
+			run_id,
+			cancelled: running.length > 0,
+			cancelledSteps: running,
+			run: oneShotRunView(run),
 		});
 	},
 );
