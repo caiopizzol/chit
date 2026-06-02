@@ -448,6 +448,34 @@ export interface BatchView {
 	updatedAt: string;
 }
 
+// Does the batch have a running task whose job would settle on the next advance
+// (terminal or stale)? Shared by describeBatch's nextAction and chit_wait so
+// status, advance, and wait all agree on "is there reconcilable work."
+export function anyReconcilable(c: Batch, deps: BatchEngineDeps): boolean {
+	return c.tasks.some((t) => {
+		if (t.status !== "running" || !t.jobId) return false;
+		const job = deps.getJob(t.jobId);
+		// A VANISHED job record (undefined) is reconcilable too: reconcile() settles it
+		// to failed so the batch never hangs. The predicate must match that, or
+		// batchWaitState reports "working" while advanceBatch would actually do work.
+		return job === undefined || jobIsSettleable(job, deps);
+	});
+}
+
+// The wait-state of a batch for chit_wait. "terminal": the batch has settled (no
+// task active or startable -- ready_for_review / failed / cancelled / needs_human),
+// nothing left to advance. "needs_advance": chit_batch_advance would do real work
+// now -- a runnable task can launch, or a finished/staled job can be reconciled.
+// "working": tasks are in flight and the next advance would do nothing yet.
+export function batchWaitState(
+	c: Batch,
+	deps: BatchEngineDeps,
+): "terminal" | "needs_advance" | "working" {
+	if (deriveBatchStatus(c) !== "running") return "terminal";
+	if (selectRunnable(c).length > 0 || anyReconcilable(c, deps)) return "needs_advance";
+	return "working";
+}
+
 // Read-only join of batch state + live job state. Computes how many tasks
 // would launch on the next advance, but launches NOTHING. Inspection is safe.
 export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
@@ -483,11 +511,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	// claim-overlap and free slots (selectRunnable), PLUS reconciliation could free
 	// slots, so this is a lower bound shown to the operator.
 	const runnable = selectRunnable(c);
-	const anyReconcilable = c.tasks.some((t) => {
-		if (t.status !== "running" || !t.jobId) return false;
-		const job = deps.getJob(t.jobId);
-		return job !== undefined && jobIsSettleable(job, deps);
-	});
+	const reconcilable = anyReconcilable(c, deps);
 	const startableBlocked = c.tasks.filter((t) => isStartable(t, c)).length;
 	const blocked = c.tasks.filter((t) => isBlocked(t, c)).length;
 
@@ -498,10 +522,10 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 		nextAction = "all tasks terminal; review the task worktrees (chit_batch_status lists them)";
 	} else if (c.status === "needs_human") {
 		nextAction = `${blocked} task(s) blocked by a failed/cancelled dependency; inspect and start a fresh batch for them`;
-	} else if (runnable.length > 0 || anyReconcilable) {
+	} else if (runnable.length > 0 || reconcilable) {
 		const n = runnable.length;
 		nextAction =
-			anyReconcilable && n === 0
+			reconcilable && n === 0
 				? "a job finished; call chit_batch_advance to reconcile and launch newly runnable task(s)"
 				: `call chit_batch_advance to launch ${n} runnable task(s)`;
 	} else {

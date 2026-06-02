@@ -42,6 +42,17 @@ export function isStale(job: JobRecord, nowMs: number, staleAfterMs = STALE_AFTE
 	return heartbeatOld || !pidAlive(job.pid);
 }
 
+// The wait-state of a background run for chit_wait: "terminal" once the job reached
+// a terminal state (completed/failed/cancelled) OR its worker is stale (dead or
+// silent), so a wait never hangs on a crashed worker; "working" while it is
+// genuinely in flight (queued or running with a fresh heartbeat).
+export function runWaitState(job: JobRecord, nowMs: number): "terminal" | "working" {
+	if (job.state === "completed" || job.state === "failed" || job.state === "cancelled") {
+		return "terminal";
+	}
+	return isStale(job, nowMs) ? "terminal" : "working";
+}
+
 // Programmatic timing for an operator view, so long-running jobs are legible
 // without diffing ISO timestamps by hand. All fields are omitted when not
 // derivable (no startedAt yet, no heartbeat, no active phase), so callers spread

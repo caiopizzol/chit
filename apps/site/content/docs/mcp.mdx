@@ -94,6 +94,17 @@ Advance the run by one unit and return control; emits a heartbeat while the unit
 
 Run status. With a `run_id`: that run's status, and whether it is foreground (supervised by this session) or a durable background run. With no `run_id`: the operator overview of what is active in this server now plus a compact list of recently finished runs (newest first). Read-only: it never sweeps or touches the in-memory stores, so polling never keeps a run alive. Inputs: `run_id?`, `recent_limit?` (overview only, default 5; 0 for none). Active foreground state is per-session; background runs and recent history are durable across reconnect.
 
+`chit_status` is a snapshot. When you want to wait for something to happen rather than poll, use `chit_wait`.
+
+### chit_wait
+
+Block until a background run or batch reaches a meaningful state, then return the same view as `chit_status` / `chit_batch_status` plus a `waitResult`. This is the "tell me when it's done" tool: reach for it instead of polling `chit_status` in a loop, and never read chit's state files to detect completion (they are private). Read-only: it never advances a batch or mutates a run; it watches the durable state and returns. Emits a heartbeat while waiting; press Esc to stop waiting (the run keeps running). Inputs: `run_id` OR `batch_id`, `timeout_ms?` (default 900000), `cwd?` (batch only).
+
+- With a `run_id` (background runs only): waits until the run is terminal (`completed` / `failed` / `cancelled`, or its worker died), so a crashed worker never hangs the wait. A **foreground** run is rejected (advance it with `chit_next`, which already blocks per unit).
+- With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch; call `chit_batch_advance` after.
+
+`waitResult` is `terminal` | `needs_advance` | `timeout`.
+
 ### chit_trace
 
 The history of a run. Input: `run_id`. For a one-shot run, the step transcript: `{ run_id, execution: "one-shot", complete, trace[] }`, each entry `{ step, kind, participant, agent, status, durationMs, output, error }`. For a loop or background run, the iteration log read from the durable loop log: `{ run_id, execution, records[] }`, where `records` are the header, each iteration (summary, changed files, verdict, decision, usage, audit ref), and the stop record. Audit refs appear here; the run_id is the only handle. Read-only.
@@ -144,11 +155,11 @@ The audit tools read the local transcripts that audited runs write: `chit run --
 
 ### chit_audit_list
 
-List audited runs, newest first. Input: `limit?`. Returns `{ runs[] }`, each run `{ run_id, manifestId, surface, scope?, iteration?, startedAt?, status, stepCount, usage?, openCall? }`, where `status` is the `run.completed` status or `incomplete`, and `openCall` (when present) names a step whose adapter call started but never completed (killed mid-call).
+List audited runs, newest first. Input: `limit?`. Returns `{ runs[] }`, each run `{ audit_ref, manifestId, surface, scope?, iteration?, startedAt?, status, stepCount, usage?, openCall? }`, where `audit_ref` is the receipt handle you pass to `chit_audit_show`, `status` is the `run.completed` status or `incomplete`, and `openCall` (when present) names a step whose adapter call started but never completed (killed mid-call). (`audit_ref` is a receipt id, distinct from a control `run_id`: a loop run has one `run_id` but one `audit_ref` per iteration.)
 
 ### chit_audit_show
 
-Show one run. Inputs: `run_id`, `include_bodies` (default `false`), `verbose` (default `false`). Returns `{ summary, incompleteReason?, participants?, timeline[], note? }`: the summary above, the reason when incomplete, the participant config recorded at start, and the structured event timeline. Without `verbose` the timeline is a receipt (the raw per-call adapter events are hidden, and `note` says how many). Prompt/output/event bodies attach to their timeline entries (`input`/`output`/`raw`) only when `include_bodies` is true, since they can be large or hold secrets.
+Show one audited run as a receipt, by its `audit_ref` (from `chit_trace`'s `auditRefs` or `chit_audit_list`, not a control `run_id`). Inputs: `audit_ref`, `include_bodies` (default `false`), `verbose` (default `false`). Returns `{ summary, incompleteReason?, participants?, timeline[], note? }`: the summary above, the reason when incomplete, the participant config recorded at start, and the structured event timeline. Without `verbose` the timeline is a receipt (the raw per-call adapter events are hidden, and `note` says how many). Prompt/output/event bodies attach to their timeline entries (`input`/`output`/`raw`) only when `include_bodies` is true, since they can be large or hold secrets.
 
 ## Observability (heartbeat)
 

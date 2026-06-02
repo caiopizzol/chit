@@ -202,7 +202,9 @@ describe("buildStatus", () => {
 		});
 		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
 		const j = status.jobs.find((x) => x.run_id === "done1");
-		expect(j?.nextAction).toContain("chit_audit_show aud-xyz");
+		// nextAction names the audit_ref argument explicitly, so a cold agent calls
+		// chit_audit_show correctly first-try (the receipt handle, not a control run_id).
+		expect(j?.nextAction).toContain('chit_audit_show { audit_ref: "aud-xyz" }');
 	});
 
 	test("summarizes a pending run as not-complete with its ready step", () => {
@@ -287,9 +289,9 @@ describe("buildStatus", () => {
 		expect(status.recent).toEqual([]);
 	});
 
-	test("publicRunSummary presents run_id and drops the internal loopId", () => {
+	test("publicRunSummary presents audit_ref (a receipt handle, not run_id) and drops loopId", () => {
 		const r = publicRunSummary({
-			runId: "run-1",
+			runId: "audit-1",
 			manifestId: "m",
 			surface: "mcp",
 			loopId: "internal-loop",
@@ -297,8 +299,9 @@ describe("buildStatus", () => {
 			status: "converged",
 			stepCount: 4,
 		} as unknown as Parameters<typeof publicRunSummary>[0]);
-		expect(r.run_id).toBe("run-1");
+		expect(r.audit_ref).toBe("audit-1");
 		const asRec = r as unknown as Record<string, unknown>;
+		expect(asRec.run_id).toBeUndefined(); // an audit receipt is NOT addressed by a control run_id
 		expect(asRec.loopId).toBeUndefined();
 		expect(asRec.runId).toBeUndefined(); // the camelCase id is not surfaced either
 		expect(r.iteration).toBe(2); // an informational number, not a handle, survives

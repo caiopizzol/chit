@@ -30,16 +30,17 @@ import type { ConvergeSession } from "./converge-engine.ts";
 import { isComplete, type Run, readySteps } from "./engine.ts";
 
 // A compact per-run line for the overview. Deliberately omits the (possibly
-// large) final output and per-step detail: drill into one run with chit_trace,
-// or chit_audit_show when audited (the run id IS the audit run id).
+// large) final output and per-step detail: drill into one run with chit_trace, or
+// chit_audit_show with its audit_ref when audited (a one-shot run's audit_ref
+// equals its run_id; a loop's audit_refs come from chit_trace, one per iteration).
 export interface RunStatusSummary {
 	run_id: string;
 	manifest: string;
 	complete: boolean;
 	// Step ids ready to run now; empty when the run is complete.
 	ready: string[];
-	// True when this run is being audited cleanly, so chit_audit_show <run_id>
-	// has a transcript. Mirrors chit_next's audit pointer.
+	// True when this run is being audited cleanly, so its receipt is openable with
+	// chit_audit_show (audit_ref). Mirrors chit_next's audit pointer.
 	audited: boolean;
 }
 
@@ -89,13 +90,15 @@ export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSumm
 	};
 }
 
-// An audit run re-presented for the unified surface: identified by run_id (the
-// audit run id IS a run id), with the internal loop-log key (loopId) dropped. The
-// receipt names iteration (a number) and status, never a second handle. Shared by
-// the chit_status `recent` slice and the chit_audit_* tools so the MCP surface is
-// run_id-only; the raw RunSummary (with loopId) stays for the CLI audit command.
+// An audit run re-presented for the unified surface: identified by audit_ref, the
+// receipt handle. audit_ref is DISTINCT from a control run_id -- a loop run has one
+// run_id but one audit_ref per iteration, so the two are different namespaces. You
+// get audit_refs from chit_trace (or this list), then open one with chit_audit_show.
+// The internal loop-log key (loopId) is dropped. Shared by the chit_status `recent`
+// slice and the chit_audit_* tools; the raw RunSummary (with loopId) stays for the
+// CLI audit command.
 export interface PublicRunSummary {
-	run_id: string;
+	audit_ref: string;
 	manifestId: string;
 	surface: string;
 	scope?: string;
@@ -131,7 +134,7 @@ export function publicTimeline(timeline: readonly unknown[]): unknown[] {
 
 export function publicRunSummary(s: RunSummary): PublicRunSummary {
 	return {
-		run_id: s.runId,
+		audit_ref: s.runId,
 		manifestId: s.manifestId,
 		surface: s.surface,
 		...(s.scope !== undefined && { scope: s.scope }),
@@ -202,7 +205,7 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 				? "queued; the worker is starting"
 				: display === "stale"
 					? `worker appears dead; chit_status "${job.runId}" to inspect, then start a fresh run`
-					: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_status "${job.runId}"${latestRef ? ` or chit_audit_show ${latestRef}` : ""}`;
+					: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_status "${job.runId}"${latestRef ? ` or chit_audit_show { audit_ref: "${latestRef}" }` : ""}`;
 	// Loop-only detail (loopId, task, iterations, verdict, stopStatus) is present
 	// only for a loop run; a one-shot background run omits all of it. Spread in
 	// place so a loop summary keeps its established field order.

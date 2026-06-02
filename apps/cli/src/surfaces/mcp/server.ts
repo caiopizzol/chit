@@ -9,10 +9,17 @@
 // Register (stdio):
 //   claude mcp add chit --scope local -- bun <repo>/apps/cli/src/surfaces/mcp/server.ts
 //
-// Run tools: chit_start / chit_next / chit_status / chit_trace / chit_cancel.
-// Batch tools (many runs in parallel worktrees): chit_batch_start / list / status /
-// advance / cancel / cleanup. Audit tools (read the local transcripts):
-// chit_audit_list / chit_audit_show.
+// Run tools: chit_start / chit_next / chit_status / chit_wait / chit_trace /
+// chit_cancel. Batch tools (many runs in parallel worktrees): chit_batch_start /
+// list / status / advance / cancel / cleanup. Audit tools (read the local
+// transcripts): chit_audit_list / chit_audit_show.
+//
+// Inspecting execution state goes THROUGH these tools, never chit's on-disk state
+// (the loop logs, job records, and batch state under the state dir are private
+// implementation detail and may move): chit_status reads a snapshot now; chit_wait
+// blocks until a background run finishes or a batch needs advancing (instead of
+// polling); chit_trace is one run's history; chit_audit_show opens one receipt by
+// its audit_ref. Everything chit owns about a run is reachable from its run_id.
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -27,6 +34,7 @@ import { AuditStore, AuditStoreError } from "../../audit/store.ts";
 import {
 	advanceBatch,
 	type BatchEngineDeps,
+	batchWaitState,
 	cancelBatch,
 	cleanupBatch,
 	describeBatch,
@@ -43,7 +51,7 @@ import {
 } from "../../batches/worktree.ts";
 import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
-import { formatDuration, isStale, jobTiming, pidAlive } from "../../jobs/health.ts";
+import { formatDuration, isStale, jobTiming, pidAlive, runWaitState } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore, JobStoreError } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/types.ts";
@@ -172,7 +180,7 @@ server.registerTool(
 	"chit_audit_list",
 	{
 		description:
-			"List audited runs (newest first): run id, manifest, surface, scope, loop, status (or `incomplete`), step count, usage/cost, and an open-call marker for a run killed mid-call. Use chit_audit_show for one run's timeline.",
+			"List audited runs (newest first): each row is a receipt addressed by audit_ref, plus manifest, surface, scope, iteration, status (or `incomplete`), step count, usage/cost, and an open-call marker for a run killed mid-call. Open one with chit_audit_show using its audit_ref. (audit_ref is a receipt handle, distinct from a control run_id.)",
 		inputSchema: {
 			limit: z
 				.number()
@@ -197,9 +205,13 @@ server.registerTool(
 	"chit_audit_show",
 	{
 		description:
-			"Show one audited run as a receipt: a summary (manifest/surface/scope/status/usage), the recorded participant config, and a step-level timeline (run/step lifecycle and adapter calls with duration and usage). The raw per-call adapter event stream is hidden by default; set verbose to include those rows. Prompt/output/event bodies are included ONLY when include_bodies is true (they can be large or hold secrets), and only for blob refs the run's own events carry. verbose and include_bodies are independent.",
+			"Show one audited run as a receipt, addressed by its audit_ref (a receipt handle, distinct from a control run_id): a summary (manifest/surface/scope/status/usage), the recorded participant config, and a step-level timeline (run/step lifecycle and adapter calls with duration and usage). Get an audit_ref from chit_trace's auditRefs (a loop has one per iteration) or chit_audit_list. The raw per-call adapter event stream is hidden by default; set verbose to include those rows. Prompt/output/event bodies are included ONLY when include_bodies is true (they can be large or hold secrets), and only for blob refs the run's own events carry. verbose and include_bodies are independent.",
 		inputSchema: {
-			run_id: z.string(),
+			audit_ref: z
+				.string()
+				.describe(
+					"A receipt handle from chit_trace's auditRefs or chit_audit_list (a one-shot run's audit_ref equals its run_id). NOT a control run_id.",
+				),
 			verbose: z
 				.boolean()
 				.default(false)
@@ -212,12 +224,12 @@ server.registerTool(
 				),
 		},
 	},
-	async ({ run_id, verbose, include_bodies }) => {
+	async ({ audit_ref, verbose, include_bodies }) => {
 		try {
-			const shown = showAudit(auditStore, run_id, { includeBodies: include_bodies, verbose });
-			// Present the receipt under run_id only: the summary via publicRunSummary
+			const shown = showAudit(auditStore, audit_ref, { includeBodies: include_bodies, verbose });
+			// Present the receipt by audit_ref only: the summary via publicRunSummary
 			// and the timeline with each event's runId/loopId stripped (publicTimeline),
-			// so no row carries a second handle.
+			// so no row carries a control run_id or loop handle.
 			return jsonResult({
 				...shown,
 				summary: publicRunSummary(shown.summary),
@@ -265,6 +277,145 @@ server.registerTool(
 		const resolved = runController.resolve(run_id, Date.now());
 		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
 		return jsonResult(unifiedRunView(resolved));
+	},
+);
+
+// Block until a chit-owned execution reaches a meaningful state, instead of the
+// caller polling chit_status (or worse, polling chit's private state files). This
+// is the notification primitive an operator reaches for ("tell me when it's done"):
+// it is READ-ONLY -- it never advances a batch or mutates a run; it only watches the
+// durable state chit already owns and returns the same view chit_status would, plus
+// a waitResult. It is intended for durable BACKGROUND runs and batches; a foreground
+// run has nothing to wait on (chit_next already blocks until its unit settles), so
+// chit_wait refuses one and points back at chit_next.
+const WAIT_POLL_MS = 2000;
+
+// Sleep that resolves early (false) if the request is aborted (Esc), else true.
+function waitTick(ms: number, signal: AbortSignal): Promise<boolean> {
+	return new Promise((resolveTick) => {
+		if (signal.aborted) return resolveTick(false);
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolveTick(true);
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolveTick(false);
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+server.registerTool(
+	"chit_wait",
+	{
+		description:
+			"Block until a background run or batch reaches a meaningful state, then return the same view as chit_status / chit_batch_status plus a waitResult. Use this instead of polling chit_status in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself; call chit_batch_advance after. Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | timeout. Inputs: run_id OR batch_id, optional timeout_ms (default 900000), cwd (batch only).",
+		inputSchema: {
+			run_id: z
+				.string()
+				.optional()
+				.describe("A background run id (from chit_start mode background)."),
+			batch_id: z
+				.string()
+				.optional()
+				.describe("A batch id (from chit_batch_start or chit_batch_list)."),
+			timeout_ms: z
+				.number()
+				.int()
+				.min(1000)
+				.default(900000)
+				.describe(
+					"Give up waiting after this long and return waitResult timeout. Default 900000 (15m).",
+				),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Batch only: any path in the target repo (defaults to server cwd)."),
+		},
+	},
+	async ({ run_id, batch_id, timeout_ms, cwd }, extra) => {
+		if ((run_id === undefined) === (batch_id === undefined)) {
+			return errorResult("provide exactly one of run_id or batch_id");
+		}
+		const deadline = Date.now() + timeout_ms;
+		let beats = 0;
+		const progressToken = extra._meta?.progressToken;
+		const heartbeat = (message: string) => {
+			beats++;
+			if (progressToken !== undefined) {
+				void extra
+					.sendNotification({
+						method: "notifications/progress",
+						params: { progressToken, progress: beats, message },
+					})
+					.catch(() => {});
+			}
+			void server
+				.sendLoggingMessage({ level: "info", data: message, logger: "chit" })
+				.catch(() => {});
+		};
+
+		// --- background run: wait until terminal ---
+		if (run_id !== undefined) {
+			const resolved = runController.resolve(run_id, Date.now());
+			if (!resolved) return errorResult(`unknown run_id ${run_id}`);
+			if (resolved.mode === "foreground") {
+				return errorResult(
+					`run "${run_id}" is foreground (supervised by this chat); advance it with chit_next, do not wait on it`,
+				);
+			}
+			while (true) {
+				const current = runController.resolve(run_id, Date.now());
+				// The durable record cannot vanish mid-wait (it is never deleted), but guard
+				// anyway: treat a disappeared run as terminal rather than looping forever.
+				if (current?.mode !== "background") {
+					return jsonResult({ run_id, waitResult: "terminal" as const });
+				}
+				if (runWaitState(current.job, Date.now()) === "terminal") {
+					return jsonResult({ ...unifiedRunView(current), waitResult: "terminal" as const });
+				}
+				if (Date.now() >= deadline) {
+					return jsonResult({ ...unifiedRunView(current), waitResult: "timeout" as const });
+				}
+				heartbeat(`run ${run_id} still ${current.job.state}; waiting`);
+				if (!(await waitTick(WAIT_POLL_MS, extra.signal))) {
+					return jsonResult({ ...unifiedRunView(current), waitResult: "timeout" as const });
+				}
+			}
+		}
+
+		// --- batch: wait until it needs an advance, or is terminal ---
+		const store = new BatchStore(resolve(cwd ?? process.cwd()));
+		// Validate up front so an unknown batch_id errors immediately, not after a tick.
+		try {
+			if (!store.get(batch_id as string)) return errorResult(`unknown batch_id ${batch_id}`);
+		} catch (e) {
+			return batchError(e);
+		}
+		while (true) {
+			let batch: ReturnType<BatchStore["get"]>;
+			try {
+				batch = store.get(batch_id as string);
+			} catch (e) {
+				return batchError(e);
+			}
+			if (!batch) return jsonResult({ batch_id, waitResult: "terminal" as const });
+			const state = batchWaitState(batch, batchDeps);
+			if (state !== "working") {
+				return jsonResult({
+					...describeBatch(batch, batchDeps),
+					waitResult: state === "terminal" ? ("terminal" as const) : ("needs_advance" as const),
+				});
+			}
+			if (Date.now() >= deadline) {
+				return jsonResult({ ...describeBatch(batch, batchDeps), waitResult: "timeout" as const });
+			}
+			heartbeat(`batch ${batch_id} working; waiting`);
+			if (!(await waitTick(WAIT_POLL_MS, extra.signal))) {
+				return jsonResult({ ...describeBatch(batch, batchDeps), waitResult: "timeout" as const });
+			}
+		}
 	},
 );
 
@@ -579,8 +730,8 @@ function describeJob(job: JobRecord) {
 				: display === "queued"
 					? "queued; the worker is starting"
 					: display === "stale"
-						? `worker appears dead; inspect with chit_status${latestRef ? ` (chit_audit_show ${latestRef} for the transcript)` : ""}, then start a fresh run`
-						: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; ${latestRef ? `open a transcript with chit_audit_show ${latestRef}` : "no audit transcript was recorded"}`;
+						? `worker appears dead; inspect with chit_status${latestRef ? ` (chit_audit_show { audit_ref: "${latestRef}" } for the transcript)` : ""}, then start a fresh run`
+						: `${display}${job.stopStatus ? ` (${job.stopStatus})` : ""}; ${latestRef ? `open a transcript with chit_audit_show { audit_ref: "${latestRef}" }` : "no audit transcript was recorded"}`;
 		return {
 			...base,
 			loopId: job.loopId,
@@ -602,8 +753,8 @@ function describeJob(job: JobRecord) {
 			: display === "queued"
 				? "queued; the worker is starting"
 				: display === "stale"
-					? `worker appears dead; inspect with chit_status${latestRef ? ` (chit_audit_show ${latestRef} for the transcript)` : ""}`
-					: `${display}; ${latestRef ? `open a transcript with chit_audit_show ${latestRef}` : "no audit transcript was recorded"}`;
+					? `worker appears dead; inspect with chit_status${latestRef ? ` (chit_audit_show { audit_ref: "${latestRef}" } for the transcript)` : ""}`
+					: `${display}; ${latestRef ? `open a transcript with chit_audit_show { audit_ref: "${latestRef}" }` : "no audit transcript was recorded"}`;
 	return {
 		...base,
 		manifestId: job.manifestId,
@@ -670,7 +821,8 @@ export function oneShotRunView(run: Run) {
 		complete,
 		ready: complete ? [] : readySummary(run),
 		output: complete ? finalOutput(run) : undefined,
-		audit: run.recorder && run.recorder.lastError === undefined ? { run_id: run.runId } : undefined,
+		audit:
+			run.recorder && run.recorder.lastError === undefined ? { audit_ref: run.runId } : undefined,
 		nextAction: complete
 			? `complete; chit_trace "${run.runId}" for the transcript`
 			: `chit_next "${run.runId}" to run the next ready step(s); chit_cancel "${run.runId}" to stop`,
@@ -733,7 +885,7 @@ server.registerTool(
 	"chit_start",
 	{
 		description:
-			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), or `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge). mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: poll with chit_status, stop with chit_cancel. For SEVERAL tasks in parallel, use chit_batch_start (it isolates each in its own git worktree).",
+			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), or `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge). mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: chit_wait blocks until it finishes (don't poll), chit_status for a snapshot, chit_cancel to stop. For SEVERAL tasks in parallel, use chit_batch_start (it isolates each in its own git worktree).",
 		inputSchema: {
 			task: z
 				.string()
@@ -751,7 +903,7 @@ server.registerTool(
 				.enum(["foreground", "background"])
 				.default("foreground")
 				.describe(
-					"foreground: this session supervises the run (advance with chit_next). background: a detached worker drives it to completion (poll with chit_status).",
+					"foreground: this session supervises the run (advance with chit_next). background: a detached worker drives it to completion (chit_wait blocks until it finishes; chit_status for a snapshot).",
 				),
 			scope: z
 				.string()
@@ -1111,7 +1263,7 @@ server.registerTool(
 				policy: "one-shot",
 				auditRefs: job.auditRefs,
 				note: job.auditRefs.length
-					? `chit_audit_show ${job.auditRefs.at(-1)} for the transcript`
+					? `chit_audit_show { audit_ref: "${job.auditRefs.at(-1)}" } for the transcript`
 					: "no audit transcript recorded",
 			});
 		}

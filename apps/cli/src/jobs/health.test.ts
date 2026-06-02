@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatDuration, isStale, jobTiming } from "./health.ts";
+import { formatDuration, isStale, jobTiming, runWaitState } from "./health.ts";
 import type { JobRecord } from "./types.ts";
 
 const NOW = Date.parse("2026-06-01T12:00:00.000Z");
@@ -52,6 +52,27 @@ describe("isStale", () => {
 		for (const state of ["completed", "cancelled", "failed"] as const) {
 			expect(isStale(job({ state, lastHeartbeatAt: ancient }), NOW)).toBe(false);
 		}
+	});
+});
+
+describe("runWaitState (what chit_wait blocks on for a background run)", () => {
+	test("terminal job states resolve the wait", () => {
+		for (const state of ["completed", "cancelled", "failed"] as const) {
+			expect(runWaitState(job({ state, lastHeartbeatAt: fresh, pid: process.pid }), NOW)).toBe(
+				"terminal",
+			);
+		}
+	});
+
+	test("a live, in-flight job keeps waiting", () => {
+		expect(runWaitState(job({ pid: process.pid, lastHeartbeatAt: fresh }), NOW)).toBe("working");
+		expect(runWaitState(job({ state: "queued", createdAt: fresh }), NOW)).toBe("working");
+	});
+
+	test("a stale (dead/silent) worker resolves the wait so it never hangs", () => {
+		expect(runWaitState(job({ pid: DEAD_PID, lastHeartbeatAt: fresh }), NOW)).toBe("terminal");
+		expect(runWaitState(job({ pid: process.pid, lastHeartbeatAt: ancient }), NOW)).toBe("terminal");
+		expect(runWaitState(job({ state: "queued", createdAt: ancient }), NOW)).toBe("terminal");
 	});
 });
 

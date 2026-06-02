@@ -6,6 +6,7 @@ import type { LoopJobRecord } from "../jobs/types.ts";
 import {
 	advanceBatch,
 	type BatchEngineDeps,
+	batchWaitState,
 	cancelBatch,
 	cleanupBatch,
 	describeBatch,
@@ -396,5 +397,57 @@ describe("listBatches", () => {
 
 	test("returns an empty list for a repo with no batches", () => {
 		expect(listBatches(store)).toEqual([]);
+	});
+});
+
+describe("batchWaitState (what chit_wait blocks on for a batch)", () => {
+	test("tasks in flight, nothing reconcilable -> working (keep waiting)", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
+		// Both jobs queued/running, none stale, none finished: advance would do nothing.
+		expect(batchWaitState(present(store.get("c1"), "c1"), deps)).toBe("working");
+	});
+
+	test("a finished job that can be reconciled -> needs_advance", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
+		jobs.finish(firstJob(), { stopStatus: "converged", lastVerdict: "proceed" });
+		// A converged job is settleable, so the next advance would reconcile it.
+		expect(batchWaitState(present(store.get("c1"), "c1"), deps)).toBe("needs_advance");
+	});
+
+	test("a pending task that becomes runnable -> needs_advance", () => {
+		// b depends on a; cap 1 so b is pending. When a converges, b becomes runnable.
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a"), task("b", { dependencies: ["a"] })],
+			maxParallel: 1,
+		});
+		jobs.finish(firstJob(), { stopStatus: "converged", lastVerdict: "proceed" });
+		expect(batchWaitState(present(store.get("c1"), "c1"), deps)).toBe("needs_advance");
+	});
+
+	test("a fully settled batch -> terminal", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged", lastVerdict: "proceed" });
+		advanceBatch(store, deps, "c1"); // -> ready_for_review
+		expect(batchWaitState(present(store.get("c1"), "c1"), deps)).toBe("terminal");
+	});
+
+	test("a stale worker is reconcilable -> needs_advance (so a wait never hangs on a dead worker)", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		const jobId = firstJob();
+		deps.isStale = (job) => job.runId === jobId;
+		expect(batchWaitState(present(store.get("c1"), "c1"), deps)).toBe("needs_advance");
+	});
+
+	test("a VANISHED job record is reconcilable -> needs_advance (advanceBatch would fail it, not hang)", () => {
+		// Regression: reconcile() settles a running task whose job record is gone to
+		// failed, so the wait must surface that as actionable, not "working".
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.jobs.clear(); // the job record disappeared (cleanup, corruption, ...)
+		expect(batchWaitState(present(store.get("c1"), "c1"), deps)).toBe("needs_advance");
+		// And advanceBatch genuinely acts on it (proves the predicate matches reality).
+		const c = advanceBatch(store, deps, "c1");
+		expect(taskOf(c, "a").status).toBe("failed");
 	});
 });

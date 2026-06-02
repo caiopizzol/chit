@@ -31,7 +31,7 @@ Audit is opt-in everywhere except the autonomous loop, because the bodies can ho
 
 - `chit converge` audits by default. Each iteration's run is recorded, and the loop iteration links to it through the loop log's `auditRef`.
 - `chit run --audit` records one run. The run id is printed on stderr.
-- The MCP surface records a run when `chit_start` is called with `audit: true`, and every background run is audited. The audit run reuses the run's `run_id`.
+- The MCP surface records a run when `chit_start` is called with `audit: true`, and every background run is audited. Each audited run (or loop iteration) gets an `audit_ref` you read back with `chit_audit_show` (a one-shot run's `audit_ref` equals its `run_id`; a loop has one per iteration, surfaced in `chit_trace`).
 
 A run with no `run.completed` event is incomplete: it failed, was cancelled, or was abandoned. The reader never treats a missing terminal event as success.
 
