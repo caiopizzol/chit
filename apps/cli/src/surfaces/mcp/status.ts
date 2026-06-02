@@ -5,7 +5,8 @@
 //
 // Two sources with different lifetimes, joined here and kept distinct in the
 // output:
-//   - active: the in-memory run/converge stores. Per-server-process and
+//   - active: the in-memory foreground runs (the merged controller store, both
+//     one-shot DAG runs and converge loops). Per-server-process and
 //     session-scoped: a new MCP server (a new Claude Code session) starts empty,
 //     and idle runs are evicted. This is the controllable, live control plane.
 //   - recent: the durable audit store (~/.local/state/chit/audit), which spans
@@ -23,10 +24,10 @@ import type { AuditStore } from "../../audit/store.ts";
 import { formatDuration, isStale, jobTiming } from "../../jobs/health.ts";
 import type { JobStore } from "../../jobs/store.ts";
 import type { JobRecord } from "../../jobs/types.ts";
+import type { RunController } from "./controller.ts";
+import type { ControlledRun } from "./controller-store.ts";
 import { type ConvergeStatus, describeConverge } from "./converge-engine.ts";
-import type { ConvergeStore } from "./converge-store.ts";
 import { isComplete, type Run, readySteps } from "./engine.ts";
-import type { RunStore } from "./run-store.ts";
 
 // A compact per-run line for the overview. Deliberately omits the (possibly
 // large) final output and per-step detail: drill into one run with chit_run_trace,
@@ -172,17 +173,24 @@ function recentRuns(auditStore: AuditStore, recentLimit: number): RunSummary[] {
 // loop reuses the SAME control-plane view as chit_converge_status, so the
 // overview and the per-loop tool never disagree.
 export function buildStatus(
-	runs: RunStore,
-	convergeSessions: ConvergeStore,
+	controller: RunController,
 	auditStore: AuditStore,
 	jobStore: JobStore,
 	recentLimit: number,
 	nowMs: number,
 ): ChitStatus {
+	// One foreground store now holds both kinds (run_id-keyed); split by kind to
+	// keep the same two-section overview. byNewest sorts each by startedAtMs, so
+	// the output is identical to the pre-merge two-store assembly.
+	const fg = controller.foregroundRuns();
+	const runs = fg.filter(
+		(c): c is Extract<ControlledRun, { kind: "one-shot" }> => c.kind === "one-shot",
+	);
+	const loops = fg.filter((c): c is Extract<ControlledRun, { kind: "loop" }> => c.kind === "loop");
 	return {
 		active: {
-			runs: byNewest(runs.list()).map(summarizeRunForStatus),
-			loops: byNewest(convergeSessions.list()).map(describeConverge),
+			runs: byNewest(runs.map((c) => c.run)).map(summarizeRunForStatus),
+			loops: byNewest(loops.map((c) => c.session)).map(describeConverge),
 		},
 		jobs: jobsForStatus(jobStore, recentLimit, nowMs),
 		recent: recentRuns(auditStore, recentLimit),

@@ -47,7 +47,7 @@ export class RunController {
 	// which, for a foreground id, includes "this is a fresh server that never saw
 	// it" (foreground runs are not durable, by design).
 	resolve(runId: string, now: number): ResolvedRun | undefined {
-		const fg = this.store.get(runId, now);
+		const fg = this.store.find(runId, now);
 		if (fg) return { mode: "foreground", run: fg };
 		const job = this.jobs.get(runId);
 		if (job) return { mode: "background", job };
@@ -55,26 +55,36 @@ export class RunController {
 	}
 
 	// Typed foreground getters for the stepwise/converge tool handlers, which act
-	// only on their own kind. Return undefined for an absent id OR an id of the
-	// other kind (a chit_run_step on a loop run_id is not a one-shot run).
+	// only on their own kind. The store's kind-specific lookups touch ONLY that
+	// kind's slot, so a chit_run_next called with a loop's id finds nothing and
+	// refreshes nothing (and vice versa).
 	getOneShot(runId: string, now: number): Run | undefined {
-		const c = this.store.get(runId, now);
-		return c?.kind === "one-shot" ? c.run : undefined;
+		return this.store.getOneShot(runId, now);
 	}
 
 	getLoop(runId: string, now: number): ConvergeSession | undefined {
-		const c = this.store.get(runId, now);
-		return c?.kind === "loop" ? c.session : undefined;
+		return this.store.getLoop(runId, now);
 	}
 
-	// Refresh a foreground run's idle timer (after a step/iteration settles).
-	touch(runId: string, now: number): void {
-		this.store.touch(runId, now);
+	// Refresh a foreground run's idle timer after its unit settles. Kind-specific
+	// so a same-id loop and one-shot never refresh each other (per-kind isolation).
+	touchOneShot(runId: string, now: number): void {
+		this.store.touchOneShot(runId, now);
 	}
 
-	// Evict idle foreground runs (opportunistic, on start). Returns evicted ids.
-	sweep(now: number): string[] {
-		return this.store.sweep(now);
+	touchLoop(runId: string, now: number): void {
+		this.store.touchLoop(runId, now);
+	}
+
+	// Evict idle foreground runs (opportunistic, on start). Kind-specific so a
+	// one-shot start sweeps only one-shot runs and a converge start only loops,
+	// matching the old separate stores. Returns evicted ids.
+	sweepOneShot(now: number): string[] {
+		return this.store.sweepOneShot(now);
+	}
+
+	sweepLoops(now: number): string[] {
+		return this.store.sweepLoops(now);
 	}
 
 	// All foreground runs (for the status overview), read-only.

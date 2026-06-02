@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { AuditStore } from "../../audit/store.ts";
 import { JobStore } from "../../jobs/store.ts";
 import type { JobRecord } from "../../jobs/types.ts";
+import { RunController } from "./controller.ts";
+import { ControllerStore } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
-import { ConvergeStore } from "./converge-store.ts";
 import type { Run } from "./engine.ts";
-import { RunStore } from "./run-store.ts";
 import { buildStatus, summarizeRunForStatus } from "./status.ts";
 
 const NOW = Date.parse("2026-06-01T11:00:00.000Z");
@@ -56,16 +56,21 @@ function emptyAuditStore(): AuditStore {
 	return new AuditStore(mkdtempSync(join(tmpdir(), "chit-status-audit-")));
 }
 
+// A controller seeded with foreground runs/sessions, for buildStatus. The merged
+// store holds both kinds keyed by run_id; buildStatus splits them back out.
+function controllerOf(runs: Run[] = [], sessions: ConvergeSession[] = []): RunController {
+	const c = new RunController(new ControllerStore(), emptyJobStore());
+	for (const r of runs) c.registerOneShot(r, 0);
+	for (const s of sessions) c.registerLoop(s, 0);
+	return c;
+}
+function emptyController(): RunController {
+	return controllerOf();
+}
+
 describe("buildStatus", () => {
 	test("empty stores produce empty active sections and empty recent", () => {
-		const status = buildStatus(
-			new RunStore(),
-			new ConvergeStore(),
-			emptyAuditStore(),
-			emptyJobStore(),
-			5,
-			NOW,
-		);
+		const status = buildStatus(emptyController(), emptyAuditStore(), emptyJobStore(), 5, NOW);
 		expect(status.active.runs).toEqual([]);
 		expect(status.active.loops).toEqual([]);
 		expect(status.jobs).toEqual([]);
@@ -113,14 +118,7 @@ describe("buildStatus", () => {
 			stopStatus: "converged",
 		});
 
-		const status = buildStatus(
-			new RunStore(),
-			new ConvergeStore(),
-			emptyAuditStore(),
-			jobStore,
-			5,
-			NOW,
-		);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
 		const byId = Object.fromEntries(status.jobs.map((j) => [j.jobId, j]));
 		expect(byId.live?.display).toBe("running");
 		expect(byId.stale?.display).toBe("stale");
@@ -149,14 +147,7 @@ describe("buildStatus", () => {
 			phase: "implementing",
 			phaseStartedAt: new Date(NOW - 30_000).toISOString(),
 		});
-		const status = buildStatus(
-			new RunStore(),
-			new ConvergeStore(),
-			emptyAuditStore(),
-			jobStore,
-			5,
-			NOW,
-		);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
 		const j = status.jobs.find((x) => x.jobId === "run1");
 		expect(j?.elapsedMs).toBe(120_000);
 		expect(j?.lastHeartbeatAgeMs).toBe(5_000);
@@ -183,14 +174,7 @@ describe("buildStatus", () => {
 			createdAt: "2026-06-01T10:50:00.000Z",
 			failure: "boom",
 		});
-		const status = buildStatus(
-			new RunStore(),
-			new ConvergeStore(),
-			emptyAuditStore(),
-			jobStore,
-			5,
-			NOW,
-		);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
 		const j = status.jobs.find((x) => x.jobId === "fail1");
 		expect(j?.nextAction).not.toContain("chit_audit_show");
 	});
@@ -212,14 +196,7 @@ describe("buildStatus", () => {
 			createdAt: "2026-06-01T10:50:00.000Z",
 			stopStatus: "converged",
 		});
-		const status = buildStatus(
-			new RunStore(),
-			new ConvergeStore(),
-			emptyAuditStore(),
-			jobStore,
-			5,
-			NOW,
-		);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
 		const j = status.jobs.find((x) => x.jobId === "done1");
 		expect(j?.nextAction).toContain("chit_audit_show aud-xyz");
 	});
@@ -245,14 +222,16 @@ describe("buildStatus", () => {
 	});
 
 	test("active runs and loops are listed newest-first by startedAtMs", () => {
-		const runs = new RunStore();
-		runs.add(fakeRun("old", { startedAtMs: 0 }), 0);
-		runs.add(fakeRun("new", { startedAtMs: 1 }), 1);
-		const loops = new ConvergeStore();
-		loops.add(fakeSession("loop-old", 0), 0);
-		loops.add(fakeSession("loop-new", 1), 1);
-
-		const status = buildStatus(runs, loops, emptyAuditStore(), emptyJobStore(), 5, NOW);
+		const status = buildStatus(
+			controllerOf(
+				[fakeRun("old", { startedAtMs: 0 }), fakeRun("new", { startedAtMs: 1 })],
+				[fakeSession("loop-old", 0), fakeSession("loop-new", 1)],
+			),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+		);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["new", "old"]);
 		expect(status.active.loops.map((l) => l.loopId)).toEqual(["loop-new", "loop-old"]);
@@ -265,25 +244,22 @@ describe("buildStatus", () => {
 		// Map#set on an existing key keeps the original insertion slot, so a plain
 		// reverse-of-insertion would misorder a force-restarted loop. Sorting by
 		// startedAtMs fixes that: re-adding loop-a with a later start moves it first.
-		const loops = new ConvergeStore();
-		loops.add(fakeSession("loop-a", 0), 0);
-		loops.add(fakeSession("loop-b", 1), 1);
-		loops.add(fakeSession("loop-a", 2), 2); // restarted with a later startedAtMs
-
-		const status = buildStatus(new RunStore(), loops, emptyAuditStore(), emptyJobStore(), 5, NOW);
+		const status = buildStatus(
+			controllerOf(
+				[],
+				[fakeSession("loop-a", 0), fakeSession("loop-b", 1), fakeSession("loop-a", 2)],
+			),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+		);
 
 		expect(status.active.loops.map((l) => l.loopId)).toEqual(["loop-a", "loop-b"]);
 	});
 
 	test("recent_limit of 0 returns no recent runs", () => {
-		const status = buildStatus(
-			new RunStore(),
-			new ConvergeStore(),
-			emptyAuditStore(),
-			emptyJobStore(),
-			0,
-			NOW,
-		);
+		const status = buildStatus(emptyController(), emptyAuditStore(), emptyJobStore(), 0, NOW);
 		expect(status.recent).toEqual([]);
 	});
 
@@ -295,10 +271,13 @@ describe("buildStatus", () => {
 				throw new Error("audit dir unavailable");
 			},
 		} as unknown as AuditStore;
-		const runs = new RunStore();
-		runs.add(fakeRun("r1", { startedAtMs: 0 }), 0);
-
-		const status = buildStatus(runs, new ConvergeStore(), throwingStore, emptyJobStore(), 5, NOW);
+		const status = buildStatus(
+			controllerOf([fakeRun("r1", { startedAtMs: 0 })]),
+			throwingStore,
+			emptyJobStore(),
+			5,
+			NOW,
+		);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["r1"]);
 		expect(status.recent).toEqual([]);

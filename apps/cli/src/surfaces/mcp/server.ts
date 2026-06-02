@@ -48,6 +48,8 @@ import type { JobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey, repoRoot } from "../../loops/location.ts";
 import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
+import { RunController } from "./controller.ts";
+import { ControllerStore } from "./controller-store.ts";
 import {
 	cancelConverge,
 	describeConverge,
@@ -55,7 +57,6 @@ import {
 	startConvergeSession,
 	traceConverge,
 } from "./converge-engine.ts";
-import { ConvergeStore } from "./converge-store.ts";
 import {
 	cancelStep,
 	finalOutput,
@@ -66,26 +67,24 @@ import {
 	type StepControllers,
 	startRun,
 } from "./engine.ts";
-import { RunStore } from "./run-store.ts";
 import { buildStatus } from "./status.ts";
 
-// Idle-evicting run store (sweeps on chit_run_start) so the in-memory run map is
-// bounded; see run-store.ts.
-const runs = new RunStore();
 // AbortControllers for in-flight steps, so chit_run_cancel can stop a running step
 // even after the model's turn is interrupted (the server keeps running).
 const controllers: StepControllers = new Map();
-// Idle-evicting converge session store (sweeps on chit_converge_start). Holds the
-// in-memory state for chit_converge_* loops; the durable record is the loop log.
-const convergeSessions = new ConvergeStore();
 // The local audit store (~/.local/state/chit/audit), read-only here: the audit
 // tools inspect runs that converge/run/MCP-start wrote. Reads validate run ids
 // and only resolve blob refs that appear in a run's own events.
 const auditStore = new AuditStore();
-// Durable background jobs (~/.local/state/chit/jobs). Unlike the in-memory run
-// and converge stores, jobs survive MCP reconnect: a detached worker process
-// owns the run, and these tools read/cancel it through the durable record.
+// Durable background jobs (~/.local/state/chit/jobs). Unlike the in-memory
+// foreground runs, jobs survive MCP reconnect: a detached worker process owns the
+// run, and these tools read/cancel it through the durable record.
 const jobStore = new JobStore();
+// The unified run controller: one merged, idle-evicting in-memory store of
+// FOREGROUND runs (one-shot DAG runs + converge loops, keyed by run_id), plus
+// resolution into the durable JobStore for background runs (run_id == jobId). The
+// stepwise/converge tools register and look up through it; see controller.ts.
+const runController = new RunController(new ControllerStore(), jobStore);
 // The agent registry is loaded lazily on first use, not at import. The CLI binary
 // imports this module to expose `chit mcp`, so importing it must not read
 // ~/.config/chit/agents.json (that read belongs to a running server, not to every
@@ -171,8 +170,9 @@ server.registerTool(
 	},
 	async ({ manifest_path, inputs, scope, cwd, allow_unenforced_permissions, audit }) => {
 		// Opportunistic idle cleanup on every chit_run_start request, before the work,
-		// so cleanup still happens when this start fails (bad manifest, etc.).
-		runs.sweep(Date.now());
+		// so cleanup still happens when this start fails (bad manifest, etc.). Sweeps
+		// only one-shot runs (a converge start sweeps loops), as the old stores did.
+		runController.sweepOneShot(Date.now());
 		const path = isAbsolute(manifest_path) ? manifest_path : resolve(process.cwd(), manifest_path);
 		let raw: unknown;
 		try {
@@ -194,7 +194,7 @@ server.registerTool(
 		} catch (e) {
 			return errorResult((e as Error).message);
 		}
-		runs.add(run, Date.now());
+		runController.registerOneShot(run, Date.now());
 		return jsonResult(describeRun(run));
 	},
 );
@@ -206,7 +206,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string() },
 	},
 	async ({ run_id }) => {
-		const run = runs.get(run_id, Date.now());
+		const run = runController.getOneShot(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 		return jsonResult(describeRun(run));
 	},
@@ -220,7 +220,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string(), step_id: z.string() },
 	},
 	async ({ run_id, step_id }, extra) => {
-		const run = runs.get(run_id, Date.now());
+		const run = runController.getOneShot(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 
 		let progress = 0;
@@ -283,7 +283,7 @@ server.registerTool(
 			// Refresh idle timer after the step settles: a multi-minute step's
 			// touch-on-lookup is stale by now, and it's no longer running, so a
 			// concurrent chit_run_start sweep could otherwise evict it immediately.
-			runs.touch(run_id, Date.now());
+			runController.touchOneShot(run_id, Date.now());
 		}
 	},
 );
@@ -296,7 +296,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string(), step_id: z.string() },
 	},
 	async ({ run_id, step_id }) => {
-		const run = runs.get(run_id, Date.now());
+		const run = runController.getOneShot(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 		const result = cancelStep(run, step_id, controllers);
 		if (result === "unknown_step") return errorResult(`unknown step "${step_id}"`);
@@ -317,7 +317,7 @@ server.registerTool(
 		inputSchema: { run_id: z.string() },
 	},
 	async ({ run_id }) => {
-		const run = runs.get(run_id, Date.now());
+		const run = runController.getOneShot(run_id, Date.now());
 		if (!run) return errorResult(`unknown run_id ${run_id}`);
 		const trace = run.manifest.executionOrder.flat().map((id) => {
 			const r = run.records[id];
@@ -395,7 +395,7 @@ server.registerTool(
 		force,
 		allow_unenforced_permissions,
 	}) => {
-		convergeSessions.sweep(Date.now());
+		runController.sweepLoops(Date.now());
 		// Resolve to an absolute path so the loop header's `repo` matches `chit
 		// converge` (which resolves cwd); a relative cwd must not produce a
 		// different on-disk loop log than the CLI for the same run.
@@ -436,7 +436,7 @@ server.registerTool(
 		} catch (e) {
 			return errorResult((e as Error).message);
 		}
-		convergeSessions.add(session, Date.now());
+		runController.registerLoop(session, Date.now());
 		return jsonResult({
 			...describeConverge(session),
 			...(prep.warnings.length > 0 && { warnings: prep.warnings }),
@@ -452,7 +452,7 @@ server.registerTool(
 		inputSchema: { loop_id: z.string() },
 	},
 	async ({ loop_id }, extra) => {
-		const session = convergeSessions.get(loop_id, Date.now());
+		const session = runController.getLoop(loop_id, Date.now());
 		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
 
 		let progress = 0;
@@ -535,7 +535,7 @@ server.registerTool(
 			releaseLock(loopLock);
 			// Refresh the idle timer after a (possibly multi-minute) iteration so a
 			// concurrent chit_converge_start sweep does not evict it immediately.
-			convergeSessions.touch(loop_id, Date.now());
+			runController.touchLoop(loop_id, Date.now());
 		}
 	},
 );
@@ -548,7 +548,7 @@ server.registerTool(
 		inputSchema: { loop_id: z.string() },
 	},
 	async ({ loop_id }) => {
-		const session = convergeSessions.get(loop_id, Date.now());
+		const session = runController.getLoop(loop_id, Date.now());
 		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
 		return jsonResult(describeConverge(session));
 	},
@@ -562,7 +562,7 @@ server.registerTool(
 		inputSchema: { loop_id: z.string() },
 	},
 	async ({ loop_id }) => {
-		const session = convergeSessions.get(loop_id, Date.now());
+		const session = runController.getLoop(loop_id, Date.now());
 		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
 		const cancel = cancelConverge(session);
 		return jsonResult({ cancel, loop: describeConverge(session) });
@@ -577,7 +577,7 @@ server.registerTool(
 		inputSchema: { loop_id: z.string() },
 	},
 	async ({ loop_id }) => {
-		const session = convergeSessions.get(loop_id, Date.now());
+		const session = runController.getLoop(loop_id, Date.now());
 		if (!session) return errorResult(`unknown loop_id ${loop_id}`);
 		try {
 			return jsonResult(traceConverge(session));
@@ -670,9 +670,7 @@ server.registerTool(
 		},
 	},
 	async ({ recent_limit }) => {
-		return jsonResult(
-			buildStatus(runs, convergeSessions, auditStore, jobStore, recent_limit, Date.now()),
-		);
+		return jsonResult(buildStatus(runController, auditStore, jobStore, recent_limit, Date.now()));
 	},
 );
 
