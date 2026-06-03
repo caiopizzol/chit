@@ -310,6 +310,55 @@ describe("execution policy", () => {
 		expect(m.policy).toMatchObject({ implementStep: "build", reviewStep: "check" });
 	});
 
+	test("loop policy accepts structured requiredChecks (args defaults to [])", () => {
+		const m = parseManifest({
+			...LOOP_BASE,
+			policy: {
+				kind: "loop",
+				implementStep: "implement",
+				reviewStep: "review",
+				requiredChecks: [
+					{ command: "bun", args: ["test"], name: "tests", timeoutMs: 120000 },
+					{ command: "make" },
+				],
+			},
+		});
+		expect(m.policy).toMatchObject({
+			kind: "loop",
+			requiredChecks: [
+				{ command: "bun", args: ["test"], name: "tests", timeoutMs: 120000 },
+				{ command: "make", args: [] },
+			],
+		});
+	});
+
+	const loopWithChecks = (requiredChecks: unknown) => ({
+		...LOOP_BASE,
+		policy: { kind: "loop", implementStep: "implement", reviewStep: "review", requiredChecks },
+	});
+
+	test("rejects a non-array requiredChecks", () => {
+		expectManifestError(loopWithChecks("bun test"), "policy.requiredChecks");
+	});
+
+	test("rejects an unknown per-check field (no env / cwd / shell)", () => {
+		expectManifestError(
+			loopWithChecks([{ command: "bun", args: ["test"], env: { CI: "1" } }]),
+			"policy.requiredChecks[0].env",
+		);
+	});
+
+	test("rejects a required check with no command", () => {
+		expectManifestError(loopWithChecks([{ args: ["test"] }]), "policy.requiredChecks[0].command");
+	});
+
+	test("rejects a non-integer required-check timeout", () => {
+		expectManifestError(
+			loopWithChecks([{ command: "bun", args: ["test"], timeoutMs: 0 }]),
+			"policy.requiredChecks[0].timeoutMs",
+		);
+	});
+
 	test("rejects unknown policy kind", () => {
 		expectManifestError({ ...VALID_BASE, policy: { kind: "fanout" } }, "policy.kind");
 	});

@@ -33,9 +33,29 @@ export type NormalizedStep =
 // guess. A `loop` policy declares the implement/check convergence shape: which
 // steps are the implementer and reviewer, and the iteration budget. The reviewer
 // verdict contract (proceed/revise/block) is fixed and NOT configurable here.
+// A verification command chit runs ITSELF after a `proceed` review (ground truth,
+// not a model claim). Structured so chit spawns it with NO shell: `command` + `args`
+// go straight to the process (no quoting/injection surface). `name` labels it in the
+// trace; `timeoutMs` bounds it. Deliberately minimal: no env, cwd, or shell strings.
+export interface RequiredCheck {
+	command: string;
+	args: string[];
+	name?: string;
+	timeoutMs?: number;
+}
+
 export type NormalizedPolicy =
 	| { kind: "one-shot" }
-	| { kind: "loop"; implementStep: string; reviewStep: string; maxIterations?: number };
+	| {
+			kind: "loop";
+			implementStep: string;
+			reviewStep: string;
+			maxIterations?: number;
+			// chit-executed verification (see RequiredCheck). When present, chit runs these
+			// after a `proceed` review and their result is authoritative over the reviewer's
+			// self-report. Absent -> the loop falls back to reviewer-reported verification.
+			requiredChecks?: RequiredCheck[];
+	  };
 
 export interface NormalizedManifest {
 	schema: Schema;

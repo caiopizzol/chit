@@ -5,6 +5,7 @@ import type {
 	NormalizedInput,
 	NormalizedPolicy,
 	NormalizedStep,
+	RequiredCheck,
 	SessionPolicy,
 	TemplateRef,
 } from "./types.ts";
@@ -78,7 +79,16 @@ const ALLOWED_CALL_KEYS = new Set(["call", "prompt"]);
 const ALLOWED_FORMAT_KEYS = new Set(["format"]);
 
 const ALLOWED_POLICY_KINDS: ReadonlySet<string> = new Set(["one-shot", "loop"]);
-const ALLOWED_LOOP_POLICY_KEYS = new Set(["kind", "implementStep", "reviewStep", "maxIterations"]);
+const ALLOWED_LOOP_POLICY_KEYS = new Set([
+	"kind",
+	"implementStep",
+	"reviewStep",
+	"maxIterations",
+	"requiredChecks",
+]);
+// Strict per-check allowlist: command + args + label + timeout only. No env, cwd, or
+// shell strings -- a required check is a process chit spawns, not a shell snippet.
+const ALLOWED_REQUIRED_CHECK_KEYS = new Set(["command", "args", "name", "timeoutMs"]);
 
 const TEMPLATE_REF_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 
@@ -425,7 +435,45 @@ function parsePolicy(raw: unknown, steps: Record<string, NormalizedStep>): Norma
 		}
 		policy.maxIterations = n;
 	}
+	if (raw.requiredChecks !== undefined) {
+		policy.requiredChecks = parseRequiredChecks(raw.requiredChecks);
+	}
 	return policy;
+}
+
+// Parse policy.requiredChecks: an array of structured commands chit runs itself.
+// Each entry is {command, args?, name?, timeoutMs?} with a strict key allowlist, so
+// env/cwd/shell-string fields are rejected rather than silently ignored.
+function parseRequiredChecks(raw: unknown): RequiredCheck[] {
+	if (!Array.isArray(raw)) throw new ManifestError("policy.requiredChecks", "must be an array");
+	return raw.map((entry, i) => {
+		const at = `policy.requiredChecks[${i}]`;
+		if (!isObject(entry)) throw new ManifestError(at, "must be an object");
+		for (const k of Object.keys(entry)) {
+			if (!ALLOWED_REQUIRED_CHECK_KEYS.has(k))
+				throw new ManifestError(
+					`${at}.${k}`,
+					"unknown field (only command, args, name, timeoutMs)",
+				);
+		}
+		const check: RequiredCheck = {
+			command: reqNonEmptyString(entry.command, `${at}.command`),
+			args: [],
+		};
+		if (entry.args !== undefined) {
+			if (!Array.isArray(entry.args) || entry.args.some((a) => typeof a !== "string"))
+				throw new ManifestError(`${at}.args`, "must be an array of strings");
+			check.args = entry.args as string[];
+		}
+		if (entry.name !== undefined) check.name = reqNonEmptyString(entry.name, `${at}.name`);
+		if (entry.timeoutMs !== undefined) {
+			const n = entry.timeoutMs;
+			if (typeof n !== "number" || !Number.isInteger(n) || n < 1)
+				throw new ManifestError(`${at}.timeoutMs`, "must be an integer >= 1");
+			check.timeoutMs = n;
+		}
+		return check;
+	});
 }
 
 // Derive the surface capabilities a manifest needs from its inputs and
