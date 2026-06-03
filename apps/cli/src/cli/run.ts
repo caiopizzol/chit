@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { NormalizedManifest } from "@chit-run/core";
+import type { NormalizedConfig, NormalizedManifest } from "@chit-run/core";
 import {
 	buildGraphModel,
 	collectInvocationWarnings,
@@ -10,14 +10,15 @@ import {
 	findUnknownAgents,
 	parseManifest,
 	renderShow,
+	resolveManifest,
 	resolveParticipantSnapshots,
 	type ShowFormat,
 } from "@chit-run/core";
 import { AdapterError, buildAdapter } from "../adapters/factory.ts";
-import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
+import { loadConfig } from "../config/load.ts";
 import { JobStore } from "../jobs/store.ts";
 import { runJobWorker } from "../jobs/worker.ts";
 import { loopLogDir } from "../loops/location.ts";
@@ -448,9 +449,15 @@ export async function runMain(argv: string[]): Promise<number> {
 		return 2;
 	}
 
+	// Parse, load the config (agents + roles), and RESOLVE before any governance
+	// check: resolution can change requires (a role can carry a per_scope session
+	// parse cannot see), so the capability check below must run on the resolved
+	// manifest. resolveManifest throws on an unknown role / no-agent participant.
 	let manifest: NormalizedManifest;
+	let config: NormalizedConfig;
 	try {
-		manifest = parseManifest(manifestRaw);
+		config = loadConfig();
+		manifest = resolveManifest(parseManifest(manifestRaw), { roles: config.roles });
 	} catch (e) {
 		process.stderr.write(`chit: invalid manifest: ${(e as Error).message}\n`);
 		return 2;
@@ -492,7 +499,7 @@ export async function runMain(argv: string[]): Promise<number> {
 		return 2;
 	}
 
-	const registry = loadRegistry();
+	const registry = config.registry;
 
 	const unknownAgents = findUnknownAgents(manifest, registry);
 	if (unknownAgents.length > 0) {
@@ -741,14 +748,16 @@ function runShow(args: ParsedArgs): number {
 	}
 
 	let manifest: NormalizedManifest;
+	let config: NormalizedConfig;
 	try {
-		manifest = parseManifest(raw);
+		config = loadConfig();
+		manifest = resolveManifest(parseManifest(raw), { roles: config.roles });
 	} catch (e) {
 		process.stderr.write(`chit: invalid manifest: ${(e as Error).message}\n`);
 		return 2;
 	}
 
-	const registry = loadRegistry();
+	const registry = config.registry;
 	let model: ReturnType<typeof buildGraphModel>;
 	try {
 		model = buildGraphModel(manifest, registry, args.showSurface);
@@ -852,7 +861,9 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 	const { PathError, startStudio } = await import("@chit-run/studio/server");
 	let handle: { url: string; stop(): void };
 	try {
-		const registry = loadRegistry();
+		// Studio gets the registry today; Stage 5.4 injects roles too so its server can
+		// resolve role refs before building the graph model.
+		const registry = loadConfig().registry;
 		handle = await startStudio({
 			cwd: process.cwd(),
 			explicitPath: args.manifestPath,
