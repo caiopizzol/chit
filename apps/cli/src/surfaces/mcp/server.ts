@@ -107,16 +107,12 @@ const runController = new RunController(new ControllerStore(), jobStore);
 // binary imports this module to expose `chit mcp`, so importing it must not read
 // ~/.config/chit/config.json (that read belongs to a running server, not to every
 // `chit` invocation). loadConfig can also throw on a malformed config; deferring it
-// keeps that failure on the mcp path, not on import. getRegistry stays as a shim over
-// the cached config so the existing call sites are unchanged; getConfig exposes the
-// roles for the resolve boundaries.
+// keeps that failure on the mcp path, not on import. Call sites read `.registry` and
+// `.roles` off the cached config directly.
 let configCache: ReturnType<typeof loadConfig> | undefined;
 function getConfig(): ReturnType<typeof loadConfig> {
 	configCache ??= loadConfig();
 	return configCache;
-}
-function getRegistry(): ReturnType<typeof loadConfig>["registry"] {
-	return getConfig().registry;
 }
 
 const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
@@ -607,29 +603,32 @@ function launchOneShotJob(p: {
 	allowUnenforced: boolean;
 }): { ok: true; jobId: string; warnings: string[] } | { ok: false; error: string } {
 	const manifestAbs = isAbsolute(p.manifestPath) ? p.manifestPath : resolve(p.cwd, p.manifestPath);
+	// Load config FIRST, in its own try, so a malformed config.json reports as a
+	// config error rather than being misattributed to the manifest below. The loop
+	// launcher (prepareConvergeExecute) and the CLI run path isolate config the same
+	// way. getConfig is memoized, so this resolves the roles the manifest needs and
+	// the registry the governance gate needs from one load.
+	let config: ReturnType<typeof getConfig>;
+	try {
+		config = getConfig();
+	} catch (e) {
+		return { ok: false, error: `could not load config: ${(e as Error).message}` };
+	}
+	const registry = config.registry;
+
 	let manifest: ResolvedManifest;
 	try {
 		// Resolve role refs before governance (validateOneShotAuth reads the resolved
 		// participants). An unknown-role / no-agent failure is reported the same way as
-		// a parse failure. getConfig throws on a malformed config; that escapes to the
-		// handler's catch like the registry-load failure already does below.
+		// a parse failure.
 		manifest = resolveManifest(parseManifest(JSON.parse(readFileSync(manifestAbs, "utf-8"))), {
-			roles: getConfig().roles,
+			roles: config.roles,
 		});
 	} catch (e) {
 		return {
 			ok: false,
 			error: `could not load manifest at ${manifestAbs}: ${(e as Error).message}`,
 		};
-	}
-
-	// A malformed config.json throws from getConfig; return it as an error rather
-	// than letting it escape the tool handler (matches the foreground startRun path).
-	let registry: ReturnType<typeof getRegistry>;
-	try {
-		registry = getRegistry();
-	} catch (e) {
-		return { ok: false, error: `could not load agent registry: ${(e as Error).message}` };
 	}
 	// Governance gate (unknown agents, enforcement, per_scope scope), shared with the
 	// worker's re-validation. The same decision is persisted (allowUnenforced) so the

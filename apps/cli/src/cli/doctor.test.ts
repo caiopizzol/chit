@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, type NormalizedConfig } from "@chit-run/core";
+import { ConfigError, type NormalizedConfig, RegistryError } from "@chit-run/core";
 import {
 	type Check,
 	type DoctorDeps,
@@ -91,6 +91,24 @@ describe("runChecks", () => {
 			deps({
 				loadReg: () => {
 					throw new ConfigError("/x/config.json", "invalid JSON");
+				},
+			}),
+		);
+		expect(byName(checks, "agents").status).toBe("fail");
+		expect(byName(checks, "agents").detail).toContain("invalid config");
+	});
+
+	test("a bad agents section (RegistryError) is a hard failure, not a crash", () => {
+		// parseConfig delegates the agents section to parseRegistry, which throws
+		// RegistryError (a sibling of ConfigError, not a subclass). checkRegistry must
+		// catch it too, or a bad agents entry escapes runChecks and crashes doctor.
+		const checks = runChecks(
+			deps({
+				loadReg: () => {
+					throw new RegistryError(
+						"/x/config.json: agents.codex",
+						"built-in agent id cannot be redefined by user config",
+					);
 				},
 			}),
 		);

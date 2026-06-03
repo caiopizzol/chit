@@ -17,7 +17,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ConfigError, type NormalizedConfig } from "@chit-run/core";
+import { ConfigError, type NormalizedConfig, RegistryError } from "@chit-run/core";
 import { defaultAuditDir } from "../audit/store.ts";
 import { loadConfig } from "../config/load.ts";
 
@@ -153,7 +153,11 @@ function checkRegistry(deps: DoctorDeps): Check {
 	try {
 		config = deps.loadReg();
 	} catch (e) {
-		if (e instanceof ConfigError) {
+		// Both are config-file problems: ConfigError for a malformed top level or
+		// roles section, RegistryError for a bad agents section (parseConfig delegates
+		// agents to parseRegistry, which throws its own type). Catch both, or a bad
+		// agents entry escapes and crashes doctor instead of reporting a failed row.
+		if (e instanceof ConfigError || e instanceof RegistryError) {
 			return {
 				name: "agents",
 				status: "fail",
