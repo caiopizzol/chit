@@ -1,4 +1,4 @@
-import type { NormalizedManifest } from "@chit-run/core";
+import type { ResolvedManifest } from "@chit-run/core";
 import { type PreparedInputs, prepareInputs, RuntimeError, renderTemplate } from "./render.ts";
 import type { AdapterMap, ExecuteOptions, RunResult, TraceEvent } from "./types.ts";
 
@@ -9,7 +9,7 @@ export function buildAgentInput(instructions: string, prompt: string): string {
 	return `Role:\n${instructions}\n\nTask:\n${prompt}`;
 }
 
-function checkAdaptersExist(manifest: NormalizedManifest, adapters: AdapterMap): void {
+function checkAdaptersExist(manifest: ResolvedManifest, adapters: AdapterMap): void {
 	const missing = new Map<string, string[]>();
 	for (const [stepId, step] of Object.entries(manifest.steps)) {
 		if (step.kind !== "call") continue;
@@ -30,7 +30,7 @@ function checkAdaptersExist(manifest: NormalizedManifest, adapters: AdapterMap):
 }
 
 async function runStep(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	stepId: string,
 	preparedInputs: PreparedInputs,
 	stepOutputs: Record<string, string>,
@@ -107,7 +107,7 @@ async function runStep(
 }
 
 export async function executeManifest(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	options: ExecuteOptions,
 ): Promise<RunResult> {
 	const trace: TraceEvent[] = [];

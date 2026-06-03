@@ -26,7 +26,6 @@ import {
 	type LoopStopStatus,
 	type LoopVerdict,
 	type NormalizedConfig,
-	type NormalizedManifest,
 	type NormalizedRegistry,
 	type NormalizedRole,
 	parseManifest,
@@ -85,7 +84,7 @@ export interface LoopSteps {
 	implementStep: string;
 	reviewStep: string;
 }
-export function resolveLoopPolicy(manifest: NormalizedManifest): LoopSteps {
+export function resolveLoopPolicy(manifest: ResolvedManifest): LoopSteps {
 	if (manifest.policy.kind === "loop") {
 		return { implementStep: manifest.policy.implementStep, reviewStep: manifest.policy.reviewStep };
 	}
@@ -527,7 +526,7 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 // adapter per agent, wrap them in the per_scope session coordinator (converge
 // is a per_scope manifest), and run the whole manifest to completion.
 export function buildExecute(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 	scope: string,
 	cwd: string,
@@ -630,7 +629,7 @@ export function prepareConvergeExecute(
 // OUTSIDE the audit wrapper so the recorder sees the session layer's injected
 // prior session and the adapter's returned new session.
 export function makeAuditedExecute(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	baseAdapters: AdapterMap,
 	registry: NormalizedRegistry,
 	scope: string,
@@ -687,7 +686,7 @@ export function makeAuditedExecute(
 // (resolveLoopPolicy). Validate that contract up front so a non-converge manifest
 // fails clearly instead of silently writing a garbage loop log. Returns an error
 // string, or null when the manifest satisfies the contract.
-export function validateConvergeManifest(manifest: NormalizedManifest): string | null {
+export function validateConvergeManifest(manifest: ResolvedManifest): string | null {
 	// Validate the steps this manifest will actually key on: its loop policy's
 	// steps when declared (core already guarantees those are call steps), else the
 	// default implement/review (the contract for a converge manifest with no

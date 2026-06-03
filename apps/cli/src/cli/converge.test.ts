@@ -3,7 +3,15 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type NormalizedRegistry, parseManifest } from "@chit-run/core";
+import { type NormalizedRegistry, parseManifest, resolveManifest } from "@chit-run/core";
+
+// buildExecute / makeAuditedExecute / validateConvergeManifest / resolveLoopPolicy
+// consume a ResolvedManifest now (the type-safety invariant). These fixtures are
+// fully inline, so resolution is a no-op beyond adding provenance.
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
+
 import { AuditStore } from "../audit/store.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import type { AdapterMap } from "../runtime/types.ts";
@@ -961,7 +969,7 @@ describe("converge: makeAuditedExecute (audit wiring)", () => {
 	// A minimal stateless converge-shaped manifest: inputs task/prior_review (the
 	// shape the driver passes), a single call step + format out. Stateless so the
 	// session wrapper passes through and an empty registry suffices.
-	const mini = parseManifest({
+	const mini = resolved({
 		schema: 1,
 		id: "mini-converge",
 		description: "minimal converge-shaped manifest for audit-wiring tests",
@@ -1064,9 +1072,10 @@ describe("converge: makeAuditedExecute (audit wiring)", () => {
 });
 
 describe("loop policy resolution (Stage 2: policy-driven step ids)", () => {
-	// A minimal converge-shaped manifest with the given top-level extras, parsed.
+	// A minimal converge-shaped manifest with the given top-level extras, parsed +
+	// resolved (validateConvergeManifest / resolveLoopPolicy consume a ResolvedManifest).
 	function parseConverge(extra: Record<string, unknown>) {
-		return parseManifest({
+		return resolved({
 			schema: 1,
 			id: "c",
 			description: "converge-shaped",

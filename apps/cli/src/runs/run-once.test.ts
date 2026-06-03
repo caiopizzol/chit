@@ -2,15 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type NormalizedRegistry, parseManifest } from "@chit-run/core";
+import { type NormalizedRegistry, parseManifest, resolveManifest } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import { prepareConvergeExecute } from "../cli/converge.ts";
 import type { AdapterCallRequest, AdapterMap } from "../runtime/types.ts";
 import { runManifestOnce, validateOneShotAuth } from "./run-once.ts";
 
+// runManifestOnce / validateOneShotAuth consume a ResolvedManifest (the type-safety
+// invariant), so fixtures parse then resolve. These manifests are fully inline, so
+// resolution is a no-op beyond adding provenance.
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
+
 // A minimal one-shot manifest: two parallel call steps + a format step, so a run
 // exercises a real DAG. No declared policy -> one-shot (a single pass).
-const MANIFEST = parseManifest({
+const MANIFEST = resolved({
 	schema: 1,
 	id: "echo-run",
 	description: "echo run",
@@ -126,7 +133,7 @@ describe("validateOneShotAuth", () => {
 	// A registry where the manifest's agent resolves (echo present). The empty
 	// REGISTRY above makes every agent unknown, which is the rejection case.
 	const KNOWN = { agents: { echo: {} } } as unknown as NormalizedRegistry;
-	const SCOPED = parseManifest({
+	const SCOPED = resolved({
 		schema: 1,
 		id: "scoped-run",
 		description: "scoped run",
@@ -160,7 +167,7 @@ describe("validateOneShotAuth", () => {
 	});
 
 	test("rejects a loop-policy manifest (a one-shot run must not drive a loop)", () => {
-		const loop = parseManifest({
+		const loop = resolved({
 			schema: 1,
 			id: "loopy",
 			description: "loop",

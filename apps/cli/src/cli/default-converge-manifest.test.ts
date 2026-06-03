@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseManifest } from "@chit-run/core";
+import { parseManifest, resolveManifest } from "@chit-run/core";
 import { validateConvergeManifest } from "./converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "./default-converge-manifest.ts";
 
@@ -18,7 +18,7 @@ describe("DEFAULT_CONVERGE_MANIFEST", () => {
 	});
 
 	test("parses and satisfies the converge contract (implement + review steps)", () => {
-		const manifest = parseManifest(DEFAULT_CONVERGE_MANIFEST);
+		const manifest = resolveManifest(parseManifest(DEFAULT_CONVERGE_MANIFEST), { roles: {} });
 		expect(manifest.id).toBe("converge");
 		expect(validateConvergeManifest(manifest)).toBeNull();
 	});

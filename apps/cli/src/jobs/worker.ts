@@ -19,7 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { type NormalizedManifest, parseManifest, resolveManifest } from "@chit-run/core";
+import { parseManifest, type ResolvedManifest, resolveManifest } from "@chit-run/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
@@ -464,7 +464,7 @@ async function defaultRunOnce(
 	// execute adapters from another. Resolution needs the roles, so load first.
 	const config = loadConfig();
 	const registry = config.registry;
-	let manifest: NormalizedManifest;
+	let manifest: ResolvedManifest;
 	try {
 		// Resolve role references before governance (validateOneShotAuth reads the
 		// resolved participants); an unknown-role / no-agent failure is reported here.

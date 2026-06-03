@@ -7,6 +7,7 @@ import {
 	type AdapterCallStartedEvent,
 	type AdapterEventEvent,
 	parseManifest,
+	resolveManifest,
 	type StepCompletedEvent,
 } from "@chit-run/core";
 import { executeManifest } from "../runtime/execute.ts";
@@ -238,34 +239,37 @@ describe("wrapAdaptersWithAudit", () => {
 
 describe("audit integration via executeManifest", () => {
 	test("a manifest run writes a full audit run: run/step/adapter-call events + blobs", async () => {
-		const manifest = parseManifest({
-			schema: 1,
-			id: "sequential-check",
-			description: "Test-only sequential manifest.",
-			inputs: { issue: { type: "string" } },
-			requires: { can_show_markdown: true },
-			participants: {
-				diagnostician: {
-					agent: "codex",
-					instructions: "Find the likely root cause.",
-					session: "per_scope",
+		const manifest = resolveManifest(
+			parseManifest({
+				schema: 1,
+				id: "sequential-check",
+				description: "Test-only sequential manifest.",
+				inputs: { issue: { type: "string" } },
+				requires: { can_show_markdown: true },
+				participants: {
+					diagnostician: {
+						agent: "codex",
+						instructions: "Find the likely root cause.",
+						session: "per_scope",
+					},
+					verifier: {
+						agent: "claude",
+						instructions: "Verify each claim in the diagnosis.",
+						session: "per_scope",
+					},
 				},
-				verifier: {
-					agent: "claude",
-					instructions: "Verify each claim in the diagnosis.",
-					session: "per_scope",
+				steps: {
+					diagnose: { call: "diagnostician", prompt: "{{ inputs.issue }}" },
+					verify: { call: "verifier", prompt: "{{ steps.diagnose.output }}" },
+					out: {
+						format:
+							"## Diagnosis\n\n{{ steps.diagnose.output }}\n\n## Verification\n\n{{ steps.verify.output }}",
+					},
 				},
-			},
-			steps: {
-				diagnose: { call: "diagnostician", prompt: "{{ inputs.issue }}" },
-				verify: { call: "verifier", prompt: "{{ steps.diagnose.output }}" },
-				out: {
-					format:
-						"## Diagnosis\n\n{{ steps.diagnose.output }}\n\n## Verification\n\n{{ steps.verify.output }}",
-				},
-			},
-			output: "out",
-		});
+				output: "out",
+			}),
+			{ roles: {} },
+		);
 		const rec = recorder("RUN");
 		rec.runStarted();
 		const fake: RuntimeAdapter = {

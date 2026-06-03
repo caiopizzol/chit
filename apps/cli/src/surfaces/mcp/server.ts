@@ -28,6 +28,7 @@ import {
 	type LoopRecord,
 	type NormalizedManifest,
 	parseManifest,
+	type ResolvedManifest,
 	resolveManifest,
 } from "@chit-run/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -606,7 +607,7 @@ function launchOneShotJob(p: {
 	allowUnenforced: boolean;
 }): { ok: true; jobId: string; warnings: string[] } | { ok: false; error: string } {
 	const manifestAbs = isAbsolute(p.manifestPath) ? p.manifestPath : resolve(p.cwd, p.manifestPath);
-	let manifest: NormalizedManifest;
+	let manifest: ResolvedManifest;
 	try {
 		// Resolve role refs before governance (validateOneShotAuth reads the resolved
 		// participants). An unknown-role / no-agent failure is reported the same way as

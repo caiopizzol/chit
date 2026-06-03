@@ -2,8 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NormalizedManifest } from "@chit-run/core";
-import { parseManifest } from "@chit-run/core";
+import { parseManifest, type ResolvedManifest, resolveManifest } from "@chit-run/core";
 import { buildAgentInput, executeManifest } from "./execute.ts";
 import { RuntimeError } from "./render.ts";
 import type { AdapterCallRequest, RuntimeAdapter, TraceEvent } from "./types.ts";
@@ -67,10 +66,17 @@ const SEQUENTIAL_MANIFEST = {
 	output: "out",
 };
 
-function loadManifestFixture(name: string): NormalizedManifest {
-	if (name === "codex-only") return parseManifest(CODEX_ONLY_MANIFEST);
-	if (name === "sequential-check") return parseManifest(SEQUENTIAL_MANIFEST);
-	return parseManifest(JSON.parse(readFileSync(join(EXAMPLES, `${name}.json`), "utf8")));
+// executeManifest now consumes a ResolvedManifest (the type-safety invariant), so
+// fixtures resolve through the real resolveManifest with no roles (the example
+// manifests are fully inline, so resolution is a no-op beyond adding provenance).
+function loadManifestFixture(name: string): ResolvedManifest {
+	const raw =
+		name === "codex-only"
+			? CODEX_ONLY_MANIFEST
+			: name === "sequential-check"
+				? SEQUENTIAL_MANIFEST
+				: JSON.parse(readFileSync(join(EXAMPLES, `${name}.json`), "utf8"));
+	return resolveManifest(parseManifest(raw), { roles: {} });
 }
 
 function echoAdapter(label: string): RuntimeAdapter {

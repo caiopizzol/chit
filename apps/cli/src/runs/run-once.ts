@@ -2,8 +2,8 @@ import {
 	type AuditSurface,
 	findEnforcementGaps,
 	findUnknownAgents,
-	type NormalizedManifest,
 	type NormalizedRegistry,
+	type ResolvedManifest,
 	resolveParticipantSnapshots,
 } from "@chit-run/core";
 import { buildAdapter } from "../adapters/factory.ts";
@@ -54,7 +54,7 @@ export interface RunOnceResult {
 // inputs on every run. On success, returns the unenforced-permission warnings (only
 // non-empty when gaps exist AND were allowed).
 export function validateOneShotAuth(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 	opts: { scope?: string; allowUnenforced: boolean },
 ): { ok: true; warnings: string[] } | { ok: false; error: string } {
@@ -107,7 +107,7 @@ export function validateOneShotAuth(
 // finishes WITHOUT pretending to be a converge loop. Loop convergence stays in
 // the converge driver; this never loops.
 export async function runManifestOnce(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	opts: RunOnceOptions,
 ): Promise<RunOnceResult> {
 	const now = opts.now ?? Date.now;

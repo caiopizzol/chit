@@ -9,6 +9,7 @@ import {
 	findMissingCapabilities,
 	findUnknownAgents,
 	parseManifest,
+	type ResolvedManifest,
 	renderShow,
 	resolveManifest,
 	resolveParticipantSnapshots,
@@ -453,7 +454,7 @@ export async function runMain(argv: string[]): Promise<number> {
 	// check: resolution can change requires (a role can carry a per_scope session
 	// parse cannot see), so the capability check below must run on the resolved
 	// manifest. resolveManifest throws on an unknown role / no-agent participant.
-	let manifest: NormalizedManifest;
+	let manifest: ResolvedManifest;
 	let config: NormalizedConfig;
 	try {
 		config = loadConfig();
