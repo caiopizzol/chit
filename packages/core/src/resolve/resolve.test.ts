@@ -156,6 +156,30 @@ describe("resolveManifest: errors", () => {
 		expect((caught as ResolveError).participantId).toBe("x");
 	});
 
+	// Once parse loosens to allow role refs, an incomplete inline participant becomes a
+	// real path (not just hand-built), so the defensive completeness checks matter.
+	test("an inline participant missing instructions is a ResolveError", () => {
+		expect(() =>
+			resolveManifest(spec({ x: { agent: "claude", session: "per_scope" } }), { roles: {} }),
+		).toThrow(/has no instructions/);
+	});
+
+	test("an inline participant missing session is a ResolveError", () => {
+		expect(() =>
+			resolveManifest(spec({ x: { agent: "claude", instructions: "I." } }), { roles: {} }),
+		).toThrow(/has no session/);
+	});
+
+	test("a model-agnostic role with an instructions override but no agent is still a no-agent ResolveError", () => {
+		// The participant overrides instructions but supplies no agent, and the role has
+		// none: the override does not rescue the missing agent.
+		expect(() =>
+			resolveManifest(spec({ reviewer: { role: "reviewer", instructions: "Override." } }), {
+				roles: { reviewer: REVIEWER_AGNOSTIC },
+			}),
+		).toThrow(/has no default agent and the participant supplied none/);
+	});
+
 	test("agent EXISTENCE is not resolution's job (a bogus agent resolves; findUnknownAgents catches it later)", () => {
 		const r = resolveManifest(
 			spec({ x: { agent: "nope", instructions: "I.", session: "stateless" } }),
