@@ -24,11 +24,15 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { type LoopRecord, type NormalizedManifest, parseManifest } from "@chit-run/core";
+import {
+	type LoopRecord,
+	type NormalizedManifest,
+	parseManifest,
+	resolveManifest,
+} from "@chit-run/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadRegistry } from "../../agents/parse.ts";
 import { listAudit, showAudit } from "../../audit/reader.ts";
 import { AuditStore, AuditStoreError } from "../../audit/store.ts";
 import {
@@ -51,6 +55,7 @@ import {
 } from "../../batches/worktree.ts";
 import { prepareConvergeExecute } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
+import { loadConfig } from "../../config/load.ts";
 import { formatDuration, isStale, jobTiming, pidAlive, runWaitState } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore, JobStoreError } from "../../jobs/store.ts";
@@ -97,15 +102,20 @@ const jobStore = new JobStore();
 // resolution into the durable JobStore for background runs (run_id == jobId). The
 // stepwise/converge tools register and look up through it; see controller.ts.
 const runController = new RunController(new ControllerStore(), jobStore);
-// The agent registry is loaded lazily on first use, not at import. The CLI binary
-// imports this module to expose `chit mcp`, so importing it must not read
-// ~/.config/chit/agents.json (that read belongs to a running server, not to every
-// `chit` invocation). loadRegistry can also throw on a malformed config; deferring
-// it keeps that failure on the mcp path, not on import.
-let registryCache: ReturnType<typeof loadRegistry> | undefined;
-function getRegistry(): ReturnType<typeof loadRegistry> {
-	registryCache ??= loadRegistry();
-	return registryCache;
+// The config (agents + roles) is loaded lazily on first use, not at import. The CLI
+// binary imports this module to expose `chit mcp`, so importing it must not read
+// ~/.config/chit/config.json (that read belongs to a running server, not to every
+// `chit` invocation). loadConfig can also throw on a malformed config; deferring it
+// keeps that failure on the mcp path, not on import. getRegistry stays as a shim over
+// the cached config so the existing call sites are unchanged; getConfig exposes the
+// roles for the resolve boundaries.
+let configCache: ReturnType<typeof loadConfig> | undefined;
+function getConfig(): ReturnType<typeof loadConfig> {
+	configCache ??= loadConfig();
+	return configCache;
+}
+function getRegistry(): ReturnType<typeof loadConfig>["registry"] {
+	return getConfig().registry;
 }
 
 const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
@@ -492,13 +502,20 @@ function launchConvergeJob(p: {
 	} else {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
-	let registry: ReturnType<typeof getRegistry>;
+	let config: ReturnType<typeof getConfig>;
 	try {
-		registry = getRegistry();
+		config = getConfig();
 	} catch (e) {
-		return { ok: false, error: `could not load agent registry: ${(e as Error).message}` };
+		return { ok: false, error: `could not load config: ${(e as Error).message}` };
 	}
-	const prep = prepareConvergeExecute(raw, registry, p.scope, p.cwd, p.allowUnenforced);
+	const prep = prepareConvergeExecute(
+		raw,
+		config.registry,
+		p.scope,
+		p.cwd,
+		p.allowUnenforced,
+		config.roles,
+	);
 	if (!prep.ok) return { ok: false, error: prep.error };
 
 	const loopId = p.loopId ?? crypto.randomUUID();
@@ -591,7 +608,13 @@ function launchOneShotJob(p: {
 	const manifestAbs = isAbsolute(p.manifestPath) ? p.manifestPath : resolve(p.cwd, p.manifestPath);
 	let manifest: NormalizedManifest;
 	try {
-		manifest = parseManifest(JSON.parse(readFileSync(manifestAbs, "utf-8")));
+		// Resolve role refs before governance (validateOneShotAuth reads the resolved
+		// participants). An unknown-role / no-agent failure is reported the same way as
+		// a parse failure. getConfig throws on a malformed config; that escapes to the
+		// handler's catch like the registry-load failure already does below.
+		manifest = resolveManifest(parseManifest(JSON.parse(readFileSync(manifestAbs, "utf-8"))), {
+			roles: getConfig().roles,
+		});
 	} catch (e) {
 		return {
 			ok: false,
@@ -999,10 +1022,11 @@ server.registerTool(
 			runController.sweepLoops(Date.now());
 			const prep = prepareConvergeExecute(
 				raw,
-				getRegistry(),
+				getConfig().registry,
 				scope,
 				runCwd,
 				allow_unenforced_permissions,
+				getConfig().roles,
 			);
 			if (!prep.ok) return errorResult(prep.error);
 			let session: ReturnType<typeof startConvergeSession>;
@@ -1055,7 +1079,8 @@ server.registerTool(
 			run = startRun(crypto.randomUUID(), {
 				rawManifest: raw,
 				inputs,
-				registry: getRegistry(),
+				registry: getConfig().registry,
+				roles: getConfig().roles,
 				...(scope !== undefined && { scope }),
 				invocationCwd: runCwd,
 				allowUnenforcedPermissions: allow_unenforced_permissions,

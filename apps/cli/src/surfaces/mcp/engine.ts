@@ -12,7 +12,9 @@ import {
 	findUnknownAgents,
 	type NormalizedManifest,
 	type NormalizedRegistry,
+	type NormalizedRole,
 	parseManifest,
+	resolveManifest,
 	resolveParticipantSnapshots,
 } from "@chit-run/core";
 import { buildAdapter } from "../../adapters/factory.ts";
@@ -64,6 +66,9 @@ export interface StartRunOptions {
 	rawManifest: unknown;
 	inputs: Record<string, unknown>;
 	registry: NormalizedRegistry;
+	// The role library to resolve participant role references against. Defaults to {}
+	// (a no-op for fully inline manifests), so callers convert incrementally.
+	roles?: Record<string, NormalizedRole>;
 	scope?: string;
 	invocationCwd: string;
 	allowUnenforcedPermissions: boolean;
@@ -77,7 +82,11 @@ export interface StartRunOptions {
 }
 
 export function startRun(runId: string, opts: StartRunOptions): Run {
-	const manifest = parseManifest(opts.rawManifest);
+	// Parse + resolve role references before governance (findUnknownAgents et al read
+	// the resolved participants). resolveManifest throws on an unknown role / a
+	// participant left with no agent; startRun's callers already treat a throw here as
+	// the run-rejected path.
+	const manifest = resolveManifest(parseManifest(opts.rawManifest), { roles: opts.roles ?? {} });
 
 	const unknown = findUnknownAgents(manifest, opts.registry);
 	if (unknown.length > 0) {
