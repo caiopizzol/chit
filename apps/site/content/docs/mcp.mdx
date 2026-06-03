@@ -57,7 +57,7 @@ One public id, and it never shifts meaning.
 `policy` is a property of the manifest, declared once, that decides what a run does.
 
 - **One-shot** (the default when a manifest declares no policy) is a single pass over the DAG. Each ready wave runs once; the run completes when every step is done. Pass `inputs`, not a `task`.
-- **Loop** is the converge pattern: an implementer step and a reviewer step run in turn, and chit reads the reviewer's verdict (`proceed | revise | block`) each round. `proceed` converges, `block` stops, an exhausted `max_iterations` budget stops as `max-iterations`. A loop run takes a `task` and a `scope`, not `inputs`. The bundled default loop is a write-capable Claude implementer and a read-only Codex reviewer; `chit_start` with a bare `task` uses it.
+- **Loop** is the converge pattern: an implementer step and a reviewer step run in turn, and chit reads the reviewer's verdict (`proceed | revise | block`) each round. `proceed` converges **only when the reviewer's verification passed** (it reports structured `checks`); a `proceed` whose checks failed, were blocked, or did not run stops as `needs-decision` for a human to judge, never as a clean converge. `block` stops, an exhausted `max_iterations` budget stops as `max-iterations`. A loop run takes a `task` and a `scope`, not `inputs`. The bundled default loop is a write-capable Claude implementer and a read-only Codex reviewer; `chit_start` with a bare `task` uses it.
 
 ## Start and advance a run
 
@@ -101,7 +101,7 @@ Run status. With a `run_id`: that run's status, and whether it is foreground (su
 Block until a background run or batch reaches a meaningful state, then return the same view as `chit_status` / `chit_batch_status` plus a `waitResult`. This is the "tell me when it's done" tool: reach for it instead of polling `chit_status` in a loop, and never read chit's state files to detect completion (they are private). Read-only: it never advances a batch or mutates a run; it watches the durable state and returns. Emits a heartbeat while waiting; press Esc to stop waiting (the run keeps running). Inputs: `run_id` OR `batch_id`, `timeout_ms?` (default 900000), `cwd?` (batch only).
 
 - With a `run_id` (background runs only): waits until the run is terminal (`completed` / `failed` / `cancelled`, or its worker died), so a crashed worker never hangs the wait. A **foreground** run is rejected (advance it with `chit_next`, which already blocks per unit).
-- With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch (it is read-only; only `chit_batch_advance` mutates state). A blocking-until-fully-done wait would deadlock, since nothing would ever advance the batch. So the operator loop is: `chit_wait` → `chit_batch_advance` → `chit_batch_status`, repeated until the batch reaches `ready_for_review`.
+- With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch (it is read-only; only `chit_batch_advance` mutates state). A blocking-until-fully-done wait would deadlock, since nothing would ever advance the batch. So the operator loop is: `chit_wait` → `chit_batch_advance` → `chit_batch_status`, repeated until the batch is terminal: `ready_for_review` when every task is clean, or `needs_human` when a task needs a decision (a `needs_attention` task) or is blocked.
 
 `waitResult` is `terminal` | `needs_advance` | `timeout`. `needs_advance` means call `chit_batch_advance` now, then wait again; `terminal` means the batch is done.
 
@@ -131,7 +131,7 @@ Plan the graph, create worktrees, launch the initial runnable wave, return immed
 
 ### chit_batch_list
 
-List the batches in this repo, newest first: `batch_id`, `status`, task count, how many tasks are `review_ready` / `failed`, `createdAt`, and `cleanedAt` if it has been cleaned up. Use it to recover a `batch_id` you lost, then `chit_batch_status` for the full view. Read-only. Inputs: `limit?` (newest N), `cwd?`.
+List the batches in this repo, newest first: `batch_id`, `status`, task count, how many tasks are `review_ready` / `needs_attention` / `failed`, `createdAt`, and `cleanedAt` if it has been cleaned up. Use it to recover a `batch_id` you lost, then `chit_batch_status` for the full view. Read-only. Inputs: `limit?` (newest N), `cwd?`.
 
 ### chit_batch_status
 
@@ -139,7 +139,7 @@ Read-only overview: each task's status, live run state/phase, branch/worktree pa
 
 ### chit_batch_advance
 
-The progression trigger. Reconciles finished runs into task state (`converged` -> `review_ready`; `blocked` / `max-iterations` / failed / stale -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished run or runnable tasks. Inputs: `batch_id`, `cwd?`.
+The progression trigger. Reconciles finished runs into task state (`converged` -> `review_ready`; `blocked` / `needs-decision` / `max-iterations` -> `needs_attention`, i.e. the run completed but did not converge clean and a human decides; a vanished/stale job or a failed run -> `failed`; a dependent proceeds only past a `review_ready` task), then launches the next runnable wave. Call it when status reports a finished run or runnable tasks. Inputs: `batch_id`, `cwd?`.
 
 ### chit_batch_cancel
 

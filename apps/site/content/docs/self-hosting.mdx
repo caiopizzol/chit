@@ -54,7 +54,7 @@ Treat the reviewer as an independent second opinion, not ground truth: verify ea
    chit converge --task "<the slice>" --scope <stable-id> --cwd <worktree>
    ```
 
-   Either way it loops implement and check to the reviewer's verdict (`proceed` converges, `block` stops, anything else revises and retries up to the budget, default 3; an unparseable verdict is treated as `block`, never an implicit proceed). It records the loop under chit's state dir (keyed by repo, not in the working tree) and audits each iteration by default.
+   Either way it loops implement and check to the reviewer's verdict (`proceed` converges only when its verification passed -- the reviewer reports structured `checks`; a `proceed` with no passing checks stops as `needs-decision` for you to judge. `block` stops, anything else revises and retries up to the budget, default 3; an unparseable verdict is treated as `block`, never an implicit proceed). It records the loop under chit's state dir (keyed by repo, not in the working tree) and audits each iteration by default.
 3. Inspect what happened: `chit_trace` (or read the loop log) lists each iteration's `auditRef`. Open a transcript with `chit_audit_show` over MCP (pass that `audit_ref`), or with `chit audit show <run-id>` from the terminal (the CLI takes the audit run id that `chit audit list` prints). The transcript carries the prompts, outputs, live adapter events, usage, and the recorded per-participant config.
 4. Run the final gates yourself (see above). The reviewer could not.
 5. Checkpoint with the human. Push only on explicit approval.

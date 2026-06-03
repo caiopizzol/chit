@@ -322,7 +322,7 @@ server.registerTool(
 	"chit_wait",
 	{
 		description:
-			"Block until a background run or batch reaches a meaningful state, then return the same view as chit_status / chit_batch_status plus a waitResult. Use this instead of polling chit_status in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is ready_for_review (a needs_advance result means call chit_batch_advance now, then wait again). Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | timeout. Inputs: run_id OR batch_id, optional timeout_ms (default 900000), cwd (batch only).",
+			"Block until a background run or batch reaches a meaningful state, then return the same view as chit_status / chit_batch_status plus a waitResult. Use this instead of polling chit_status in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is terminal -- ready_for_review (every task clean), needs_human (a task needs a decision or is blocked), failed, or cancelled (a needs_advance result means call chit_batch_advance now, then wait again). Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | timeout. Inputs: run_id OR batch_id, optional timeout_ms (default 900000), cwd (batch only).",
 		inputSchema: {
 			run_id: z
 				.string()
@@ -1488,7 +1488,7 @@ server.registerTool(
 	"chit_batch_start",
 	{
 		description:
-			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_batch_status and call chit_batch_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). To swap the pairing, point manifestPath at your own converge manifest (participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
+			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then drive it with chit_wait (it blocks until a job finishes or a task becomes runnable, instead of polling) followed by chit_batch_advance to launch the next wave, repeating until the batch is terminal. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). To swap the pairing, point manifestPath at your own converge manifest (participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
 		inputSchema: {
 			tasks: z
 				.array(batchTaskSchema)
@@ -1550,7 +1550,7 @@ server.registerTool(
 	"chit_batch_list",
 	{
 		description:
-			"List the batches in this repo, newest first: batch_id, status, task count, how many tasks are review_ready / failed, and whether it has been cleaned up. Use it to recover a batch_id you lost, then chit_batch_status <batch_id> for the full view. Read-only.",
+			"List the batches in this repo, newest first: batch_id, status, task count, how many tasks are review_ready / needs_attention / failed, and whether it has been cleaned up. Use it to recover a batch_id you lost, then chit_batch_status <batch_id> for the full view. Read-only.",
 		inputSchema: {
 			limit: z
 				.number()
@@ -1603,7 +1603,7 @@ server.registerTool(
 	"chit_batch_advance",
 	{
 		description:
-			"Advance a batch: reconcile finished jobs into task state (converged -> review_ready; blocked/max-iterations/failed/stale -> failed; dependents proceed only past a review_ready task), then launch the next runnable wave. The only progression trigger besides start. Call it when chit_batch_status reports runnable tasks or a finished job.",
+			"Advance a batch: reconcile finished jobs into task state (converged -> review_ready; blocked/needs-decision/max-iterations -> needs_attention, i.e. the run completed but did not converge clean and a human decides; a vanished/stale job or a failed run -> failed; dependents proceed only past a review_ready task), then launch the next runnable wave. The only progression trigger besides start. Call it when chit_batch_status reports runnable tasks or a finished job.",
 		inputSchema: {
 			batch_id: z.string().describe("The batch id, from chit_batch_start or chit_batch_list"),
 			cwd: z
