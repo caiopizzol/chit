@@ -19,8 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { type NormalizedManifest, parseManifest } from "@chit-run/core";
-import { loadRegistry } from "../agents/parse.ts";
+import { type NormalizedManifest, parseManifest, resolveManifest } from "@chit-run/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
@@ -29,6 +28,7 @@ import {
 	runConvergeIteration,
 } from "../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
+import { loadConfig } from "../config/load.ts";
 import { stopLoop } from "../loops/log-store.ts";
 import { type RunOnceResult, runManifestOnce, validateOneShotAuth } from "../runs/run-once.ts";
 import type { TraceEvent } from "../runtime/types.ts";
@@ -87,7 +87,15 @@ function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	} else {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
-	const prep = prepareConvergeExecute(raw, loadRegistry(), job.scope, job.cwd, job.allowUnenforced);
+	const config = loadConfig();
+	const prep = prepareConvergeExecute(
+		raw,
+		config.registry,
+		job.scope,
+		job.cwd,
+		job.allowUnenforced,
+		config.roles,
+	);
 	return prep.ok
 		? { ok: true, execute: prep.execute, loopSteps: prep.loopSteps }
 		: { ok: false, error: prep.error };
@@ -432,16 +440,21 @@ async function defaultRunOnce(
 	opts: { signal: AbortSignal; onTrace?: (e: TraceEvent) => void },
 ): Promise<RunOnceResult> {
 	const path = isAbsolute(job.manifestPath) ? job.manifestPath : resolve(job.cwd, job.manifestPath);
+	// Load the config ONCE and validate + run against the same object, so a
+	// concurrent config edit cannot make the worker authorize against one config and
+	// execute adapters from another. Resolution needs the roles, so load first.
+	const config = loadConfig();
+	const registry = config.registry;
 	let manifest: NormalizedManifest;
 	try {
-		manifest = parseManifest(JSON.parse(readFileSync(path, "utf-8")));
+		// Resolve role references before governance (validateOneShotAuth reads the
+		// resolved participants); an unknown-role / no-agent failure is reported here.
+		manifest = resolveManifest(parseManifest(JSON.parse(readFileSync(path, "utf-8"))), {
+			roles: config.roles,
+		});
 	} catch (e) {
 		return { ok: false, error: `could not load manifest at ${path}: ${(e as Error).message}` };
 	}
-	// Load the registry ONCE and validate + run against the same object, so a
-	// concurrent agents.json edit cannot make the worker authorize against one
-	// registry and execute adapters from another.
-	const registry = loadRegistry();
 	// Re-validate governance in this process. launchRun validated at enqueue, but
 	// the manifest file may have changed since; re-run the same checks (with the
 	// persisted allow-unenforced decision) so a now-invalid manifest cannot run.

@@ -25,16 +25,20 @@ import {
 	formatEnforcementGaps,
 	type LoopStopStatus,
 	type LoopVerdict,
+	type NormalizedConfig,
 	type NormalizedManifest,
 	type NormalizedRegistry,
+	type NormalizedRole,
 	parseManifest,
+	type ResolvedManifest,
+	resolveManifest,
 	resolveParticipantSnapshots,
 } from "@chit-run/core";
 import { buildAdapter } from "../adapters/factory.ts";
-import { loadRegistry } from "../agents/parse.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
+import { loadConfig } from "../config/load.ts";
 import { appendIteration, startLoop, stopLoop } from "../loops/log-store.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
@@ -562,10 +566,17 @@ export function prepareConvergeExecute(
 	scope: string,
 	cwd: string,
 	allowUnenforced: boolean,
+	roles: Record<string, NormalizedRole> = {},
 ): PrepareConvergeResult {
-	let manifest: ReturnType<typeof parseManifest>;
+	// Parse + RESOLVE here: prepareConvergeExecute is the single chokepoint every
+	// converge path (CLI, worker, MCP launchers) flows through, so resolving role
+	// references in one place covers them all. An unknown-role / no-agent resolution
+	// failure surfaces as the prep error, same channel as a parse error. `roles`
+	// defaults to {} so a caller that has not yet threaded the config still works on
+	// inline manifests (resolution is a no-op for fully inline participants).
+	let manifest: ResolvedManifest;
 	try {
-		manifest = parseManifest(raw);
+		manifest = resolveManifest(parseManifest(raw), { roles });
 	} catch (e) {
 		return { ok: false, error: (e as Error).message };
 	}
@@ -796,7 +807,20 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 		throw e;
 	}
 
-	let manifest: NormalizedManifest;
+	// Load the config (agents + roles) first: resolution needs the roles, and a
+	// malformed config is reported distinctly from a malformed manifest.
+	let config: NormalizedConfig;
+	try {
+		config = loadConfig();
+	} catch (e) {
+		// e.g. an invalid ~/.config/chit/config.json (ConfigError). Surface it
+		// cleanly rather than as a raw stack, matching the rest of this command.
+		io.err(`chit converge: ${(e as Error).message}\n`);
+		return 1;
+	}
+	const registry = config.registry;
+
+	let manifest: ResolvedManifest;
 	try {
 		// No --manifest: use the embedded default, which works from the published
 		// binary (no examples/ on disk). A given path is read from disk as before.
@@ -804,7 +828,9 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 			parsed.manifestPath !== undefined
 				? JSON.parse(readFileSync(parsed.manifestPath, "utf-8"))
 				: DEFAULT_CONVERGE_MANIFEST;
-		manifest = parseManifest(raw);
+		// Resolve role references against the config so governance + buildExecute below
+		// see concrete participants (an unknown-role / no-agent failure lands here).
+		manifest = resolveManifest(parseManifest(raw), { roles: config.roles });
 	} catch (e) {
 		io.err(
 			`chit converge: failed to load manifest ${parsed.manifestPath ?? "(built-in default)"}: ${(e as Error).message}\n`,
@@ -815,16 +841,6 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 	const shapeError = validateConvergeManifest(manifest);
 	if (shapeError) {
 		io.err(`chit converge: ${shapeError}\n`);
-		return 1;
-	}
-
-	let registry: NormalizedRegistry;
-	try {
-		registry = loadRegistry();
-	} catch (e) {
-		// e.g. an invalid ~/.config/chit/agents.json (RegistryError). Surface it
-		// cleanly rather than as a raw stack, matching the rest of this command.
-		io.err(`chit converge: ${(e as Error).message}\n`);
 		return 1;
 	}
 

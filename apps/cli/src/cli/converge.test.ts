@@ -467,13 +467,14 @@ describe("runConverge (CLI)", () => {
 		}
 	});
 
-	test("an invalid registry exits 1 with a clean message", async () => {
-		// An unreadable ~/.config/chit/agents.json makes loadRegistry throw a
-		// RegistryError; it must surface as a clean `chit converge:` line, not a
-		// raw Bun stack.
+	test("an invalid config exits 1 with a clean message", async () => {
+		// An unreadable ~/.config/chit/config.json makes loadConfig throw a
+		// ConfigError; it must surface as a clean `chit converge:` line, not a
+		// raw Bun stack. (config.json is the single read path now; agents.json is
+		// no longer read.)
 		const configDir = join(cwd, "chit");
 		mkdirSync(configDir, { recursive: true });
-		writeFileSync(join(configDir, "agents.json"), "{ not valid json");
+		writeFileSync(join(configDir, "config.json"), "{ not valid json");
 
 		const saved = {
 			PATH: process.env.PATH,
