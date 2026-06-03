@@ -30,6 +30,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "node:path";
 import {
 	type AdapterUsage,
+	type LoopCheck,
 	type LoopHeaderRecord,
 	type LoopIterationRecord,
 	type LoopRecord,
@@ -38,6 +39,7 @@ import {
 	type LoopVerdict,
 	parseLoopLog,
 	serializeLoopRecord,
+	type Verification,
 	validateLoopLog,
 } from "@chit-run/core";
 import { loopLogDir, repoKey, repoRoot } from "./location.ts";
@@ -128,6 +130,10 @@ export interface AppendOptions {
 	// operator/reviewer attention. Optional; omitted when the workspace was clean.
 	workspaceWarnings?: string[];
 	checksRun: string;
+	// Structured checks behind checksRun's prose, and their rollup. Optional and
+	// written together (verification is meaningless without the checks it summarizes).
+	checks?: LoopCheck[];
+	verification?: Verification;
 	verdict: LoopVerdict;
 	findingCount: number;
 	decision: LoopVerdict;
@@ -169,6 +175,12 @@ export function appendIteration(
 	};
 	if (opts.workspaceWarnings !== undefined && opts.workspaceWarnings.length > 0) {
 		rec.workspaceWarnings = opts.workspaceWarnings;
+	}
+	// checks + verification are written together: verification is the rollup of the
+	// checks, so neither is meaningful alone. Omitted when no checks were reported.
+	if (opts.checks !== undefined && opts.checks.length > 0 && opts.verification !== undefined) {
+		rec.checks = opts.checks;
+		rec.verification = opts.verification;
 	}
 	if (opts.auditRef !== undefined) rec.auditRef = opts.auditRef;
 	if (opts.usage !== undefined) rec.usage = opts.usage;

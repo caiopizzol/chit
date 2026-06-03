@@ -231,6 +231,45 @@ describe("convergeLoop", () => {
 		expect(it.checkDurationMs).toBe(4200);
 	});
 
+	test("records structured checks + derives verification (failed dominates)", async () => {
+		const review = [
+			"Reviewed the diff.",
+			"```json",
+			JSON.stringify({
+				verdict: "proceed",
+				findingCount: 0,
+				checks: [
+					{ command: "bun run typecheck", status: "passed" },
+					{ command: "bun run test", status: "failed", reason: "2 failed in board.test.ts" },
+				],
+				checksRun: "typecheck + test",
+				risk: "none",
+			}),
+			"```",
+		].join("\n");
+		const execute: ConvergeExecute = async () => ({
+			ok: true,
+			output: "",
+			outputs: { implement: "did it", review },
+			trace: [],
+		});
+		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 3, loopId: "V1", execute });
+		const it = firstIteration("V1");
+		expect(it.checks).toEqual([
+			{ command: "bun run typecheck", status: "passed" },
+			{ command: "bun run test", status: "failed", reason: "2 failed in board.test.ts" },
+		]);
+		expect(it.verification).toBe("failed");
+	});
+
+	test("omits checks/verification when the reviewer reports none (additive, byte-identical)", async () => {
+		const { execute } = fakeExecute([reviewJson("proceed")]);
+		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 3, loopId: "V2", execute });
+		const it = firstIteration("V2");
+		expect("checks" in it).toBe(false);
+		expect("verification" in it).toBe(false);
+	});
+
 	test("records token usage summed across implement and review steps", async () => {
 		const review = reviewJson("proceed");
 		const execute: ConvergeExecute = async () => ({

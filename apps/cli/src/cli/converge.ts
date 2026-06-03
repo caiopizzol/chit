@@ -23,6 +23,7 @@ import {
 	findEnforcementGaps,
 	findUnknownAgents,
 	formatEnforcementGaps,
+	type LoopCheck,
 	type LoopStopStatus,
 	type LoopVerdict,
 	type NormalizedConfig,
@@ -32,6 +33,7 @@ import {
 	type ResolvedManifest,
 	resolveManifest,
 	resolveParticipantSnapshots,
+	type Verification,
 } from "@chit-run/core";
 import { buildAdapter } from "../adapters/factory.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
@@ -156,6 +158,43 @@ interface ParsedReview {
 	verdict: LoopVerdict;
 	findingCount: number;
 	checksRun: string;
+	// Structured checks the reviewer reported running, and their rollup. Source is
+	// the reviewer (model-reported) in this slice; chit-executed required_checks
+	// become the authoritative source later. The loop gates `converged` on
+	// verification, NOT on the verdict alone.
+	checks: LoopCheck[];
+	verification: Verification;
+}
+
+const CHECK_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "blocked"]);
+
+// Sanitize the reviewer's self-reported `checks` array, tolerantly: drop any entry
+// that is not a well-formed { command, status } (the review block is untrusted
+// model output, so we never throw here -- a malformed entry is simply ignored).
+function sanitizeChecks(raw: unknown): LoopCheck[] {
+	if (!Array.isArray(raw)) return [];
+	const out: LoopCheck[] = [];
+	for (const e of raw) {
+		if (typeof e !== "object" || e === null) continue;
+		const r = e as Record<string, unknown>;
+		if (typeof r.command !== "string" || r.command.trim() === "") continue;
+		if (typeof r.status !== "string" || !CHECK_STATUSES.has(r.status)) continue;
+		const check: LoopCheck = { command: r.command.trim(), status: r.status as LoopCheck["status"] };
+		if (typeof r.reason === "string" && r.reason.trim() !== "") check.reason = r.reason.trim();
+		out.push(check);
+	}
+	return out;
+}
+
+// The verification rollup over the reported checks. failed dominates (any failed ->
+// failed), then blocked (a check that could not run), then passed (>=1, all passed).
+// No checks reported -> not_run. This is what the loop gates `converged` on: a
+// proceed verdict with verification !== "passed" must not converge clean.
+function deriveVerification(checks: LoopCheck[]): Verification {
+	if (checks.length === 0) return "not_run";
+	if (checks.some((c) => c.status === "failed")) return "failed";
+	if (checks.some((c) => c.status === "blocked")) return "blocked";
+	return "passed";
 }
 
 // The LAST fenced ```json block, parsed to an object — or null if absent or
@@ -187,13 +226,23 @@ function parseReview(reviewText: string): ParsedReview {
 	if (block && rawVerdict && VERDICTS.has(rawVerdict)) {
 		const fc = block.findingCount;
 		const cr = block.checksRun;
+		const checks = sanitizeChecks(block.checks);
 		return {
 			verdict: rawVerdict as LoopVerdict,
 			findingCount: typeof fc === "number" && Number.isInteger(fc) && fc >= 0 ? fc : 0,
 			checksRun: typeof cr === "string" && cr.trim() !== "" ? cr.trim() : CHECKS_RUN_FALLBACK,
+			checks,
+			verification: deriveVerification(checks),
 		};
 	}
-	return { verdict: "block", findingCount: 0, checksRun: CHECKS_RUN_FALLBACK };
+	// No usable block: fail safe to block, with no checks (verification not_run).
+	return {
+		verdict: "block",
+		findingCount: 0,
+		checksRun: CHECKS_RUN_FALLBACK,
+		checks: [],
+		verification: "not_run",
+	};
 }
 
 // The review step's own duration from the run trace — the check duration. 0 if
@@ -412,6 +461,14 @@ export async function runConvergeIteration(
 		changedFiles,
 		workspaceWarnings,
 		checksRun: review.checksRun,
+		// Structured checks + their rollup, when the reviewer reported any. Omitted
+		// (not "not_run") when none were reported, so an iteration that predates this
+		// or simply ran no checks stays byte-identical. The loop gates `converged` on
+		// review.verification regardless of what is persisted here.
+		...(review.checks.length > 0 && {
+			checks: review.checks,
+			verification: review.verification,
+		}),
 		verdict: review.verdict,
 		findingCount: review.findingCount,
 		// Autonomous driver: it follows the reviewer, so decision == verdict.
