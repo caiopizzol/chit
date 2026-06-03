@@ -130,6 +130,28 @@ describe("resolveManifest: role references", () => {
 	});
 });
 
+describe("resolveManifest: recomputes inferred requirements", () => {
+	test("a per_scope session hidden behind a role ref surfaces can_provide_stable_scope", () => {
+		// The spec's participant references a role; parse could not see the role's
+		// per_scope session, so the spec carries no can_provide_stable_scope. Resolution
+		// must derive it from the resolved participant.
+		const s = spec({ reviewer: { role: "reviewer" } });
+		expect(s.requires.can_provide_stable_scope).toBeUndefined(); // not visible pre-resolve
+		const r = resolveManifest(s, { roles: { reviewer: REVIEWER_WITH_AGENT } });
+		expect(r.requires.can_provide_stable_scope).toBe(true);
+		expect(r.inferredRequires.can_provide_stable_scope).toBe(true);
+	});
+
+	test("declared requires are preserved through resolution", () => {
+		const s = { ...spec({ x: { agent: "claude", instructions: "I.", session: "stateless" } }) };
+		s.declaredRequires = { can_show_markdown: true };
+		s.requires = { can_show_markdown: true };
+		const r = resolveManifest(s, { roles: {} });
+		expect(r.requires.can_show_markdown).toBe(true);
+		expect(r.declaredRequires.can_show_markdown).toBe(true);
+	});
+});
+
 describe("resolveManifest: errors", () => {
 	test("an unknown role reference is a ResolveError", () => {
 		expect(() => resolveManifest(spec({ reviewer: { role: "ghost" } }), { roles: {} })).toThrow(

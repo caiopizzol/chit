@@ -7,6 +7,7 @@
 // agent (a model-agnostic role used without a participant agent).
 
 import type { NormalizedRole } from "../config/types.ts";
+import { computeInferredRequires } from "../manifest/parse.ts";
 import type { FilesystemPermission, SessionPolicy } from "../manifest/types.ts";
 import type {
 	ManifestSpec,
@@ -36,7 +37,14 @@ export function resolveManifest(spec: ManifestSpec, ctx: ResolveContext): Resolv
 	for (const [pid, p] of Object.entries(spec.participants)) {
 		participants[pid] = resolveParticipant(pid, p, ctx.roles);
 	}
-	return { ...spec, participants };
+	// Recompute inferred requirements from the RESOLVED participants. A role
+	// reference can carry a per_scope session that parse (role-library-free) could
+	// not see, so can_provide_stable_scope must be derived here, not trusted from the
+	// spec. declaredRequires is the author's own and is preserved; requires is the
+	// union, declared winning, exactly as parse builds it.
+	const inferredRequires = computeInferredRequires(spec.inputs, participants);
+	const requires: Record<string, true> = { ...inferredRequires, ...spec.declaredRequires };
+	return { ...spec, participants, inferredRequires, requires };
 }
 
 function resolveParticipant(

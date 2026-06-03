@@ -381,9 +381,16 @@ function parsePolicy(raw: unknown, steps: Record<string, NormalizedStep>): Norma
 	return policy;
 }
 
-function computeInferredRequires(
-	inputs: Record<string, NormalizedInput>,
-	participants: Record<string, NormalizedParticipant>,
+// Derive the surface capabilities a manifest needs from its inputs and
+// participants. Exported because resolveManifest RE-runs it after resolution: a
+// participant that references a role gets its session from the role, which parse
+// (role-library-free) cannot see, so a per_scope session can be hidden until
+// resolution. The participant type is widened to an optional session so it accepts
+// both a parsed spec (session may be absent on a role ref) and a resolved
+// participant (session concrete).
+export function computeInferredRequires(
+	inputs: Record<string, { type: InputType }>,
+	participants: Record<string, { session?: SessionPolicy }>,
 ): Record<string, true> {
 	const out: Record<string, true> = {};
 	for (const input of Object.values(inputs)) {
