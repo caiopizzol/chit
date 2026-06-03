@@ -510,13 +510,13 @@ describe("runConverge (CLI)", () => {
 			participants: {
 				implementer: {
 					agent: "claude",
-					role: "implement",
+					instructions: "implement",
 					session: "stateless",
 					permissions: { filesystem: "write" },
 				},
 				reviewer: {
 					agent: "claude",
-					role: "review",
+					instructions: "review",
 					session: "stateless",
 					permissions: { filesystem: reviewerPerms },
 				},
@@ -593,7 +593,7 @@ describe("runConverge (CLI)", () => {
 			participants: {
 				implementer: {
 					agent: "claude",
-					role: "implement",
+					instructions: "implement",
 					session: "stateless",
 					permissions: { filesystem: "write" },
 				},
@@ -669,7 +669,7 @@ describe("runConverge (CLI)", () => {
 				participants: {
 					reviewer: {
 						agent: "claude",
-						role: "review",
+						instructions: "review",
 						session: "stateless",
 						permissions: { filesystem: "write" },
 					},
@@ -698,7 +698,7 @@ describe("runConverge (CLI)", () => {
 				participants: {
 					worker: {
 						agent: "claude",
-						role: "worker",
+						instructions: "worker",
 						session: "stateless",
 						permissions: { filesystem: "write" },
 					},
@@ -966,7 +966,7 @@ describe("converge: makeAuditedExecute (audit wiring)", () => {
 		description: "minimal converge-shaped manifest for audit-wiring tests",
 		inputs: { task: { type: "string" }, prior_review: { type: "string" } },
 		requires: { can_show_markdown: true },
-		participants: { worker: { agent: "codex", role: "do the task", session: "stateless" } },
+		participants: { worker: { agent: "codex", instructions: "do the task", session: "stateless" } },
 		steps: {
 			implement: { call: "worker", prompt: "{{ inputs.task }}" },
 			out: { format: "{{ steps.implement.output }}" },
@@ -1071,8 +1071,8 @@ describe("loop policy resolution (Stage 2: policy-driven step ids)", () => {
 			description: "converge-shaped",
 			inputs: { task: { type: "string" }, prior_review: { type: "string", optional: true } },
 			participants: {
-				impl: { agent: "claude", role: "implement", session: "per_scope" },
-				rev: { agent: "codex", role: "review", session: "per_scope" },
+				impl: { agent: "claude", instructions: "implement", session: "per_scope" },
+				rev: { agent: "codex", instructions: "review", session: "per_scope" },
 			},
 			steps: {
 				implement: { call: "impl", prompt: "{{ inputs.task }}" },

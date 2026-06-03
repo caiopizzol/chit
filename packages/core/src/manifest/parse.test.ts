@@ -10,7 +10,7 @@ const VALID_BASE = {
 	id: "test",
 	description: "test manifest",
 	inputs: { q: { type: "string" } },
-	participants: { a: { agent: "codex", role: "test role", session: "stateless" } },
+	participants: { a: { agent: "codex", instructions: "test role", session: "stateless" } },
 	steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
 	output: "s",
 };
@@ -44,7 +44,7 @@ describe("defaults and inference", () => {
 			description: "x",
 			inputs: { files: { type: "file[]" } },
 			requires: { can_pass_files: true },
-			participants: { a: { agent: "codex", role: "x", session: "stateless" } },
+			participants: { a: { agent: "codex", instructions: "x", session: "stateless" } },
 			steps: { s: { call: "a", prompt: "{{ inputs.files }}" } },
 			output: "s",
 		});
@@ -93,7 +93,7 @@ describe("invalid manifests fail with useful errors", () => {
 		expectManifestError(
 			{
 				...VALID_BASE,
-				participants: { a: { agent: "codex", role: "x", session: "forever" } },
+				participants: { a: { agent: "codex", instructions: "x", session: "forever" } },
 			},
 			"participants.a.session",
 			"must be one of",
@@ -226,21 +226,21 @@ describe("reserved ids (prototype-pollution guard)", () => {
 	// own "__proto__" key — exactly the pollution vector being guarded.
 	test("rejects __proto__ as a step id", () => {
 		const raw = JSON.parse(
-			'{"schema":1,"id":"x","description":"d","inputs":{"q":{"type":"string"}},"participants":{"a":{"agent":"codex","role":"r","session":"stateless"}},"steps":{"__proto__":{"call":"a","prompt":"{{ inputs.q }}"}},"output":"__proto__"}',
+			'{"schema":1,"id":"x","description":"d","inputs":{"q":{"type":"string"}},"participants":{"a":{"agent":"codex","instructions":"r","session":"stateless"}},"steps":{"__proto__":{"call":"a","prompt":"{{ inputs.q }}"}},"output":"__proto__"}',
 		);
 		expectManifestError(raw, "steps.__proto__", "reserved");
 	});
 
 	test("rejects constructor as a participant id", () => {
 		const raw = JSON.parse(
-			'{"schema":1,"id":"x","description":"d","inputs":{"q":{"type":"string"}},"participants":{"constructor":{"agent":"codex","role":"r","session":"stateless"}},"steps":{"s":{"call":"constructor","prompt":"{{ inputs.q }}"}},"output":"s"}',
+			'{"schema":1,"id":"x","description":"d","inputs":{"q":{"type":"string"}},"participants":{"constructor":{"agent":"codex","instructions":"r","session":"stateless"}},"steps":{"s":{"call":"constructor","prompt":"{{ inputs.q }}"}},"output":"s"}',
 		);
 		expectManifestError(raw, "participants.constructor", "reserved");
 	});
 
 	test("rejects prototype as an input name", () => {
 		const raw = JSON.parse(
-			'{"schema":1,"id":"x","description":"d","inputs":{"prototype":{"type":"string"}},"participants":{"a":{"agent":"codex","role":"r","session":"stateless"}},"steps":{"s":{"call":"a","prompt":"{{ inputs.prototype }}"}},"output":"s"}',
+			'{"schema":1,"id":"x","description":"d","inputs":{"prototype":{"type":"string"}},"participants":{"a":{"agent":"codex","instructions":"r","session":"stateless"}},"steps":{"s":{"call":"a","prompt":"{{ inputs.prototype }}"}},"output":"s"}',
 		);
 		expectManifestError(raw, "inputs.prototype", "reserved");
 	});
@@ -255,8 +255,8 @@ describe("execution policy", () => {
 		description: "loop-shaped manifest",
 		inputs: { task: { type: "string" } },
 		participants: {
-			impl: { agent: "claude", role: "implement", session: "per_scope" },
-			rev: { agent: "codex", role: "review", session: "per_scope" },
+			impl: { agent: "claude", instructions: "implement", session: "per_scope" },
+			rev: { agent: "codex", instructions: "review", session: "per_scope" },
 		},
 		steps: {
 			implement: { call: "impl", prompt: "{{ inputs.task }}" },

@@ -291,7 +291,7 @@ export async function runStep(
 			const adapter = run.adapters[participant.agent];
 			if (!adapter) throw new RuntimeError(`no adapter for agent "${participant.agent}"`);
 			const prompt = renderTemplate(step.prompt, run.preparedInputs, run.outputs);
-			const input = buildAgentInput(participant.role, prompt);
+			const input = buildAgentInput(participant.instructions, prompt);
 			// Heartbeat on a timer while the adapter call runs. Latest-state text,
 			// not a transcript (no adapter event streaming in the spike).
 			const iv = setInterval(() => {

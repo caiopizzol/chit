@@ -91,7 +91,7 @@ export function validationSeverity(v: ValidationReport | null): ValidationSeveri
 
 export interface ParticipantInfo {
 	agentId: string;
-	role: string;
+	instructions: string;
 	session: SessionPolicy;
 	permissions: { filesystem: FilesystemPermission };
 	adapter: string;
@@ -140,7 +140,7 @@ export function buildGraphModel(
 		const desc = agent ? getAdapterDescriptor(agent.adapter) : undefined;
 		participants[pid] = {
 			agentId: p.agent,
-			role: p.role,
+			instructions: p.instructions,
 			session: p.session,
 			permissions: p.permissions,
 			adapter: adapterKind,

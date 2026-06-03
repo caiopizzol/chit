@@ -45,7 +45,7 @@ An edge from A to B exists exactly because B's template references A. Creating a
 The right rail pairs an always-visible validation panel with an inspector for the selected node, edge, or input.
 
 - The validation panel renders shape-coded indicators for ok, warn, and fail, with rows for capabilities, agents, and permissions.
-- The inspector edits safe fields directly: manifest `description`, participant `role`, `session`, and `permissions.filesystem`, plus the call `prompt` and format `format` templates.
+- The inspector edits safe fields directly: manifest `description`, participant `instructions`, `session`, and `permissions.filesystem`, plus the call `prompt` and format `format` templates.
 
 Edits run on a debounced preview loop. A preview validates a draft without writing; an explicit save validates, writes canonical JSON back to disk, and checks a per-file content hash for conflicts. Save is disabled while validation severity is `error`. A per-file hash is carried through every read and save so a concurrent on-disk change is detected rather than overwritten.
 

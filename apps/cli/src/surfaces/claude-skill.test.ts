@@ -62,7 +62,7 @@ done
 cat > /dev/null
 emit_stream() {
   echo '{"type":"system","subtype":"init","session_id":"'"$1"'"}'
-  echo '{"type":"assistant","message":{"role":"assistant"}}'
+  echo '{"type":"assistant","message":{"instructions":"assistant"}}'
 }
 if [ "$IS_RESUME" = "1" ]; then
   emit_stream "claude-session-2"
@@ -94,7 +94,7 @@ beforeAll(() => {
 		participants: {
 			codex: {
 				agent: "codex",
-				role: "Answer briefly. Cite file:line for any claim about code.",
+				instructions: "Answer briefly. Cite file:line for any claim about code.",
 				session: "stateless",
 			},
 		},
@@ -111,7 +111,7 @@ beforeAll(() => {
 		inputs: { files: { type: "file[]" } },
 		requires: { can_show_markdown: true },
 		participants: {
-			codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+			codex: { agent: "codex", instructions: "Read the files.", session: "stateless" },
 		},
 		steps: {
 			check: { call: "codex", prompt: "{{ inputs.files }}" },
@@ -564,7 +564,7 @@ describe("installClaudeSkill: validation", () => {
 				description: "references an agent that doesn't exist",
 				inputs: { question: { type: "string" } },
 				participants: {
-					ghost: { agent: "does-not-exist", role: "x", session: "stateless" },
+					ghost: { agent: "does-not-exist", instructions: "x", session: "stateless" },
 				},
 				steps: {
 					ask: { call: "ghost", prompt: "{{ inputs.question }}" },

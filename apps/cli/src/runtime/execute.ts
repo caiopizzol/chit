@@ -2,8 +2,11 @@ import type { NormalizedManifest } from "@chit-run/core";
 import { type PreparedInputs, prepareInputs, RuntimeError, renderTemplate } from "./render.ts";
 import type { AdapterMap, ExecuteOptions, RunResult, TraceEvent } from "./types.ts";
 
-export function buildAgentInput(role: string, prompt: string): string {
-	return `Role:\n${role}\n\nTask:\n${prompt}`;
+export function buildAgentInput(instructions: string, prompt: string): string {
+	// The agent-facing "Role:" label is intentionally unchanged by the
+	// role->instructions field rename: this slice is a pure rename, so the exact
+	// bytes sent to agents stay identical (no behavior change).
+	return `Role:\n${instructions}\n\nTask:\n${prompt}`;
 }
 
 function checkAdaptersExist(manifest: NormalizedManifest, adapters: AdapterMap): void {
@@ -67,7 +70,7 @@ async function runStep(
 			session: participant.session,
 			prompt: renderedPrompt,
 		});
-		const input = buildAgentInput(participant.role, renderedPrompt);
+		const input = buildAgentInput(participant.instructions, renderedPrompt);
 		// Don't even start the call if cancellation already landed (e.g. between
 		// this level and the previous one). The adapter also honors signal during
 		// the call; this just avoids spawning a child we would immediately kill.

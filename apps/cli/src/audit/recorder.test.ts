@@ -247,12 +247,12 @@ describe("audit integration via executeManifest", () => {
 			participants: {
 				diagnostician: {
 					agent: "codex",
-					role: "Find the likely root cause.",
+					instructions: "Find the likely root cause.",
 					session: "per_scope",
 				},
 				verifier: {
 					agent: "claude",
-					role: "Verify each claim in the diagnosis.",
+					instructions: "Verify each claim in the diagnosis.",
 					session: "per_scope",
 				},
 			},

@@ -50,15 +50,15 @@ export function isDirty(draftSource: unknown, raw: string): boolean {
 	return !deepEqual(draftSource, parsed);
 }
 
-// Immutably set a participant field on a file-shape draft. role and session
-// are top-level on the participant; filesystem is nested under permissions
-// (created if absent). Returns a new draft; does not mutate the input. Pure
-// so the nested-permissions shape is unit-tested rather than buried in the
-// hook.
+// Immutably set a participant field on a file-shape draft. instructions and
+// session are top-level on the participant; filesystem is nested under
+// permissions (created if absent). Returns a new draft; does not mutate the
+// input. Pure so the nested-permissions shape is unit-tested rather than buried
+// in the hook.
 export function updateParticipantField(
 	draft: Record<string, unknown>,
 	participantId: string,
-	field: "role" | "session" | "filesystem",
+	field: "instructions" | "session" | "filesystem",
 	value: string,
 ): Record<string, unknown> {
 	const participants = (draft.participants ?? {}) as Record<string, Record<string, unknown>>;

@@ -14,12 +14,12 @@
 	"participants": {
 		"codex": {
 			"agent": "codex",
-			"role": "Second opinion advisor. Be specific. Cite file:line when describing code.",
+			"instructions": "Second opinion advisor. Be specific. Cite file:line when describing code.",
 			"session": "per_scope"
 		},
 		"claude": {
 			"agent": "claude",
-			"role": "Second opinion advisor. Be specific. Cite file:line when describing code.",
+			"instructions": "Second opinion advisor. Be specific. Cite file:line when describing code.",
 			"session": "per_scope"
 		}
 	},

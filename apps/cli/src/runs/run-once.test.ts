@@ -15,7 +15,7 @@ const MANIFEST = parseManifest({
 	id: "echo-run",
 	description: "echo run",
 	inputs: { q: { type: "string" } },
-	participants: { e: { agent: "echo", role: "echo back", session: "stateless" } },
+	participants: { e: { agent: "echo", instructions: "echo back", session: "stateless" } },
 	steps: {
 		a: { call: "e", prompt: "{{ inputs.q }}" },
 		b: { call: "e", prompt: "{{ inputs.q }}" },
@@ -131,7 +131,7 @@ describe("validateOneShotAuth", () => {
 		id: "scoped-run",
 		description: "scoped run",
 		inputs: { q: { type: "string" } },
-		participants: { e: { agent: "echo", role: "echo back", session: "per_scope" } },
+		participants: { e: { agent: "echo", instructions: "echo back", session: "per_scope" } },
 		steps: { a: { call: "e", prompt: "{{ inputs.q }}" } },
 		output: "a",
 	});
@@ -166,7 +166,7 @@ describe("validateOneShotAuth", () => {
 			description: "loop",
 			policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 			inputs: { task: { type: "string" } },
-			participants: { e: { agent: "echo", role: "echo", session: "stateless" } },
+			participants: { e: { agent: "echo", instructions: "echo", session: "stateless" } },
 			steps: {
 				implement: { call: "e", prompt: "{{ inputs.task }}" },
 				review: { call: "e", prompt: "check {{ steps.implement.output }}" },
@@ -190,7 +190,7 @@ describe("prepareConvergeExecute policy guard", () => {
 				id: "os",
 				description: "one-shot",
 				inputs: { q: { type: "string" } },
-				participants: { e: { agent: "echo", role: "x", session: "stateless" } },
+				participants: { e: { agent: "echo", instructions: "x", session: "stateless" } },
 				steps: { a: { call: "e", prompt: "{{ inputs.q }}" } },
 				output: "a",
 			},

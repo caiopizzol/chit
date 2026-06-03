@@ -44,7 +44,7 @@ Supervised convergence is currently an operating pattern, not a packaged skill o
 ## Reminders that bite
 
 - Prefer `codex-exec` as the checker: it runs in a hard OS sandbox (`--sandbox read-only`), the firmest read-only guarantee. `claude-cli` also enforces `read_only` via `--permission-mode plan` (a softer, permission-level guarantee inside Claude, not an OS sandbox), so it can serve as a read-only reviewer too; codex stays the default for the strongest boundary.
-- Reuse one `scope` per thread; pass `cwd` set to the repo; do not edit the advisor `role` mid-thread (it is in the session fingerprint and forks a fresh thread).
+- Reuse one `scope` per thread; pass `cwd` set to the repo; do not edit the advisor `instructions` mid-thread (they are in the session fingerprint, so a change forks a fresh thread).
 - Keep the advisor serial per scope (the session store has a read-modify-write race on concurrent same-scope writes).
 
 ## Platform note (others building on top)

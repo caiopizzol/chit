@@ -21,7 +21,7 @@ const ASK_CODEX = parseManifest({
 	participants: {
 		codex: {
 			agent: "codex",
-			role: "Answer briefly. Cite file:line for any claim about code.",
+			instructions: "Answer briefly. Cite file:line for any claim about code.",
 			session: "stateless",
 		},
 	},

@@ -30,7 +30,7 @@ const CHAIN = {
 	id: "chain",
 	description: "test chain",
 	inputs: { x: { type: "string" } },
-	participants: { p: { agent: "fake", role: "r", session: "stateless" } },
+	participants: { p: { agent: "fake", instructions: "r", session: "stateless" } },
 	steps: {
 		a: { call: "p", prompt: "{{ inputs.x }}" },
 		b: { call: "p", prompt: "{{ steps.a.output }}" },
@@ -99,8 +99,8 @@ describe("mcp engine: ready order + DAG guardrail", () => {
 			description: "d",
 			inputs: { task: { type: "string" } },
 			participants: {
-				proposer: { agent: "fake", role: "r", session: "stateless" },
-				verifier: { agent: "fake", role: "r", session: "stateless" },
+				proposer: { agent: "fake", instructions: "r", session: "stateless" },
+				verifier: { agent: "fake", instructions: "r", session: "stateless" },
 			},
 			steps: {
 				propose: { call: "proposer", prompt: "{{ inputs.task }}" },
@@ -287,7 +287,7 @@ describe("mcp engine: startRun rejects per_scope without a scope", () => {
 		description: "d",
 		inputs: { q: { type: "string" } },
 		// codex enforces read_only (no gap), so this isolates the scope check.
-		participants: { a: { agent: "codex", role: "r", session: "per_scope" } },
+		participants: { a: { agent: "codex", instructions: "r", session: "per_scope" } },
 		steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
 		output: "s",
 	};
@@ -317,7 +317,7 @@ describe("mcp engine: isComplete requires every step done", () => {
 		id: "tb",
 		description: "d",
 		inputs: { x: { type: "string" } },
-		participants: { p: { agent: "fake", role: "r", session: "stateless" } },
+		participants: { p: { agent: "fake", instructions: "r", session: "stateless" } },
 		steps: {
 			main: { format: "{{ inputs.x }}" },
 			extra: { call: "p", prompt: "{{ inputs.x }}" }, // independent, not the output

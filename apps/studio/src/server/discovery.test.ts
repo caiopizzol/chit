@@ -20,7 +20,7 @@ function chit(id: string): string {
 		inputs: { q: { type: "string" } },
 		requires: {},
 		participants: {
-			a: { agent: "claude", role: "r", session: "stateless" },
+			a: { agent: "claude", instructions: "r", session: "stateless" },
 		},
 		steps: {
 			s: { call: "a", prompt: "{{ inputs.q }}" },

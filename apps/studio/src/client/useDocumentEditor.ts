@@ -35,7 +35,7 @@ export interface DocumentEditor {
 	setDescription: (value: string) => void;
 	setParticipantField: (
 		participantId: string,
-		field: "role" | "session" | "filesystem",
+		field: "instructions" | "session" | "filesystem",
 		value: string,
 	) => void;
 	setStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
@@ -155,12 +155,12 @@ export function useDocumentEditor(initial: OpenClientState): DocumentEditor {
 		[applyDraft, draftSource],
 	);
 
-	// Edit a participant's role / session / permissions.filesystem. filesystem
-	// is nested under permissions; role and session are top-level on the
-	// participant. Editing here edits the shared participant (a participant can
-	// back several call steps).
+	// Edit a participant's instructions / session / permissions.filesystem.
+	// filesystem is nested under permissions; instructions and session are
+	// top-level on the participant. Editing here edits the shared participant (a
+	// participant can back several call steps).
 	const setParticipantField = useCallback(
-		(participantId: string, field: "role" | "session" | "filesystem", value: string) => {
+		(participantId: string, field: "instructions" | "session" | "filesystem", value: string) => {
 			applyDraft(updateParticipantField(draftSource, participantId, field, value));
 		},
 		[applyDraft, draftSource],

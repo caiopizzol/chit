@@ -52,7 +52,11 @@ export function computeFingerprint(input: FingerprintInput): string {
 				participant.permissions.filesystem === "write" ? "workspace-write" : "read-only",
 		}),
 		baseUrl,
-		role: participant.role,
+		// The hash KEY stays "role" though the field is now `instructions`: the
+		// fingerprint hashes the persona TEXT, and keeping the key preserves existing
+		// session continuity (a pure field rename must not spuriously fork every
+		// per_scope session). Same reasoning as the codexSandbox key-omission above.
+		role: participant.instructions,
 		session: participant.session,
 		permissions: participant.permissions,
 	});

@@ -139,7 +139,7 @@ function CallInspector({
 	resolvedParticipants: Record<string, ParticipantInfo>;
 	onParticipantField: (
 		participantId: string,
-		field: "role" | "session" | "filesystem",
+		field: "instructions" | "session" | "filesystem",
 		value: string,
 	) => void;
 	onStepField: (stepId: string, field: "prompt" | "format", value: string) => void;
@@ -150,7 +150,7 @@ function CallInspector({
 	const prompt = String(steps[data.id]?.prompt ?? "");
 	const participants = (draftSource.participants ?? {}) as Record<string, Record<string, unknown>>;
 	const p = participants[pid] ?? {};
-	const role = String(p.role ?? "");
+	const instructions = String(p.instructions ?? "");
 	const session = String(p.session ?? "stateless");
 	const filesystem = String(
 		((p.permissions as Record<string, unknown> | undefined)?.filesystem ?? "read_only") as string,
@@ -185,16 +185,16 @@ function CallInspector({
 				/>
 			</div>
 			<div className="field">
-				<label className="field-label" htmlFor="call-role">
-					role
+				<label className="field-label" htmlFor="call-instructions">
+					instructions
 				</label>
 				<textarea
-					id="call-role"
+					id="call-instructions"
 					className="inspector-input"
-					value={role}
+					value={instructions}
 					rows={3}
 					spellCheck={false}
-					onChange={(e) => onParticipantField(pid, "role", e.currentTarget.value)}
+					onChange={(e) => onParticipantField(pid, "instructions", e.currentTarget.value)}
 				/>
 			</div>
 			<div className="field">
@@ -301,7 +301,7 @@ function Inspector({
 	resolvedParticipants: Record<string, ParticipantInfo>;
 	onParticipantField: (
 		participantId: string,
-		field: "role" | "session" | "filesystem",
+		field: "instructions" | "session" | "filesystem",
 		value: string,
 	) => void;
 	onStepField: (stepId: string, field: "prompt" | "format", value: string) => void;

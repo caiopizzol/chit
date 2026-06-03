@@ -5,8 +5,16 @@
 	"inputs": { "question": { "type": "string" } },
 	"requires": { "can_show_markdown": true },
 	"participants": {
-		"codex": { "agent": "codex", "role": "Second opinion advisor.", "session": "per_scope" },
-		"claude": { "agent": "claude", "role": "Second opinion advisor.", "session": "per_scope" }
+		"codex": {
+			"agent": "codex",
+			"instructions": "Second opinion advisor.",
+			"session": "per_scope"
+		},
+		"claude": {
+			"agent": "claude",
+			"instructions": "Second opinion advisor.",
+			"session": "per_scope"
+		}
 	},
 	"steps": {
 		"ask_codex": { "call": "codex", "prompt": "{{ inputs.question }}" },

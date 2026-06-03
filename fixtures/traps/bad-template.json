@@ -3,7 +3,9 @@
 	"id": "trap-bad-template",
 	"description": "Template uses a filter, which is not supported.",
 	"inputs": { "q": { "type": "string" } },
-	"participants": { "advisor": { "agent": "claude", "role": "Advisor.", "session": "stateless" } },
+	"participants": {
+		"advisor": { "agent": "claude", "instructions": "Advisor.", "session": "stateless" }
+	},
 	"steps": { "ask": { "call": "advisor", "prompt": "{{ inputs.q | upper }}" } },
 	"output": "ask"
 }

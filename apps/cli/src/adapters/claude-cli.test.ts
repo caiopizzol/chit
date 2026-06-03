@@ -18,7 +18,7 @@ done
 emit_stream() {
   echo '{"type":"system","subtype":"init","session_id":"'"$1"'"}'
   echo '{"type":"stream_event","event":{"type":"content_block_delta"}}'
-  echo '{"type":"assistant","message":{"role":"assistant"}}'
+  echo '{"type":"assistant","message":{"instructions":"assistant"}}'
 }
 
 if [ -n "$CHIT_TEST_SLEEP" ]; then

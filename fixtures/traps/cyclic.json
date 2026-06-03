@@ -3,7 +3,9 @@
 	"id": "trap-cyclic",
 	"description": "Two steps reference each other's output (a cycle).",
 	"inputs": { "q": { "type": "string" } },
-	"participants": { "advisor": { "agent": "claude", "role": "Advisor.", "session": "stateless" } },
+	"participants": {
+		"advisor": { "agent": "claude", "instructions": "Advisor.", "session": "stateless" }
+	},
 	"steps": {
 		"a": { "call": "advisor", "prompt": "{{ inputs.q }} {{ steps.b.output }}" },
 		"b": { "call": "advisor", "prompt": "{{ steps.a.output }}" }

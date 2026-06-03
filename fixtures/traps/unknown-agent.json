@@ -4,7 +4,7 @@
 	"description": "Participant points at an agent that is not in the registry.",
 	"inputs": { "q": { "type": "string" } },
 	"participants": {
-		"advisor": { "agent": "gpt-9000", "role": "Advisor.", "session": "stateless" }
+		"advisor": { "agent": "gpt-9000", "instructions": "Advisor.", "session": "stateless" }
 	},
 	"steps": { "ask": { "call": "advisor", "prompt": "{{ inputs.q }}" } },
 	"output": "ask"

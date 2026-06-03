@@ -44,7 +44,7 @@ done
 cat > /dev/null
 emit_stream() {
   echo '{"type":"system","subtype":"init","session_id":"'"$1"'"}'
-  echo '{"type":"assistant","message":{"role":"assistant"}}'
+  echo '{"type":"assistant","message":{"instructions":"assistant"}}'
 }
 if [ "$IS_RESUME" = "1" ]; then
   emit_stream "claude-session-2"
@@ -75,7 +75,7 @@ beforeAll(() => {
 		participants: {
 			codex: {
 				agent: "codex",
-				role: "Answer briefly. Cite file:line for any claim about code.",
+				instructions: "Answer briefly. Cite file:line for any claim about code.",
 				session: "stateless",
 			},
 		},
@@ -94,7 +94,7 @@ beforeAll(() => {
 		participants: {
 			claude: {
 				agent: "claude",
-				role: "Answer briefly. Cite file:line for any claim about code.",
+				instructions: "Answer briefly. Cite file:line for any claim about code.",
 				session: "stateless",
 			},
 		},
@@ -111,8 +111,8 @@ beforeAll(() => {
 		inputs: { question: { type: "string" } },
 		requires: { can_show_markdown: true },
 		participants: {
-			codex: { agent: "codex", role: "Second opinion advisor.", session: "stateless" },
-			claude: { agent: "claude", role: "Second opinion advisor.", session: "stateless" },
+			codex: { agent: "codex", instructions: "Second opinion advisor.", session: "stateless" },
+			claude: { agent: "claude", instructions: "Second opinion advisor.", session: "stateless" },
 		},
 		steps: {
 			ask_codex: { call: "codex", prompt: "{{ inputs.question }}" },
@@ -131,7 +131,7 @@ beforeAll(() => {
 		inputs: { files: { type: "file[]" } },
 		requires: { can_show_markdown: true },
 		participants: {
-			codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+			codex: { agent: "codex", instructions: "Read the files.", session: "stateless" },
 		},
 		steps: {
 			check: { call: "codex", prompt: "{{ inputs.files }}" },

@@ -48,8 +48,8 @@ const STATEFUL_MANIFEST = {
 	inputs: { q: { type: "string" } },
 	requires: { can_show_markdown: true },
 	participants: {
-		alpha: { agent: "codex", role: "advisor A", session: "per_scope" },
-		beta: { agent: "codex", role: "advisor B", session: "per_scope" },
+		alpha: { agent: "codex", instructions: "advisor A", session: "per_scope" },
+		beta: { agent: "codex", instructions: "advisor B", session: "per_scope" },
 	},
 	steps: {
 		s1: { call: "alpha", prompt: "{{ inputs.q }}" },
@@ -63,7 +63,7 @@ const STATELESS_MANIFEST = {
 	...STATEFUL_MANIFEST,
 	id: "stateless-test",
 	participants: {
-		alpha: { agent: "codex", role: "advisor A", session: "stateless" },
+		alpha: { agent: "codex", instructions: "advisor A", session: "stateless" },
 	},
 	steps: {
 		s1: { call: "alpha", prompt: "{{ inputs.q }}" },
@@ -208,7 +208,7 @@ describe("wrapAdaptersWithSessions: fingerprint invalidation", () => {
 				...STATEFUL_MANIFEST.participants,
 				alpha: {
 					...STATEFUL_MANIFEST.participants.alpha,
-					role: "advisor A (revised)",
+					instructions: "advisor A (revised)",
 				},
 			},
 		});

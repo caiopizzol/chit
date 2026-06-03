@@ -20,7 +20,7 @@ const ASK_CODEX = {
 	participants: {
 		codex: {
 			agent: "codex",
-			role: "Answer briefly. Cite file:line for any claim about code.",
+			instructions: "Answer briefly. Cite file:line for any claim about code.",
 			session: "stateless",
 		},
 	},
@@ -37,7 +37,7 @@ const FILE_INPUT_MANIFEST = {
 	inputs: { files: { type: "file[]" } },
 	requires: { can_show_markdown: true },
 	participants: {
-		codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+		codex: { agent: "codex", instructions: "Read the files.", session: "stateless" },
 	},
 	steps: {
 		check: { call: "codex", prompt: "{{ inputs.files }}" },
@@ -141,13 +141,13 @@ describe("buildGraphModel: effective participant config", () => {
 		participants: {
 			reviewer: {
 				agent: "codex-deep",
-				role: "review",
+				instructions: "review",
 				session: "per_scope",
 				permissions: { filesystem: "read_only" },
 			},
 			implementer: {
 				agent: "claude-opus",
-				role: "implement",
+				instructions: "implement",
 				session: "per_scope",
 				permissions: { filesystem: "read_only" },
 			},
@@ -196,7 +196,7 @@ describe("buildGraphModel: effective participant config", () => {
 			...CONSULT,
 			participants: {
 				...CONSULT.participants,
-				ghost: { agent: "does-not-exist", role: "test", session: "stateless" },
+				ghost: { agent: "does-not-exist", instructions: "test", session: "stateless" },
 			},
 			steps: {
 				...CONSULT.steps,
@@ -223,8 +223,9 @@ describe("buildGraphModel: effective participant config", () => {
 				envKeys: ["OPENAI_BASE_URL"],
 			},
 		});
-		// role is deliberately omitted from the snapshot (it lives in prompt blobs).
-		expect(snaps.reviewer && "role" in snaps.reviewer).toBe(false);
+		// the persona (instructions) is deliberately omitted from the snapshot (it
+		// lives in the prompt blobs, not the run.started participant config).
+		expect(snaps.reviewer && "instructions" in snaps.reviewer).toBe(false);
 	});
 });
 
@@ -270,7 +271,7 @@ describe("buildGraphModel: surface and validation", () => {
 			...CONSULT,
 			participants: {
 				...CONSULT.participants,
-				ghost: { agent: "does-not-exist", role: "test", session: "stateless" },
+				ghost: { agent: "does-not-exist", instructions: "test", session: "stateless" },
 			},
 			steps: {
 				...CONSULT.steps,
@@ -354,7 +355,7 @@ describe("validationSeverity", () => {
 		const manifestWithGhost = parseManifest({
 			...CONSULT,
 			participants: {
-				codex: { agent: "missing", role: "x", session: "stateless" },
+				codex: { agent: "missing", instructions: "x", session: "stateless" },
 			},
 			steps: {
 				s: { call: "codex", prompt: "{{ inputs.question }}" },

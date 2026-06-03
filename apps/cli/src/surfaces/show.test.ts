@@ -20,7 +20,7 @@ const ASK_CODEX = {
 	participants: {
 		codex: {
 			agent: "codex",
-			role: "Answer briefly. Cite file:line for any claim about code.",
+			instructions: "Answer briefly. Cite file:line for any claim about code.",
 			session: "stateless",
 		},
 	},
@@ -36,7 +36,7 @@ const WRITE_CODEX = {
 	participants: {
 		codex: {
 			agent: "codex",
-			role: "Edit the workspace.",
+			instructions: "Edit the workspace.",
 			session: "stateless",
 			permissions: { filesystem: "write" },
 		},
@@ -49,7 +49,7 @@ const FILE_INPUT_MANIFEST = {
 	inputs: { files: { type: "file[]" } },
 	requires: { can_show_markdown: true },
 	participants: {
-		codex: { agent: "codex", role: "Read the files.", session: "stateless" },
+		codex: { agent: "codex", instructions: "Read the files.", session: "stateless" },
 	},
 	steps: {
 		check: { call: "codex", prompt: "{{ inputs.files }}" },
@@ -145,7 +145,7 @@ describe("renderShow: ascii", () => {
 				...CONSULT,
 				participants: {
 					...CONSULT.participants,
-					ghost: { agent: "does-not-exist", role: "test", session: "stateless" },
+					ghost: { agent: "does-not-exist", instructions: "test", session: "stateless" },
 				},
 				steps: {
 					...CONSULT.steps,

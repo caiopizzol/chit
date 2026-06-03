@@ -22,7 +22,7 @@ function chit(id: string, description = "a chit"): string {
 		description,
 		inputs: { q: { type: "string" } },
 		requires: {},
-		participants: { a: { agent: "codex", role: "r", session: "stateless" } },
+		participants: { a: { agent: "codex", instructions: "r", session: "stateless" } },
 		steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
 		output: "s",
 	});
@@ -95,17 +95,17 @@ describe("updateParticipantField", () => {
 	const draft = () => ({
 		schema: 1,
 		participants: {
-			codex: { agent: "codex", role: "old role", session: "per_scope" },
-			claude: { agent: "claude", role: "r", session: "stateless" },
+			codex: { agent: "codex", instructions: "old role", session: "per_scope" },
+			claude: { agent: "claude", instructions: "r", session: "stateless" },
 		},
 	});
 
-	test("sets a top-level field (role) without touching other participants", () => {
-		const next = updateParticipantField(draft(), "codex", "role", "new role");
+	test("sets a top-level field (instructions) without touching other participants", () => {
+		const next = updateParticipantField(draft(), "codex", "instructions", "new instructions");
 		const ps = next.participants as Record<string, Record<string, unknown>>;
-		expect(ps.codex?.role).toBe("new role");
+		expect(ps.codex?.instructions).toBe("new instructions");
 		expect(ps.codex?.agent).toBe("codex");
-		expect(ps.claude).toEqual({ agent: "claude", role: "r", session: "stateless" });
+		expect(ps.claude).toEqual({ agent: "claude", instructions: "r", session: "stateless" });
 	});
 
 	test("sets session", () => {
@@ -134,7 +134,7 @@ describe("updateParticipantField", () => {
 	test("does not mutate the input draft", () => {
 		const d = draft();
 		const before = JSON.stringify(d);
-		updateParticipantField(d, "codex", "role", "changed");
+		updateParticipantField(d, "codex", "instructions", "changed");
 		expect(JSON.stringify(d)).toBe(before);
 	});
 });

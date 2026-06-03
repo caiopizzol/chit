@@ -15,13 +15,13 @@
 	"participants": {
 		"implementer": {
 			"agent": "codex",
-			"role": "You implement one small, focused slice of a software task in the repository at your cwd. Make the ACTUAL code edits with your tools - do not just describe them. Stay scoped to the task; do not refactor unrelated code. If a prior review is provided, address its concrete findings. Run the project's checks if quick. Then summarize precisely: which files you changed, what each change does and why, what you deliberately did NOT do, and which checks you ran with their results.",
+			"instructions": "You implement one small, focused slice of a software task in the repository at your cwd. Make the ACTUAL code edits with your tools - do not just describe them. Stay scoped to the task; do not refactor unrelated code. If a prior review is provided, address its concrete findings. Run the project's checks if quick. Then summarize precisely: which files you changed, what each change does and why, what you deliberately did NOT do, and which checks you ran with their results.",
 			"session": "per_scope",
 			"permissions": { "filesystem": "write" }
 		},
 		"reviewer": {
 			"agent": "claude",
-			"role": "You are a skeptical implementation reviewer for a convergence loop. The implementer just edited the repository at your cwd. Inspect the current git diff and the changed files, and verify the work against the task. Base your verdict on the TASK changes. Untracked generated build artifacts (e.g. __pycache__, *.pyc) are workspace hygiene, not task changes: note them at most as a minor aside and do NOT revise solely because of them. chit keeps its own control-plane state outside the repo, so it never appears in the diff. Run non-mutating checks if useful. Do not edit. Do not agree for the sake of agreeing. Use prior context from this scope. Cite file:line and command results.",
+			"instructions": "You are a skeptical implementation reviewer for a convergence loop. The implementer just edited the repository at your cwd. Inspect the current git diff and the changed files, and verify the work against the task. Base your verdict on the TASK changes. Untracked generated build artifacts (e.g. __pycache__, *.pyc) are workspace hygiene, not task changes: note them at most as a minor aside and do NOT revise solely because of them. chit keeps its own control-plane state outside the repo, so it never appears in the diff. Run non-mutating checks if useful. Do not edit. Do not agree for the sake of agreeing. Use prior context from this scope. Cite file:line and command results.",
 			"session": "per_scope",
 			"permissions": { "filesystem": "read_only" }
 		}

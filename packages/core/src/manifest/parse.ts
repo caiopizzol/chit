@@ -52,8 +52,8 @@ const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
 const ALLOWED_INPUT_KEYS = new Set(["type", "optional"]);
 const ALLOWED_INPUT_TYPES: ReadonlySet<string> = new Set(["string", "file[]"]);
 
-const ALLOWED_PARTICIPANT_KEYS = new Set(["agent", "role", "session", "permissions"]);
-const REQUIRED_PARTICIPANT_KEYS = ["agent", "role", "session"] as const;
+const ALLOWED_PARTICIPANT_KEYS = new Set(["agent", "instructions", "session", "permissions"]);
+const REQUIRED_PARTICIPANT_KEYS = ["agent", "instructions", "session"] as const;
 const ALLOWED_SESSIONS: ReadonlySet<string> = new Set(["stateless", "per_topology", "per_scope"]);
 const ALLOWED_PERMISSION_KEYS = new Set(["filesystem"]);
 const ALLOWED_FILESYSTEM_VALUES: ReadonlySet<string> = new Set(["read_only", "write"]);
@@ -149,7 +149,7 @@ function parseParticipants(raw: unknown): Record<string, NormalizedParticipant> 
 		}
 
 		const agent = reqNonEmptyString(val.agent, `${path}.agent`);
-		const role = reqNonEmptyString(val.role, `${path}.role`);
+		const instructions = reqNonEmptyString(val.instructions, `${path}.instructions`);
 
 		const session = val.session;
 		if (typeof session !== "string" || !ALLOWED_SESSIONS.has(session)) {
@@ -181,7 +181,7 @@ function parseParticipants(raw: unknown): Record<string, NormalizedParticipant> 
 
 		out[name] = {
 			agent,
-			role,
+			instructions,
 			session: session as SessionPolicy,
 			permissions: { filesystem },
 		};

@@ -5,8 +5,8 @@
 	"inputs": { "question": { "type": "string" } },
 	"requires": {},
 	"participants": {
-		"codex": { "agent": "codex", "role": "advisor", "session": "stateless" },
-		"claude": { "agent": "claude", "role": "advisor", "session": "stateless" }
+		"codex": { "agent": "codex", "instructions": "advisor", "session": "stateless" },
+		"claude": { "agent": "claude", "instructions": "advisor", "session": "stateless" }
 	},
 	"steps": {
 		"ask_codex": { "call": "codex", "prompt": "{{ inputs.question }}" },

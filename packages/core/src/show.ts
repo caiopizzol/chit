@@ -269,7 +269,7 @@ function renderHtml(m: GraphModel): string {
   <div class="participant-config">
     ${configBadges}
   </div>
-  <p class="role">${escapeHtml(p.role)}</p>
+  <p class="instructions">${escapeHtml(p.instructions)}</p>
 </div>`;
 		})
 		.join("\n");
@@ -324,7 +324,7 @@ function renderHtml(m: GraphModel): string {
   .participant h3 { margin: 0 0 6px 0; font-size: 14px; }
   .participant-meta { margin-bottom: 6px; }
   .participant-config { margin-bottom: 6px; }
-  .role { margin: 0; font-size: 12px; color: #57606a; }
+  .instructions { margin: 0; font-size: 12px; color: #57606a; }
   .requires-list { font-family: ui-monospace, monospace; font-size: 12px; color: #57606a; }
 </style>
 </head>

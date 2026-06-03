@@ -11,7 +11,10 @@ export interface NormalizedInput {
 
 export interface NormalizedParticipant {
 	agent: string;
-	role: string;
+	// The persona / standing instructions prepended to every call this participant
+	// makes. (Renamed from `role`: "role" now names the reusable role concept; this
+	// field is the instruction text.)
+	instructions: string;
 	session: SessionPolicy;
 	permissions: { filesystem: FilesystemPermission };
 }

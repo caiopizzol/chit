@@ -14,7 +14,7 @@ A chit is a JSON manifest. This page is the reference for what it can declare. T
 | `description`  | yes      | One sentence. Surfaced in the skill/MCP/CLI install artifact.         |
 | `inputs`       | yes      | Map of input name to `{ type, optional? }`. Types: `string`, `file[]`. |
 | `requires`     | no       | Surface capabilities the schema cannot infer. Defaults to `{}`.       |
-| `participants` | yes      | Aliases over registry agents with role, session, and permissions.    |
+| `participants` | yes      | Aliases over registry agents with instructions, session, and permissions. |
 | `steps`        | yes      | Map of step id to step body. Step types: `call`, `format`.            |
 | `output`       | yes      | Step id whose output is the final return value.                       |
 
@@ -23,11 +23,11 @@ A chit is a JSON manifest. This page is the reference for what it can declare. T
 Each entry:
 
 - `agent`: id from the agent registry.
-- `role`: short text describing the participant's identity or responsibility. The runtime prepends it to every step prompt that targets this participant, using a deterministic envelope (see `call` below). Adapters that natively support a system or developer channel may map `role` to that transport later; manifest semantics stay "role is applied before task."
+- `instructions`: short text describing the participant's identity or responsibility (the persona). The runtime prepends it to every step prompt that targets this participant, using a deterministic envelope (see `call` below). Adapters that natively support a system or developer channel may map it to that transport later; manifest semantics stay "instructions are applied before task."
 - `session`: `stateless` | `per_topology` | `per_scope`. `per_scope` means the session persists across runs sharing a scope (e.g. the same Claude session plus worktree). When any participant uses `per_scope`, the runtime infers `can_provide_stable_scope` as a surface requirement.
 - `permissions.filesystem`: `read_only` | `write`. Optional. Default is `read_only`. Only declare it when the participant needs `write`.
 
-Aliases let the same registry agent participate twice with different roles. Without that, aliases are pure renaming and should not exist.
+Aliases let the same registry agent participate twice with different instructions. Without that, aliases are pure renaming and should not exist.
 
 ## Steps
 
@@ -46,13 +46,13 @@ The runtime constructs the final agent input deterministically:
 
 ```
 Role:
-{participant.role}
+{participant.instructions}
 
 Task:
 {rendered step prompt}
 ```
 
-Audit logs and adapter calls always see this shape. Adapters that natively support a separate role/system channel may route the `Role:` portion to that transport instead, but the envelope stays the same so manifests remain transport-agnostic.
+Audit logs and adapter calls always see this shape (the `Role:` label is the fixed envelope; the text under it is the participant's `instructions`). Adapters that natively support a separate role/system channel may route that portion to that transport instead, but the envelope stays the same so manifests remain transport-agnostic.
 
 ### format
 
@@ -109,7 +109,7 @@ A `per_scope` session is keyed by `(scope, manifestId, participantId, fingerprin
 - **scope**: user-supplied via `--scope`, isolates concurrent workspaces.
 - **manifestId**: keeps two manifests from sharing sessions even when both use the same agent.
 - **participantId**: two participants sharing an agent get independent sessions.
-- **fingerprint**: model/role/permissions changes invalidate prior sessions.
+- **fingerprint**: model/instructions/permissions changes invalidate prior sessions.
 
 The fingerprint hashes enough of the `(agent, participant)` pair that a meaningful change starts a fresh session instead of resuming a mismatched one. Sensitive env values (API keys, tokens) are deliberately not in the fingerprint material.
 

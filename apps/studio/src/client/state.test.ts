@@ -15,7 +15,7 @@ function chit(id: string): string {
 		description: `t ${id}`,
 		inputs: { q: { type: "string" } },
 		requires: {},
-		participants: { a: { agent: "claude", role: "r", session: "stateless" } },
+		participants: { a: { agent: "claude", instructions: "r", session: "stateless" } },
 		steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
 		output: "s",
 	});

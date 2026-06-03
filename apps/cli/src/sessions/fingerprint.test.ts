@@ -16,7 +16,7 @@ function agent(overrides: Partial<NormalizedAgent> = {}): NormalizedAgent {
 function participant(overrides: Partial<NormalizedParticipant> = {}): NormalizedParticipant {
 	return {
 		agent: "codex",
-		role: "advisor",
+		instructions: "advisor",
 		session: "per_scope",
 		permissions: { filesystem: "read_only" },
 		...overrides,
@@ -39,11 +39,11 @@ describe("computeFingerprint", () => {
 	test("different role produces different fingerprint", () => {
 		const a = computeFingerprint({
 			agent: agent(),
-			participant: participant({ role: "diagnose root cause" }),
+			participant: participant({ instructions: "diagnose root cause" }),
 		});
 		const b = computeFingerprint({
 			agent: agent(),
-			participant: participant({ role: "verify claims" }),
+			participant: participant({ instructions: "verify claims" }),
 		});
 		expect(a).not.toBe(b);
 	});
@@ -94,7 +94,7 @@ describe("computeFingerprint", () => {
 			},
 			participant: {
 				agent: "claude",
-				role: "implementer",
+				instructions: "implementer",
 				session: "per_scope",
 				permissions: { filesystem: "read_only" },
 			},
