@@ -14,20 +14,32 @@ A chit is a JSON manifest. This page is the reference for what it can declare. T
 | `description`  | yes      | One sentence. Surfaced in the skill/MCP/CLI install artifact.         |
 | `inputs`       | yes      | Map of input name to `{ type, optional? }`. Types: `string`, `file[]`. |
 | `requires`     | no       | Surface capabilities the schema cannot infer. Defaults to `{}`.       |
-| `participants` | yes      | Aliases over registry agents with instructions, session, and permissions. |
+| `participants` | yes      | Inline aliases over registry agents, or references to a config role, with instructions, session, and permissions. |
 | `steps`        | yes      | Map of step id to step body. Step types: `call`, `format`.            |
 | `output`       | yes      | Step id whose output is the final return value.                       |
 
-## Participants
+A participant is either inline or a reference to a named role. An inline participant declares `agent`, `instructions`, and `session` directly. A role reference names a role from config and inherits those fields, restating only what it overrides.
 
-Each entry:
+Fields:
 
-- `agent`: id from the agent registry.
+- `role`: id of a role defined in the `roles` section of `~/.config/chit/config.json`. Optional, and the alternative to declaring `agent`/`instructions`/`session` inline. When present, the participant inherits the role's `agent`, `instructions`, `session`, and `permissions`; any of those the participant also sets replaces the role's value (a shallow replace, not a merge).
+- `agent`: id from the agent registry. Required on an inline participant; an optional override on a role reference. A role with no default agent is model-agnostic, and a participant referencing it must supply one.
 - `instructions`: short text describing the participant's identity or responsibility (the persona). The runtime prepends it to every step prompt that targets this participant, using a deterministic envelope (see `call` below). Adapters that natively support a system or developer channel may map it to that transport later; manifest semantics stay "instructions are applied before task."
-- `session`: `stateless` | `per_topology` | `per_scope`. `per_scope` means the session persists across runs sharing a scope (e.g. the same Claude session plus worktree). When any participant uses `per_scope`, the runtime infers `can_provide_stable_scope` as a surface requirement.
+- `session`: `stateless` | `per_topology` | `per_scope`. `per_scope` means the session persists across runs sharing a scope (e.g. the same Claude session plus worktree). When any participant uses `per_scope`, the runtime infers `can_provide_stable_scope` as a surface requirement. A `per_scope` session inherited from a role counts the same as one declared inline.
 - `permissions.filesystem`: `read_only` | `write`. Optional. Default is `read_only`. Only declare it when the participant needs `write`.
 
-Aliases let the same registry agent participate twice with different instructions. Without that, aliases are pure renaming and should not exist.
+A role reference is the inline form with the shared fields lifted into config:
+
+```json
+"participants": {
+  "reviewer": { "role": "reviewer" },
+  "implementer": { "role": "reviewer", "agent": "claude", "permissions": { "filesystem": "write" } }
+}
+```
+
+Both participants inherit the `reviewer` role's instructions and session. `implementer` overrides the agent and grants write. Role references resolve against config when the chit runs, not when it parses: an unknown role, or a model-agnostic role used without a participant `agent`, is a resolution error reported at run time, not a parse error.
+
+Inline participants still let the same registry agent participate twice with different instructions. Without an inline alias or a role reference, a participant would be pure renaming and should not exist.
 
 ## Steps
 
@@ -135,4 +147,4 @@ None of these block the parser. They are settled for now with the working answer
 4. **`inputs` types beyond `string` and `file[]`.** Add `boolean`, `number`, `enum` only when a recipe needs them.
 5. **Error semantics.** Fail-fast: if any `call` step fails, no downstream step runs. The runtime returns a structured failure envelope (which step failed, the error, partial outputs). Per-step `on_failure: continue` can come later.
 6. **YAML vs JSON.** JSON for now: parses everywhere, no dependency. Revisit if hand-authoring multi-line prompts becomes the dominant path.
-7. **Agent registry location.** `~/.config/chit/agents.json`, with built-in `codex` and `claude` entries that user config merges on top.
+7. **Config location.** `~/.config/chit/config.json`, holding `agents` (the registry, merged over built-in `codex` and `claude`) and `roles` (reusable participant profiles a manifest references by id). There is no separate `agents.json`.

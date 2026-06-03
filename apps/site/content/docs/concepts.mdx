@@ -3,17 +3,21 @@ title: Concepts
 description: Agents, chits, and surfaces, and why manifests are static.
 ---
 
-chit has three layers and one rule: the manifest is the artifact, and a shared runtime executes it.
+chit has a few layers and one rule: the manifest is the artifact, and a shared runtime executes it.
 
 ## Agents
 
-An agent is an invocable participant: Codex CLI, Claude CLI, or anything else reachable through an adapter. Agents live in a registry (`~/.config/chit/agents.json`) with built-in `codex` and `claude` entries that your config merges on top. A manifest never talks to a vendor directly; it names a participant, and the registry resolves it to an adapter.
+An agent is an invocable participant: Codex CLI, Claude CLI, or anything else reachable through an adapter. Agents live in a registry inside your config (`~/.config/chit/config.json`) with built-in `codex` and `claude` entries that your config merges on top. A manifest never talks to a vendor directly; it names a participant, and the registry resolves it to an adapter.
+
+## Roles
+
+A role is a reusable participant profile, defined in the `roles` section of the same config file: instructions (the persona), a session policy, permissions, and optionally a default agent. A participant can reference a role by name instead of spelling those fields out, and override any of them. A role with no default agent is model-agnostic: the chit that references it supplies the agent. Roles keep a shared persona and its governance in one place, so the same reviewer profile is declared once and reused across chits instead of copied into each one.
 
 ## Chits
 
 A chit is a JSON manifest. It declares:
 
-- **participants** - aliases over registry agents, each with instructions (its persona), a session policy, and permissions.
+- **participants** - named slots in the routine, each either inline over a registry agent or a reference to a named role, carrying instructions (its persona), a session policy, and permissions.
 - **steps** - a map of step id to a `call` (invoke a participant) or a `format` (a pure string template).
 - **inputs** and **output** - what flows in, and which step's output is the result.
 

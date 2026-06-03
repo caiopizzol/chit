@@ -62,7 +62,7 @@ describe("buildAdapter", () => {
 	});
 
 	test("forwards agent.noProgressTimeoutMs into both adapter configs", () => {
-		// Without this the no-progress watchdog would be unreachable from agents.json
+		// Without this the no-progress watchdog would be unreachable from config.json
 		// (the registry accepts it, but it must reach the adapter to take effect).
 		const codex = buildAdapter(agent({ adapter: "codex-exec", noProgressTimeoutMs: 90000 }));
 		expect(

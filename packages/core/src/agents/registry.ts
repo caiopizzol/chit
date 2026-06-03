@@ -50,8 +50,8 @@ const BUILT_IN_AGENTS: Readonly<Record<string, NormalizedAgent>> = {
 	// defer to the user's local CLI default so smoke runs stay fast and
 	// resume calls inherit the original session config. Users wanting a
 	// specific profile (e.g., gpt-5.3-codex + xhigh) add a custom agent
-	// like `codex-deep` in ~/.config/chit/agents.json and reference
-	// that id from their manifests.
+	// like `codex-deep` in the `agents` section of ~/.config/chit/config.json
+	// and reference that id from their manifests.
 	codex: {
 		id: "codex",
 		adapter: "codex-exec",
