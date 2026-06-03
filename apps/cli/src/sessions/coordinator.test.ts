@@ -201,7 +201,7 @@ describe("wrapAdaptersWithSessions: fingerprint invalidation", () => {
 		await before.codex?.call(baseReq("alpha", "s1"));
 		expect(inner.calls[0]?.session).toBeUndefined();
 
-		// Same manifest id, same participant id, but the role text changed.
+		// Same manifest id, same participant id, but the instructions text changed.
 		const mutated = parseManifest({
 			...STATEFUL_MANIFEST,
 			participants: {

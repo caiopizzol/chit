@@ -257,9 +257,9 @@ export function buildGraphModel(
 
 // Resolve the per-participant config snapshot to persist at run start, so an
 // audited run records exactly what config it ran with (the registry can change
-// afterward). Reuses buildGraphModel's participant resolution and drops the role
-// text: role already appears in the rendered prompt blobs, and leaving it out
-// keeps the run.started event small and less sensitive.
+// afterward). Reuses buildGraphModel's participant resolution and drops the
+// instructions text: it already appears in the rendered prompt blobs, and leaving
+// it out keeps the run.started event small and less sensitive.
 export function resolveParticipantSnapshots(
 	manifest: NormalizedManifest,
 	registry: NormalizedRegistry,

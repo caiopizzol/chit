@@ -126,7 +126,7 @@ const FILESYSTEMS = ["read_only", "write"];
 // draftSource (the in-progress edit), NOT from the node's graphModel data,
 // which lags by the debounce. Edits funnel through setStepField /
 // setParticipantField, the same lifecycle as the description edit. `prompt`
-// is a step field; role/session/filesystem are participant fields.
+// is a step field; instructions/session/filesystem are participant fields.
 function CallInspector({
 	data,
 	draftSource,

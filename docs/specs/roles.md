@@ -98,9 +98,13 @@ cross-package mechanical rename with a migration note, not a one-file change.
 ## 3. Config: one file
 
 `~/.config/chit/config.json` with `agents` + `roles` sections (roles reference
-agents, so co-edit in one file; avoids cross-file drift). Keep reading
-`agents.json` for back-compat, or migrate it. Filename is the low-stakes part; one
-file is the point.
+agents, so co-edit in one file; avoids cross-file drift). **One read path only:**
+`loadConfig` reads `config.json` and nothing else. Do NOT keep `agents.json` as a
+second long-lived read path - supporting both reintroduces the exact configuration
+ambiguity this change removes. The `agents.json` -> `config.json` move is a
+clean break (clean-break policy: 0.x, no back-compat). If migration help is
+wanted, it is explicit tooling or a doc note (e.g. "rename `agents.json` to
+`config.json` and nest its contents under an `agents` key"), never a fallback read.
 
 ```jsonc
 {

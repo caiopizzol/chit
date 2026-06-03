@@ -13,7 +13,7 @@ An agent is an invocable participant: Codex CLI, Claude CLI, or anything else re
 
 A chit is a JSON manifest. It declares:
 
-- **participants** - aliases over registry agents, each with a role, a session policy, and permissions.
+- **participants** - aliases over registry agents, each with instructions (its persona), a session policy, and permissions.
 - **steps** - a map of step id to a `call` (invoke a participant) or a `format` (a pure string template).
 - **inputs** and **output** - what flows in, and which step's output is the result.
 
