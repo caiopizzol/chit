@@ -12,5 +12,7 @@ export * from "./install-marker.ts";
 export * from "./loops/log.ts";
 export * from "./manifest/parse.ts";
 export * from "./manifest/types.ts";
+export * from "./resolve/resolve.ts";
+export * from "./resolve/types.ts";
 export * from "./shared.ts";
 export * from "./show.ts";
