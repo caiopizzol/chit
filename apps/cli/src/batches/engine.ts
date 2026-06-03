@@ -520,6 +520,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	const reconcilable = anyReconcilable(c, deps);
 	const startableBlocked = c.tasks.filter((t) => isStartable(t, c)).length;
 	const blocked = c.tasks.filter((t) => isBlocked(t, c)).length;
+	const needsAttention = c.tasks.filter((t) => t.status === "needs_attention").length;
 
 	// Every terminal state shares one close-out instruction. Naming the next tool
 	// call matters: an agent follows nextAction literally, and the old bare "review
@@ -536,9 +537,24 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	} else if (c.status === "ready_for_review") {
 		nextAction = `all tasks terminal. ${reviewAndRetire}`;
 	} else if (c.status === "failed") {
-		nextAction = `batch failed; one or more tasks did not converge (see each task's status/error). ${reviewAndRetire}`;
+		nextAction = `batch failed; one or more tasks broke during execution (a dead worker, a worktree error, or a thrown run -- see each task's status/error). ${reviewAndRetire}`;
 	} else if (c.status === "needs_human") {
-		nextAction = `${blocked} task(s) blocked by a failed/cancelled dependency; inspect them and start a fresh batch for the blocked work. ${reviewAndRetire}`;
+		// needs_human means a human must decide: a task that finished without converging
+		// clean (needs_attention), and/or a pending task blocked by an unfinished dep.
+		// Name whichever applies, and keep clean review_ready siblings reviewable.
+		const parts: string[] = [];
+		if (needsAttention > 0)
+			parts.push(
+				`${needsAttention} task(s) need attention: the run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect each one's worktree (changedFiles) and receipt, then decide: fix and start a fresh batch, rerun with a higher budget, or discard.`,
+			);
+		if (blocked > 0)
+			parts.push(
+				`${blocked} task(s) are blocked by an unfinished dependency (failed/cancelled/needs_attention) and can never run; start a fresh batch for them once the upstream is resolved.`,
+			);
+		if (parts.length === 0)
+			parts.push("the batch is stuck with no runnable or active work; inspect the tasks.");
+		parts.push("review_ready tasks (if any) can be reviewed independently.");
+		nextAction = `${parts.join(" ")} ${reviewAndRetire}`;
 	} else if (runnable.length > 0 || reconcilable) {
 		const n = runnable.length;
 		nextAction =
@@ -576,6 +592,7 @@ export interface BatchSummary {
 	status: Batch["status"];
 	taskCount: number;
 	reviewReady: number;
+	needsAttention: number;
 	failed: number;
 	createdAt: string;
 	updatedAt: string;
@@ -588,6 +605,7 @@ export function summarizeBatch(c: Batch): BatchSummary {
 		status: c.status,
 		taskCount: c.tasks.length,
 		reviewReady: c.tasks.filter((t) => t.status === "review_ready").length,
+		needsAttention: c.tasks.filter((t) => t.status === "needs_attention").length,
 		failed: c.tasks.filter((t) => t.status === "failed").length,
 		createdAt: c.createdAt,
 		updatedAt: c.updatedAt,

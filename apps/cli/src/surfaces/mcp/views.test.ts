@@ -119,6 +119,16 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expectNoLeakage(v);
 	});
 
+	test("a needs-decision loop view explains verification did not pass (not a clean stop)", () => {
+		const v = loopRunView(loopSession({ loopId: "loop-nd", terminalStatus: "needs-decision" }));
+		expect(v.status).toBe("needs-decision");
+		expect(v.cancellable).toBe(false);
+		expect(v.nextAction).toContain("verification did not pass");
+		expect(v.nextAction).toContain('chit_trace "loop-nd"');
+		expect(v.nextAction).not.toContain("converged");
+		expectNoLeakage(v);
+	});
+
 	test("background view is keyed by run_id (== job id), drops the job/loop handles", () => {
 		const v = backgroundRunView(job({ runId: "bg-7", auditRefs: ["aud-1"] }));
 		expect(v.run_id).toBe("bg-7");
@@ -136,6 +146,16 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		);
 		expect(v.display).toBe("completed");
 		expect(v.nextAction).toContain("chit_trace");
+		expectNoLeakage(v);
+	});
+
+	test("a needs-decision background view explains verification did not pass", () => {
+		const v = backgroundRunView(
+			job({ runId: "bg-nd", state: "completed", stopStatus: "needs-decision" }),
+		);
+		expect(v.display).toBe("completed");
+		expect(v.nextAction).toContain("verification did not pass");
+		expect(v.nextAction).toContain('chit_trace "bg-nd"');
 		expectNoLeakage(v);
 	});
 
@@ -165,6 +185,20 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(header.repoKey).toBeUndefined();
 		expect(header.task).toBe("t"); // informational fields survive
 		expect(out[1]).toEqual(raw[1]); // iteration record passes through unchanged
+	});
+
+	test("publicLoopRecords preserves an iteration's checks + verification (chit_trace surfaces them)", () => {
+		const raw = [
+			{
+				type: "iteration",
+				n: 1,
+				verdict: "proceed",
+				verification: "failed",
+				checks: [{ command: "bun test", status: "failed", reason: "1 failing" }],
+			},
+		] as unknown as Parameters<typeof publicLoopRecords>[0];
+		// The gate's evidence (why a run did not converge) must reach chit_trace intact.
+		expect(publicLoopRecords(raw)[0]).toEqual(raw[0]);
 	});
 
 	test("safeMcpError reduces storage errors to run-scoped text, passes others through", () => {

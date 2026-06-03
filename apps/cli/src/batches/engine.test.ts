@@ -286,6 +286,28 @@ describe("describeBatch is read-only", () => {
 	});
 });
 
+describe("needs_attention surfacing", () => {
+	test("needs_human nextAction names the needs_attention task, keeps review_ready reviewable", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "needs-decision" });
+		advanceBatch(store, deps, "c1"); // a -> needs_attention, batch -> needs_human
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(view.status).toBe("needs_human");
+		expect(view.nextAction).toContain("need attention");
+		expect(view.nextAction).toContain("review_ready tasks");
+	});
+
+	test("summarizeBatch counts needs_attention separately from failed", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "blocked" });
+		advanceBatch(store, deps, "c1");
+		const summary = summarizeBatch(present(store.get("c1"), "batch c1"));
+		expect(summary.needsAttention).toBe(1);
+		expect(summary.failed).toBe(0);
+		expect(summary.reviewReady).toBe(0);
+	});
+});
+
 describe("cancelBatch", () => {
 	test("cancels active jobs and marks the batch cancelled", () => {
 		startBatch(store, deps, {

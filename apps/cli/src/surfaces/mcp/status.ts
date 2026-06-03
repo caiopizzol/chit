@@ -70,11 +70,22 @@ export interface LoopStatusSummary {
 	nextAction: string;
 }
 
+// needs-decision is the verification gate's "approved but unverified" stop. Every
+// run surface (chit_status, the chit_next/run views) explains it identically -- WHY
+// (the reviewer returned proceed, but verification did not pass) and what to do -- so
+// it never reads as a clean stop. traceTarget is the run id whose chit_trace shows
+// the latest iteration's checks + verification.
+export function needsDecisionNextAction(traceTarget: string): string {
+	return `needs-decision: the reviewer returned proceed but verification did not pass (a check failed, was blocked, or did not run), so chit did not converge it. Inspect chit_trace "${traceTarget}" -- the latest iteration lists its checks and verification -- then decide: accept it, fix and re-run, or treat it as blocked.`;
+}
+
 export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSummary {
 	const stopped = session.terminalStatus !== undefined;
 	const status = session.terminalStatus ?? (session.active ? "running" : "open");
 	const nextAction = stopped
-		? `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
+		? session.terminalStatus === "needs-decision"
+			? needsDecisionNextAction(session.loopId)
+			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
 		: session.active
 			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
 			: `chit_next "${session.loopId}" to run the next iteration; chit_cancel "${session.loopId}" to stop`;
@@ -205,7 +216,9 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 				? "queued; the worker is starting"
 				: display === "stale"
 					? `worker appears dead; chit_status "${job.runId}" to inspect, then start a fresh run`
-					: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_status "${job.runId}"${latestRef ? ` or chit_audit_show { audit_ref: "${latestRef}" }` : ""}`;
+					: stopStatus === "needs-decision"
+						? needsDecisionNextAction(job.runId)
+						: `${display}${stopStatus ? ` (${stopStatus})` : ""}; chit_status "${job.runId}"${latestRef ? ` or chit_audit_show { audit_ref: "${latestRef}" }` : ""}`;
 	// Loop-only detail (loopId, task, iterations, verdict, stopStatus) is present
 	// only for a loop run; a one-shot background run omits all of it. Spread in
 	// place so a loop summary keeps its established field order.

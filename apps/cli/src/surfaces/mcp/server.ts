@@ -85,7 +85,12 @@ import {
 	type StepControllers,
 	startRun,
 } from "./engine.ts";
-import { buildStatus, publicRunSummary, publicTimeline } from "./status.ts";
+import {
+	buildStatus,
+	needsDecisionNextAction,
+	publicRunSummary,
+	publicTimeline,
+} from "./status.ts";
 
 // AbortControllers for in-flight steps, so chit_cancel can stop a running step
 // even after the model's turn is interrupted (the server keeps running).
@@ -856,7 +861,9 @@ export function loopRunView(session: ConvergeSession) {
 	const status = session.terminalStatus ?? (session.active ? "running" : "open");
 	const stopped = session.terminalStatus !== undefined;
 	const nextAction = stopped
-		? `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
+		? session.terminalStatus === "needs-decision"
+			? needsDecisionNextAction(session.loopId)
+			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
 		: session.active
 			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
 			: `chit_next "${session.loopId}" to run the next iteration; chit_cancel "${session.loopId}" to stop`;
@@ -897,7 +904,9 @@ export function backgroundRunView(job: JobRecord) {
 			? `running in the background; chit_status "${job.runId}" to poll, chit_cancel "${job.runId}" to stop`
 			: dj.display === "stale"
 				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run`
-				: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history`,
+				: job.policy === "loop" && job.stopStatus === "needs-decision"
+					? needsDecisionNextAction(job.runId)
+					: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history`,
 	};
 }
 
@@ -1265,7 +1274,7 @@ server.registerTool(
 	"chit_trace",
 	{
 		description:
-			"The history of a run: a one-shot run's step transcript, or a loop/background run's iteration log (each iteration's summary, changed files, verdict, usage, and audit ref). Read-only. Inputs: run_id.",
+			"The history of a run: a one-shot run's step transcript, or a loop/background run's iteration log (each iteration's summary, changed files, verdict, verification and the reviewer's checks, usage, and audit ref). Read-only. Inputs: run_id.",
 		inputSchema: {
 			run_id: z.string().describe("A run id (from chit_start)"),
 		},
