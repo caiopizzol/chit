@@ -2,8 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NormalizedManifest } from "@chit-run/core";
-import { parseManifest, parseRegistry } from "@chit-run/core";
+import type { ResolvedManifest } from "@chit-run/core";
+import { parseManifest, parseRegistry, resolveManifest } from "@chit-run/core";
+
+// wrapAdaptersWithSessions consumes a ResolvedManifest (the type-safety invariant);
+// these fixtures are fully inline, so resolution only adds provenance.
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
+
 import type {
 	AdapterCallRequest,
 	AdapterCallResult,
@@ -72,14 +79,14 @@ const STATELESS_MANIFEST = {
 };
 
 let TMPDIR: string;
-let manifest: NormalizedManifest;
-let statelessManifest: NormalizedManifest;
+let manifest: ResolvedManifest;
+let statelessManifest: ResolvedManifest;
 const registry = parseRegistry(undefined);
 
 beforeEach(() => {
 	TMPDIR = mkdtempSync(join(tmpdir(), "chit-coord-"));
-	manifest = parseManifest(STATEFUL_MANIFEST);
-	statelessManifest = parseManifest(STATELESS_MANIFEST);
+	manifest = resolved(STATEFUL_MANIFEST);
+	statelessManifest = resolved(STATELESS_MANIFEST);
 });
 
 afterEach(() => {
@@ -145,7 +152,7 @@ describe("wrapAdaptersWithSessions: scope isolation", () => {
 	});
 
 	test("different manifestIds don't share sessions", async () => {
-		const otherManifest = parseManifest({ ...STATEFUL_MANIFEST, id: "other-id" });
+		const otherManifest = resolved({ ...STATEFUL_MANIFEST, id: "other-id" });
 		const inner = new EchoSessionAdapter();
 		const store = new FileSessionStore(TMPDIR);
 
@@ -202,7 +209,7 @@ describe("wrapAdaptersWithSessions: fingerprint invalidation", () => {
 		expect(inner.calls[0]?.session).toBeUndefined();
 
 		// Same manifest id, same participant id, but the instructions text changed.
-		const mutated = parseManifest({
+		const mutated = resolved({
 			...STATEFUL_MANIFEST,
 			participants: {
 				...STATEFUL_MANIFEST.participants,

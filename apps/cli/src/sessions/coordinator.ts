@@ -1,4 +1,4 @@
-import type { NormalizedManifest, NormalizedRegistry } from "@chit-run/core";
+import type { NormalizedRegistry, ResolvedManifest } from "@chit-run/core";
 import type { AdapterCallRequest, AdapterMap, RuntimeAdapter } from "../runtime/types.ts";
 import { computeFingerprint } from "./fingerprint.ts";
 import type { SessionKey, SessionStore } from "./types.ts";
@@ -12,7 +12,7 @@ import type { SessionKey, SessionStore } from "./types.ts";
 // session injection per call.
 export function wrapAdaptersWithSessions(
 	adapters: AdapterMap,
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 	scope: string,
 	store: SessionStore,
