@@ -7,7 +7,7 @@
 // output. No shell, no env injection, no retries -- this is chit-executed
 // verification, not a CI runner.
 
-import type { RequiredCheck } from "@chit-run/core";
+import type { LoopCheck, RequiredCheck } from "@chit-run/core";
 
 export const DEFAULT_CHECK_TIMEOUT_MS = 120_000;
 // The loop log must not balloon with full build output, so each result keeps only a
@@ -18,7 +18,11 @@ const MAX_OUTPUT_CHARS = 2_000;
 // exited 0 / non-zero; `blocked` means chit could NOT verify (it never started, timed
 // out, or was cancelled) -- which the loop must treat differently from a real failure.
 export interface CheckResult {
-	name: string; // display label: the check's `name`, else the command + args
+	// The exact command as a display string ("bun test") -- the ground truth of what
+	// ran. Always present, even when the check declared a friendly name.
+	command: string;
+	// The check's declared friendly label, if any ("tests"). Never replaces `command`.
+	name?: string;
 	status: "passed" | "failed" | "blocked";
 	exitCode?: number; // present only when the process actually ran (passed/failed)
 	durationMs: number;
@@ -26,8 +30,17 @@ export interface CheckResult {
 	output: string; // bounded tail of combined stdout+stderr, or the start/timeout note
 }
 
-function label(check: RequiredCheck): string {
-	return check.name ?? [check.command, ...check.args].join(" ");
+// The exact argv as a display string -- the ground truth of what ran.
+function commandDisplay(check: RequiredCheck): string {
+	return [check.command, ...check.args].join(" ");
+}
+
+// The identity fields every result carries: the ground-truth command, plus the
+// friendly name when the check declared one.
+function baseOf(check: RequiredCheck): { command: string; name?: string } {
+	const base: { command: string; name?: string } = { command: commandDisplay(check) };
+	if (check.name !== undefined) base.name = check.name;
+	return base;
 }
 
 // Keep only the last MAX_OUTPUT_CHARS, with a marker, so a huge log degrades to its
@@ -45,7 +58,7 @@ export async function runRequiredCheck(
 	opts: { cwd: string; signal?: AbortSignal; now?: () => number },
 ): Promise<CheckResult> {
 	const now = opts.now ?? Date.now;
-	const name = label(check);
+	const base = baseOf(check);
 	const timeoutMs = check.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
 	const start = now();
 
@@ -61,7 +74,7 @@ export async function runRequiredCheck(
 		});
 	} catch (e) {
 		return {
-			name,
+			...base,
 			status: "blocked",
 			durationMs: now() - start,
 			timedOut: false,
@@ -92,7 +105,7 @@ export async function runRequiredCheck(
 
 		if (timedOut) {
 			return {
-				name,
+				...base,
 				status: "blocked",
 				durationMs,
 				timedOut: true,
@@ -103,7 +116,7 @@ export async function runRequiredCheck(
 		}
 		if (opts.signal?.aborted) {
 			return {
-				name,
+				...base,
 				status: "blocked",
 				durationMs,
 				timedOut: false,
@@ -111,7 +124,7 @@ export async function runRequiredCheck(
 			};
 		}
 		return {
-			name,
+			...base,
 			status: exitCode === 0 ? "passed" : "failed",
 			exitCode,
 			durationMs,
@@ -136,7 +149,7 @@ export async function runRequiredChecks(
 	for (const check of checks) {
 		if (opts.signal?.aborted) {
 			results.push({
-				name: label(check),
+				...baseOf(check),
 				status: "blocked",
 				durationMs: 0,
 				timedOut: false,
@@ -147,4 +160,17 @@ export async function runRequiredChecks(
 		results.push(await runRequiredCheck(check, opts));
 	}
 	return results;
+}
+
+// Map chit's executed results into the recorded LoopCheck shape: `command` carries the
+// ground-truth argv, `name` the friendly label, and `reason` the bounded output tail
+// for a non-passed check ONLY (a passed check needs no reason -- no output noise in
+// the log; the exit code stays internal to CheckResult rather than buried in prose).
+export function checkResultsToLoopChecks(results: CheckResult[]): LoopCheck[] {
+	return results.map((r) => {
+		const check: LoopCheck = { command: r.command, status: r.status };
+		if (r.name !== undefined) check.name = r.name;
+		if (r.status !== "passed") check.reason = r.output;
+		return check;
+	});
 }

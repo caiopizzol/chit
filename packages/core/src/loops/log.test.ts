@@ -96,6 +96,30 @@ describe("convergence log: serialize/validate round-trip", () => {
 		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
 	});
 
+	test("a check name + verificationSource survive the round-trip", () => {
+		// command is the ground-truth argv; name is the friendly label, kept separately.
+		const withSource: LoopIterationRecord = {
+			...iteration,
+			checks: [{ command: "bun test", name: "tests", status: "passed" }],
+			verification: "passed",
+			verificationSource: "chit",
+		};
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(withSource)))).toEqual(withSource);
+	});
+
+	test("a bad verificationSource value is rejected", () => {
+		const bad = { ...JSON.parse(serializeLoopRecord(iteration)), verificationSource: "robot" };
+		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
+	});
+
+	test("a check with an empty name is rejected", () => {
+		const bad = {
+			...JSON.parse(serializeLoopRecord(iteration)),
+			checks: [{ command: "bun test", name: "", status: "passed" }],
+		};
+		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
+	});
+
 	test("optional usage survives the round-trip (full and partial)", () => {
 		const full: LoopIterationRecord = {
 			...iteration,

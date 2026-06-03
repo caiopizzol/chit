@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type CheckResult, runRequiredCheck, runRequiredChecks } from "./required-checks.ts";
+import {
+	type CheckResult,
+	checkResultsToLoopChecks,
+	runRequiredCheck,
+	runRequiredChecks,
+} from "./required-checks.ts";
 
 // These spawn real POSIX binaries (true/false/printf/sleep/seq), which is the point:
 // the runner's contract is about real process semantics (argv, exit codes, timeout),
@@ -100,5 +105,55 @@ describe("runRequiredChecks", () => {
 		});
 		expect(rs[0]?.status).toBe("blocked");
 		expect(rs[0]?.output).toContain("cancelled");
+	});
+});
+
+describe("command vs name + checkResultsToLoopChecks", () => {
+	test("command is the argv display (ground truth); name is the separate label", async () => {
+		const r = await runRequiredCheck(
+			{ command: "true", args: ["--quiet"], name: "liveness" },
+			{ cwd: CWD },
+		);
+		expect(r.command).toBe("true --quiet"); // what actually ran
+		expect(r.name).toBe("liveness"); // the friendly label, kept separate, not a substitute
+	});
+
+	test("a check with no name has none (command still carries the truth)", async () => {
+		const r = await runRequiredCheck({ command: "true", args: [] }, { cwd: CWD });
+		expect(r.command).toBe("true");
+		expect(r.name).toBeUndefined();
+	});
+
+	test("the mapper records command + name, and reason only for non-passed", () => {
+		const checks = checkResultsToLoopChecks([
+			{
+				command: "bun test",
+				name: "tests",
+				status: "passed",
+				durationMs: 1,
+				timedOut: false,
+				output: "ok",
+			},
+			{
+				command: "bun run lint",
+				status: "failed",
+				exitCode: 1,
+				durationMs: 1,
+				timedOut: false,
+				output: "3 problems",
+			},
+			{
+				command: "bun run e2e",
+				status: "blocked",
+				durationMs: 1,
+				timedOut: true,
+				output: "timed out after 80ms",
+			},
+		]);
+		expect(checks).toEqual([
+			{ command: "bun test", name: "tests", status: "passed" }, // passed -> no reason recorded
+			{ command: "bun run lint", status: "failed", reason: "3 problems" },
+			{ command: "bun run e2e", status: "blocked", reason: "timed out after 80ms" },
+		]);
 	});
 });

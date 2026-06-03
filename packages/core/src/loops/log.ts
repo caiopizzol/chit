@@ -26,16 +26,28 @@ export type LoopStopStatus =
 // support. In stage 1 the source is the reviewer's self-reported checks; in stage 2
 // it becomes chit-executed required_checks (the same fields, an authoritative source).
 export type Verification = "passed" | "failed" | "blocked" | "not_run";
+
+// Where an iteration's `verification` came from: the reviewer's self-reported checks
+// (advisory) or commands chit executed itself (ground truth). Recorded so chit_trace
+// makes the distinction explicit rather than presenting both as the same `checks`.
+export type VerificationSource = "reviewer" | "chit";
 // One check behind the checksRun prose. command is the exact command; status is its
 // own result; reason explains a non-pass (a failure summary, or why it was blocked).
 export interface LoopCheck {
+	// The exact command as a display string -- for a chit-executed check this is the
+	// argv joined ("bun test"), the GROUND TRUTH of what ran; for a reviewer-reported
+	// check it is whatever the reviewer claimed it ran. Never a friendly label.
 	command: string;
+	// Optional friendly label (e.g. "tests"). A convenience for display; it is NEVER a
+	// substitute for `command`, which always carries what actually ran.
+	name?: string;
 	status: "passed" | "failed" | "blocked";
 	reason?: string;
 }
 
 const VERDICTS: ReadonlySet<string> = new Set(["proceed", "revise", "block"]);
 const VERIFICATIONS: ReadonlySet<string> = new Set(["passed", "failed", "blocked", "not_run"]);
+const VERIFICATION_SOURCES: ReadonlySet<string> = new Set(["reviewer", "chit"]);
 const CHECK_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "blocked"]);
 const STOP_STATUSES: ReadonlySet<string> = new Set([
 	"converged",
@@ -80,6 +92,9 @@ export interface LoopIterationRecord {
 	// reported. The loop gates `converged` on verification (see Verification).
 	checks?: LoopCheck[];
 	verification?: Verification;
+	// Where `verification` came from (reviewer self-report vs chit-executed). Absent on
+	// records with no verification.
+	verificationSource?: VerificationSource;
 	verdict: LoopVerdict;
 	findingCount: number;
 	decision: LoopVerdict;
@@ -151,6 +166,20 @@ function verificationOf(o: Record<string, unknown>, key: string, ctx: string): V
 	return v as Verification;
 }
 
+function verificationSourceOf(
+	o: Record<string, unknown>,
+	key: string,
+	ctx: string,
+): VerificationSource {
+	const v = o[key];
+	if (typeof v !== "string" || !VERIFICATION_SOURCES.has(v)) {
+		throw new LoopLogError(
+			`${ctx}: "${key}" must be one of ${[...VERIFICATION_SOURCES].join(", ")}`,
+		);
+	}
+	return v as VerificationSource;
+}
+
 function checkArray(o: Record<string, unknown>, key: string, ctx: string): LoopCheck[] {
 	const v = o[key];
 	if (!Array.isArray(v)) throw new LoopLogError(`${ctx}: "${key}" must be an array`);
@@ -165,6 +194,11 @@ function checkArray(o: Record<string, unknown>, key: string, ctx: string): LoopC
 			throw new LoopLogError(`${ec}: "status" must be one of ${[...CHECK_STATUSES].join(", ")}`);
 		}
 		const check: LoopCheck = { command: r.command, status: r.status as LoopCheck["status"] };
+		if (r.name !== undefined) {
+			if (typeof r.name !== "string" || r.name === "")
+				throw new LoopLogError(`${ec}: "name" must be a non-empty string`);
+			check.name = r.name;
+		}
 		if (r.reason !== undefined) {
 			if (typeof r.reason !== "string") throw new LoopLogError(`${ec}: "reason" must be a string`);
 			check.reason = r.reason;
@@ -259,6 +293,8 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 		}
 		if (o.checks !== undefined) rec.checks = checkArray(o, "checks", ctx);
 		if (o.verification !== undefined) rec.verification = verificationOf(o, "verification", ctx);
+		if (o.verificationSource !== undefined)
+			rec.verificationSource = verificationSourceOf(o, "verificationSource", ctx);
 		if (o.auditRef !== undefined) rec.auditRef = str(o, "auditRef", ctx);
 		const usage = optUsage(o, ctx);
 		if (usage !== undefined) rec.usage = usage;
