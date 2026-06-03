@@ -65,6 +65,37 @@ describe("convergence log: serialize/validate round-trip", () => {
 		expect("auditRef" in rec).toBe(false);
 	});
 
+	test("optional checks + verification survive the round-trip", () => {
+		const withChecks: LoopIterationRecord = {
+			...iteration,
+			checks: [
+				{ command: "bun run typecheck", status: "passed" },
+				{ command: "bun run test", status: "failed", reason: "2 failed in board.test.ts" },
+			],
+			verification: "failed",
+		};
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(withChecks)))).toEqual(withChecks);
+	});
+
+	test("absent checks/verification are omitted, not set to undefined", () => {
+		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
+		expect("checks" in rec).toBe(false);
+		expect("verification" in rec).toBe(false);
+	});
+
+	test("a bad verification value is rejected", () => {
+		const bad = { ...JSON.parse(serializeLoopRecord(iteration)), verification: "ok" };
+		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
+	});
+
+	test("a check with a bad status is rejected", () => {
+		const bad = {
+			...JSON.parse(serializeLoopRecord(iteration)),
+			checks: [{ command: "bun run test", status: "green" }],
+		};
+		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
+	});
+
 	test("optional usage survives the round-trip (full and partial)", () => {
 		const full: LoopIterationRecord = {
 			...iteration,

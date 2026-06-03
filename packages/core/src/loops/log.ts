@@ -18,7 +18,25 @@ export type LoopStopStatus =
 	| "needs-decision"
 	| "cancelled";
 
+// Verification is the rollup of an iteration's checks: the signal the loop gates
+// `converged` on. "passed" only when every check passed; "failed" when any failed;
+// "blocked" when a check could not run (e.g. a read-only sandbox); "not_run" when
+// no checks were attempted. A proceed verdict with verification !== "passed" must
+// NOT converge clean -- chit never reports success more strongly than the checks
+// support. In stage 1 the source is the reviewer's self-reported checks; in stage 2
+// it becomes chit-executed required_checks (the same fields, an authoritative source).
+export type Verification = "passed" | "failed" | "blocked" | "not_run";
+// One check behind the checksRun prose. command is the exact command; status is its
+// own result; reason explains a non-pass (a failure summary, or why it was blocked).
+export interface LoopCheck {
+	command: string;
+	status: "passed" | "failed" | "blocked";
+	reason?: string;
+}
+
 const VERDICTS: ReadonlySet<string> = new Set(["proceed", "revise", "block"]);
+const VERIFICATIONS: ReadonlySet<string> = new Set(["passed", "failed", "blocked", "not_run"]);
+const CHECK_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "blocked"]);
 const STOP_STATUSES: ReadonlySet<string> = new Set([
 	"converged",
 	"blocked",
@@ -57,6 +75,11 @@ export interface LoopIterationRecord {
 	// changedFiles. Optional and absent when the workspace was clean.
 	workspaceWarnings?: string[];
 	checksRun: string;
+	// Structured check results behind checksRun's prose, and their rollup. Optional:
+	// absent on records written before this field existed and when no checks were
+	// reported. The loop gates `converged` on verification (see Verification).
+	checks?: LoopCheck[];
+	verification?: Verification;
 	verdict: LoopVerdict;
 	findingCount: number;
 	decision: LoopVerdict;
@@ -118,6 +141,36 @@ function verdict(o: Record<string, unknown>, key: string, ctx: string): LoopVerd
 		throw new LoopLogError(`${ctx}: "${key}" must be one of ${[...VERDICTS].join(", ")}`);
 	}
 	return v as LoopVerdict;
+}
+
+function verificationOf(o: Record<string, unknown>, key: string, ctx: string): Verification {
+	const v = o[key];
+	if (typeof v !== "string" || !VERIFICATIONS.has(v)) {
+		throw new LoopLogError(`${ctx}: "${key}" must be one of ${[...VERIFICATIONS].join(", ")}`);
+	}
+	return v as Verification;
+}
+
+function checkArray(o: Record<string, unknown>, key: string, ctx: string): LoopCheck[] {
+	const v = o[key];
+	if (!Array.isArray(v)) throw new LoopLogError(`${ctx}: "${key}" must be an array`);
+	return v.map((e, i) => {
+		const ec = `${ctx}.${key}[${i}]`;
+		if (typeof e !== "object" || e === null) throw new LoopLogError(`${ec}: must be an object`);
+		const r = e as Record<string, unknown>;
+		if (typeof r.command !== "string" || r.command === "") {
+			throw new LoopLogError(`${ec}: "command" must be a non-empty string`);
+		}
+		if (typeof r.status !== "string" || !CHECK_STATUSES.has(r.status)) {
+			throw new LoopLogError(`${ec}: "status" must be one of ${[...CHECK_STATUSES].join(", ")}`);
+		}
+		const check: LoopCheck = { command: r.command, status: r.status as LoopCheck["status"] };
+		if (r.reason !== undefined) {
+			if (typeof r.reason !== "string") throw new LoopLogError(`${ec}: "reason" must be a string`);
+			check.reason = r.reason;
+		}
+		return check;
+	});
 }
 
 function stringArray(o: Record<string, unknown>, key: string, ctx: string): string[] {
@@ -204,6 +257,8 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 		if (o.workspaceWarnings !== undefined) {
 			rec.workspaceWarnings = stringArray(o, "workspaceWarnings", ctx);
 		}
+		if (o.checks !== undefined) rec.checks = checkArray(o, "checks", ctx);
+		if (o.verification !== undefined) rec.verification = verificationOf(o, "verification", ctx);
 		if (o.auditRef !== undefined) rec.auditRef = str(o, "auditRef", ctx);
 		const usage = optUsage(o, ctx);
 		if (usage !== undefined) rec.usage = usage;
