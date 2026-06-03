@@ -450,14 +450,21 @@ export async function runMain(argv: string[]): Promise<number> {
 		return 2;
 	}
 
-	// Parse, load the config (agents + roles), and RESOLVE before any governance
+	// Load the config and the manifest as separate steps so their failures report
+	// distinctly: a malformed config.json is "invalid config"; a malformed or
+	// unresolvable manifest is "invalid manifest". RESOLVE before any governance
 	// check: resolution can change requires (a role can carry a per_scope session
-	// parse cannot see), so the capability check below must run on the resolved
-	// manifest. resolveManifest throws on an unknown role / no-agent participant.
-	let manifest: ResolvedManifest;
+	// parse cannot see), so the capability check below runs on the resolved manifest.
+	// resolveManifest throws on an unknown role / no-agent participant.
 	let config: NormalizedConfig;
 	try {
 		config = loadConfig();
+	} catch (e) {
+		process.stderr.write(`chit: invalid config: ${(e as Error).message}\n`);
+		return 2;
+	}
+	let manifest: ResolvedManifest;
+	try {
 		manifest = resolveManifest(parseManifest(manifestRaw), { roles: config.roles });
 	} catch (e) {
 		process.stderr.write(`chit: invalid manifest: ${(e as Error).message}\n`);
@@ -748,10 +755,16 @@ function runShow(args: ParsedArgs): number {
 		return 2;
 	}
 
-	let manifest: ResolvedManifest;
+	// Config and manifest failures report distinctly (mirrors the run path).
 	let config: NormalizedConfig;
 	try {
 		config = loadConfig();
+	} catch (e) {
+		process.stderr.write(`chit: invalid config: ${(e as Error).message}\n`);
+		return 2;
+	}
+	let manifest: ResolvedManifest;
+	try {
 		manifest = resolveManifest(parseManifest(raw), { roles: config.roles });
 	} catch (e) {
 		process.stderr.write(`chit: invalid manifest: ${(e as Error).message}\n`);

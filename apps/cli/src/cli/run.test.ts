@@ -370,6 +370,40 @@ describe("chit run (subprocess)", () => {
 		expect(stdout).toContain("CODEX_ANSWER: 42");
 	});
 
+	test("a malformed config.json reports as 'invalid config', not 'invalid manifest'", async () => {
+		// Isolate XDG so the bad config cannot leak into the other subprocess runs
+		// (which share TMPDIR and rely on its absence of a config file).
+		const cfgDir = mkdtempSync(join(tmpdir(), "chit-badcfg-"));
+		try {
+			mkdirSync(join(cfgDir, "chit"), { recursive: true });
+			writeFileSync(join(cfgDir, "chit", "config.json"), "{ not valid json");
+			const { stderr, code } = await runCLI(["run", ASK_CODEX, "--input", "question=hi"], {
+				XDG_CONFIG_HOME: cfgDir,
+			});
+			expect(code).toBe(2);
+			expect(stderr).toContain("invalid config");
+			expect(stderr).not.toContain("invalid manifest");
+		} finally {
+			rmSync(cfgDir, { recursive: true, force: true });
+		}
+	});
+
+	test("a manifest that fails to parse reports as 'invalid manifest'", async () => {
+		// Valid JSON (so it is not a read error) that parseManifest rejects: schema 2.
+		const badManifest = writeManifestFixture("bad-schema", {
+			schema: 2,
+			id: "bad",
+			description: "wrong schema",
+			inputs: { q: { type: "string" } },
+			participants: { a: { agent: "codex", instructions: "r", session: "stateless" } },
+			steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
+			output: "s",
+		});
+		const { stderr, code } = await runCLI(["run", badManifest, "--input", "q=hi"]);
+		expect(code).toBe(2);
+		expect(stderr).toContain("invalid manifest");
+	});
+
 	test("--audit persists a full audit run (cli surface) without changing output", async () => {
 		// Isolate the audit store in a fresh state dir so we can read it back.
 		const stateDir = mkdtempSync(join(tmpdir(), "chit-run-audit-"));

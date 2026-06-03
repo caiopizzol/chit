@@ -4,10 +4,13 @@
 // surface, and -- the real regression guard -- that every surface threads the
 // config's roles into resolution instead of an empty map.
 //
-// Surfaces covered: one-shot execution, the converge (loop) chokepoint, the
-// background worker's config-on-disk path, show, and audit. Batch performs no
-// resolution of its own (it launches background runs via the same worker path), so
-// the background test covers it transitively; see the note on that test.
+// Surfaces covered with a role-referencing manifest: one-shot execution, the
+// converge (loop) chokepoint, the background worker's config-on-disk path, show,
+// and audit. Batch is deliberately NOT re-proven here: it performs no resolution of
+// its own. A batch task's manifestPath is opaque to the batch engine and forwarded
+// to the worker, which resolves it with config.roles. That forwarding is covered in
+// batches/engine.test.ts; resolution is covered by the background case below. A
+// batch-level role-ref test would only re-exercise the forwarding, not resolution.
 
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -133,9 +136,8 @@ describe("role references, end to end", () => {
 	// for one-shot jobs, defaultResolveExecute -> prepareConvergeExecute for loop
 	// jobs). This drives that exact composition from a real config.json on disk:
 	// loadConfig() -> roles -> resolveManifest -> runManifestOnce (the worker's
-	// one-shot executor). Batch is covered transitively here: it performs no
-	// resolution of its own; it launches background runs through this same worker
-	// path, so a batch task with a role-ref manifest resolves exactly as this does.
+	// one-shot executor). It is also the path a batch task takes: the batch engine
+	// forwards a task's manifestPath to this worker (see the file header).
 	test("background: a role defined in config.json on disk resolves a manifest and drives a run", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "chit-roles-e2e-"));
 		const prevXdg = process.env.XDG_CONFIG_HOME;
