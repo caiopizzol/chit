@@ -87,7 +87,16 @@ function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	} else {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
-	const config = loadConfig();
+	// loadConfig throws ConfigError on a malformed config.json. resolveExecute is
+	// contracted to RETURN an ExecuteResolution (runLoopJob has no catch around it,
+	// so a throw here would leave the job stuck running -> stale instead of closing
+	// it failed). Catch the load and report it as a prep failure.
+	let config: ReturnType<typeof loadConfig>;
+	try {
+		config = loadConfig();
+	} catch (e) {
+		return { ok: false, error: `could not load config: ${(e as Error).message}` };
+	}
 	const prep = prepareConvergeExecute(
 		raw,
 		config.registry,
@@ -228,7 +237,17 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 	try {
 		transitionToRunning(store, jobId, now, workerToken);
 
-		const resolved = resolveExecute(job);
+		// resolveExecute is contracted to RETURN an ExecuteResolution, but a custom
+		// resolver (or a future change to the default) could throw; a throw here would
+		// escape this function's only try (which has no catch, just a finally) and
+		// leave the job stuck running -> later stale. Treat a throw as a prep failure
+		// so the job always reaches a terminal state.
+		let resolved: ExecuteResolution;
+		try {
+			resolved = resolveExecute(job);
+		} catch (e) {
+			resolved = { ok: false, error: (e as Error).message };
+		}
 		if (!resolved.ok) {
 			// Manifest could not be prepared in this process. The loop header exists
 			// (the caller reserved it); close it blocked so it is not left open.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoopVerdict } from "@chit-run/core";
@@ -195,6 +195,52 @@ describe("background converge worker", () => {
 		});
 		expect(store.get("j1")).toMatchObject({ state: "failed", failure: "bad manifest" });
 		expect(readLoop(cwd, "j1").at(-1)).toMatchObject({ type: "stop", status: "blocked" });
+	});
+
+	test("a THROWING resolveExecute does not leave the job stuck running", async () => {
+		// resolveExecute is contracted to RETURN an ExecuteResolution; runLoopJob has
+		// no catch around it, so if it threw (e.g. defaultResolveExecute's loadConfig
+		// on a malformed config.json) the job would be stuck running -> later stale
+		// instead of failed. defaultResolveExecute now catches the load, but guard the
+		// invariant directly: even a thrown resolveExecute must not leave it running.
+		seedJob();
+		await runJobWorker("j1", {
+			jobStore: store,
+			resolveExecute: () => {
+				throw new Error("resolve exploded");
+			},
+			installSignalHandlers: false,
+			now: () => 1000,
+		});
+		expect(store.get("j1")?.state).not.toBe("running");
+	});
+
+	test("a malformed config.json -> the loop job closes failed (real loadConfig path)", async () => {
+		// Exercise the DEFAULT resolveExecute (no injection): a malformed config.json
+		// makes loadConfig throw, which must surface as a clean failed job + blocked
+		// loop, not a job stuck running. The job uses the embedded default manifest
+		// (no manifestPath), so the only failure is the config load.
+		const savedCfg = process.env.XDG_CONFIG_HOME;
+		const cfgHome = mkdtempSync(join(tmpdir(), "chit-worker-cfg-"));
+		mkdirSync(join(cfgHome, "chit"), { recursive: true });
+		writeFileSync(join(cfgHome, "chit", "config.json"), "{ not valid json");
+		process.env.XDG_CONFIG_HOME = cfgHome;
+		try {
+			seedJob();
+			await runJobWorker("j1", {
+				jobStore: store,
+				installSignalHandlers: false,
+				now: () => 1000,
+			});
+			const job = store.get("j1");
+			expect(job?.state).toBe("failed");
+			expect(job?.failure).toMatch(/could not load config/);
+			expect(readLoop(cwd, "j1").at(-1)).toMatchObject({ type: "stop", status: "blocked" });
+		} finally {
+			if (savedCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = savedCfg;
+			rmSync(cfgHome, { recursive: true, force: true });
+		}
 	});
 
 	test("a non-queued job is left untouched (idempotent against double spawn)", async () => {
