@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError } from "@chit-run/core";
@@ -57,4 +57,39 @@ test("invalid JSON throws a ConfigError naming the path", () => {
 	}
 	expect(caught).toBeInstanceOf(ConfigError);
 	expect((caught as ConfigError).path).toBe(path);
+});
+
+// The no-argument form resolves $XDG_CONFIG_HOME/chit/config.json. This is the
+// production entry every surface uses, so its default-path resolution is pinned
+// here (it used to be covered against the removed agents.json loader).
+describe("loadConfig: default path resolution (no explicit path)", () => {
+	let prevXdg: string | undefined;
+	beforeEach(() => {
+		prevXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = dir; // outer beforeEach created `dir`
+	});
+	afterEach(() => {
+		if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+		else process.env.XDG_CONFIG_HOME = prevXdg;
+	});
+
+	test("reads $XDG_CONFIG_HOME/chit/config.json when present", () => {
+		mkdirSync(join(dir, "chit"), { recursive: true });
+		writeFileSync(
+			join(dir, "chit", "config.json"),
+			JSON.stringify({
+				agents: { "kimi-cloud": { adapter: "claude-cli", model: "k", passModelOnResume: true } },
+			}),
+		);
+		const c = loadConfig();
+		expect(c.registry.agents["kimi-cloud"]).toBeDefined();
+		expect(c.configPath).toBe(join(dir, "chit", "config.json"));
+	});
+
+	test("falls back to built-ins when the default config file is absent", () => {
+		const c = loadConfig();
+		expect(Object.keys(c.registry.agents).sort()).toEqual(["claude", "codex"]);
+		expect(c.roles).toEqual({});
+		expect(c.configPath).toBeUndefined();
+	});
 });

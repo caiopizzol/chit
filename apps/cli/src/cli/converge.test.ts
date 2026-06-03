@@ -448,7 +448,7 @@ describe("runConverge (CLI)", () => {
 			XDG_STATE_HOME: process.env.XDG_STATE_HOME,
 		};
 		// Prepend the fake bin so our `claude` wins; point config at an empty dir so
-		// loadRegistry yields the built-in agents (claude -> claude-cli).
+		// loadConfig yields the built-in agents (claude -> claude-cli).
 		process.env.PATH = `${binDir}:${saved.PATH ?? ""}`;
 		process.env.XDG_CONFIG_HOME = cwd;
 		process.env.XDG_STATE_HOME = cwd;

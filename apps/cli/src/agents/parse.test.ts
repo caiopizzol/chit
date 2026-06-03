@@ -1,9 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 import { getAdapterDescriptor, isBuiltInAgent, parseRegistry, RegistryError } from "@chit-run/core";
-import { loadRegistry } from "./parse.ts";
 
 function expectRegistryError(
 	raw: unknown,
@@ -282,107 +278,5 @@ describe("parseRegistry: invalid configs", () => {
 			"agents.x.env.FOO",
 			"must be a string",
 		);
-	});
-});
-
-describe("loadRegistry", () => {
-	let TMPDIR: string;
-	let CONFIG: string;
-
-	beforeEach(() => {
-		TMPDIR = mkdtempSync(join(tmpdir(), "chit-registry-"));
-		CONFIG = join(TMPDIR, "agents.json");
-	});
-
-	afterEach(() => {
-		rmSync(TMPDIR, { recursive: true, force: true });
-	});
-
-	test("returns built-ins only when file does not exist", () => {
-		const reg = loadRegistry(join(TMPDIR, "missing.json"));
-		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex"]);
-		expect(reg.configPath).toBeUndefined();
-	});
-
-	test("loads user agents from a file and records configPath", () => {
-		writeFileSync(
-			CONFIG,
-			JSON.stringify({
-				agents: {
-					"kimi-cloud": {
-						adapter: "claude-cli",
-						model: "kimi-k2.6:cloud",
-						passModelOnResume: true,
-					},
-				},
-			}),
-		);
-		const reg = loadRegistry(CONFIG);
-		expect(Object.keys(reg.agents).sort()).toEqual(["claude", "codex", "kimi-cloud"]);
-		expect(reg.configPath).toBe(CONFIG);
-	});
-
-	test("rejects invalid JSON with the file path in the error", () => {
-		writeFileSync(CONFIG, "{ not: json");
-		expect(() => loadRegistry(CONFIG)).toThrow(RegistryError);
-		try {
-			loadRegistry(CONFIG);
-		} catch (e) {
-			if (e instanceof RegistryError) {
-				expect(e.path).toBe(CONFIG);
-				expect(e.message).toContain("invalid JSON");
-			}
-		}
-	});
-
-	test("validation errors include the file path", () => {
-		writeFileSync(CONFIG, JSON.stringify({ agents: { codex: { adapter: "codex-exec" } } }));
-		try {
-			loadRegistry(CONFIG);
-			throw new Error("expected error");
-		} catch (e) {
-			if (e instanceof RegistryError) {
-				expect(e.path).toContain(CONFIG);
-				expect(e.path).toContain("agents.codex");
-				expect(e.message).toContain("built-in agent id cannot be redefined");
-			} else {
-				throw e;
-			}
-		}
-	});
-});
-
-describe("loadRegistry: chit default-path resolution", () => {
-	let XDG: string;
-	let prevXdg: string | undefined;
-	const agentsJson = (id: string) =>
-		JSON.stringify({ agents: { [id]: { adapter: "codex-exec" } } });
-
-	beforeEach(() => {
-		XDG = mkdtempSync(join(tmpdir(), "chit-cfg-"));
-		prevXdg = process.env.XDG_CONFIG_HOME;
-		process.env.XDG_CONFIG_HOME = XDG;
-	});
-	afterEach(() => {
-		if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-		else process.env.XDG_CONFIG_HOME = prevXdg;
-		rmSync(XDG, { recursive: true, force: true });
-	});
-
-	test("reads ~/.config/chit/agents.json", () => {
-		mkdirSync(join(XDG, "chit"), { recursive: true });
-		writeFileSync(join(XDG, "chit", "agents.json"), agentsJson("new-one"));
-		expect(loadRegistry().agents["new-one"]).toBeDefined();
-	});
-
-	test("falls back to built-ins when ~/.config/chit/agents.json is absent", () => {
-		const reg = loadRegistry();
-		expect(reg.agents.codex).toBeDefined();
-	});
-
-	test("ignores ~/.config/handoff/agents.json (no legacy fallback)", () => {
-		mkdirSync(join(XDG, "handoff"), { recursive: true });
-		writeFileSync(join(XDG, "handoff", "agents.json"), agentsJson("legacy-only"));
-		expect(loadRegistry().agents["legacy-only"]).toBeUndefined();
 	});
 });

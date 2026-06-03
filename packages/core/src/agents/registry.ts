@@ -2,10 +2,10 @@
 // registry: built-in agents, adapter capability descriptors, validation,
 // and the in-memory parseRegistry. NO node imports, NO file IO.
 //
-// File-backed loading (reading ~/.config/chit/agents.json) lives in
-// src/agents/parse.ts so consumers that only need metadata (graph-model,
-// shared validators, future Studio web UI) don't transitively pull
-// node:fs/os/path into a browser bundle.
+// File-backed loading (reading ~/.config/chit/config.json) lives in the CLI's
+// config loader (apps/cli/src/config/load.ts) so consumers that only need
+// metadata (graph-model, shared validators, Studio web UI) don't transitively
+// pull node:fs/os/path into a browser bundle.
 
 import type {
 	AdapterDescriptor,

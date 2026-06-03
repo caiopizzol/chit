@@ -6,9 +6,9 @@ import {
 	type AdapterCallCompletedEvent,
 	type NormalizedRegistry,
 	parseManifest,
+	parseRegistry,
 	resolveManifest,
 } from "@chit-run/core";
-import { loadRegistry } from "../../agents/parse.ts";
 import { AuditRecorder } from "../../audit/recorder.ts";
 import { AuditStore } from "../../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../../audit/wrap.ts";
@@ -293,7 +293,11 @@ describe("mcp engine: startRun rejects per_scope without a scope", () => {
 		steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
 		output: "s",
 	};
-	const opts = { inputs: { q: "x" }, registry: loadRegistry(), invocationCwd: "/tmp" as string };
+	const opts = {
+		inputs: { q: "x" },
+		registry: parseRegistry(undefined),
+		invocationCwd: "/tmp" as string,
+	};
 
 	test("rejects when no scope is supplied", () => {
 		expect(() =>
