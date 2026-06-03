@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NormalizedRegistry } from "@chit-run/core";
-import { RegistryError } from "../agents/parse.ts";
+import { ConfigError, type NormalizedConfig } from "@chit-run/core";
 import {
 	type Check,
 	type DoctorDeps,
@@ -28,9 +27,10 @@ function probeWith(okPrefixes: string[]): Probe {
 	return (cmd) => ({ ok: okPrefixes.some((p) => cmd.join(" ").startsWith(p)), output: "" });
 }
 
-const REGISTRY = {
-	agents: { claude: {}, codex: {} },
-} as unknown as NormalizedRegistry;
+const CONFIG = {
+	registry: { agents: { claude: {}, codex: {} } },
+	roles: {},
+} as unknown as NormalizedConfig;
 
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 	return {
@@ -43,7 +43,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 		]),
 		cwd: "/tmp/work",
 		auditDir,
-		loadReg: () => REGISTRY,
+		loadReg: () => CONFIG,
 		bunVersion: "1.3.12",
 		...over,
 	};
@@ -86,16 +86,16 @@ describe("runChecks", () => {
 		expect(byName(checks, "git repo").status).toBe("warn");
 	});
 
-	test("invalid agent config is a hard failure", () => {
+	test("invalid config is a hard failure", () => {
 		const checks = runChecks(
 			deps({
 				loadReg: () => {
-					throw new RegistryError("/x/agents.json", "invalid JSON");
+					throw new ConfigError("/x/config.json", "invalid JSON");
 				},
 			}),
 		);
 		expect(byName(checks, "agents").status).toBe("fail");
-		expect(byName(checks, "agents").detail).toContain("invalid agent config");
+		expect(byName(checks, "agents").detail).toContain("invalid config");
 	});
 
 	test("audit dir not writable is a hard failure", () => {

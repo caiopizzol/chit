@@ -622,7 +622,7 @@ function launchOneShotJob(p: {
 		};
 	}
 
-	// A malformed agents.json throws from loadRegistry; return it as an error rather
+	// A malformed config.json throws from getConfig; return it as an error rather
 	// than letting it escape the tool handler (matches the foreground startRun path).
 	let registry: ReturnType<typeof getRegistry>;
 	try {

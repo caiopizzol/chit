@@ -17,9 +17,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { NormalizedRegistry } from "@chit-run/core";
-import { loadRegistry, RegistryError } from "../agents/parse.ts";
+import { ConfigError, type NormalizedConfig } from "@chit-run/core";
 import { defaultAuditDir } from "../audit/store.ts";
+import { loadConfig } from "../config/load.ts";
 
 export interface DoctorIO {
 	out: (s: string) => void;
@@ -75,7 +75,10 @@ export interface DoctorDeps {
 	probe: Probe;
 	cwd: string;
 	auditDir: string;
-	loadReg: () => NormalizedRegistry;
+	// Load the full config (agents + roles). Returns NormalizedConfig so the check
+	// can report the resolved config path (registry.configPath is not set by the
+	// config parser; the path lives on the config).
+	loadReg: () => NormalizedConfig;
 	bunVersion: string | undefined;
 }
 
@@ -84,7 +87,7 @@ function defaultDeps(): DoctorDeps {
 		probe: defaultProbe,
 		cwd: process.cwd(),
 		auditDir: defaultAuditDir(),
-		loadReg: () => loadRegistry(),
+		loadReg: () => loadConfig(),
 		bunVersion: process.versions.bun,
 	};
 }
@@ -146,24 +149,24 @@ function checkAuditDir(deps: DoctorDeps): Check {
 }
 
 function checkRegistry(deps: DoctorDeps): Check {
-	let registry: NormalizedRegistry;
+	let config: NormalizedConfig;
 	try {
-		registry = deps.loadReg();
+		config = deps.loadReg();
 	} catch (e) {
-		if (e instanceof RegistryError) {
+		if (e instanceof ConfigError) {
 			return {
 				name: "agents",
 				status: "fail",
-				detail: `invalid agent config: ${e.message}`,
-				hint: "fix or remove ~/.config/chit/agents.json",
+				detail: `invalid config: ${e.message}`,
+				hint: "fix or remove ~/.config/chit/config.json",
 			};
 		}
 		throw e;
 	}
-	const ids = Object.keys(registry.agents).sort().join(", ");
-	const source = registry.configPath
-		? `from ${registry.configPath}`
-		: "built-in defaults (no agents.json)";
+	const ids = Object.keys(config.registry.agents).sort().join(", ");
+	const source = config.configPath
+		? `from ${config.configPath}`
+		: "built-in defaults (no config.json)";
 	return { name: "agents", status: "pass", detail: `${ids || "none"} (${source})` };
 }
 

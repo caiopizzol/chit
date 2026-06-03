@@ -10,9 +10,10 @@ import {
 	INSTALL_MARKER_FILENAME,
 	type InstallMarker,
 	parseManifest,
+	resolveManifest,
 	VALID_INSTALL_NAME_RE,
 } from "@chit-run/core";
-import { loadRegistry } from "../agents/parse.ts";
+import { loadConfig } from "../config/load.ts";
 
 export class SurfaceInstallError extends Error {
 	constructor(message: string) {
@@ -100,9 +101,18 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 			`failed to read manifest ${opts.manifestPath}: ${(e as Error).message}`,
 		);
 	}
+	// Load the config (agents + roles) so install resolves role references the same
+	// way a run does. Tests inject opts.registry with inline manifests, so roles
+	// default to {} on that path. A real install with no injected registry uses the
+	// file config (built-ins when absent).
+	const config = opts.registry === undefined ? loadConfig() : undefined;
+	const registry = opts.registry ?? config?.registry;
+	if (!registry) throw new SurfaceInstallError("internal: no registry resolved");
+	const roles = config?.roles ?? {};
+
 	let manifest: NormalizedManifest;
 	try {
-		manifest = parseManifest(rawJson);
+		manifest = resolveManifest(parseManifest(rawJson), { roles });
 	} catch (e) {
 		throw new SurfaceInstallError(
 			`invalid manifest at ${opts.manifestPath}: ${(e as Error).message}`,
@@ -143,8 +153,6 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 				`claude-skill surface in PR6 supports exactly one string input`,
 		);
 	}
-
-	const registry = opts.registry ?? loadRegistry();
 
 	const unknownAgents = findUnknownAgents(manifest, registry);
 	if (unknownAgents.length > 0) {
