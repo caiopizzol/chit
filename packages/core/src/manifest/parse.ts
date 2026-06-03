@@ -54,9 +54,16 @@ const ALLOWED_INPUT_TYPES: ReadonlySet<string> = new Set(["string", "file[]"]);
 
 const ALLOWED_PARTICIPANT_KEYS = new Set(["agent", "instructions", "session", "permissions"]);
 const REQUIRED_PARTICIPANT_KEYS = ["agent", "instructions", "session"] as const;
-const ALLOWED_SESSIONS: ReadonlySet<string> = new Set(["stateless", "per_topology", "per_scope"]);
+// Exported as the single source of the participant/role vocabulary: the config
+// role parser reuses these so a role and a participant validate session and
+// filesystem identically (no drift between the two).
+export const ALLOWED_SESSIONS: ReadonlySet<string> = new Set([
+	"stateless",
+	"per_topology",
+	"per_scope",
+]);
 const ALLOWED_PERMISSION_KEYS = new Set(["filesystem"]);
-const ALLOWED_FILESYSTEM_VALUES: ReadonlySet<string> = new Set(["read_only", "write"]);
+export const ALLOWED_FILESYSTEM_VALUES: ReadonlySet<string> = new Set(["read_only", "write"]);
 
 const ALLOWED_CALL_KEYS = new Set(["call", "prompt"]);
 const ALLOWED_FORMAT_KEYS = new Set(["format"]);
