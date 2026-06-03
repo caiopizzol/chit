@@ -41,11 +41,15 @@ afterEach(() => {
 // block), so tests drive the loop through it.
 function reviewJson(
 	verdict: string,
-	extra: { findingCount?: number; checksRun?: string } = {},
+	extra: { findingCount?: number; checksRun?: string; checks?: unknown[] } = {},
 ): string {
+	// A normal proceeding review reports passing checks, so default `checks` to one
+	// passed entry: `proceed` then converges (verification passed). Tests exercising
+	// the unverified paths pass `checks` explicitly (failed / blocked / [] / malformed).
 	const block = {
 		verdict,
 		findingCount: extra.findingCount ?? 0,
+		checks: extra.checks ?? [{ command: "bun run test", status: "passed" }],
 		checksRun: extra.checksRun ?? "none",
 		risk: "none",
 	};
@@ -203,6 +207,7 @@ describe("convergeLoop", () => {
 			JSON.stringify({
 				verdict: "proceed",
 				findingCount: 2,
+				checks: [{ command: "bun test; tsc", status: "passed" }],
 				checksRun: "bun test; tsc",
 				risk: "low",
 			}),
@@ -262,12 +267,87 @@ describe("convergeLoop", () => {
 		expect(it.verification).toBe("failed");
 	});
 
-	test("omits checks/verification when the reviewer reports none (additive, byte-identical)", async () => {
-		const { execute } = fakeExecute([reviewJson("proceed")]);
+	test("omits checks/verification from the record when the reviewer reports none", async () => {
+		const { execute } = fakeExecute([reviewJson("proceed", { checks: [] })]);
 		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 3, loopId: "V2", execute });
 		const it = firstIteration("V2");
 		expect("checks" in it).toBe(false);
 		expect("verification" in it).toBe(false);
+	});
+
+	// The gate: a proceed verdict converges ONLY when verification passed. Otherwise
+	// (failed / blocked / not_run / a malformed report) the loop stops needs-decision,
+	// so chit never presents success the checks do not support.
+	const gateRun = async (loopId: string, review: string) => {
+		const { execute } = fakeExecute([review]);
+		const res = await convergeLoop({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			loopId,
+			execute,
+		});
+		return { status: res.status, it: firstIteration(loopId) };
+	};
+
+	test("proceed + all checks passed -> converged", async () => {
+		const { status } = await gateRun(
+			"G1",
+			reviewJson("proceed", { checks: [{ command: "bun test", status: "passed" }] }),
+		);
+		expect(status).toBe("converged");
+	});
+
+	test("proceed + a failed check -> needs-decision (not converged)", async () => {
+		const { status, it } = await gateRun(
+			"G2",
+			reviewJson("proceed", {
+				checks: [{ command: "bun test", status: "failed", reason: "2 failed" }],
+			}),
+		);
+		expect(it.verification).toBe("failed");
+		expect(status).toBe("needs-decision");
+	});
+
+	test("proceed + a blocked check -> needs-decision", async () => {
+		const { status, it } = await gateRun(
+			"G3",
+			reviewJson("proceed", {
+				checks: [{ command: "bun test", status: "blocked", reason: "read-only sandbox" }],
+			}),
+		);
+		expect(it.verification).toBe("blocked");
+		expect(status).toBe("needs-decision");
+	});
+
+	test("proceed + no checks (not_run) -> needs-decision", async () => {
+		const { status } = await gateRun("G4", reviewJson("proceed", { checks: [] }));
+		expect(status).toBe("needs-decision");
+	});
+
+	test("proceed + a malformed check cannot roll up to passed -> needs-decision", async () => {
+		// One valid passed entry + one garbled entry (bad status). Dropping the
+		// garbled one must NOT let the rollup become passed: verification is blocked.
+		const { status, it } = await gateRun(
+			"G5",
+			reviewJson("proceed", {
+				checks: [
+					{ command: "bun typecheck", status: "passed" },
+					{ command: "bun test", status: "FAIL" },
+				],
+			}),
+		);
+		expect(it.verification).toBe("blocked");
+		expect(status).toBe("needs-decision");
+	});
+
+	test("block stays blocked regardless of passing checks", async () => {
+		const { status } = await gateRun(
+			"G6",
+			reviewJson("block", { checks: [{ command: "bun test", status: "passed" }] }),
+		);
+		expect(status).toBe("blocked");
 	});
 
 	test("records token usage summed across implement and review steps", async () => {

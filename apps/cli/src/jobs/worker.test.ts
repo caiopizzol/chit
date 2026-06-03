@@ -51,6 +51,8 @@ function fakeExecute(
 		const review = `looks fine\n\`\`\`json\n${JSON.stringify({
 			verdict: o?.verdict ?? "proceed",
 			findingCount: 0,
+			// A passing check so a proceed converges under the verification gate.
+			checks: [{ command: "tests", status: "passed" }],
 			checksRun: "tests",
 			risk: "none",
 		})}\n\`\`\``;
@@ -258,6 +260,7 @@ describe("background worker: non-default loop policy steps (Stage 2)", () => {
 		const review = `looks fine\n\`\`\`json\n${JSON.stringify({
 			verdict: "proceed",
 			findingCount: 0,
+			checks: [{ command: "tests", status: "passed" }],
 			checksRun: "tests",
 			risk: "none",
 		})}\n\`\`\``;

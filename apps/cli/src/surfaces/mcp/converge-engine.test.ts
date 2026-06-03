@@ -25,11 +25,14 @@ afterEach(() => {
 
 function reviewJson(
 	verdict: string,
-	extra: { findingCount?: number; checksRun?: string } = {},
+	extra: { findingCount?: number; checksRun?: string; checks?: unknown[] } = {},
 ): string {
+	// Default to a passing check so a `proceed` converges (verification === passed);
+	// the gate sends proceed-without-passing-checks to needs-decision.
 	const block = {
 		verdict,
 		findingCount: extra.findingCount ?? 0,
+		checks: extra.checks ?? [{ command: "bun test", status: "passed" }],
 		checksRun: extra.checksRun ?? "none",
 		risk: "none",
 	};

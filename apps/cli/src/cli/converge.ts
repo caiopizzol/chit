@@ -168,32 +168,49 @@ interface ParsedReview {
 
 const CHECK_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "blocked"]);
 
-// Sanitize the reviewer's self-reported `checks` array, tolerantly: drop any entry
-// that is not a well-formed { command, status } (the review block is untrusted
-// model output, so we never throw here -- a malformed entry is simply ignored).
-function sanitizeChecks(raw: unknown): LoopCheck[] {
-	if (!Array.isArray(raw)) return [];
-	const out: LoopCheck[] = [];
+// Parse the reviewer's self-reported `checks` array from the (untrusted) review
+// block. Never throws: a malformed entry is dropped from `checks` but RECORDED in
+// `malformed`, because dropping-and-ignoring is unsafe once verification gates
+// convergence -- a reviewer that emits one valid passed check and one garbled
+// failure must not roll up to `passed`. `malformed` is also true when `checks` is
+// present but not an array at all. Absent `checks` (undefined) is honest no-checks,
+// not malformed.
+function parseChecks(raw: unknown): { checks: LoopCheck[]; malformed: boolean } {
+	if (raw === undefined) return { checks: [], malformed: false };
+	if (!Array.isArray(raw)) return { checks: [], malformed: true };
+	const checks: LoopCheck[] = [];
+	let malformed = false;
 	for (const e of raw) {
-		if (typeof e !== "object" || e === null) continue;
+		if (typeof e !== "object" || e === null) {
+			malformed = true;
+			continue;
+		}
 		const r = e as Record<string, unknown>;
-		if (typeof r.command !== "string" || r.command.trim() === "") continue;
-		if (typeof r.status !== "string" || !CHECK_STATUSES.has(r.status)) continue;
+		if (typeof r.command !== "string" || r.command.trim() === "") {
+			malformed = true;
+			continue;
+		}
+		if (typeof r.status !== "string" || !CHECK_STATUSES.has(r.status)) {
+			malformed = true;
+			continue;
+		}
 		const check: LoopCheck = { command: r.command.trim(), status: r.status as LoopCheck["status"] };
 		if (typeof r.reason === "string" && r.reason.trim() !== "") check.reason = r.reason.trim();
-		out.push(check);
+		checks.push(check);
 	}
-	return out;
+	return { checks, malformed };
 }
 
-// The verification rollup over the reported checks. failed dominates (any failed ->
-// failed), then blocked (a check that could not run), then passed (>=1, all passed).
-// No checks reported -> not_run. This is what the loop gates `converged` on: a
-// proceed verdict with verification !== "passed" must not converge clean.
-function deriveVerification(checks: LoopCheck[]): Verification {
-	if (checks.length === 0) return "not_run";
+// The verification rollup the loop gates `converged` on. Fail-safe ordering: any
+// failed -> failed; any blocked -> blocked; a malformed report -> blocked (it was
+// reported but cannot be trusted, so it can NEVER improve to passed); no checks at
+// all -> not_run; only then, every reported check passed and none was malformed ->
+// passed. A proceed verdict with verification !== "passed" must not converge clean.
+function deriveVerification(checks: LoopCheck[], malformed: boolean): Verification {
 	if (checks.some((c) => c.status === "failed")) return "failed";
 	if (checks.some((c) => c.status === "blocked")) return "blocked";
+	if (malformed) return "blocked";
+	if (checks.length === 0) return "not_run";
 	return "passed";
 }
 
@@ -226,13 +243,13 @@ function parseReview(reviewText: string): ParsedReview {
 	if (block && rawVerdict && VERDICTS.has(rawVerdict)) {
 		const fc = block.findingCount;
 		const cr = block.checksRun;
-		const checks = sanitizeChecks(block.checks);
+		const { checks, malformed } = parseChecks(block.checks);
 		return {
 			verdict: rawVerdict as LoopVerdict,
 			findingCount: typeof fc === "number" && Number.isInteger(fc) && fc >= 0 ? fc : 0,
 			checksRun: typeof cr === "string" && cr.trim() !== "" ? cr.trim() : CHECKS_RUN_FALLBACK,
 			checks,
-			verification: deriveVerification(checks),
+			verification: deriveVerification(checks, malformed),
 		};
 	}
 	// No usable block: fail safe to block, with no checks (verification not_run).
@@ -481,10 +498,19 @@ export async function runConvergeIteration(
 		...(result.auditRunId && { auditRef: result.auditRunId }),
 	});
 
-	// proceed -> converged, block -> blocked; revise leaves it undefined so the
-	// caller threads reviewText back in and runs another round.
+	// The gate: a proceed verdict converges clean ONLY when verification passed.
+	// proceed + failed/blocked/not_run -> needs-decision (the reviewer approved but
+	// the checks do not back it, so a human must decide -- chit never reports success
+	// more strongly than the evidence supports). block -> blocked; revise leaves it
+	// undefined so the caller threads reviewText back in and runs another round.
 	const stopStatus: LoopStopStatus | undefined =
-		review.verdict === "proceed" ? "converged" : review.verdict === "block" ? "blocked" : undefined;
+		review.verdict === "proceed"
+			? review.verification === "passed"
+				? "converged"
+				: "needs-decision"
+			: review.verdict === "block"
+				? "blocked"
+				: undefined;
 
 	return {
 		ok: true,
@@ -570,10 +596,12 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 
 	const reason =
 		status === "converged"
-			? "reviewer returned proceed"
+			? "reviewer returned proceed and verification passed"
 			: status === "blocked"
 				? "reviewer returned block"
-				: `reached max iterations (${opts.maxIterations}) without converging`;
+				: status === "needs-decision"
+					? "reviewer returned proceed but verification did not pass (checks failed, were blocked, or did not run)"
+					: `reached max iterations (${opts.maxIterations}) without converging`;
 	stopLoop(opts.cwd, loopId, { status, reason });
 
 	return { loopId, iterations, status };
