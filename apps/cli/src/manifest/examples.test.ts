@@ -75,4 +75,37 @@ describe("example manifests", () => {
 		expect(m.participants.reviewer?.agent).toBe("claude");
 		expect(m.participants.reviewer?.permissions?.filesystem).toBe("read_only");
 	});
+
+	test("every loop example's reviewer prompt teaches the structured checks contract", () => {
+		// The verification gate reads the reviewer's `checks`; a loop example whose
+		// review prompt omits them makes a `proceed` stop needs-decision (checks not_run).
+		// So EVERY loop example must teach the same honest contract, not just converge.json.
+		const loopExamples = readdirSync(EXAMPLES)
+			.filter((f) => f.endsWith(".json"))
+			.map((f) => ({
+				name: f,
+				raw: JSON.parse(readFileSync(join(EXAMPLES, f), "utf8")) as {
+					policy?: { kind?: string; reviewStep?: string };
+					steps?: Record<string, { prompt?: string }>;
+				},
+			}))
+			.filter((e) => e.raw.policy?.kind === "loop");
+		// Pin the set so the guard cannot pass vacuously and a NEW loop example is forced
+		// to carry the contract.
+		expect(loopExamples.map((e) => e.name).sort()).toEqual([
+			"converge-codex-writer.json",
+			"converge.json",
+		]);
+		const offenders = loopExamples
+			.filter(({ raw }) => {
+				const prompt = raw.steps?.[raw.policy?.reviewStep ?? ""]?.prompt ?? "";
+				return !(
+					prompt.includes('"checks"') &&
+					prompt.includes("NEVER report") &&
+					prompt.includes("if you ran none, use []")
+				);
+			})
+			.map((e) => e.name);
+		expect(offenders).toEqual([]);
+	});
 });
