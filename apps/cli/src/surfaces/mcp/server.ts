@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
 	type LoopRecord,
-	type NormalizedManifest,
+	type ManifestSpec,
 	parseManifest,
 	type ResolvedManifest,
 	resolveManifest,
@@ -989,7 +989,10 @@ server.registerTool(
 		} else {
 			raw = DEFAULT_CONVERGE_MANIFEST;
 		}
-		let manifest: NormalizedManifest;
+		// Parsed only to read its policy for dispatch. A ManifestSpec is enough (and
+		// honest: this is pre-resolution); the foreground paths re-resolve from `raw`
+		// and the background launchers re-read from the manifest path.
+		let manifest: ManifestSpec;
 		try {
 			manifest = parseManifest(raw);
 		} catch (e) {

@@ -1,9 +1,8 @@
+import type { ManifestSpec, ParticipantSpec } from "../resolve/types.ts";
 import type {
 	FilesystemPermission,
 	InputType,
 	NormalizedInput,
-	NormalizedManifest,
-	NormalizedParticipant,
 	NormalizedPolicy,
 	NormalizedStep,
 	SessionPolicy,
@@ -52,7 +51,17 @@ const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
 const ALLOWED_INPUT_KEYS = new Set(["type", "optional"]);
 const ALLOWED_INPUT_TYPES: ReadonlySet<string> = new Set(["string", "file[]"]);
 
-const ALLOWED_PARTICIPANT_KEYS = new Set(["agent", "instructions", "session", "permissions"]);
+// `role` references a config role (resolved later); the other four are inline
+// participant fields, any of which may also override a referenced role's value.
+const ALLOWED_PARTICIPANT_KEYS = new Set([
+	"role",
+	"agent",
+	"instructions",
+	"session",
+	"permissions",
+]);
+// Required only of an INLINE participant (no `role`). A role reference may omit
+// these; the role supplies them, checked at resolution.
 const REQUIRED_PARTICIPANT_KEYS = ["agent", "instructions", "session"] as const;
 // Exported as the single source of the participant/role vocabulary: the config
 // role parser reuses these so a role and a participant validate session and
@@ -136,28 +145,63 @@ function parseRequires(raw: unknown): Record<string, true> {
 	return out;
 }
 
-function parseParticipants(raw: unknown): Record<string, NormalizedParticipant> {
+function parseParticipants(raw: unknown): Record<string, ParticipantSpec> {
 	if (!isObject(raw)) throw new ManifestError("participants", "must be an object");
 	if (Object.keys(raw).length === 0)
 		throw new ManifestError("participants", "must define at least one participant");
 
-	const out: Record<string, NormalizedParticipant> = {};
+	const out: Record<string, ParticipantSpec> = {};
 	for (const [name, val] of Object.entries(raw)) {
 		const path = `participants.${name}`;
 		if (!IDENT_RE.test(name)) throw new ManifestError(path, "participant id must be an identifier");
 		if (RESERVED_IDS.has(name))
 			throw new ManifestError(path, "participant id must not be a reserved name");
-		if (!isObject(val)) throw new ManifestError(path, "must be an object");
-		for (const k of Object.keys(val)) {
-			if (!ALLOWED_PARTICIPANT_KEYS.has(k)) throw new ManifestError(path, `unknown field "${k}"`);
-		}
+		out[name] = parseParticipant(val, path);
+	}
+	return out;
+}
+
+// A participant is EITHER a reference to a config role (a `role` field, with any
+// of the inline fields as shallow overrides) OR a fully inline participant
+// (agent + instructions + session, the original form). The parser is
+// role-library-free and browser-safe, so it validates SHAPE only: it cannot check
+// that a referenced role exists or that a ref plus its overrides yields a complete
+// participant. resolveManifest does that, against the loaded config.
+function parseParticipant(val: unknown, path: string): ParticipantSpec {
+	if (!isObject(val)) throw new ManifestError(path, "must be an object");
+	for (const k of Object.keys(val)) {
+		if (!ALLOWED_PARTICIPANT_KEYS.has(k)) throw new ManifestError(path, `unknown field "${k}"`);
+	}
+
+	const isRoleRef = "role" in val;
+	// An inline participant must carry agent/instructions/session itself. A role
+	// reference may omit them; the role supplies the rest at resolution.
+	if (!isRoleRef) {
 		for (const k of REQUIRED_PARTICIPANT_KEYS) {
 			if (!(k in val)) throw new ManifestError(path, `missing \`${k}\``);
 		}
+	}
 
-		const agent = reqNonEmptyString(val.agent, `${path}.agent`);
-		const instructions = reqNonEmptyString(val.instructions, `${path}.instructions`);
+	const spec: ParticipantSpec = {};
 
+	if (isRoleRef) {
+		const role = reqNonEmptyString(val.role, `${path}.role`);
+		if (!ID_RE.test(role)) {
+			throw new ManifestError(
+				`${path}.role`,
+				"role reference must be a kebab-case slug (lowercase letters, digits, hyphens; starts with a letter)",
+			);
+		}
+		spec.role = role;
+	}
+
+	// Each field is validated when present. On an inline participant the REQUIRED
+	// check above guarantees agent/instructions/session are present; on a role
+	// reference they are optional overrides.
+	if ("agent" in val) spec.agent = reqNonEmptyString(val.agent, `${path}.agent`);
+	if ("instructions" in val)
+		spec.instructions = reqNonEmptyString(val.instructions, `${path}.instructions`);
+	if ("session" in val) {
 		const session = val.session;
 		if (typeof session !== "string" || !ALLOWED_SESSIONS.has(session)) {
 			throw new ManifestError(
@@ -165,35 +209,38 @@ function parseParticipants(raw: unknown): Record<string, NormalizedParticipant> 
 				`must be one of: ${[...ALLOWED_SESSIONS].join(", ")}`,
 			);
 		}
-
-		let filesystem: FilesystemPermission = "read_only";
-		if ("permissions" in val) {
-			const perms = val.permissions;
-			if (!isObject(perms)) throw new ManifestError(`${path}.permissions`, "must be an object");
-			for (const k of Object.keys(perms)) {
-				if (!ALLOWED_PERMISSION_KEYS.has(k))
-					throw new ManifestError(`${path}.permissions`, `unknown field "${k}"`);
-			}
-			if ("filesystem" in perms) {
-				const fs = perms.filesystem;
-				if (typeof fs !== "string" || !ALLOWED_FILESYSTEM_VALUES.has(fs)) {
-					throw new ManifestError(
-						`${path}.permissions.filesystem`,
-						`must be one of: ${[...ALLOWED_FILESYSTEM_VALUES].join(", ")}`,
-					);
-				}
-				filesystem = fs as FilesystemPermission;
-			}
-		}
-
-		out[name] = {
-			agent,
-			instructions,
-			session: session as SessionPolicy,
-			permissions: { filesystem },
-		};
+		spec.session = session as SessionPolicy;
 	}
-	return out;
+
+	// permissions: parsed when present. An INLINE participant keeps the historical
+	// read_only default when it omits permissions, so an inline manifest parses to
+	// exactly the spec it always did. A ROLE REFERENCE that omits permissions leaves
+	// them undefined, so resolveManifest falls back to the role's own permissions
+	// instead of this default clobbering them.
+	if ("permissions" in val) {
+		const perms = val.permissions;
+		if (!isObject(perms)) throw new ManifestError(`${path}.permissions`, "must be an object");
+		for (const k of Object.keys(perms)) {
+			if (!ALLOWED_PERMISSION_KEYS.has(k))
+				throw new ManifestError(`${path}.permissions`, `unknown field "${k}"`);
+		}
+		let filesystem: FilesystemPermission = "read_only";
+		if ("filesystem" in perms) {
+			const fs = perms.filesystem;
+			if (typeof fs !== "string" || !ALLOWED_FILESYSTEM_VALUES.has(fs)) {
+				throw new ManifestError(
+					`${path}.permissions.filesystem`,
+					`must be one of: ${[...ALLOWED_FILESYSTEM_VALUES].join(", ")}`,
+				);
+			}
+			filesystem = fs as FilesystemPermission;
+		}
+		spec.permissions = { filesystem };
+	} else if (!isRoleRef) {
+		spec.permissions = { filesystem: "read_only" };
+	}
+
+	return spec;
 }
 
 function extractRefs(
@@ -275,7 +322,7 @@ function extractRefs(
 function parseStep(
 	raw: unknown,
 	stepId: string,
-	participants: Record<string, NormalizedParticipant>,
+	participants: Record<string, ParticipantSpec>,
 	inputs: Record<string, NormalizedInput>,
 	stepIds: Set<string>,
 ): NormalizedStep {
@@ -312,7 +359,7 @@ function parseStep(
 
 function parseSteps(
 	raw: unknown,
-	participants: Record<string, NormalizedParticipant>,
+	participants: Record<string, ParticipantSpec>,
 	inputs: Record<string, NormalizedInput>,
 ): Record<string, NormalizedStep> {
 	if (!isObject(raw)) throw new ManifestError("steps", "must be an object");
@@ -459,7 +506,7 @@ function topologicalSort(deps: Record<string, string[]>): string[][] {
 	return levels;
 }
 
-export function parseManifest(raw: unknown): NormalizedManifest {
+export function parseManifest(raw: unknown): ManifestSpec {
 	if (!isObject(raw)) throw new ManifestError("$", "manifest must be a JSON object");
 
 	for (const k of Object.keys(raw)) {

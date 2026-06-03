@@ -34,7 +34,7 @@ function expectManifestError(raw: unknown, pathFragment: string, msgFragment?: s
 describe("defaults and inference", () => {
 	test("permissions.filesystem defaults to read_only", () => {
 		const m = parseManifest(VALID_BASE);
-		expect(m.participants.a?.permissions.filesystem).toBe("read_only");
+		expect(m.participants.a?.permissions?.filesystem).toBe("read_only");
 	});
 
 	test("declared inferred-capability is treated as no-op", () => {
@@ -384,5 +384,82 @@ describe("execution policy", () => {
 				"policy.maxIterations",
 			);
 		}
+	});
+});
+
+describe("participant role references", () => {
+	// VALID_BASE's participant `a` is inline. A role reference instead names a config
+	// role and may omit the fields the role supplies. parse validates shape only (it
+	// has no role library); resolveManifest is what proves a reference complete.
+	test("a bare role reference parses with no inline fields", () => {
+		const m = parseManifest({ ...VALID_BASE, participants: { a: { role: "reviewer" } } });
+		expect(m.participants.a?.role).toBe("reviewer");
+		expect(m.participants.a?.agent).toBeUndefined();
+		expect(m.participants.a?.instructions).toBeUndefined();
+		expect(m.participants.a?.session).toBeUndefined();
+	});
+
+	test("a role reference omitting permissions leaves them undefined (the role supplies them)", () => {
+		const m = parseManifest({ ...VALID_BASE, participants: { a: { role: "reviewer" } } });
+		// Load-bearing: parse must NOT default a role ref's permissions to read_only,
+		// or it would clobber the role's own permissions at resolution. Contrast with
+		// an inline participant, which keeps the read_only default (asserted above).
+		expect(m.participants.a?.permissions).toBeUndefined();
+	});
+
+	test("a role reference may shallow-override individual fields", () => {
+		const m = parseManifest({
+			...VALID_BASE,
+			participants: { a: { role: "reviewer", agent: "codex", session: "per_scope" } },
+		});
+		expect(m.participants.a?.role).toBe("reviewer");
+		expect(m.participants.a?.agent).toBe("codex");
+		expect(m.participants.a?.session).toBe("per_scope");
+		expect(m.participants.a?.instructions).toBeUndefined();
+	});
+
+	test("an inline participant (no role) still requires agent/instructions/session", () => {
+		expectManifestError(
+			{ ...VALID_BASE, participants: { a: { instructions: "x", session: "stateless" } } },
+			"participants.a",
+			"missing `agent`",
+		);
+	});
+
+	test("rejects a non-kebab-case role reference", () => {
+		expectManifestError(
+			{ ...VALID_BASE, participants: { a: { role: "Reviewer One" } } },
+			"participants.a.role",
+			"kebab-case",
+		);
+	});
+
+	test("rejects an empty or non-string role reference", () => {
+		expectManifestError(
+			{ ...VALID_BASE, participants: { a: { role: "" } } },
+			"participants.a.role",
+			"non-empty string",
+		);
+		expectManifestError(
+			{ ...VALID_BASE, participants: { a: { role: 123 } } },
+			"participants.a.role",
+			"non-empty string",
+		);
+	});
+
+	test("validates override fields on a role reference (bad session enum)", () => {
+		expectManifestError(
+			{ ...VALID_BASE, participants: { a: { role: "reviewer", session: "forever" } } },
+			"participants.a.session",
+			"must be one of",
+		);
+	});
+
+	test("still rejects unknown participant fields alongside a role reference", () => {
+		expectManifestError(
+			{ ...VALID_BASE, participants: { a: { role: "reviewer", bogus: 1 } } },
+			"participants.a",
+			'unknown field "bogus"',
+		);
 	});
 });

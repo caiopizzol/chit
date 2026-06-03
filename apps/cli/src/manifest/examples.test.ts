@@ -45,8 +45,8 @@ describe("example manifests", () => {
 
 		expect(m.inputs.task?.type).toBe("string");
 		expect(m.inputs.prior_review?.optional).toBe(true);
-		expect(m.participants.implementer?.permissions.filesystem).toBe("write");
-		expect(m.participants.reviewer?.permissions.filesystem).toBe("read_only");
+		expect(m.participants.implementer?.permissions?.filesystem).toBe("write");
+		expect(m.participants.reviewer?.permissions?.filesystem).toBe("read_only");
 		expect(m.inferredRequires.can_provide_stable_scope).toBe(true);
 
 		expect(m.executionOrder).toEqual([["implement"], ["review"], ["out"]]);
@@ -71,8 +71,8 @@ describe("example manifests", () => {
 		// The roles are swapped by vendor, but the permission boundary is unchanged:
 		// the implementer writes, the reviewer is read-only, regardless of agent.
 		expect(m.participants.implementer?.agent).toBe("codex");
-		expect(m.participants.implementer?.permissions.filesystem).toBe("write");
+		expect(m.participants.implementer?.permissions?.filesystem).toBe("write");
 		expect(m.participants.reviewer?.agent).toBe("claude");
-		expect(m.participants.reviewer?.permissions.filesystem).toBe("read_only");
+		expect(m.participants.reviewer?.permissions?.filesystem).toBe("read_only");
 	});
 });

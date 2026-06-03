@@ -3,14 +3,18 @@
 // server is the only consumer in sub-unit 1.0; the client will import the
 // same module from across the workspace once it lands.
 
-import type { GraphModel, LoopStopStatus, NormalizedManifest } from "@chit-run/core";
+import type { GraphModel, LoopStopStatus, ResolvedManifest } from "@chit-run/core";
 
 export type ParsedStudioDocument = {
 	id: string;
 	relPath: string;
 	raw: string;
 	status: "parsed";
-	manifest: NormalizedManifest;
+	// The server resolves every draft (parseManifest -> resolveManifest) before it
+	// builds the graph model, so what crosses the wire is a ResolvedManifest, not a
+	// bare parse. Typed accordingly so the contract does not under-claim (clients may
+	// read participant provenance); resolution errors surface as the `error` variant.
+	manifest: ResolvedManifest;
 };
 
 export type ErrorStudioDocument = {
