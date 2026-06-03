@@ -23,15 +23,19 @@ function depsSatisfied(task: BatchTask, index: Map<string, BatchTask>): boolean 
 	});
 }
 
-// A task that is permanently blocked: a dependency failed or was cancelled, so it
-// can never become runnable. Surfaced so the batch reports needs_human rather
-// than spinning. (Pending + unsatisfiable deps.)
+// A task that is permanently blocked: a dependency reached a terminal state that is
+// NOT review_ready (failed, cancelled, or needs_attention), so the dependent can
+// never become runnable -- only review_ready satisfies a dependency. Surfaced so the
+// batch reports needs_human rather than spinning. (Pending + unsatisfiable deps.)
 export function isBlocked(task: BatchTask, batch: Batch): boolean {
 	if (task.status !== "pending") return false;
 	const index = byId(batch.tasks);
 	return task.dependencies.some((dep) => {
 		const d = index.get(dep);
-		return d !== undefined && (d.status === "failed" || d.status === "cancelled");
+		return (
+			d !== undefined &&
+			(d.status === "failed" || d.status === "cancelled" || d.status === "needs_attention")
+		);
 	});
 }
 
@@ -65,11 +69,13 @@ export function selectRunnable(batch: Batch): BatchTask[] {
 }
 
 // The batch status derived from its tasks. running while anything is active or
-// startable; failed if a task failed and nothing else can move; needs_human if
-// stuck (pending tasks that are blocked by a failed/cancelled dep, or no slots
-// logic can free); ready_for_review when every task is terminal and at least one
-// is review_ready; cancelled when all terminal tasks are cancelled/failed with no
-// review_ready and a cancel happened (the engine sets cancelled explicitly).
+// startable; needs_human when stuck (pending tasks blocked by an unfinished dep) OR
+// any terminal task needs_attention (it did not converge clean -- this outranks
+// review_ready so the headline never reads "ready" while a task is unresolved);
+// ready_for_review when every task is terminal, at least one is review_ready, and
+// none needs attention; failed if a task failed and nothing else can move; cancelled
+// when all terminal tasks are cancelled/failed with no review_ready and a cancel
+// happened (the engine sets cancelled explicitly).
 export function deriveBatchStatus(batch: Batch): BatchStatus {
 	const tasks = batch.tasks;
 	if (tasks.length === 0) return "ready_for_review";
@@ -80,11 +86,16 @@ export function deriveBatchStatus(batch: Batch): BatchStatus {
 
 	// Nothing active or startable. Are there pending tasks that can never run?
 	const stuckPending = tasks.some((t) => t.status === "pending");
+	const anyNeedsAttention = tasks.some((t) => t.status === "needs_attention");
 	const anyReviewReady = tasks.some((t) => t.status === "review_ready");
 	const anyFailed = tasks.some((t) => t.status === "failed");
 
 	if (stuckPending) return "needs_human"; // pending with unsatisfiable deps
+	// A terminal task that did not converge clean needs a human decision; that
+	// outranks review_ready for the headline (verdict integrity: never read "ready"
+	// while any task is unresolved). review_ready siblings stay reviewable per-task.
+	if (anyNeedsAttention) return "needs_human";
 	if (anyReviewReady) return "ready_for_review";
 	if (anyFailed) return "failed";
-	return "ready_for_review"; // all terminal, none review_ready, none failed (e.g. all cancelled)
+	return "ready_for_review"; // all terminal: none review_ready/needs_attention/failed (e.g. all cancelled)
 }

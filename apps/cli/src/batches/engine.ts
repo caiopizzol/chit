@@ -317,18 +317,24 @@ function reconcile(c: Batch, deps: BatchEngineDeps): Batch {
 			}
 			continue; // still working (or just settled stale); nothing more to do
 		}
-		// Terminal job states:
-		if (job.state === "completed" && job.stopStatus === "converged") {
-			settleTask(t, "review_ready", deps, { job });
+		// Terminal job states. converged is the only clean outcome (review_ready). A
+		// COMPLETED-but-not-converged run -- the reviewer blocked, approved-but-
+		// unverified (needs-decision), or ran out of iterations (max-iterations) -- is a
+		// review judgment, NOT an execution failure: settle needs_attention so a human
+		// decides (fix / rerun / discard) without it reading as a broken run, and
+		// without satisfying any dependent (only review_ready does). Only a genuinely
+		// failed run (state === "failed": the manifest threw or returned ok:false; the
+		// vanished / non-loop / stale cases are handled above) settles failed.
+		if (job.state === "completed") {
+			settleTask(t, job.stopStatus === "converged" ? "review_ready" : "needs_attention", deps, {
+				job,
+			});
 		} else if (job.state === "cancelled") {
 			settleTask(t, "cancelled", deps, { job });
 		} else {
-			// completed-but-not-converged (blocked / max-iterations) or failed: do NOT
-			// auto-proceed dependents onto un-converged work. The worktree diff is still
-			// listed in the summary; the human can bump the budget and re-run.
 			settleTask(t, "failed", deps, {
 				job,
-				failure: job.failure ?? `did not converge (${job.stopStatus ?? "failed"})`,
+				failure: job.failure ?? `run failed (${job.stopStatus ?? "failed"})`,
 			});
 		}
 	}
@@ -346,7 +352,7 @@ function jobIsSettleable(job: JobRecord, deps: BatchEngineDeps): boolean {
 
 function settleTask(
 	t: BatchTask,
-	status: Extract<TaskStatus, "review_ready" | "failed" | "cancelled">,
+	status: Extract<TaskStatus, "review_ready" | "needs_attention" | "failed" | "cancelled">,
 	deps: BatchEngineDeps,
 	extra: { job?: LoopJobRecord; failure?: string },
 ): void {

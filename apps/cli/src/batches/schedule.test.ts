@@ -75,6 +75,10 @@ describe("isBlocked", () => {
 		const c = batch([task("a", { status: "running" }), task("b", { dependencies: ["a"] })]);
 		expect(isBlocked(c.tasks[1] as BatchTask, c)).toBe(false);
 	});
+	test("pending task with a needs_attention dependency is blocked (only review_ready satisfies)", () => {
+		const c = batch([task("a", { status: "needs_attention" }), task("b", { dependencies: ["a"] })]);
+		expect(isBlocked(c.tasks[1] as BatchTask, c)).toBe(true);
+	});
 });
 
 describe("deriveBatchStatus", () => {
@@ -93,6 +97,13 @@ describe("deriveBatchStatus", () => {
 	test("needs_human when a pending task is stuck behind a failed dep", () => {
 		const c = batch([task("a", { status: "failed" }), task("b", { dependencies: ["a"] })]);
 		expect(deriveBatchStatus(c)).toBe("needs_human");
+	});
+	test("needs_attention outranks review_ready/failed for the headline", () => {
+		// A terminal task needing a human decision is not "ready"; it makes the batch
+		// need a human even alongside a clean review_ready sibling (verdict integrity).
+		expect(deriveBatchStatus(states("needs_attention"))).toBe("needs_human");
+		expect(deriveBatchStatus(states("review_ready", "needs_attention"))).toBe("needs_human");
+		expect(deriveBatchStatus(states("needs_attention", "failed"))).toBe("needs_human");
 	});
 	test("all-cancelled is ready_for_review (terminal, none failed/review_ready)", () => {
 		expect(deriveBatchStatus(states("cancelled", "cancelled"))).toBe("ready_for_review");

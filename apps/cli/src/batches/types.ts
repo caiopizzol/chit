@@ -14,9 +14,12 @@ import type { LoopStopStatus, LoopVerdict } from "@chit-run/core";
 // Batch lifecycle, derived from its tasks (see schedule.deriveBatchStatus):
 //   planning  - created, nothing launched yet (transient)
 //   running   - at least one task active or startable
-//   needs_human - stuck: pending/blocked tasks with no active work and no failure
-//   ready_for_review - every task reached a terminal reviewable/failed/cancelled
-//     state and at least one is review_ready
+//   needs_human - a human must decide: pending tasks blocked by an unfinished
+//     dependency, OR a terminal task that needs attention (completed but did not
+//     converge clean). Outranks ready_for_review so the batch never reads "ready"
+//     while any task is unresolved.
+//   ready_for_review - every task reached a terminal state, at least one is
+//     review_ready, and none needs attention
 //   failed    - a task failed and nothing else can progress
 //   cancelled - the batch was cancelled
 export type BatchStatus =
@@ -30,12 +33,25 @@ export type BatchStatus =
 // Task lifecycle. Simplified from the prototype: merge semantics are deliberately
 // absent (merging is the human's, outside the batch). A task that converged is
 // `review_ready`, NOT merged.
-//   pending      - not yet launched
-//   running      - a background job is advancing it
-//   review_ready - its job converged; the worktree diff is ready for human review
-//   failed       - its job failed/blocked, or the worktree could not be created
-//   cancelled    - cancelled before or during the run
-export type TaskStatus = "pending" | "running" | "review_ready" | "failed" | "cancelled";
+//   pending         - not yet launched
+//   running         - a background job is advancing it
+//   review_ready    - its job converged + verified; the worktree diff is ready to review
+//   needs_attention - its job COMPLETED but did not converge clean (the reviewer
+//                     blocked, approved-but-unverified -> needs-decision, or ran out of
+//                     iterations -> max-iterations). A review judgment, NOT an execution
+//                     failure: a human inspects the worktree + receipt and decides
+//                     (fix / rerun / discard). Does NOT satisfy a dependent.
+//   failed          - orchestration/execution broke (worker died, job vanished, the
+//                     manifest run threw or returned ok:false, or the worktree could not
+//                     be created), not a review judgment
+//   cancelled       - cancelled before or during the run
+export type TaskStatus =
+	| "pending"
+	| "running"
+	| "review_ready"
+	| "needs_attention"
+	| "failed"
+	| "cancelled";
 
 // A task is "active" (occupies a parallel slot) only while running.
 export const ACTIVE_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["running"]);
@@ -49,7 +65,7 @@ export const DEPENDENCY_SATISFIED_STATUSES: ReadonlySet<TaskStatus> = new Set<Ta
 
 // The terminal outcome of a task's job, summarized from the loop log + job record
 // (the batch never recomputes execution; it points). Present once the task is
-// review_ready or failed.
+// review_ready, needs_attention, or failed.
 export interface TaskResult {
 	// Mirrors the job's stop status exactly (the batch points, never recomputes).
 	stopStatus?: LoopStopStatus;

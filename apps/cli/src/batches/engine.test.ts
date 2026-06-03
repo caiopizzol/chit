@@ -204,18 +204,34 @@ describe("advanceBatch", () => {
 		expect(b.status).toBe("running"); // launched now that a is review_ready
 	});
 
-	test("a blocked/max-iterations job fails the task and does NOT proceed dependents", () => {
-		startBatch(store, deps, {
-			id: "c1",
-			cwd,
-			tasks: [task("a"), task("b", { dependencies: ["a"] })],
-			maxParallel: 2,
-		});
-		jobs.finish(firstJob(), { stopStatus: "max-iterations" });
+	test("a non-converged job (blocked / needs-decision / max-iterations) -> needs_attention, not failed", () => {
+		// These are review judgments, not execution failures: the agents completed but
+		// did not produce clean mergeable work. The task needs a human decision, carries
+		// no error, and does NOT proceed its dependents (only review_ready satisfies).
+		for (const stop of ["blocked", "needs-decision", "max-iterations"] as const) {
+			startBatch(store, deps, {
+				id: `c-${stop}`,
+				cwd,
+				tasks: [task("a"), task("b", { dependencies: ["a"] })],
+				maxParallel: 2,
+			});
+			const jobId = present(jobs.launched.at(-1), `${stop} launched job`).jobId;
+			jobs.finish(jobId, { stopStatus: stop });
+			const c = advanceBatch(store, deps, `c-${stop}`);
+			expect(taskOf(c, "a").status).toBe("needs_attention");
+			expect(taskOf(c, "a").error).toBeUndefined(); // not an error
+			expect(taskOf(c, "a").result?.stopStatus).toBe(stop);
+			expect(taskOf(c, "b").status).toBe("pending"); // dependent does not proceed
+			expect(c.status).toBe("needs_human");
+		}
+	});
+
+	test("a genuinely failed job (manifest threw / ok:false) -> failed with an error", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { state: "failed", failure: "step exploded" });
 		const c = advanceBatch(store, deps, "c1");
-		expect(c.tasks.find((t) => t.id === "a")?.status).toBe("failed");
-		expect(c.tasks.find((t) => t.id === "b")?.status).toBe("pending"); // not launched
-		expect(c.status).toBe("needs_human"); // b is blocked by a's failure
+		expect(taskOf(c, "a").status).toBe("failed");
+		expect(taskOf(c, "a").error).toContain("step exploded");
 	});
 
 	test("advance immediately after start does NOT fail a just-launched queued job", () => {
