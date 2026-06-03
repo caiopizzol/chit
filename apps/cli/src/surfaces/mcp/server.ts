@@ -317,7 +317,7 @@ server.registerTool(
 	"chit_wait",
 	{
 		description:
-			"Block until a background run or batch reaches a meaningful state, then return the same view as chit_status / chit_batch_status plus a waitResult. Use this instead of polling chit_status in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself; call chit_batch_advance after. Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | timeout. Inputs: run_id OR batch_id, optional timeout_ms (default 900000), cwd (batch only).",
+			"Block until a background run or batch reaches a meaningful state, then return the same view as chit_status / chit_batch_status plus a waitResult. Use this instead of polling chit_status in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is ready_for_review (a needs_advance result means call chit_batch_advance now, then wait again). Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | timeout. Inputs: run_id OR batch_id, optional timeout_ms (default 900000), cwd (batch only).",
 		inputSchema: {
 			run_id: z
 				.string()
@@ -1541,7 +1541,7 @@ server.registerTool(
 	"chit_batch_list",
 	{
 		description:
-			"List the batches in this repo, newest first: id, status, task count, how many tasks are review_ready / failed, and whether it has been cleaned up. Use it to recover a batch id you lost, then chit_batch_status <id> for the full view. Read-only.",
+			"List the batches in this repo, newest first: batch_id, status, task count, how many tasks are review_ready / failed, and whether it has been cleaned up. Use it to recover a batch_id you lost, then chit_batch_status <batch_id> for the full view. Read-only.",
 		inputSchema: {
 			limit: z
 				.number()

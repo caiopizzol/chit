@@ -178,7 +178,7 @@ export interface CleanupTaskEntry {
 }
 
 export interface CleanupResult {
-	batchId: string;
+	batch_id: string;
 	confirmed: boolean; // false = dry run (nothing removed)
 	removable: CleanupTaskEntry[]; // terminal tasks with a worktree
 	skipped: Array<{ id: string; status: TaskStatus; reason: string }>;
@@ -241,7 +241,7 @@ export function cleanupBatch(
 
 	if (!opts.confirm) {
 		return {
-			batchId: id,
+			batch_id: id,
 			confirmed: false,
 			removable,
 			skipped,
@@ -273,7 +273,7 @@ export function cleanupBatch(
 	}
 
 	return {
-		batchId: id,
+		batch_id: id,
 		confirmed: true,
 		removable,
 		skipped,
@@ -435,7 +435,7 @@ export interface BatchTaskView {
 }
 
 export interface BatchView {
-	id: string;
+	batch_id: string;
 	repo: string;
 	baseBranch: string;
 	baseSha: string;
@@ -535,7 +535,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	void startableBlocked;
 
 	return {
-		id: c.id,
+		batch_id: c.id,
 		repo: c.repo,
 		baseBranch: c.baseBranch,
 		baseSha: c.baseSha,
@@ -555,7 +555,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 // batch id can find it again without reading state files. Counts come straight
 // off the stored task statuses (no job reads), so this is cheap.
 export interface BatchSummary {
-	id: string;
+	batch_id: string;
 	status: Batch["status"];
 	taskCount: number;
 	reviewReady: number;
@@ -567,7 +567,7 @@ export interface BatchSummary {
 
 export function summarizeBatch(c: Batch): BatchSummary {
 	const summary: BatchSummary = {
-		id: c.id,
+		batch_id: c.id,
 		status: c.status,
 		taskCount: c.tasks.length,
 		reviewReady: c.tasks.filter((t) => t.status === "review_ready").length,

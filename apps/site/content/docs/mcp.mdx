@@ -101,9 +101,9 @@ Run status. With a `run_id`: that run's status, and whether it is foreground (su
 Block until a background run or batch reaches a meaningful state, then return the same view as `chit_status` / `chit_batch_status` plus a `waitResult`. This is the "tell me when it's done" tool: reach for it instead of polling `chit_status` in a loop, and never read chit's state files to detect completion (they are private). Read-only: it never advances a batch or mutates a run; it watches the durable state and returns. Emits a heartbeat while waiting; press Esc to stop waiting (the run keeps running). Inputs: `run_id` OR `batch_id`, `timeout_ms?` (default 900000), `cwd?` (batch only).
 
 - With a `run_id` (background runs only): waits until the run is terminal (`completed` / `failed` / `cancelled`, or its worker died), so a crashed worker never hangs the wait. A **foreground** run is rejected (advance it with `chit_next`, which already blocks per unit).
-- With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch; call `chit_batch_advance` after.
+- With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch (it is read-only; only `chit_batch_advance` mutates state). A blocking-until-fully-done wait would deadlock, since nothing would ever advance the batch. So the operator loop is: `chit_wait` → `chit_batch_advance` → `chit_batch_status`, repeated until the batch reaches `ready_for_review`.
 
-`waitResult` is `terminal` | `needs_advance` | `timeout`.
+`waitResult` is `terminal` | `needs_advance` | `timeout`. `needs_advance` means call `chit_batch_advance` now, then wait again; `terminal` means the batch is done.
 
 ### chit_trace
 
@@ -131,7 +131,7 @@ Plan the graph, create worktrees, launch the initial runnable wave, return immed
 
 ### chit_batch_list
 
-List the batches in this repo, newest first: `id`, `status`, task count, how many tasks are `review_ready` / `failed`, `createdAt`, and `cleanedAt` if it has been cleaned up. Use it to recover a batch id you lost, then `chit_batch_status` for the full view. Read-only. Inputs: `limit?` (newest N), `cwd?`.
+List the batches in this repo, newest first: `batch_id`, `status`, task count, how many tasks are `review_ready` / `failed`, `createdAt`, and `cleanedAt` if it has been cleaned up. Use it to recover a `batch_id` you lost, then `chit_batch_status` for the full view. Read-only. Inputs: `limit?` (newest N), `cwd?`.
 
 ### chit_batch_status
 

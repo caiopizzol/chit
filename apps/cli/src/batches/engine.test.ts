@@ -359,7 +359,7 @@ describe("listBatches", () => {
 		advanceBatch(store, deps, "c1");
 		const s = summarizeBatch(present(store.get("c1"), "batch c1"));
 		expect(s).toMatchObject({
-			id: "c1",
+			batch_id: "c1",
 			taskCount: 2,
 			reviewReady: 1,
 			failed: 1,
@@ -372,7 +372,7 @@ describe("listBatches", () => {
 		startBatch(store, deps, { id: "old", cwd, tasks: [task("a")], maxParallel: 1 });
 		deps.now = () => 2000;
 		startBatch(store, deps, { id: "new", cwd, tasks: [task("a")], maxParallel: 1 });
-		const ids = listBatches(store).map((b) => b.id);
+		const ids = listBatches(store).map((b) => b.batch_id);
 		expect(ids).toEqual(["new", "old"]);
 	});
 
@@ -383,7 +383,7 @@ describe("listBatches", () => {
 		startBatch(store, deps, { id: "c2", cwd, tasks: [task("a")], maxParallel: 1 });
 		deps.now = () => 3000;
 		startBatch(store, deps, { id: "c3", cwd, tasks: [task("a")], maxParallel: 1 });
-		expect(listBatches(store, 2).map((b) => b.id)).toEqual(["c3", "c2"]);
+		expect(listBatches(store, 2).map((b) => b.batch_id)).toEqual(["c3", "c2"]);
 	});
 
 	test("surfaces cleanedAt once a batch has been cleaned up", () => {
@@ -449,5 +449,55 @@ describe("batchWaitState (what chit_wait blocks on for a batch)", () => {
 		// And advanceBatch genuinely acts on it (proves the predicate matches reality).
 		const c = advanceBatch(store, deps, "c1");
 		expect(taskOf(c, "a").status).toBe("failed");
+	});
+});
+
+// The MCP response-shape contract. The batch tools are pass-throughs:
+// chit_batch_start / chit_batch_status return describeBatch(...), chit_batch_list
+// returns listBatches(...) rows (summarizeBatch), chit_batch_cleanup returns
+// cleanupBatch(...). So pinning these payloads pins the boundary clients actually
+// read. The boundary id is `batch_id` (matching every batch tool's INPUT param and
+// the run_id / audit_ref convention); a top-level `id` or camelCase `batchId` must
+// never reappear. Task-level `id` and `run_id` stay (they are not the batch handle).
+describe("MCP response-shape contract: batch payloads use batch_id, not id/batchId", () => {
+	// Drive a single task to ready_for_review so every view has real content (a
+	// removable worktree for cleanup, a terminal status for the summary).
+	function readyBatch(): Batch {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1"); // a -> review_ready, batch -> ready_for_review
+		return present(store.get("c1"), "batch c1");
+	}
+
+	test("describeBatch (chit_batch_start / chit_batch_status) has top-level batch_id, not id/batchId", () => {
+		const v = describeBatch(readyBatch(), deps);
+		expect(v.batch_id).toBe("c1");
+		expect("id" in v).toBe(false);
+		expect("batchId" in v).toBe(false);
+		// Task-level ids are preserved: a task keeps `id`, and a launched task its run_id.
+		const t = present(v.tasks[0], "task view");
+		expect(t.id).toBe("a");
+		expect(t.run_id).toBeDefined();
+	});
+
+	test("listBatches rows (chit_batch_list) have batch_id, not id", () => {
+		readyBatch();
+		const row = present(listBatches(store)[0], "list row");
+		expect(row.batch_id).toBe("c1");
+		expect("id" in row).toBe(false);
+	});
+
+	test("cleanupBatch (chit_batch_cleanup) has batch_id, not batchId/id, on both dry-run and confirm", () => {
+		readyBatch();
+		const dry = cleanupBatch(store, deps, "c1", { confirm: false });
+		expect(dry.batch_id).toBe("c1");
+		expect("batchId" in dry).toBe(false);
+		expect("id" in dry).toBe(false);
+		const done = cleanupBatch(store, deps, "c1", { confirm: true });
+		expect(done.batch_id).toBe("c1");
+		expect("batchId" in done).toBe(false);
+		expect("id" in done).toBe(false);
+		// The per-task removable entries still carry their own task `id`.
+		expect(present(done.removable[0], "removable entry").id).toBe("a");
 	});
 });
