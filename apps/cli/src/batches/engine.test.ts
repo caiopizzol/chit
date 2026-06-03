@@ -501,3 +501,34 @@ describe("MCP response-shape contract: batch payloads use batch_id, not id/batch
 		expect(present(done.removable[0], "removable entry").id).toBe("a");
 	});
 });
+
+// A cold agent follows nextAction literally (a real dogfood quoted the documented
+// wait->advance loop verbatim). A terminal batch that only said "review the task
+// worktrees" left one agent to guess, and it wrongly told the user to pass the
+// batch_id to chit_audit_show (receipts open by audit_ref). So every terminal state
+// must name the next tool calls: receipts via chit_audit_show { audit_ref } and
+// retirement via chit_batch_cleanup, and flag that the work is uncommitted.
+describe("batch terminal nextAction guides to receipts + cleanup (not the batch_id)", () => {
+	test("ready_for_review names chit_audit_show { audit_ref }, uncommitted changes, and chit_batch_cleanup", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("ready_for_review");
+		expect(v.nextAction).toContain("chit_audit_show");
+		expect(v.nextAction).toContain("audit_ref");
+		expect(v.nextAction).toContain("chit_batch_cleanup");
+		expect(v.nextAction.toLowerCase()).toContain("uncommitted");
+		// The bug guard: it must NOT steer the agent to use the batch_id for receipts.
+		expect(v.nextAction).not.toContain("batch_id");
+	});
+
+	test("cancelled also points at receipts + cleanup, not a bare 'batch cancelled'", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		cancelBatch(store, deps, "c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("cancelled");
+		expect(v.nextAction).toContain("chit_audit_show");
+		expect(v.nextAction).toContain("chit_batch_cleanup");
+	});
+});

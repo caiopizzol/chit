@@ -515,13 +515,24 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	const startableBlocked = c.tasks.filter((t) => isStartable(t, c)).length;
 	const blocked = c.tasks.filter((t) => isBlocked(t, c)).length;
 
+	// Every terminal state shares one close-out instruction. Naming the next tool
+	// call matters: an agent follows nextAction literally, and the old bare "review
+	// the task worktrees" wording (no audit/cleanup pointer) led one to wrongly tell
+	// a user to pass the batch_id to chit_audit_show -- receipts open by audit_ref, a
+	// different handle. So spell out: the work is uncommitted, receipts open by
+	// audit_ref, worktrees retire with chit_batch_cleanup.
+	const reviewAndRetire =
+		"Review the uncommitted changes in each completed task's worktree (changedFiles lists them; nothing is committed or merged), open a task's receipt with chit_audit_show { audit_ref } (each task lists its auditRefs), and retire the worktrees with chit_batch_cleanup when done.";
+
 	let nextAction: string;
 	if (c.status === "cancelled") {
-		nextAction = "batch cancelled";
+		nextAction = `batch cancelled (running jobs settle in the background; worktrees are kept for inspection). ${reviewAndRetire}`;
 	} else if (c.status === "ready_for_review") {
-		nextAction = "all tasks terminal; review the task worktrees (chit_batch_status lists them)";
+		nextAction = `all tasks terminal. ${reviewAndRetire}`;
+	} else if (c.status === "failed") {
+		nextAction = `batch failed; one or more tasks did not converge (see each task's status/error). ${reviewAndRetire}`;
 	} else if (c.status === "needs_human") {
-		nextAction = `${blocked} task(s) blocked by a failed/cancelled dependency; inspect and start a fresh batch for them`;
+		nextAction = `${blocked} task(s) blocked by a failed/cancelled dependency; inspect them and start a fresh batch for the blocked work. ${reviewAndRetire}`;
 	} else if (runnable.length > 0 || reconcilable) {
 		const n = runnable.length;
 		nextAction =
