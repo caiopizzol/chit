@@ -188,7 +188,7 @@ export interface CleanupResult {
 
 // Retire a batch's worktrees + branches. SAFETY: refuses while any task is
 // still running (a live worker is in that worktree); only ever removes worktrees
-// for TERMINAL tasks (review_ready / failed / cancelled). Default is a DRY RUN
+// for TERMINAL tasks (review_ready / needs_attention / failed / cancelled). Default is a DRY RUN
 // (confirm=false): it reports exactly which worktrees/branches would be removed
 // and which changed-file diffs that would discard, and removes nothing. With
 // confirm=true it removes them via deps.removeWorktree. It NEVER deletes the

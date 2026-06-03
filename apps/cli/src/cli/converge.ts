@@ -382,8 +382,9 @@ export interface ConvergeIterationContext {
 //     its receipt instead of leaving a transcript on disk orphaned.
 //   - ok: true   -> the iteration record was appended; the parsed verdict and
 //     metrics are returned, plus `reviewText` (the next prior_review) and
-//     `stopStatus` (converged for proceed, blocked for block, undefined for
-//     revise -> continue). `decision` == verdict (the autonomous driver follows
+//     `stopStatus` (converged for proceed WITH verification passed, needs-decision
+//     for a proceed without it, blocked for block, undefined for revise -> continue).
+//     `decision` == verdict (the autonomous driver follows
 //     the reviewer). `auditRunId` is present only when the run was audited.
 export type ConvergeIterationResult =
 	| { ok: false; failure: string; auditRunId?: string }
@@ -478,14 +479,14 @@ export async function runConvergeIteration(
 		changedFiles,
 		workspaceWarnings,
 		checksRun: review.checksRun,
-		// Structured checks + their rollup, when the reviewer reported any. Omitted
-		// (not "not_run") when none were reported, so an iteration that predates this
-		// or simply ran no checks stays byte-identical. The loop gates `converged` on
-		// review.verification regardless of what is persisted here.
-		...(review.checks.length > 0 && {
-			checks: review.checks,
-			verification: review.verification,
-		}),
+		// verification is ALWAYS recorded: it is the rollup the loop gates `converged`
+		// on, and chit_trace surfaces it as the reason a run stopped needs-decision. The
+		// not_run (no checks) and blocked (only-malformed checks) cases are exactly the
+		// ones that stop needs-decision, so they MUST carry the rollup or the trace
+		// hides why. The checks list is recorded when the reviewer reported any; an
+		// empty list adds nothing the rollup does not already say.
+		...(review.checks.length > 0 && { checks: review.checks }),
+		verification: review.verification,
 		verdict: review.verdict,
 		findingCount: review.findingCount,
 		// Autonomous driver: it follows the reviewer, so decision == verdict.
@@ -842,9 +843,11 @@ const CONVERGE_HELP = `chit converge --task <text> --scope <id> [options]
                            Default off: such a manifest is refused before running.
 
 Runs the implement/check loop to convergence and records it under chit's
-state dir (keyed by repo, not in the worktree). Stops at the reviewer's verdict: proceed ->
-converged, block -> blocked, else revise and retry up to the budget. An
-unparseable verdict is treated as block (never an implicit proceed).
+state dir (keyed by repo, not in the worktree). Stops at the reviewer's verdict and
+its verification: proceed + verification passed -> converged; proceed whose checks
+failed, were blocked, or did not run -> needs-decision (a human decides); block ->
+blocked; else revise and retry up to the budget. An unparseable verdict is treated
+as block (never an implicit proceed).
 `;
 
 class UsageError extends Error {}

@@ -176,12 +176,11 @@ export function appendIteration(
 	if (opts.workspaceWarnings !== undefined && opts.workspaceWarnings.length > 0) {
 		rec.workspaceWarnings = opts.workspaceWarnings;
 	}
-	// checks + verification are written together: verification is the rollup of the
-	// checks, so neither is meaningful alone. Omitted when no checks were reported.
-	if (opts.checks !== undefined && opts.checks.length > 0 && opts.verification !== undefined) {
-		rec.checks = opts.checks;
-		rec.verification = opts.verification;
-	}
+	// verification is the rollup the loop gates `converged` on and chit_trace surfaces
+	// (so a needs-decision run shows why); record it whenever provided. The checks list
+	// is recorded when the reviewer reported any (an empty list adds nothing new).
+	if (opts.verification !== undefined) rec.verification = opts.verification;
+	if (opts.checks !== undefined && opts.checks.length > 0) rec.checks = opts.checks;
 	if (opts.auditRef !== undefined) rec.auditRef = opts.auditRef;
 	if (opts.usage !== undefined) rec.usage = opts.usage;
 	appendFileSync(path, `${serializeLoopRecord(rec)}\n`);

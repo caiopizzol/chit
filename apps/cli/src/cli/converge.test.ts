@@ -268,12 +268,15 @@ describe("convergeLoop", () => {
 		expect(it.verification).toBe("failed");
 	});
 
-	test("omits checks/verification from the record when the reviewer reports none", async () => {
+	test("records verification not_run (omitting the empty checks list) when the reviewer reports none", async () => {
+		// not_run is exactly when a proceed stops needs-decision, so the record MUST
+		// carry the rollup or chit_trace cannot show why. The empty checks list adds
+		// nothing the rollup does not already say, so it stays omitted.
 		const { execute } = fakeExecute([reviewJson("proceed", { checks: [] })]);
 		await convergeLoop({ cwd, scope: "s", task: "t", maxIterations: 3, loopId: "V2", execute });
 		const it = firstIteration("V2");
 		expect("checks" in it).toBe(false);
-		expect("verification" in it).toBe(false);
+		expect(it.verification).toBe("not_run");
 	});
 
 	// The gate: a proceed verdict converges ONLY when verification passed. Otherwise
@@ -322,8 +325,9 @@ describe("convergeLoop", () => {
 		expect(status).toBe("needs-decision");
 	});
 
-	test("proceed + no checks (not_run) -> needs-decision", async () => {
-		const { status } = await gateRun("G4", reviewJson("proceed", { checks: [] }));
+	test("proceed + no checks (not_run) -> needs-decision, verification not_run recorded", async () => {
+		const { status, it } = await gateRun("G4", reviewJson("proceed", { checks: [] }));
+		expect(it.verification).toBe("not_run");
 		expect(status).toBe("needs-decision");
 	});
 
@@ -339,6 +343,19 @@ describe("convergeLoop", () => {
 				],
 			}),
 		);
+		expect(it.verification).toBe("blocked");
+		expect(status).toBe("needs-decision");
+	});
+
+	test("proceed + ONLY a malformed check -> needs-decision, verification blocked recorded", async () => {
+		// No valid checks survive parsing (the lone entry has a bad status), so the
+		// rollup is blocked -- and it must be recorded even with no valid checks, or the
+		// trace hides why this stopped needs-decision (the gap the review caught).
+		const { status, it } = await gateRun(
+			"G6",
+			reviewJson("proceed", { checks: [{ command: "bun test", status: "FAIL" }] }),
+		);
+		expect("checks" in it).toBe(false); // none were valid, so no list is recorded
 		expect(it.verification).toBe("blocked");
 		expect(status).toBe("needs-decision");
 	});

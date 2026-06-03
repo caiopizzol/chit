@@ -62,7 +62,7 @@ export function summarizeRunForStatus(run: Run): RunStatusSummary {
 export interface LoopStatusSummary {
 	run_id: string;
 	scope: string;
-	status: string; // running | open | converged | blocked | max-iterations | cancelled
+	status: string; // running | open | converged | needs-decision | blocked | max-iterations | cancelled
 	iterationsCompleted: number;
 	cancellable: boolean;
 	lastVerdict?: ConvergeSession["lastVerdict"];
