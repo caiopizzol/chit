@@ -1464,7 +1464,7 @@ const batchTaskSchema = z.object({
 		.string()
 		.optional()
 		.describe(
-			"Per-task converge manifest override (absolute or relative to cwd). Omit to use the bundled default (write-capable Claude implementer + read-only Codex reviewer). To swap roles (e.g. a Codex implementer), point this at a custom manifest like examples/converge-codex-writer.json.",
+			"Per-task converge manifest override (absolute or relative to cwd). Omit to use the bundled default (write-capable Claude implementer + read-only Codex reviewer). To swap the pairing (e.g. a Codex implementer + Claude reviewer), point this at your own converge manifest; its participants can be inline, or reference reusable roles defined in ~/.config/chit/config.json.",
 		),
 });
 
@@ -1479,7 +1479,7 @@ server.registerTool(
 	"chit_batch_start",
 	{
 		description:
-			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_batch_status and call chit_batch_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer; point manifestPath at a custom manifest like examples/converge-codex-writer.json to swap roles).",
+			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then poll chit_batch_status and call chit_batch_advance to launch the next wave as jobs finish. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). To swap the pairing, point manifestPath at your own converge manifest (participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
 		inputSchema: {
 			tasks: z
 				.array(batchTaskSchema)
