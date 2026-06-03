@@ -8,11 +8,18 @@ import {
 	type NormalizedRegistry,
 	parseManifest,
 	parseRegistry,
+	resolveManifest,
 } from "@chit-run/core";
 
+// findEnforcementGaps / collectInvocationWarnings consume a ResolvedManifest now;
+// these inline fixtures resolve with no roles (a no-op beyond provenance).
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
+
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
-const CONSULT = parseManifest(JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8")));
-const ASK_CODEX = parseManifest({
+const CONSULT = resolved(JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8")));
+const ASK_CODEX = resolved({
 	schema: 1,
 	id: "ask-codex",
 	description: "Ask Codex a single stateless question.",

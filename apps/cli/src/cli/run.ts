@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { NormalizedConfig, NormalizedManifest } from "@chit-run/core";
+import type { NormalizedConfig } from "@chit-run/core";
 import {
 	buildGraphModel,
 	collectInvocationWarnings,
@@ -748,7 +748,7 @@ function runShow(args: ParsedArgs): number {
 		return 2;
 	}
 
-	let manifest: NormalizedManifest;
+	let manifest: ResolvedManifest;
 	let config: NormalizedConfig;
 	try {
 		config = loadConfig();
@@ -862,13 +862,15 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 	const { PathError, startStudio } = await import("@chit-run/studio/server");
 	let handle: { url: string; stop(): void };
 	try {
-		// Studio gets the registry today; Stage 5.4 injects roles too so its server can
-		// resolve role refs before building the graph model.
-		const registry = loadConfig().registry;
+		// Inject both the registry and the roles so Studio's server resolves role
+		// references in a draft before building the graph model (buildGraphModel
+		// consumes a ResolvedManifest).
+		const config = loadConfig();
 		handle = await startStudio({
 			cwd: process.cwd(),
 			explicitPath: args.manifestPath,
-			registry,
+			registry: config.registry,
+			roles: config.roles,
 			lifecycle: buildStudioLifecycle(),
 			// The CLI owns the loop-log location scheme; inject the resolved dir so
 			// Studio reads the same place chit writes.

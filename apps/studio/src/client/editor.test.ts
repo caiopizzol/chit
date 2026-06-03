@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { buildGraphModel, parseManifest, parseRegistry, validationSeverity } from "@chit-run/core";
+import {
+	buildGraphModel,
+	parseManifest,
+	parseRegistry,
+	resolveManifest,
+	validationSeverity,
+} from "@chit-run/core";
+
+// buildGraphModel consumes a ResolvedManifest now; inline fixtures resolve (no roles).
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
+
 import {
 	appendReference,
 	canonicalize,
@@ -29,7 +41,7 @@ function chit(id: string, description = "a chit"): string {
 }
 
 function graphFor(raw: string, surface?: "claude-skill" | "cli") {
-	return buildGraphModel(parseManifest(JSON.parse(raw)), REGISTRY, surface);
+	return buildGraphModel(resolved(JSON.parse(raw)), REGISTRY, surface);
 }
 
 describe("deepEqual", () => {

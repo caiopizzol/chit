@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
-import type { NormalizedManifest, NormalizedRegistry } from "@chit-run/core";
+import type { NormalizedRegistry, ResolvedManifest } from "@chit-run/core";
 import {
 	findEnforcementGaps,
 	findMissingCapabilities,
@@ -110,7 +110,7 @@ export function installClaudeSkill(opts: InstallOptions): InstallResult {
 	if (!registry) throw new SurfaceInstallError("internal: no registry resolved");
 	const roles = config?.roles ?? {};
 
-	let manifest: NormalizedManifest;
+	let manifest: ResolvedManifest;
 	try {
 		manifest = resolveManifest(parseManifest(rawJson), { roles });
 	} catch (e) {
@@ -236,7 +236,7 @@ function generateHeredocDelimiter(): string {
 }
 
 interface BuildOptions {
-	manifest: NormalizedManifest;
+	manifest: ResolvedManifest;
 	runtimePath: string;
 	primaryInputName: string;
 	allowUnenforced: boolean;

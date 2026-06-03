@@ -7,7 +7,14 @@ import {
 	parseManifest,
 	parseRegistry,
 	renderShow,
+	resolveManifest,
 } from "@chit-run/core";
+
+// buildGraphModel consumes a ResolvedManifest now; these inline fixtures resolve
+// with no roles (a no-op beyond provenance).
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 const CONSULT = JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8"));
@@ -60,7 +67,7 @@ const FILE_INPUT_MANIFEST = {
 const REGISTRY = parseRegistry(undefined);
 
 function buildConsult(surface?: string): GraphModel {
-	return buildGraphModel(parseManifest(CONSULT), REGISTRY, surface);
+	return buildGraphModel(resolved(CONSULT), REGISTRY, surface);
 }
 
 // consult no longer has a real enforcement gap: both codex (sandbox) and claude
@@ -141,7 +148,7 @@ describe("renderShow: ascii", () => {
 
 	test("renders an unknown agent's config as unresolved, not defaults", () => {
 		const ghost = buildGraphModel(
-			parseManifest({
+			resolved({
 				...CONSULT,
 				participants: {
 					...CONSULT.participants,
@@ -172,14 +179,14 @@ describe("renderShow: ascii", () => {
 	});
 
 	test("codex-only manifest shows permissions OK", () => {
-		const m = buildGraphModel(parseManifest(ASK_CODEX), REGISTRY, "claude-skill");
+		const m = buildGraphModel(resolved(ASK_CODEX), REGISTRY, "claude-skill");
 		const out = renderShow(m, "ascii");
 		expect(out).toContain("OK");
 		expect(out).not.toContain("NEEDS OVERRIDE");
 	});
 
 	test("write-capable participant shows active filesystem mode and not-requested enforcement", () => {
-		const m = buildGraphModel(parseManifest(WRITE_CODEX), REGISTRY, "cli");
+		const m = buildGraphModel(resolved(WRITE_CODEX), REGISTRY, "cli");
 		const out = renderShow(m, "ascii");
 		expect(out).toMatch(
 			/codex\s+agent=codex\s+session=stateless\s+filesystem=write\s+read_only_enforcement=not requested \(adapter supports\)\s+adapter=codex-exec/,
@@ -224,7 +231,7 @@ describe("renderShow: html", () => {
 	});
 
 	test("write-capable participant does not get an active read-only badge", () => {
-		const m = buildGraphModel(parseManifest(WRITE_CODEX), REGISTRY, "cli");
+		const m = buildGraphModel(resolved(WRITE_CODEX), REGISTRY, "cli");
 		const out = renderShow(m, "html");
 		expect(out).toContain("filesystem: write");
 		expect(out).toContain("read_only enforcement: not requested (adapter supports)");
@@ -251,7 +258,7 @@ describe("renderShow: html", () => {
 	});
 
 	test("missing-capability renders as error (red)", () => {
-		const m = buildGraphModel(parseManifest(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
+		const m = buildGraphModel(resolved(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
 		const out = renderShow(m, "html");
 		expect(out).toContain('<section class="validation error">');
 		expect(out).toContain("Missing capabilities");
@@ -273,7 +280,7 @@ describe("renderShow: html", () => {
 			...CONSULT,
 			description: 'Consult <script>alert("xss")</script>',
 		};
-		const m = buildGraphModel(parseManifest(malicious), REGISTRY, "claude-skill");
+		const m = buildGraphModel(resolved(malicious), REGISTRY, "claude-skill");
 		const out = renderShow(m, "html");
 		expect(out).not.toContain("<script>alert");
 		expect(out).toContain("&lt;script&gt;");

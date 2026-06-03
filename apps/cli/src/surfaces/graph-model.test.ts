@@ -5,9 +5,16 @@ import {
 	buildGraphModel,
 	parseManifest,
 	parseRegistry,
+	resolveManifest,
 	resolveParticipantSnapshots,
 	validationSeverity,
 } from "@chit-run/core";
+
+// buildGraphModel / resolveParticipantSnapshots consume a ResolvedManifest now; the
+// fixtures here are fully inline, so resolution only adds provenance.
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
 
 const EXAMPLES = join(import.meta.dir, "..", "..", "..", "..", "examples");
 const CONSULT = JSON.parse(readFileSync(join(EXAMPLES, "consult.json"), "utf-8"));
@@ -50,7 +57,7 @@ const REGISTRY = parseRegistry(undefined);
 
 describe("buildGraphModel: structural fields", () => {
 	test("consult.json produces parallel-fan-out node structure", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		expect(model.manifest.id).toBe("consult");
 		expect(model.manifest.output).toBe("out");
 
@@ -73,7 +80,7 @@ describe("buildGraphModel: structural fields", () => {
 	});
 
 	test("execution levels match the manifest's topological order", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		const askCodex = model.nodes.find((n) => n.id === "ask_codex");
 		const askClaude = model.nodes.find((n) => n.id === "ask_claude");
 		const out = model.nodes.find((n) => n.id === "out");
@@ -88,7 +95,7 @@ describe("buildGraphModel: structural fields", () => {
 	});
 
 	test("edges connect each step to its referenced sources", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		const edge = (from: string, to: string) =>
 			model.edges.find((e) => e.from === from && e.to === to);
 		expect(edge("input:question", "ask_codex")?.kind).toBe("input-ref");
@@ -98,7 +105,7 @@ describe("buildGraphModel: structural fields", () => {
 	});
 
 	test("participants denormalize adapter + enforcesReadOnly from registry", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		expect(model.participants.codex?.adapter).toBe("codex-exec");
 		expect(model.participants.codex?.enforcesReadOnly).toBe(true);
 		expect(model.participants.claude?.adapter).toBe("claude-cli");
@@ -107,7 +114,7 @@ describe("buildGraphModel: structural fields", () => {
 	});
 
 	test("requires.effective is declared ∪ inferred", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		expect(model.requires.declared).toEqual({ can_show_markdown: true });
 		expect(model.requires.inferred).toEqual({ can_provide_stable_scope: true });
 		expect(model.requires.effective).toEqual({
@@ -136,7 +143,7 @@ describe("buildGraphModel: effective participant config", () => {
 			},
 		},
 	});
-	const CFG_MANIFEST = parseManifest({
+	const CFG_MANIFEST = resolved({
 		...CONSULT,
 		participants: {
 			reviewer: {
@@ -183,7 +190,7 @@ describe("buildGraphModel: effective participant config", () => {
 	});
 
 	test("built-in agents resolve to defaults; claude strict-MCP is effectively on", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		expect(model.participants.codex?.config.model).toBeUndefined(); // CLI default
 		expect(model.participants.codex?.config.strictMcp).toBeUndefined(); // not claude-cli
 		expect(model.participants.claude?.config.model).toBeUndefined();
@@ -192,7 +199,7 @@ describe("buildGraphModel: effective participant config", () => {
 	});
 
 	test("an unknown agent yields an empty config", () => {
-		const manifestWithGhost = parseManifest({
+		const manifestWithGhost = resolved({
 			...CONSULT,
 			participants: {
 				...CONSULT.participants,
@@ -231,7 +238,7 @@ describe("buildGraphModel: effective participant config", () => {
 
 describe("buildGraphModel: surface and validation", () => {
 	test("without surface, surface and validation are null", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY);
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY);
 		expect(model.surface).toBeNull();
 		expect(model.validation).toBeNull();
 	});
@@ -239,7 +246,7 @@ describe("buildGraphModel: surface and validation", () => {
 	test("claude-skill surface: consult is compatible with no permission gaps", () => {
 		// Both participants (codex + claude) enforce read_only now, so consult has
 		// no enforcement gaps and needs no override flag.
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY, "claude-skill");
 		expect(model.surface?.kind).toBe("claude-skill");
 		expect(model.validation?.capabilities.compatible).toBe(true);
 		expect(model.validation?.capabilities.missing).toEqual([]);
@@ -248,26 +255,26 @@ describe("buildGraphModel: surface and validation", () => {
 	});
 
 	test("claude-skill surface: ask-codex has no gaps (codex-exec enforces)", () => {
-		const model = buildGraphModel(parseManifest(ASK_CODEX), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(ASK_CODEX), REGISTRY, "claude-skill");
 		expect(model.validation?.capabilities.compatible).toBe(true);
 		expect(model.validation?.permissions.status).toBe("ok");
 		expect(model.validation?.permissions.gaps).toEqual([]);
 	});
 
 	test("claude-skill surface: file[] input manifest missing can_pass_files", () => {
-		const model = buildGraphModel(parseManifest(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
 		expect(model.validation?.capabilities.compatible).toBe(false);
 		expect(model.validation?.capabilities.missing).toContain("can_pass_files");
 	});
 
 	test("unknown surface throws", () => {
-		expect(() => buildGraphModel(parseManifest(CONSULT), REGISTRY, "imaginary-surface")).toThrow(
+		expect(() => buildGraphModel(resolved(CONSULT), REGISTRY, "imaginary-surface")).toThrow(
 			/unknown surface/,
 		);
 	});
 
 	test("unknown agents are surfaced as a blocking validation issue", () => {
-		const manifestWithGhost = parseManifest({
+		const manifestWithGhost = resolved({
 			...CONSULT,
 			participants: {
 				...CONSULT.participants,
@@ -290,19 +297,19 @@ describe("buildGraphModel: surface and validation", () => {
 	});
 
 	test("CLI surface carries the --scope caveat when manifest needs stable scope", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "cli");
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY, "cli");
 		expect(model.surface?.notes).toContain("can_provide_stable_scope requires --scope at run time");
 	});
 
 	test("CLI surface omits the --scope caveat for stateless manifests", () => {
 		// ask-codex is stateless: no per_scope participants, no can_provide_stable_scope
 		// in requires. The --scope note should not appear.
-		const model = buildGraphModel(parseManifest(ASK_CODEX), REGISTRY, "cli");
+		const model = buildGraphModel(resolved(ASK_CODEX), REGISTRY, "cli");
 		expect(model.surface?.notes).toEqual([]);
 	});
 
 	test("claude-skill surface has no run-time notes", () => {
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY, "claude-skill");
 		expect(model.surface?.notes).toEqual([]);
 	});
 });
@@ -313,7 +320,7 @@ describe("validationSeverity", () => {
 	});
 
 	test("missing capability → error (install-blocking)", () => {
-		const model = buildGraphModel(parseManifest(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(FILE_INPUT_MANIFEST), REGISTRY, "claude-skill");
 		expect(validationSeverity(model.validation)).toBe("error");
 	});
 
@@ -321,7 +328,7 @@ describe("validationSeverity", () => {
 		// No built-in adapter produces a real gap anymore (both enforce read_only),
 		// so synthesize a needs_override report to verify the severity mapping, the
 		// same way the "blocked" case below is constructed.
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY, "claude-skill");
 		const needsOverride = {
 			capabilities: { compatible: true, missing: [] },
 			permissions: {
@@ -334,7 +341,7 @@ describe("validationSeverity", () => {
 	});
 
 	test("codex-only manifest → ok", () => {
-		const model = buildGraphModel(parseManifest(ASK_CODEX), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(ASK_CODEX), REGISTRY, "claude-skill");
 		expect(validationSeverity(model.validation)).toBe("ok");
 	});
 
@@ -342,7 +349,7 @@ describe("validationSeverity", () => {
 		// The current code paths don't produce "blocked", but the severity
 		// contract says they should hard-fail. Construct one synthetically
 		// to verify the mapping.
-		const model = buildGraphModel(parseManifest(CONSULT), REGISTRY, "claude-skill");
+		const model = buildGraphModel(resolved(CONSULT), REGISTRY, "claude-skill");
 		const blocked = {
 			capabilities: { compatible: true, missing: [] },
 			permissions: { status: "blocked" as const, gaps: [] },
@@ -352,7 +359,7 @@ describe("validationSeverity", () => {
 	});
 
 	test("unknown agent → error (install-blocking)", () => {
-		const manifestWithGhost = parseManifest({
+		const manifestWithGhost = resolved({
 			...CONSULT,
 			participants: {
 				codex: { agent: "missing", instructions: "x", session: "stateless" },

@@ -10,10 +10,10 @@
 import {
 	findEnforcementGaps,
 	findUnknownAgents,
-	type NormalizedManifest,
 	type NormalizedRegistry,
 	type NormalizedRole,
 	parseManifest,
+	type ResolvedManifest,
 	resolveManifest,
 	resolveParticipantSnapshots,
 } from "@chit-run/core";
@@ -46,7 +46,10 @@ export interface StepRecord {
 
 export interface Run {
 	runId: string;
-	manifest: NormalizedManifest;
+	// The resolved manifest startRun built (role refs resolved, governance checked).
+	// ResolvedManifest, so the stepwise chit_next path that reads run.manifest stays
+	// behind the same barrier as the rest of execution.
+	manifest: ResolvedManifest;
 	preparedInputs: PreparedInputs;
 	adapters: AdapterMap;
 	invocationCwd: string;

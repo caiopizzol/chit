@@ -1,12 +1,8 @@
 import { getAdapterDescriptor } from "./agents/registry.ts";
 import type { NormalizedAgent, NormalizedRegistry, ParticipantConfig } from "./agents/types.ts";
 import type { AuditParticipantSnapshot } from "./audit/events.ts";
-import type {
-	FilesystemPermission,
-	InputType,
-	NormalizedManifest,
-	SessionPolicy,
-} from "./manifest/types.ts";
+import type { FilesystemPermission, InputType, SessionPolicy } from "./manifest/types.ts";
+import type { ResolvedManifest } from "./resolve/types.ts";
 import {
 	type EnforcementGap,
 	findEnforcementGaps,
@@ -30,7 +26,7 @@ const SURFACE_CAPABILITIES: Readonly<Record<string, ReadonlySet<string>>> = {
 // this manifest. Showing every static note on every manifest is noise.
 interface SurfaceNoteRule {
 	text: string;
-	appliesTo: (m: NormalizedManifest) => boolean;
+	appliesTo: (m: ResolvedManifest) => boolean;
 }
 
 const SURFACE_NOTE_RULES: Readonly<Record<string, ReadonlyArray<SurfaceNoteRule>>> = {
@@ -129,7 +125,7 @@ export function isKnownSurface(kind: string): kind is SurfaceKind {
 }
 
 export function buildGraphModel(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 	surfaceKind?: string,
 ): GraphModel {
@@ -261,7 +257,7 @@ export function buildGraphModel(
 // instructions text: it already appears in the rendered prompt blobs, and leaving
 // it out keeps the run.started event small and less sensitive.
 export function resolveParticipantSnapshots(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 ): Record<string, AuditParticipantSnapshot> {
 	const { participants } = buildGraphModel(manifest, registry);

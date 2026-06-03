@@ -4,7 +4,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { NormalizedRegistry, SurfaceKind } from "@chit-run/core";
+import type { NormalizedRegistry, NormalizedRole, SurfaceKind } from "@chit-run/core";
 import { isKnownSurface } from "@chit-run/core";
 import { Hono } from "hono";
 import { defaultAuditDir, readAuditRun } from "./audit.ts";
@@ -38,6 +38,9 @@ export interface StartStudioOptions {
 	cwd: string;
 	explicitPath?: string;
 	registry: NormalizedRegistry;
+	// The role library, so previews resolve role references before buildGraphModel.
+	// Optional: a host that injects only a registry (older callers, tests) gets none.
+	roles?: Record<string, NormalizedRole>;
 	hostname?: string;
 	port?: number;
 	// Where the React client bundle (index.js, index.css) lives. Defaults to
@@ -68,7 +71,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 	const hostname = opts.hostname ?? "127.0.0.1";
 	const requestedPort = opts.port ?? 0;
 
-	const store = new DocStore(opts.cwd, opts.registry);
+	const store = new DocStore(opts.cwd, opts.registry, opts.roles ?? {});
 	const defaultSurface: SurfaceKind = opts.defaultSurface ?? "claude-skill";
 	const token = generateToken();
 

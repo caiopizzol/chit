@@ -3,7 +3,13 @@
 // target.
 
 import { describe, expect, test } from "bun:test";
-import { buildGraphModel, parseManifest, parseRegistry } from "@chit-run/core";
+import { buildGraphModel, parseManifest, parseRegistry, resolveManifest } from "@chit-run/core";
+
+// buildGraphModel consumes a ResolvedManifest now; inline fixtures resolve (no roles).
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
+
 import { initClientState } from "./state.ts";
 
 const REGISTRY = parseRegistry(undefined);
@@ -44,7 +50,7 @@ describe("initClientState", () => {
 
 	test("open + parsed bootstrap → open mode with raw, draftSource, graphModel", () => {
 		const raw = chit("consult");
-		const manifest = parseManifest(JSON.parse(raw));
+		const manifest = resolved(JSON.parse(raw));
 		const graphModel = buildGraphModel(manifest, REGISTRY);
 		const state = initClientState({
 			mode: "open",

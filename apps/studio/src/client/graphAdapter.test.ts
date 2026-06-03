@@ -11,8 +11,14 @@ import {
 	type NormalizedRegistry,
 	parseManifest,
 	parseRegistry,
+	resolveManifest,
 } from "@chit-run/core";
 import { adaptGraphModel } from "./graphAdapter.ts";
+
+// buildGraphModel consumes a ResolvedManifest now; inline fixtures resolve (no roles).
+function resolved(raw: unknown) {
+	return resolveManifest(parseManifest(raw), { roles: {} });
+}
 
 const REGISTRY = parseRegistry(undefined);
 const EXAMPLES_DIR = join(import.meta.dir, "..", "..", "..", "..", "examples");
@@ -35,7 +41,7 @@ const UNENFORCED_REGISTRY: NormalizedRegistry = {
 
 function loadGraphModel(filename: string) {
 	const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, filename), "utf-8"));
-	const manifest = parseManifest(raw);
+	const manifest = resolved(raw);
 	return buildGraphModel(manifest, REGISTRY);
 }
 
@@ -128,7 +134,7 @@ describe("adaptGraphModel", () => {
 
 	test("consult + claude-skill: no permission warns now that both adapters enforce read_only", () => {
 		const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, "consult.json"), "utf-8"));
-		const manifest = parseManifest(raw);
+		const manifest = resolved(raw);
 		const model = buildGraphModel(manifest, REGISTRY, "claude-skill");
 		expect(model.validation).not.toBeNull();
 		// codex sandboxes, claude uses plan mode: neither participant is a gap.
@@ -142,7 +148,7 @@ describe("adaptGraphModel", () => {
 
 	test("a permission gap renders as a 'needs check' warn on the call node (synthetic non-enforcing adapter)", () => {
 		const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, "consult.json"), "utf-8"));
-		const manifest = parseManifest(raw);
+		const manifest = resolved(raw);
 		const model = buildGraphModel(manifest, UNENFORCED_REGISTRY, "claude-skill");
 		const gappedParticipants = new Set(
 			model.validation?.permissions.gaps.map((g) => g.participantId),

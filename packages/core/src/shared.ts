@@ -1,12 +1,12 @@
 import { getAdapterDescriptor } from "./agents/registry.ts";
 import type { NormalizedRegistry } from "./agents/types.ts";
-import type { NormalizedManifest } from "./manifest/types.ts";
+import type { ResolvedManifest } from "./resolve/types.ts";
 
 // Returns the names of capabilities the manifest requires that the surface
 // does not provide. Empty array means the manifest is compatible with the
 // surface.
 export function findMissingCapabilities(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	surfaceCaps: ReadonlySet<string>,
 ): string[] {
 	const missing: string[] = [];
@@ -25,7 +25,7 @@ export interface UnknownAgentRef {
 // registry. Shared so every surface (CLI, claude-skill, future MCP) catches
 // this at install/run time instead of only failing once an adapter is built.
 export function findUnknownAgents(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 ): UnknownAgentRef[] {
 	const out: UnknownAgentRef[] = [];
@@ -51,7 +51,7 @@ export interface EnforcementGap {
 // uniform whether the manifest is being installed as a CLI manifest, a Claude
 // skill, an MCP tool, or anything later.
 export function findEnforcementGaps(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 ): EnforcementGap[] {
 	const gaps: EnforcementGap[] = [];
@@ -104,7 +104,7 @@ export interface InvocationWarningOptions {
 // Today: one warning per enforcement gap when allowUnenforcedPermissions
 // is true. Future kinds (fingerprint_mismatch, etc.) plug in here.
 export function collectInvocationWarnings(
-	manifest: NormalizedManifest,
+	manifest: ResolvedManifest,
 	registry: NormalizedRegistry,
 	options: InvocationWarningOptions,
 ): InvocationWarning[] {

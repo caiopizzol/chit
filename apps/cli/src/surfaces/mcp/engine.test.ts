@@ -6,6 +6,7 @@ import {
 	type AdapterCallCompletedEvent,
 	type NormalizedRegistry,
 	parseManifest,
+	resolveManifest,
 } from "@chit-run/core";
 import { loadRegistry } from "../../agents/parse.ts";
 import { AuditRecorder } from "../../audit/recorder.ts";
@@ -41,7 +42,8 @@ const CHAIN = {
 // Build a Run with injected adapters, bypassing real adapter construction so
 // tests can control timing/failure. Mirrors startRun's record init.
 function makeRun(raw: unknown, inputs: Record<string, unknown>, adapters: AdapterMap): Run {
-	const manifest = parseManifest(raw);
+	// Run.manifest is a ResolvedManifest now; resolve the inline fixture (no roles).
+	const manifest = resolveManifest(parseManifest(raw), { roles: {} });
 	const records: Run["records"] = {};
 	for (const [stepId, step] of Object.entries(manifest.steps)) {
 		records[stepId] =

@@ -4,8 +4,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, relative } from "node:path";
-import type { NormalizedRegistry, SurfaceKind } from "@chit-run/core";
-import { buildGraphModel, parseManifest } from "@chit-run/core";
+import type { NormalizedRegistry, NormalizedRole, SurfaceKind } from "@chit-run/core";
+import { buildGraphModel, parseManifest, resolveManifest } from "@chit-run/core";
 import type { DiscoveryResult } from "./discovery.ts";
 import type {
 	Bootstrap,
@@ -50,7 +50,18 @@ export class DocStore {
 	constructor(
 		private cwd: string,
 		private registry: NormalizedRegistry,
+		// The role library, so a draft that references a named role resolves before
+		// buildGraphModel (which now consumes a ResolvedManifest). The CLI boots Studio
+		// with the loaded config's roles; defaults to none for a registry-only host.
+		private roles: Record<string, NormalizedRole> = {},
 	) {}
+
+	// Parse + resolve a client draft into the ResolvedManifest buildGraphModel needs.
+	// A parse error OR a resolution error (unknown role / no agent) throws here and is
+	// caught by the preview/read sites, which surface it as the `error` variant.
+	private resolveDraft(draft: unknown) {
+		return resolveManifest(parseManifest(draft), { roles: this.roles });
+	}
 
 	add(docId: string, absolutePath: string): void {
 		const rel = relative(this.cwd, absolutePath);
@@ -92,7 +103,7 @@ export class DocStore {
 		if (!entry) return null;
 
 		try {
-			const manifest = parseManifest(draft);
+			const manifest = this.resolveDraft(draft);
 			const graphModel = buildGraphModel(manifest, this.registry, surface);
 			const canonicalRaw = canonicalize(draft);
 			return {
@@ -169,7 +180,7 @@ export class DocStore {
 		}
 
 		try {
-			const manifest = parseManifest(parsedJson);
+			const manifest = this.resolveDraft(parsedJson);
 			const graphModel = buildGraphModel(manifest, this.registry, surface);
 			return {
 				document: {
@@ -226,7 +237,7 @@ export class DocStore {
 
 		// 3. Validate the draft. Parse failures: return error variant, no write.
 		try {
-			const manifest = parseManifest(draft);
+			const manifest = this.resolveDraft(draft);
 			const graphModel = buildGraphModel(manifest, this.registry, surface);
 			const canonicalRaw = canonicalize(draft);
 
