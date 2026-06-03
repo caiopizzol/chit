@@ -26,6 +26,7 @@ import {
 	type LoopSteps,
 	prepareConvergeExecute,
 	runConvergeIteration,
+	stopReasonFor,
 } from "../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
 import { loadConfig } from "../config/load.ts";
@@ -276,7 +277,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 			// Close cleanly with NO further iteration on a persisted cancel intent OR
 			// a signal that already aborted us during startup (handler installed above).
 			if (store.get(jobId)?.cancelRequestedAt || controller.signal.aborted) {
-				stopLoopSafely(job, "cancelled", "cancelled via chit_cancel");
+				stopLoopSafely(job, "cancelled", stopReasonFor("cancelled", { detail: "via chit_cancel" }));
 				finish(store, jobId, now, "cancelled", { stopStatus: "cancelled" });
 				return;
 			}
@@ -328,7 +329,11 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 					store.update(jobId, (c) => ({ ...c, auditRefs: [...c.auditRefs, ref] }));
 				}
 				if (controller.signal.aborted) {
-					stopLoopSafely(job, "cancelled", "cancelled mid-iteration (signal)");
+					stopLoopSafely(
+						job,
+						"cancelled",
+						stopReasonFor("cancelled", { detail: "mid-iteration (signal)" }),
+					);
 					finish(store, jobId, now, "cancelled", { stopStatus: "cancelled" });
 				} else {
 					stopLoopSafely(job, "blocked", iter.failure);
@@ -349,11 +354,10 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 			}));
 
 			if (iter.stopStatus) {
-				// proceed -> converged, block -> blocked. The loop already has no stop
-				// record; close it here (the worker is the loop's driver).
-				const reason =
-					iter.stopStatus === "converged" ? "reviewer returned proceed" : "reviewer returned block";
-				stopLoopSafely(job, iter.stopStatus, reason);
+				// converged / blocked / needs-decision -- the gate already chose the
+				// status; close the loop here (the worker is the loop's driver) with the
+				// shared wording so it matches the CLI and MCP drivers.
+				stopLoopSafely(job, iter.stopStatus, stopReasonFor(iter.stopStatus));
 				finish(store, jobId, now, "completed", { stopStatus: iter.stopStatus });
 				return;
 			}
@@ -363,7 +367,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 				stopLoopSafely(
 					job,
 					"max-iterations",
-					`reached max iterations (${job.maxIterations}) without converging`,
+					stopReasonFor("max-iterations", { maxIterations: job.maxIterations }),
 				);
 				finish(store, jobId, now, "completed", { stopStatus: "max-iterations" });
 				return;

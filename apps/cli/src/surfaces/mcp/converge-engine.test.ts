@@ -152,6 +152,9 @@ describe("runNextIteration: verdict-driven stops", () => {
 		expect(r.stopStatus).toBe("converged");
 		expect(session.terminalStatus).toBe("converged");
 		expect(stopRecord("L1")?.status).toBe("converged");
+		// Converged wording is shared with the CLI driver: it names verification, not
+		// just the verdict (so "converged" can never read as proceed-alone).
+		expect(stopRecord("L1")?.reason).toBe("reviewer returned proceed and verification passed");
 		// Terminal: another next throws rather than appending past the stop. The
 		// error is surfaced verbatim by chit_next, so it must be run-scoped: no
 		// internal loop id (run_id is the only handle a caller holds).
@@ -166,6 +169,36 @@ describe("runNextIteration: verdict-driven stops", () => {
 		if (r.kind !== "iteration") throw new Error("expected iteration");
 		expect(r.stopStatus).toBe("blocked");
 		expect(stopRecord("L1")?.status).toBe("blocked");
+		expect(stopRecord("L1")?.reason).toBe("reviewer returned block");
+	});
+
+	test("proceed with a failing check stops needs-decision with honest wording", async () => {
+		const session = start(
+			scriptedExecute([
+				reviewJson("proceed", {
+					checks: [{ command: "bun test", status: "failed", reason: "1 failing" }],
+				}),
+			]),
+		);
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.verdict).toBe("proceed");
+		expect(r.stopStatus).toBe("needs-decision");
+		const stop = stopRecord("L1");
+		expect(stop?.status).toBe("needs-decision");
+		// The reason must NOT be the binary "reviewer returned block" -- that false
+		// history string (the reviewer returned proceed, not block) is exactly the bug
+		// this MCP path had before the wording was centralized. It must name the gate.
+		expect(stop?.reason).toContain("verification did not pass");
+		expect(stop?.reason).not.toContain("returned block");
+	});
+
+	test("proceed with no checks run stops needs-decision", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed", { checks: [] })]));
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.stopStatus).toBe("needs-decision");
+		expect(stopRecord("L1")?.reason).toContain("verification did not pass");
 	});
 
 	test("an unparseable verdict fails safe to block (never an implicit proceed)", async () => {

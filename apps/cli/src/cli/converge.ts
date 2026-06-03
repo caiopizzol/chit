@@ -527,6 +527,36 @@ export async function runConvergeIteration(
 	};
 }
 
+// The single source of truth for a loop's terminal stop reason, shared by every
+// driver (the CLI convergeLoop, the MCP runNextIteration, the background worker)
+// so the wording can never drift between surfaces. The bug this prevents: a
+// needs-decision stop mislabeled "reviewer returned block" because a driver wrote
+// its own binary converged/block reason. Verdict and budget outcomes get fixed
+// wording; cancellation carries a site `detail` (where and how it was cancelled).
+// Step-failure stops do NOT come here -- their reason is the failure or throw
+// message, which says more than a status string would. The switch is exhaustive
+// over LoopStopStatus, so a newly added status will not compile until it is given
+// wording here.
+export function stopReasonFor(
+	status: LoopStopStatus,
+	ctx?: { maxIterations?: number; detail?: string },
+): string {
+	switch (status) {
+		case "converged":
+			return "reviewer returned proceed and verification passed";
+		case "blocked":
+			return "reviewer returned block";
+		case "needs-decision":
+			return "reviewer returned proceed but verification did not pass (checks failed, were blocked, or did not run)";
+		case "max-iterations":
+			return ctx?.maxIterations !== undefined
+				? `reached max iterations (${ctx.maxIterations}) without converging`
+				: "reached max iterations without converging";
+		case "cancelled":
+			return ctx?.detail ? `cancelled ${ctx.detail}` : "cancelled";
+	}
+}
+
 // The pure loop: a thin driver over runConvergeIteration. startLoop, then run
 // one iteration per round (deciding stop from its returned next-state), then
 // stopLoop. No agent spawning here: that is entirely behind `execute`.
@@ -594,15 +624,10 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 
 	if (status === undefined) status = "max-iterations";
 
-	const reason =
-		status === "converged"
-			? "reviewer returned proceed and verification passed"
-			: status === "blocked"
-				? "reviewer returned block"
-				: status === "needs-decision"
-					? "reviewer returned proceed but verification did not pass (checks failed, were blocked, or did not run)"
-					: `reached max iterations (${opts.maxIterations}) without converging`;
-	stopLoop(opts.cwd, loopId, { status, reason });
+	stopLoop(opts.cwd, loopId, {
+		status,
+		reason: stopReasonFor(status, { maxIterations: opts.maxIterations }),
+	});
 
 	return { loopId, iterations, status };
 }

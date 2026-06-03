@@ -32,7 +32,12 @@ afterEach(() => {
 // review carries that verdict; {fail} -> a graceful manifest failure (ok:false),
 // optionally carrying an auditRunId (a transcript recorded before the run failed).
 function fakeExecute(
-	outcomes: Array<{ verdict?: LoopVerdict; fail?: string; auditRunId?: string }>,
+	outcomes: Array<{
+		verdict?: LoopVerdict;
+		fail?: string;
+		auditRunId?: string;
+		checks?: unknown[];
+	}>,
 ): ConvergeExecute {
 	let i = 0;
 	return async () => {
@@ -51,8 +56,9 @@ function fakeExecute(
 		const review = `looks fine\n\`\`\`json\n${JSON.stringify({
 			verdict: o?.verdict ?? "proceed",
 			findingCount: 0,
-			// A passing check so a proceed converges under the verification gate.
-			checks: [{ command: "tests", status: "passed" }],
+			// A passing check so a proceed converges under the verification gate; an
+			// outcome can override with a failing/empty check to exercise the gate.
+			checks: o?.checks ?? [{ command: "tests", status: "passed" }],
 			checksRun: "tests",
 			risk: "none",
 		})}\n\`\`\``;
@@ -144,6 +150,31 @@ describe("background converge worker", () => {
 		await runJobWorker("j1", runDeps(fakeExecute([{ verdict: "block" }])));
 		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "blocked" });
 		expect(readLoop(cwd, "j1").at(-1)).toMatchObject({ type: "stop", status: "blocked" });
+	});
+
+	test("reviewer proceed but a failing check -> completed with needs-decision (honest reason)", async () => {
+		seedJob();
+		await runJobWorker(
+			"j1",
+			runDeps(
+				fakeExecute([
+					{
+						verdict: "proceed",
+						checks: [{ command: "tests", status: "failed", reason: "1 failing" }],
+					},
+				]),
+			),
+		);
+		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "needs-decision" });
+		const stop = readLoop(cwd, "j1").at(-1);
+		expect(stop).toMatchObject({ type: "stop", status: "needs-decision" });
+		// The worker is a loop driver that had the same binary mislabel as the MCP path:
+		// a needs-decision stop must NOT read "reviewer returned block" (the reviewer
+		// returned proceed). Its wording is now the shared, honest gate text.
+		if (stop?.type === "stop") {
+			expect(stop.reason).toContain("verification did not pass");
+			expect(stop.reason).not.toContain("returned block");
+		}
 	});
 
 	test("manifest run failure -> failed", async () => {

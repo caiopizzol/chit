@@ -24,6 +24,7 @@ import {
 	resolveLoopPolicy,
 	runConverge,
 	runConvergeIteration,
+	stopReasonFor,
 	validateConvergeManifest,
 } from "./converge.ts";
 
@@ -1294,5 +1295,31 @@ describe("loop policy resolution (Stage 2: policy-driven step ids)", () => {
 		// outputs["implement"] absent -> empty summary -> the "(no summary)" fallback.
 		expect(it.implementSummary).toBe("(no summary)");
 		expect(it.checkDurationMs).toBe(0); // no "review" step in the trace
+	});
+});
+
+describe("stopReasonFor (the one wording source for every loop driver)", () => {
+	test("verdict and budget outcomes get fixed, honest wording", () => {
+		// converged names verification, so it can never read as proceed-alone.
+		expect(stopReasonFor("converged")).toBe("reviewer returned proceed and verification passed");
+		expect(stopReasonFor("blocked")).toBe("reviewer returned block");
+		// The bug this guards: needs-decision must NOT say "reviewer returned block".
+		const nd = stopReasonFor("needs-decision");
+		expect(nd).toContain("verification did not pass");
+		expect(nd).not.toContain("returned block");
+	});
+
+	test("max-iterations includes the budget when given, omits it otherwise", () => {
+		expect(stopReasonFor("max-iterations", { maxIterations: 3 })).toBe(
+			"reached max iterations (3) without converging",
+		);
+		expect(stopReasonFor("max-iterations")).toBe("reached max iterations without converging");
+	});
+
+	test("cancellation carries the site detail, defaulting to plain cancelled", () => {
+		expect(stopReasonFor("cancelled")).toBe("cancelled");
+		expect(stopReasonFor("cancelled", { detail: "mid-iteration (signal)" })).toBe(
+			"cancelled mid-iteration (signal)",
+		);
 	});
 });

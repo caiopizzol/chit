@@ -19,6 +19,7 @@ import {
 	type ConvergeIterationResult,
 	type LoopSteps,
 	runConvergeIteration,
+	stopReasonFor,
 } from "../../cli/converge.ts";
 import { readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
 
@@ -211,7 +212,11 @@ export async function runNextIteration(
 			if (controller.signal.aborted) {
 				// Cancelled mid-run: runConvergeIteration appended NO record (it appends
 				// only on a successful run). Close the loop cleanly as cancelled.
-				stopTerminal(session, "cancelled", "cancelled via MCP (client abort or chit_cancel)");
+				stopTerminal(
+					session,
+					"cancelled",
+					stopReasonFor("cancelled", { detail: "via MCP (client abort or chit_cancel)" }),
+				);
 				return { kind: "cancelled", iteration };
 			}
 			// A real manifest failure (not a cancellation): close blocked, exactly as
@@ -228,10 +233,9 @@ export async function runNextIteration(
 		if (iter.auditRunId !== undefined) session.auditRefs.push(iter.auditRunId);
 
 		if (iter.stopStatus !== undefined) {
-			// proceed -> converged, block -> blocked.
-			const reason =
-				iter.stopStatus === "converged" ? "reviewer returned proceed" : "reviewer returned block";
-			stopTerminal(session, iter.stopStatus, reason);
+			// converged / blocked / needs-decision -- the verdict-and-verification gate
+			// already chose the status; stopReasonFor gives the matching wording.
+			stopTerminal(session, iter.stopStatus, stopReasonFor(iter.stopStatus));
 		} else {
 			// revise: thread the review forward. If that consumed the budget, the loop
 			// stops as max-iterations (mirrors convergeLoop's post-loop default).
@@ -240,7 +244,7 @@ export async function runNextIteration(
 				stopTerminal(
 					session,
 					"max-iterations",
-					`reached max iterations (${session.maxIterations}) without converging`,
+					stopReasonFor("max-iterations", { maxIterations: session.maxIterations }),
 				);
 			}
 		}
@@ -282,7 +286,11 @@ export function cancelConverge(session: ConvergeSession): CancelResult {
 		session.active.abort();
 		return { state: "cancelling" };
 	}
-	stopTerminal(session, "cancelled", "cancelled via chit_cancel (no iteration running)");
+	stopTerminal(
+		session,
+		"cancelled",
+		stopReasonFor("cancelled", { detail: "via chit_cancel (no iteration running)" }),
+	);
 	return { state: "closed" };
 }
 
