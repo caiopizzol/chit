@@ -60,15 +60,32 @@ function streamBoundedTail(stream: ReadableStream<Uint8Array>): {
 } {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
-	let tail = "";
+	let tail = ""; // committed content tail (trailing whitespace deferred), bounded to MAX
+	let pendingWs = ""; // whitespace since the last content char: trailing until content follows
 	let dropped = false;
+	const cap = (s: string): string => {
+		if (s.length > MAX_OUTPUT_CHARS) {
+			dropped = true;
+			return s.slice(s.length - MAX_OUTPUT_CHARS);
+		}
+		return s;
+	};
+	// Defer trailing whitespace so a flood of trailing newlines cannot evict real content
+	// from the bounded window (preserving the old trimEnd-then-tail semantics, but streamed).
 	const append = (chunk: string): void => {
 		if (!chunk) return;
-		tail += chunk;
-		if (tail.length > MAX_OUTPUT_CHARS) {
-			tail = tail.slice(tail.length - MAX_OUTPUT_CHARS);
-			dropped = true;
+		const trailing = /\s*$/.exec(chunk)?.[0] ?? "";
+		if (trailing.length === chunk.length) {
+			// All whitespace: keep it bounded and pending. It is dropped at EOF if it stays
+			// trailing (trailing whitespace is never counted as truncated content).
+			pendingWs = (pendingWs + trailing).slice(-MAX_OUTPUT_CHARS);
+			return;
 		}
+		// Content arrived: the previously-pending whitespace is now internal, so commit it
+		// with the content; the chunk's own trailing whitespace becomes the new pending.
+		const content = chunk.slice(0, chunk.length - trailing.length);
+		tail = cap(tail + pendingWs + content);
+		pendingWs = trailing.length > MAX_OUTPUT_CHARS ? trailing.slice(-MAX_OUTPUT_CHARS) : trailing;
 	};
 	const done = (async () => {
 		try {
@@ -125,12 +142,15 @@ export async function runRequiredCheck(
 	let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
 	try {
 		// Array form + no `env` option: argv straight to the process (no shell), child
-		// inherits this process's environment unchanged.
+		// inherits this process's environment unchanged. `detached` makes the child its own
+		// process-group leader, so a timeout/abort can kill the WHOLE tree (its test workers,
+		// spawned servers, ...) via a group signal, not just the direct process.
 		proc = Bun.spawn([check.command, ...check.args], {
 			cwd: opts.cwd,
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
+			detached: true,
 		});
 	} catch (e) {
 		return {
@@ -142,12 +162,15 @@ export async function runRequiredCheck(
 		};
 	}
 
-	// Kill the whole process, ignoring an "already exited" throw from a late timer/abort.
+	// Kill the check's whole process GROUP (the child leads its own group via `detached`),
+	// so its descendants -- test workers, spawned servers -- die with it, not just the
+	// direct process. SIGKILL is uncatchable. Ignore an "already gone" throw from a late
+	// timer/abort.
 	const safeKill = (): void => {
 		try {
-			proc.kill("SIGKILL");
+			process.kill(-proc.pid, "SIGKILL");
 		} catch {
-			// the process already exited; nothing to kill
+			// the group already exited; nothing to kill
 		}
 	};
 
@@ -173,6 +196,10 @@ export async function runRequiredCheck(
 
 	try {
 		const exitCode = await proc.exited;
+		// Disarm the timeout NOW, synchronously, before the drain grace can run: the process
+		// has exited, so a child still holding the pipe during the grace must not let the
+		// timer fire and flip a clean exit into a false `blocked`/timedOut.
+		clearTimeout(timer);
 		// The process is gone (the timeout/abort SIGKILL guarantees this resolves). Let the
 		// pipes flush so a well-behaved command's full output is captured, but CAP the wait:
 		// a surviving grandchild can hold a pipe open past the process's exit, and we must

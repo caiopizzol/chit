@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RequiredCheck } from "@chit-run/core";
 import {
 	type CheckResult,
@@ -79,6 +82,65 @@ describe("runRequiredCheck", () => {
 		expect(r.timedOut).toBe(true);
 		expect(r.output).toContain("timed out after 150ms");
 		expect(elapsed).toBeLessThan(2000); // a trapped SIGTERM would have hung ~5s
+	});
+
+	test("a timeout KILLS THE PROCESS TREE, not just the direct child", async () => {
+		// The shell backgrounds a long sleep (a grandchild of the runner), records ITS pid,
+		// then waits. On timeout chit must group-kill the whole tree, so the grandchild is
+		// dead afterward -- not orphaned and left running.
+		const dir = mkdtempSync(join(tmpdir(), "chit-rc-tree-"));
+		const pidFile = join(dir, "child.pid");
+		const r = await runRequiredCheck(
+			{ command: "sh", args: ["-c", `sleep 30 & echo $! > "${pidFile}"; wait`], timeoutMs: 150 },
+			{ cwd: CWD },
+		);
+		expect(r.status).toBe("blocked");
+		expect(r.timedOut).toBe(true);
+		await Bun.sleep(150); // let the kernel reap the group
+		const childPid = Number(readFileSync(pidFile, "utf8").trim());
+		expect(Number.isInteger(childPid)).toBe(true);
+		let alive = true;
+		try {
+			process.kill(childPid, 0); // signal 0 = existence probe
+		} catch {
+			alive = false;
+		}
+		try {
+			process.kill(childPid, "SIGKILL"); // best-effort cleanup if the fix regressed
+		} catch {
+			// already gone
+		}
+		rmSync(dir, { recursive: true, force: true });
+		expect(alive).toBe(false); // the whole tree was reaped, not just the direct child
+	});
+
+	test("a process that exits 0 before its timeout is passed, even if a child holds the pipe past it", async () => {
+		// sh exits 0 almost immediately; the backgrounded `sleep` keeps the stdout pipe open,
+		// so the post-exit drain grace runs. timeoutMs is short enough that the grace crosses
+		// it -- the timeout must already be disarmed (the process is done), so this is passed,
+		// NOT a false blocked/timedOut.
+		const r = await runRequiredCheck(
+			{ command: "sh", args: ["-c", "sleep 2 & exit 0"], timeoutMs: 50 },
+			{ cwd: CWD },
+		);
+		expect(r.status).toBe("passed");
+		expect(r.exitCode).toBe(0);
+		expect(r.timedOut).toBe(false);
+	});
+
+	test("trailing whitespace does not evict real content from the bounded tail", async () => {
+		// "ERR" then far more than MAX trailing newlines. The old trimEnd-then-tail kept
+		// "ERR"; the streamed bounded tail must too (trailing whitespace is trimmed, not
+		// counted as content), so the record is the real tail, not just a truncation marker.
+		const r = await runRequiredCheck(
+			{
+				command: "sh",
+				args: ["-c", 'printf ERR; i=0; while [ $i -lt 3000 ]; do printf "\\n"; i=$((i+1)); done'],
+			},
+			{ cwd: CWD },
+		);
+		expect(r.status).toBe("passed");
+		expect(r.output).toBe("ERR");
 	});
 
 	test("output is bounded to a tail (does not balloon the loop log)", async () => {
