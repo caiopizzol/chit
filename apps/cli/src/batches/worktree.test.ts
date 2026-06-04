@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
@@ -571,6 +572,67 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 			expect(ap.appliedUntracked).toEqual(["newfile.ts"]);
 		} finally {
 			teardown();
+		}
+	});
+
+	test("a parent-path collision (target has a FILE where the untracked file needs a dir) refuses ATOMICALLY (#101 review)", () => {
+		const main = mkdtempSync(join(tmpdir(), "chit-apply-coll-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-apply-collwt-"));
+		try {
+			realGit(["init", "-q"], main);
+			realGit(["config", "user.email", "t@chit.test"], main);
+			realGit(["config", "user.name", "t"], main);
+			writeFileSync(join(main, "f.ts"), "base\n");
+			realGit(["add", "."], main);
+			realGit(["commit", "-qm", "base"], main);
+			const ws = prepareRunWorkspace(realGit, main, {
+				runId: "r-coll",
+				scope: "o",
+				worktreesRoot: root,
+			});
+			const wt = ws.worktreePath;
+			const base = ws.baseSha;
+			if (!wt || !base) return;
+			writeFileSync(join(wt, "f.ts"), "RUN\n"); // tracked change
+			mkdirSync(join(wt, "dir"));
+			writeFileSync(join(wt, "dir", "new.ts"), "x\n"); // untracked under dir/
+			// target has `dir` as a FILE -> mkdir dir would fail mid-copy
+			writeFileSync(join(main, "dir"), "i am a file\n");
+
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+				includeUntracked: ["dir/new.ts"],
+			});
+			expect(ap.applied).toBe(false); // refused
+			expect(ap.untrackedConflicts).toContain("dir/new.ts");
+			// ATOMIC: the tracked patch did NOT apply either, and `dir` (the user's file) is intact
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toBe("base\n");
+			expect(readFileSync(join(main, "dir"), "utf8")).toBe("i am a file\n");
+		} finally {
+			rmSync(main, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses to apply into a target that is not a git work tree (#101 review)", () => {
+		const { wt, base, teardown } = applySetup();
+		const nonGit = mkdtempSync(join(tmpdir(), "chit-apply-nongit-"));
+		try {
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: nonGit,
+				confirm: true,
+			});
+			expect(ap.applied).toBeUndefined(); // never reached the apply
+			expect(ap.note).toContain("not a git work tree");
+			expect(existsSync(join(nonGit, "f.ts"))).toBe(false); // nothing scattered in
+		} finally {
+			teardown();
+			rmSync(nonGit, { recursive: true, force: true });
 		}
 	});
 });

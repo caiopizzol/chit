@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import {
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -20,7 +21,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 export class WorktreeError extends Error {}
 
@@ -371,6 +372,23 @@ export function applyRunWorkspace(
 			.map((x) => x.trim())
 			.filter(Boolean);
 
+	// The target must be a git work tree: a chit run's diff is applied INTO a repo (it is how the
+	// tracked patch is gated, and it bounds where untracked copies land). Refuse otherwise -- never
+	// scatter files into an arbitrary directory, even for an untracked-only run (which skips the
+	// git patch gate below).
+	if (git(["rev-parse", "--is-inside-work-tree"], opts.target).stdout.trim() !== "true") {
+		return {
+			confirmed: opts.confirm,
+			target: opts.target,
+			trackedFiles: [],
+			appliesClean: false,
+			untracked: [],
+			untrackedConflicts: [],
+			receiptsKept: true,
+			note: `target ${JSON.stringify(opts.target)} is not a git work tree; chit_apply only applies into a repo.`,
+		};
+	}
+
 	// The run's tracked diff vs the base it was cut from.
 	const diff = git(["diff", opts.baseSha], opts.worktreePath);
 	if (diff.code !== 0) {
@@ -412,17 +430,47 @@ export function applyRunWorkspace(
 		if (!appliesClean) conflict = gitErr(check);
 	}
 
-	// Untracked-overwrite guard: a requested untracked file that ALREADY exists in the target with
-	// DIFFERENT content would be overwritten by the copy below -- the same "never overwrite user
-	// changes silently" rule the tracked patch gets from --check. Identical content is a harmless
-	// idempotent re-copy (not a conflict). Only the requested files are checked (real candidates).
+	// Untracked-copy PREFLIGHT (ALL checks before ANY mutation, so a copy can never fail mid-apply
+	// and leave a partial result): a requested untracked file is a conflict if copying it would
+	//   - overwrite an existing target file with DIFFERENT content (identical = harmless no-op), or
+	//   - collide with the target's layout: the dst is itself a directory, or a parent path
+	//     component exists as a non-directory (so mkdir would fail after the tracked patch applied), or
+	//   - escape the target tree (a `..` or a symlinked parent resolving outside target).
+	// Only requested files that are real candidates (in the git untracked list) are considered.
 	const requestedUntracked = (opts.includeUntracked ?? []).filter((f) => untracked.includes(f));
 	const untrackedConflicts: string[] = [];
+	const targetReal = existsSync(opts.target) ? realpathSync(opts.target) : opts.target;
 	for (const f of requestedUntracked) {
 		const dst = join(opts.target, f);
-		if (!existsSync(dst)) continue;
-		const same = readFileSync(dst).equals(readFileSync(join(opts.worktreePath, f)));
-		if (!same) untrackedConflicts.push(f);
+		// containment: the dst must stay within the target tree.
+		const rel = relative(targetReal, existsSync(dirname(dst)) ? realpathSync(dirname(dst)) : dst);
+		if (rel === ".." || rel.startsWith(`..${sep}`)) {
+			untrackedConflicts.push(f);
+			continue;
+		}
+		// a parent path component exists as a non-directory -> mkdir would fail.
+		let parent = dirname(dst);
+		let collides = false;
+		while (parent.startsWith(opts.target) && parent !== opts.target) {
+			if (existsSync(parent) && !lstatSync(parent).isDirectory()) {
+				collides = true;
+				break;
+			}
+			parent = dirname(parent);
+		}
+		if (collides) {
+			untrackedConflicts.push(f);
+			continue;
+		}
+		if (existsSync(dst)) {
+			// a directory at dst, or a file with different content -> conflict.
+			if (lstatSync(dst).isDirectory()) {
+				untrackedConflicts.push(f);
+				continue;
+			}
+			const same = readFileSync(dst).equals(readFileSync(join(opts.worktreePath, f)));
+			if (!same) untrackedConflicts.push(f);
+		}
 	}
 
 	if (!opts.confirm) {
