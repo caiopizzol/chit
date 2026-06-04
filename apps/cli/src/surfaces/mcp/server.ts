@@ -878,6 +878,40 @@ function requestJobCancel(jobId: string): CancelResult {
 
 // The per-run status view for chit_status({run_id}). Dispatches on where the run
 // lives, re-presenting the existing per-kind describe* state under run_id.
+// Managed-worktree fields for a run view (#85): where an isolated write run's diff
+// lives + the base it was cut from, and an explicit flag that the caller's checkout
+// was NOT edited. Empty for an in_place run (it ran in the caller checkout, which WAS
+// edited) and for one-shot/read-only runs. Surfaced identically by every read surface.
+function workspaceView(r: { worktreePath?: string; branch?: string; baseSha?: string }): {
+	worktreePath?: string;
+	branch?: string;
+	baseSha?: string;
+	callerCheckoutEdited?: boolean;
+} {
+	if (!r.worktreePath) return {};
+	return {
+		worktreePath: r.worktreePath,
+		...(r.branch !== undefined && { branch: r.branch }),
+		...(r.baseSha !== undefined && { baseSha: r.baseSha }),
+		callerCheckoutEdited: false,
+	};
+}
+
+// A run's diff is in its managed worktree, not the caller checkout: a TERMINAL-state
+// hint that points an operator/agent there and tells them how to retire it manually
+// (chit does not auto-clean a successful run -- the worktree IS the review artifact, and
+// there is no single-run cleanup tool yet). Only called on terminal nextActions, never
+// on an active run. Empty for in_place runs (no worktree). The `git branch -D` line is
+// included only when the chit-created branch is known, and is gated on removing the
+// worktree first (the branch is checked out in it, so -D fails until then).
+function worktreeInspectHint(r: { worktreePath?: string; branch?: string }): string {
+	if (!r.worktreePath) return "";
+	const retire = r.branch
+		? ` Inspect it, then retire it manually: \`git worktree remove ${r.worktreePath}\` and (if desired, after removing the worktree) \`git branch -D ${r.branch}\`.`
+		: ` Inspect it, then retire it manually with \`git worktree remove ${r.worktreePath}\`.`;
+	return ` The run's changes are in its managed worktree (${r.worktreePath}); your checkout was not edited.${retire}`;
+}
+
 export function unifiedRunView(resolved: ResolvedRun) {
 	if (resolved.mode === "background") return backgroundRunView(resolved.job);
 	return resolved.run.kind === "one-shot"
@@ -912,8 +946,8 @@ export function loopRunView(session: ConvergeSession) {
 					session.loopId,
 					session.lastVerification,
 					session.lastVerificationSource,
-				)
-			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
+				) + worktreeInspectHint(session)
+			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history.${worktreeInspectHint(session)}`
 		: session.active
 			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
 			: `chit_next "${session.loopId}" to run the next iteration; chit_cancel "${session.loopId}" to stop`;
@@ -922,6 +956,7 @@ export function loopRunView(session: ConvergeSession) {
 		mode: "foreground" as const,
 		execution: "loop" as const,
 		status,
+		...workspaceView(session),
 		iterationsCompleted: session.iteration,
 		cancellable: !stopped,
 		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
@@ -954,13 +989,15 @@ export function backgroundRunView(job: JobRecord) {
 		mode: "background" as const,
 		execution: "job" as const,
 		...rest,
+		...workspaceView(job),
 		nextAction: live
 			? `running in the background; chit_status "${job.runId}" to poll, chit_cancel "${job.runId}" to stop`
 			: dj.display === "stale"
-				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run`
+				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run.${worktreeInspectHint(job)}`
 				: job.policy === "loop" && job.stopStatus === "needs-decision"
-					? needsDecisionNextAction(job.runId, job.lastVerification, job.lastVerificationSource)
-					: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history`,
+					? needsDecisionNextAction(job.runId, job.lastVerification, job.lastVerificationSource) +
+						worktreeInspectHint(job)
+					: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history.${worktreeInspectHint(job)}`,
 	};
 }
 
@@ -1121,7 +1158,10 @@ server.registerTool(
 					...(requiredChecks && { requiredChecks }),
 					allowUnenforced: allow_unenforced_permissions,
 				});
-				if (!r.ok) return errorResult(r.error);
+				if (!r.ok) {
+					ws.cleanup?.(); // launch failed: retire the worktree we just created (nothing ran in it)
+					return errorResult(r.error);
+				}
 				const resolved = runController.resolve(r.jobId, Date.now());
 				if (!resolved) return errorResult(`run ${r.jobId} vanished after launch`);
 				return jsonResult({
@@ -1138,7 +1178,10 @@ server.registerTool(
 				allow_unenforced_permissions,
 				getConfig().roles,
 			);
-			if (!prep.ok) return errorResult(prep.error);
+			if (!prep.ok) {
+				ws.cleanup?.(); // setup failed before the loop opened: retire the empty worktree
+				return errorResult(prep.error);
+			}
 			let session: ReturnType<typeof startConvergeSession>;
 			try {
 				session = startConvergeSession({
@@ -1154,6 +1197,7 @@ server.registerTool(
 					loopSteps: { ...prep.loopSteps, ...(requiredChecks && { requiredChecks }) },
 				});
 			} catch (e) {
+				ws.cleanup?.(); // the loop never opened: retire the empty worktree
 				return errorResult(safeMcpError(e));
 			}
 			runController.registerLoop(session, Date.now());

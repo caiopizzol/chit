@@ -129,6 +129,45 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expectNoLeakage(v);
 	});
 
+	test("a managed-worktree loop view surfaces the worktree + says the caller checkout was not edited (#85)", () => {
+		const v = loopRunView(
+			loopSession({
+				terminalStatus: "converged",
+				worktreePath: "/wt/run-x/owner",
+				branch: "chit-run/run-x/owner",
+				baseSha: "basesha",
+			}),
+		);
+		expect(v.worktreePath).toBe("/wt/run-x/owner");
+		expect(v.branch).toBe("chit-run/run-x/owner");
+		expect(v.baseSha).toBe("basesha");
+		expect(v.callerCheckoutEdited).toBe(false);
+		// The terminal nextAction points at the worktree, says the checkout was untouched,
+		// and gives the exact manual retirement commands (no single-run cleanup tool yet).
+		expect(v.nextAction).toContain("/wt/run-x/owner");
+		expect(v.nextAction).toContain("checkout was not edited");
+		expect(v.nextAction).toContain("git worktree remove /wt/run-x/owner");
+		expect(v.nextAction).toContain("git branch -D chit-run/run-x/owner");
+	});
+
+	test("an ACTIVE managed-worktree loop view does NOT suggest cleanup (only terminal states do)", () => {
+		const v = loopRunView(
+			loopSession({ active: new AbortController(), worktreePath: "/wt/run-a/owner" }),
+		);
+		expect(v.worktreePath).toBe("/wt/run-a/owner"); // surfaced...
+		expect(v.nextAction).not.toContain("git worktree remove"); // ...but no retire-while-running
+		expect(v.nextAction).toContain("chit_cancel");
+	});
+
+	test("an in_place loop view has no worktree fields and no worktree hint", () => {
+		// in_place runs in the caller checkout -> prepareRunWorkspace returns no worktree, so
+		// the session carries none; the view must not claim a managed worktree or callerCheckoutEdited.
+		const v = loopRunView(loopSession({ terminalStatus: "converged" }));
+		expect(v.worktreePath).toBeUndefined();
+		expect(v.callerCheckoutEdited).toBeUndefined();
+		expect(v.nextAction).not.toContain("managed worktree");
+	});
+
 	test("background view is keyed by run_id (== job id), drops the job/loop handles", () => {
 		const v = backgroundRunView(job({ runId: "bg-7", auditRefs: ["aud-1"] }));
 		expect(v.run_id).toBe("bg-7");
@@ -146,6 +185,25 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		);
 		expect(v.display).toBe("completed");
 		expect(v.nextAction).toContain("chit_trace");
+		expectNoLeakage(v);
+	});
+
+	test("a managed-worktree background view surfaces the worktree + the not-edited hint (#85)", () => {
+		const v = backgroundRunView(
+			job({
+				runId: "bg-wt",
+				state: "completed",
+				stopStatus: "converged",
+				worktreePath: "/wt/bg-wt/owner",
+				branch: "chit-run/bg-wt/owner",
+				baseSha: "basesha",
+			}),
+		) as Record<string, unknown>;
+		expect(v.worktreePath).toBe("/wt/bg-wt/owner");
+		expect(v.branch).toBe("chit-run/bg-wt/owner");
+		expect(v.callerCheckoutEdited).toBe(false);
+		expect(v.nextAction).toContain("/wt/bg-wt/owner");
+		expect(v.nextAction).toContain("checkout was not edited");
 		expectNoLeakage(v);
 	});
 
