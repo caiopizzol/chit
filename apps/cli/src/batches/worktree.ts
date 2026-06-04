@@ -157,7 +157,14 @@ export function prepareRunWorkspace(
 		baseRef?: string;
 		worktreesRoot?: string;
 	},
-): { cwd: string; worktreePath?: string; branch?: string; baseSha?: string; cleanup?: () => void } {
+): {
+	cwd: string;
+	worktreePath?: string;
+	branch?: string;
+	baseSha?: string;
+	repo?: string;
+	cleanup?: () => void;
+} {
 	if (opts.inPlace) return { cwd: callerCwd };
 	const repo = repoToplevel(git, callerCwd);
 	const baseSha = resolveBaseSha(git, repo, opts.baseRef ?? "HEAD");
@@ -168,6 +175,9 @@ export function prepareRunWorkspace(
 		worktreePath,
 		branch,
 		baseSha,
+		// The MAIN repo (recorded so cleanup runs git worktree remove / branch -D from here even
+		// after the worktree dir is gone -- no fragile re-derivation from a missing worktree).
+		repo,
 		// removeTaskWorktree is the generic path+branch remover (force-remove + branch -D),
 		// safe for a run worktree too. Never auto-called: the caller cleans up explicitly.
 		cleanup: () => {

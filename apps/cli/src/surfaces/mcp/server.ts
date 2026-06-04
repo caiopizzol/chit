@@ -507,8 +507,8 @@ function launchConvergeJob(p: {
 	// and the surfaced run_id match. Undefined -> generated here (batch tasks).
 	runId?: string;
 	// A chit-managed worktree this run executes in (cwd is already the worktree path).
-	// Recorded for surfacing; absent for in_place / batch runs.
-	worktree?: { worktreePath: string; branch: string; baseSha: string };
+	// Recorded for surfacing + cleanup; absent for in_place / batch runs.
+	worktree?: { worktreePath: string; branch: string; baseSha: string; repo: string };
 	force?: boolean;
 	// The EFFECTIVE required checks for this run, persisted on the job so the worker
 	// runs the intended checks without re-deriving them. Undefined -> the worker falls
@@ -587,6 +587,7 @@ function launchConvergeJob(p: {
 			worktreePath: p.worktree.worktreePath,
 			branch: p.worktree.branch,
 			baseSha: p.worktree.baseSha,
+			repo: p.worktree.repo,
 		}),
 		scope: p.scope,
 		task: p.task,
@@ -1197,8 +1198,13 @@ server.registerTool(
 				return errorResult(safeMcpError(e));
 			}
 			const worktree =
-				ws.worktreePath && ws.branch && ws.baseSha
-					? { worktreePath: ws.worktreePath, branch: ws.branch, baseSha: ws.baseSha }
+				ws.worktreePath && ws.branch && ws.baseSha && ws.repo
+					? {
+							worktreePath: ws.worktreePath,
+							branch: ws.branch,
+							baseSha: ws.baseSha,
+							repo: ws.repo,
+						}
 					: undefined;
 			if (mode === "background") {
 				const r = launchConvergeJob({
@@ -1633,21 +1639,27 @@ server.registerTool(
 		// The run's managed worktree (if any) + whether its worker is still live, per kind.
 		let worktreePath: string | undefined;
 		let branch: string | undefined;
+		let storedRepo: string | undefined;
 		let workerLive = false;
 		if (resolved.mode === "background") {
 			const job = resolved.job;
 			worktreePath = job.worktreePath;
 			branch = job.branch;
-			// A worker is live unless the job reached a terminal STATE or its process is gone.
-			// Do NOT trust runWaitState/isStale here: a wedged worker with an old heartbeat but a
-			// live pid is "stale" yet still in the worktree -- removing it would corrupt the run.
-			const terminalState =
-				job.state === "completed" || job.state === "failed" || job.state === "cancelled";
-			workerLive = !terminalState && pidAlive(job.pid);
+			storedRepo = job.repo;
+			// A worker is live unless we can prove it is gone. Per state:
+			//   queued  -> the worker is spawning into the worktree (it has no pid yet); live
+			//              UNLESS stale-queued (the spawn never produced a pid within the window).
+			//   running -> live iff the process is actually alive. Do NOT trust isStale here: a
+			//              wedged worker with an old heartbeat but a live pid is "stale" yet still
+			//              in the worktree -- removing it would corrupt the run.
+			//   completed/failed/cancelled -> terminal, safe.
+			if (job.state === "queued") workerLive = !isStale(job, Date.now());
+			else if (job.state === "running") workerLive = pidAlive(job.pid);
 		} else if (resolved.run.kind === "loop") {
 			const session = resolved.run.session;
 			worktreePath = session.worktreePath;
 			branch = session.branch;
+			storedRepo = session.repo;
 			workerLive = session.terminalStatus === undefined || session.active !== undefined;
 		}
 		// No managed worktree (a one-shot or an in_place run) -> nothing to clean, regardless of
@@ -1667,24 +1679,23 @@ server.registerTool(
 				`run ${JSON.stringify(run_id)} is still active; chit_cancel it and wait for it to settle before cleaning up.`,
 			);
 		}
-		// Idempotent: a prior cleanup (or a manual `git worktree remove`) may have already removed
-		// the worktree. Report it cleanly rather than crashing in mainRepoOfWorktree (which runs git
-		// from the worktree dir).
-		if (!existsSync(worktreePath)) {
-			return jsonResult({
-				run_id,
-				confirmed: confirm,
-				worktreePath,
-				branch,
-				receiptsKept: true,
-				note: "the worktree was already removed; nothing to do. Receipts (loop log / audit) are kept.",
-			});
-		}
-		let repo: string;
-		try {
-			repo = mainRepoOfWorktree(realGit, worktreePath);
-		} catch (e) {
-			return errorResult(safeMcpError(e));
+		// The MAIN repo cleanup runs git from (never the worktree being removed). New runs RECORD
+		// it, so cleanup works even after the worktree dir is gone -- removeTaskWorktree then prunes
+		// and still removes the branch, so a partial state (worktree gone, branch left) is fully
+		// cleaned and a re-run is idempotent. A pre-0.20.0 record may lack repo: fall back to
+		// deriving it from the worktree, which only works while the worktree still exists.
+		let repo = storedRepo;
+		if (!repo) {
+			if (!existsSync(worktreePath)) {
+				return errorResult(
+					`run ${JSON.stringify(run_id)} predates worktree-repo tracking and its worktree is already gone; remove its branch manually with \`git branch -D ${branch}\` from your repo.`,
+				);
+			}
+			try {
+				repo = mainRepoOfWorktree(realGit, worktreePath);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
 		}
 		const result = cleanupRunWorkspace(realGit, { repo, worktreePath, branch, confirm });
 		return jsonResult({ run_id, ...result });

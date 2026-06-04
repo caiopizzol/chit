@@ -56,6 +56,7 @@ export interface BaseJobRecord {
 	worktreePath?: string;
 	branch?: string;
 	baseSha?: string;
+	repo?: string; // the MAIN repo the worktree was cut from (so cleanup retires it even if the worktree dir is gone)
 
 	state: JobState;
 	createdAt: string; // ISO 8601, when the queued record was written

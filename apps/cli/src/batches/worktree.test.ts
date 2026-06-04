@@ -261,4 +261,66 @@ describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	test("confirm removes the BRANCH even when the worktree dir was already removed (#98 review)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-cleanup-repo2-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-cleanup-wt2-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const ws = prepareRunWorkspace(realGit, repo, {
+				runId: "run-partial",
+				scope: "owner",
+				worktreesRoot: root,
+			});
+			const wt = ws.worktreePath;
+			const br = ws.branch;
+			expect(wt && br).toBeTruthy();
+			if (!wt || !br) return;
+			// Simulate a PARTIAL state: the worktree DIR is gone (manual removal) but git still
+			// tracks the worktree and the chit-run/... branch still exists.
+			rmSync(wt, { recursive: true, force: true });
+			expect(realGit(["branch", "--list", br], repo).stdout.trim()).toContain(br);
+
+			// cleanup with the STORED repo (ws.repo) must still prune + remove the branch.
+			const r = cleanupRunWorkspace(realGit, {
+				repo: ws.repo ?? repo,
+				worktreePath: wt,
+				branch: br,
+				confirm: true,
+			});
+			expect(r.removed).toBe(true);
+			expect(realGit(["branch", "--list", br], repo).stdout.trim()).toBe(""); // branch gone
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("prepareRunWorkspace records the main repo for cleanup (#98)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-cleanup-repo3-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-cleanup-wt3-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const ws = prepareRunWorkspace(realGit, repo, {
+				runId: "run-repo",
+				scope: "owner",
+				worktreesRoot: root,
+			});
+			expect(ws.repo).toBe(realpathSync(repo)); // the main repo is recorded, not the worktree
+			ws.cleanup?.();
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
