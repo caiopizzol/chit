@@ -412,6 +412,11 @@ export type ConvergeIterationResult =
 			findingCount: number;
 			checksRun: string;
 			decision: LoopVerdict;
+			// The iteration's verification rollup + its source (reviewer self-report vs
+			// chit-executed). Returned so the session/job can cache them for status views;
+			// the loop log stays the durable source of truth.
+			verification: Verification;
+			verificationSource: VerificationSource;
 			// The same changed files, workspace warnings, and usage written to the
 			// iteration record, also returned so a caller (the MCP next response) can
 			// surface them without re-reading the loop log. changedFiles is task work
@@ -530,6 +535,8 @@ export async function runConvergeIteration(
 		findingCount: review.findingCount,
 		checksRun: review.checksRun,
 		decision: outcome.decision,
+		verification: outcome.verification,
+		verificationSource: outcome.verificationSource,
 		changedFiles,
 		workspaceWarnings,
 		...(usage && { usage }),

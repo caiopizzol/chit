@@ -1,4 +1,10 @@
-import type { LoopStopStatus, LoopVerdict, RequiredCheck } from "@chit-run/core";
+import type {
+	LoopStopStatus,
+	LoopVerdict,
+	RequiredCheck,
+	Verification,
+	VerificationSource,
+} from "@chit-run/core";
 
 // Batch model: a thin coordinator over durable background converge jobs. A
 // batch plans a static graph of tasks, creates one git worktree per task, and
@@ -70,6 +76,10 @@ export interface TaskResult {
 	// Mirrors the job's stop status exactly (the batch points, never recomputes).
 	stopStatus?: LoopStopStatus;
 	lastVerdict?: LoopVerdict;
+	// The latest iteration's verification + source (chit-executed vs reviewer), mirrored
+	// from the job. Authoritative over lastVerdict when source is "chit".
+	lastVerification?: Verification;
+	lastVerificationSource?: VerificationSource;
 	iterations: number;
 	changedFiles: string[];
 	workspaceWarnings: string[];

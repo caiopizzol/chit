@@ -66,6 +66,10 @@ export interface LoopStatusSummary {
 	iterationsCompleted: number;
 	cancellable: boolean;
 	lastVerdict?: ConvergeSession["lastVerdict"];
+	// The latest iteration's verification + its source (reviewer self-report vs
+	// chit-executed). When source is "chit", these are the authoritative signal.
+	lastVerification?: ConvergeSession["lastVerification"];
+	lastVerificationSource?: ConvergeSession["lastVerificationSource"];
 	auditRefs: string[];
 	nextAction: string;
 }
@@ -96,6 +100,10 @@ export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSumm
 		iterationsCompleted: session.iteration,
 		cancellable: !stopped,
 		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
+		...(session.lastVerification !== undefined && { lastVerification: session.lastVerification }),
+		...(session.lastVerificationSource !== undefined && {
+			lastVerificationSource: session.lastVerificationSource,
+		}),
 		auditRefs: session.auditRefs,
 		nextAction,
 	};
@@ -173,6 +181,8 @@ export interface JobStatusSummary {
 	task?: string;
 	iterationsCompleted?: number;
 	lastVerdict?: LoopJobRecord["lastVerdict"];
+	lastVerification?: LoopJobRecord["lastVerification"];
+	lastVerificationSource?: LoopJobRecord["lastVerificationSource"];
 	stopStatus?: LoopJobRecord["stopStatus"];
 	auditRefs: string[];
 	createdAt: string;
@@ -230,6 +240,12 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 		...(job.phase !== undefined && { phase: job.phase }),
 		...(job.policy === "loop" && { iterationsCompleted: job.iterationsCompleted }),
 		...(job.policy === "loop" && job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
+		...(job.policy === "loop" &&
+			job.lastVerification !== undefined && { lastVerification: job.lastVerification }),
+		...(job.policy === "loop" &&
+			job.lastVerificationSource !== undefined && {
+				lastVerificationSource: job.lastVerificationSource,
+			}),
 		...(job.policy === "loop" && job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 		auditRefs: job.auditRefs,
 		createdAt: job.createdAt,

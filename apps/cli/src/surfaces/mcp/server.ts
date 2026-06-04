@@ -794,6 +794,10 @@ function describeJob(job: JobRecord) {
 			...(job.iteration !== undefined && { iteration: job.iteration }),
 			iterationsCompleted: job.iterationsCompleted,
 			...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
+			...(job.lastVerification !== undefined && { lastVerification: job.lastVerification }),
+			...(job.lastVerificationSource !== undefined && {
+				lastVerificationSource: job.lastVerificationSource,
+			}),
 			...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 			...(latest !== undefined && { latest }),
 			nextAction,
@@ -901,6 +905,10 @@ export function loopRunView(session: ConvergeSession) {
 		iterationsCompleted: session.iteration,
 		cancellable: !stopped,
 		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
+		...(session.lastVerification !== undefined && { lastVerification: session.lastVerification }),
+		...(session.lastVerificationSource !== undefined && {
+			lastVerificationSource: session.lastVerificationSource,
+		}),
 		...(session.lastDecision !== undefined && { lastDecision: session.lastDecision }),
 		...(session.failure !== undefined && { failure: session.failure }),
 		auditRefs: session.auditRefs,

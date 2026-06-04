@@ -159,6 +159,33 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expectNoLeakage(v);
 	});
 
+	test("a loop view surfaces the latest verification + its source", () => {
+		const v = loopRunView(
+			loopSession({
+				terminalStatus: "needs-decision",
+				lastVerification: "failed",
+				lastVerificationSource: "chit",
+			}),
+		);
+		expect(v.lastVerification).toBe("failed");
+		expect(v.lastVerificationSource).toBe("chit");
+	});
+
+	test("a background view surfaces the latest verification + its source", () => {
+		// backgroundRunView returns a loop|one-shot union; this is a loop job, so read the
+		// loop-only fields through a cast.
+		const v = backgroundRunView(
+			job({
+				state: "completed",
+				stopStatus: "needs-decision",
+				lastVerification: "blocked",
+				lastVerificationSource: "chit",
+			}),
+		) as Record<string, unknown>;
+		expect(v.lastVerification).toBe("blocked");
+		expect(v.lastVerificationSource).toBe("chit");
+	});
+
 	test("loop trace records are sanitized: the header drops loopId/repoKey, no leak", () => {
 		// chit_trace returns the loop log; its header record carries the internal
 		// loopId + repoKey. publicLoopRecords strips those, keeping iteration/stop
@@ -187,17 +214,19 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(out[1]).toEqual(raw[1]); // iteration record passes through unchanged
 	});
 
-	test("publicLoopRecords preserves an iteration's checks + verification (chit_trace surfaces them)", () => {
+	test("publicLoopRecords preserves an iteration's checks + verification + verificationSource", () => {
 		const raw = [
 			{
 				type: "iteration",
 				n: 1,
 				verdict: "proceed",
 				verification: "failed",
+				verificationSource: "chit",
 				checks: [{ command: "bun test", status: "failed", reason: "1 failing" }],
 			},
 		] as unknown as Parameters<typeof publicLoopRecords>[0];
-		// The gate's evidence (why a run did not converge) must reach chit_trace intact.
+		// The gate's evidence (why a run did not converge, and whether chit ran the checks
+		// or the reviewer claimed them) must reach chit_trace intact.
 		expect(publicLoopRecords(raw)[0]).toEqual(raw[0]);
 	});
 

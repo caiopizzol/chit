@@ -18,6 +18,8 @@ import type {
 	LoopStopStatus,
 	LoopVerdict,
 	RequiredCheck,
+	Verification,
+	VerificationSource,
 } from "@chit-run/core";
 import {
 	type ConvergeExecute,
@@ -58,6 +60,10 @@ export interface ConvergeSession {
 	failure?: string;
 	lastVerdict?: LoopVerdict;
 	lastDecision?: LoopVerdict;
+	// Latest iteration's verification rollup + source, cached for status views (the
+	// loop log is the durable source of truth).
+	lastVerification?: Verification;
+	lastVerificationSource?: VerificationSource;
 	// Audit run ids for completed audited iterations, in order. The loop log also
 	// records these as auditRef; mirrored here so status/trace need not re-read
 	// the log just for the refs.
@@ -240,6 +246,8 @@ export async function runNextIteration(
 		session.iteration = iteration;
 		session.lastVerdict = iter.verdict;
 		session.lastDecision = iter.decision;
+		session.lastVerification = iter.verification;
+		session.lastVerificationSource = iter.verificationSource;
 		if (iter.auditRunId !== undefined) session.auditRefs.push(iter.auditRunId);
 
 		if (iter.stopStatus !== undefined) {
@@ -322,6 +330,8 @@ export interface ConvergeStatus {
 	cancellable: boolean;
 	lastVerdict?: LoopVerdict;
 	lastDecision?: LoopVerdict;
+	lastVerification?: Verification;
+	lastVerificationSource?: VerificationSource;
 	failure?: string;
 	auditRefs: string[];
 	nextAction: string;
@@ -349,6 +359,10 @@ export function describeConverge(session: ConvergeSession): ConvergeStatus {
 		cancellable: !terminal,
 		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
 		...(session.lastDecision !== undefined && { lastDecision: session.lastDecision }),
+		...(session.lastVerification !== undefined && { lastVerification: session.lastVerification }),
+		...(session.lastVerificationSource !== undefined && {
+			lastVerificationSource: session.lastVerificationSource,
+		}),
 		...(session.failure !== undefined && { failure: session.failure }),
 		auditRefs: session.auditRefs,
 		nextAction,

@@ -354,6 +354,8 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 				...(c.phase !== "recording" && { phaseStartedAt: iso(now()) }),
 				iterationsCompleted: i,
 				lastVerdict: iter.verdict,
+				lastVerification: iter.verification,
+				lastVerificationSource: iter.verificationSource,
 				auditRefs: iter.auditRunId ? [...c.auditRefs, iter.auditRunId] : c.auditRefs,
 				lastHeartbeatAt: iso(now()),
 			}));

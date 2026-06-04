@@ -443,6 +443,9 @@ describe("required checks via runNextIteration (chit-executed, the MCP driver)",
 		const it = iterations("L1")[0];
 		expect(it?.verification).toBe("passed");
 		expect(it?.verificationSource).toBe("chit");
+		// The session caches the latest verification + source for status views.
+		expect(session.lastVerification).toBe("passed");
+		expect(session.lastVerificationSource).toBe("chit");
 	});
 
 	test("proceed + a failed check -> the iteration is a revise (no stop, decision diverges)", async () => {

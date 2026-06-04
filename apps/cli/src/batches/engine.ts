@@ -378,6 +378,10 @@ function settleTask(
 	};
 	if (extra.job?.stopStatus !== undefined) result.stopStatus = extra.job.stopStatus;
 	if (extra.job?.lastVerdict !== undefined) result.lastVerdict = extra.job.lastVerdict;
+	if (extra.job?.lastVerification !== undefined)
+		result.lastVerification = extra.job.lastVerification;
+	if (extra.job?.lastVerificationSource !== undefined)
+		result.lastVerificationSource = extra.job.lastVerificationSource;
 	t.result = result;
 	if (status === "failed" && extra.failure !== undefined) t.error = extra.failure;
 }
@@ -446,6 +450,8 @@ export interface BatchTaskView {
 	phase?: JobRecord["phase"];
 	stopStatus?: TaskResult["stopStatus"];
 	lastVerdict?: TaskResult["lastVerdict"];
+	lastVerification?: TaskResult["lastVerification"];
+	lastVerificationSource?: TaskResult["lastVerificationSource"];
 	changedFiles?: string[];
 	workspaceWarnings?: string[];
 	auditRefs?: string[];
@@ -517,6 +523,10 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 		if (t.result) {
 			if (t.result.stopStatus !== undefined) view.stopStatus = t.result.stopStatus;
 			if (t.result.lastVerdict !== undefined) view.lastVerdict = t.result.lastVerdict;
+			if (t.result.lastVerification !== undefined)
+				view.lastVerification = t.result.lastVerification;
+			if (t.result.lastVerificationSource !== undefined)
+				view.lastVerificationSource = t.result.lastVerificationSource;
 			view.changedFiles = t.result.changedFiles;
 			view.workspaceWarnings = t.result.workspaceWarnings;
 			view.auditRefs = t.result.auditRefs;

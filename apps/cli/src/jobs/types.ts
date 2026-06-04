@@ -1,4 +1,10 @@
-import type { LoopStopStatus, LoopVerdict, RequiredCheck } from "@chit-run/core";
+import type {
+	LoopStopStatus,
+	LoopVerdict,
+	RequiredCheck,
+	Verification,
+	VerificationSource,
+} from "@chit-run/core";
 
 // A background run: a detached worker executing one run to completion. The job
 // record is the durable source of truth for the JOB (lifecycle, worker identity,
@@ -89,6 +95,10 @@ export interface LoopJobRecord extends BaseJobRecord {
 	iteration?: number; // current (running) or last completed iteration number
 	iterationsCompleted: number;
 	lastVerdict?: LoopVerdict;
+	// The latest iteration's verification rollup + source, cached from the iteration
+	// result for status views. The loop log is the durable source of truth.
+	lastVerification?: Verification;
+	lastVerificationSource?: VerificationSource;
 	stopStatus?: LoopStopStatus;
 }
 

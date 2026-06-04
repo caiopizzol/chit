@@ -482,7 +482,12 @@ describe("required checks via the background worker (chit-executed)", () => {
 	test("proceed + passing checks -> completed converged via chit", async () => {
 		seedJob();
 		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [PASS]));
-		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "converged" });
+		expect(store.get("j1")).toMatchObject({
+			state: "completed",
+			stopStatus: "converged",
+			lastVerification: "passed", // cached on the job for status views
+			lastVerificationSource: "chit",
+		});
 		expect(firstIter()).toMatchObject({ verification: "passed", verificationSource: "chit" });
 	});
 
