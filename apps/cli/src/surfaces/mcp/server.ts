@@ -1089,15 +1089,18 @@ server.registerTool(
 		}
 		const runCwd = resolve(cwd ?? process.cwd());
 		// Read the manifest once to learn its policy; task-form uses the built-in loop
-		// manifest. Foreground paths reuse this raw; background launchers re-read it
-		// from the path (they store the absolute manifest_path on the job record).
+		// manifest. Resolve a relative manifest_path against the CALLER cwd (runCwd) -- the
+		// manifest defines the run and is read from where the user pointed, NOT from a
+		// managed worktree (which is cut off HEAD and may lack an untracked manifest). Both
+		// foreground (reuses raw) and background (gets this absolute path) read the same file.
 		let raw: unknown;
+		let manifestAbs: string | undefined;
 		if (manifest_path) {
-			const path = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
+			manifestAbs = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
 			try {
-				raw = JSON.parse(readFileSync(path, "utf-8"));
+				raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
 			} catch (e) {
-				return errorResult(`could not read manifest at ${path}: ${(e as Error).message}`);
+				return errorResult(`could not read manifest at ${manifestAbs}: ${(e as Error).message}`);
 			}
 		} else {
 			raw = DEFAULT_CONVERGE_MANIFEST;
@@ -1130,15 +1133,28 @@ server.registerTool(
 					"a loop run needs a `scope` (both agents keep their thread across iterations)",
 				);
 			}
-			// Managed worktree (#85): a write-capable loop run is isolated in a chit-managed
+			// Load config BEFORE creating any worktree (F3a): a malformed config throws here,
+			// before isolation, so a config error never leaks a just-created worktree (both
+			// the fg prep below and bg launchConvergeJob then hit the memoized cache).
+			try {
+				getConfig();
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
+			// Managed worktree (#85): a WRITE-CAPABLE loop run is isolated in a chit-managed
 			// worktree cut clean off HEAD so its diff is attributable regardless of caller-tree
-			// dirt; in_place opts out. The run_id is pre-generated so the worktree
-			// (chit-run/<run_id>) and the surfaced run_id match -- it is the jobId (bg) /
-			// loopId (fg) below; both run in ws.cwd.
+			// dirt; in_place opts out. A provably read-only loop (every participant read_only)
+			// writes nothing, so it needs no worktree and runs in place (F1: "read-only runs
+			// unaffected"); an unknown role-ref errs toward isolating (the safe direction). The
+			// run_id is pre-generated so the worktree (chit-run/<run_id>) and the surfaced
+			// run_id match -- it is the jobId (bg) / loopId (fg) below; both run in ws.cwd.
+			const mayWrite = Object.values(manifest.participants).some(
+				(p) => p.permissions?.filesystem !== "read_only",
+			);
 			const runId = crypto.randomUUID();
 			let ws: ReturnType<typeof prepareRunWorkspace>;
 			try {
-				ws = prepareRunWorkspace(realGit, runCwd, { runId, scope, inPlace: in_place });
+				ws = prepareRunWorkspace(realGit, runCwd, { runId, scope, inPlace: in_place || !mayWrite });
 			} catch (e) {
 				return errorResult(safeMcpError(e));
 			}
@@ -1153,7 +1169,9 @@ server.registerTool(
 					runId,
 					cwd: ws.cwd,
 					...(worktree && { worktree }),
-					...(manifest_path !== undefined && { manifestPath: manifest_path }),
+					// Absolute, resolved against the caller cwd (F2): bg must read the SAME manifest
+					// file as fg, not re-resolve a relative path against the worktree.
+					...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
 					maxIterations: max_iterations,
 					...(requiredChecks && { requiredChecks }),
 					allowUnenforced: allow_unenforced_permissions,
@@ -1436,7 +1454,13 @@ server.registerTool(
 				} catch {
 					// loop log not readable yet (worker still starting) or removed
 				}
-				return jsonResult({ run_id, execution: "job", policy: "loop", records });
+				return jsonResult({
+					run_id,
+					execution: "job",
+					policy: "loop",
+					...workspaceView(job),
+					records,
+				});
 			}
 			// A one-shot background run has no loop log; its history is the audit run.
 			return jsonResult({
@@ -1460,6 +1484,7 @@ server.registerTool(
 					execution: "loop",
 					status: t.status,
 					active: t.active,
+					...workspaceView(session),
 					auditRefs: t.auditRefs,
 					records: publicLoopRecords(t.records),
 				});
