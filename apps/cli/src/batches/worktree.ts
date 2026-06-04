@@ -13,6 +13,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmdirSync,
 	rmSync,
@@ -338,6 +339,7 @@ export interface RunApplyResult {
 	applied?: boolean; // set on confirm: was the tracked patch actually applied
 	conflict?: string; // when !appliesClean: git's conflict report (no markers are written)
 	untracked: string[]; // unignored untracked candidates in the worktree -- NOT applied unless included
+	untrackedConflicts: string[]; // requested untracked files that already exist in the target with DIFFERENT content (would overwrite -> refused)
 	appliedUntracked?: string[]; // set on confirm: which untracked files were copied (a subset of `untracked`)
 	receiptsKept: true; // apply NEVER touches the loop log / audit
 	note: string;
@@ -378,6 +380,7 @@ export function applyRunWorkspace(
 			trackedFiles: [],
 			appliesClean: false,
 			untracked: [],
+			untrackedConflicts: [],
 			receiptsKept: true,
 			note: `could not compute the run's diff from ${opts.baseSha}: ${gitErr(diff)}`,
 		};
@@ -409,7 +412,21 @@ export function applyRunWorkspace(
 		if (!appliesClean) conflict = gitErr(check);
 	}
 
+	// Untracked-overwrite guard: a requested untracked file that ALREADY exists in the target with
+	// DIFFERENT content would be overwritten by the copy below -- the same "never overwrite user
+	// changes silently" rule the tracked patch gets from --check. Identical content is a harmless
+	// idempotent re-copy (not a conflict). Only the requested files are checked (real candidates).
+	const requestedUntracked = (opts.includeUntracked ?? []).filter((f) => untracked.includes(f));
+	const untrackedConflicts: string[] = [];
+	for (const f of requestedUntracked) {
+		const dst = join(opts.target, f);
+		if (!existsSync(dst)) continue;
+		const same = readFileSync(dst).equals(readFileSync(join(opts.worktreePath, f)));
+		if (!same) untrackedConflicts.push(f);
+	}
+
 	if (!opts.confirm) {
+		const clean = appliesClean && untrackedConflicts.length === 0;
 		return {
 			confirmed: false,
 			target: opts.target,
@@ -417,14 +434,18 @@ export function applyRunWorkspace(
 			appliesClean,
 			...(conflict ? { conflict } : {}),
 			untracked,
+			untrackedConflicts,
 			receiptsKept: true,
-			note: appliesClean
+			note: clean
 				? `dry run: ${trackedFiles.length} tracked file(s) apply cleanly to ${opts.target}; ${untracked.length} untracked candidate(s) (pass include_untracked to copy specific ones). confirm=true to apply.`
-				: `dry run: the tracked patch does NOT apply cleanly to ${opts.target} (it conflicts with the target's current state). Nothing applied.`,
+				: !appliesClean
+					? `dry run: the tracked patch does NOT apply cleanly to ${opts.target} (it conflicts with the target's current state). Nothing applied.`
+					: `dry run: requested untracked file(s) already exist in ${opts.target} with different content (${untrackedConflicts.join(", ")}); applying would overwrite them. Nothing applied.`,
 		};
 	}
 
-	// confirm: never overwrite silently -- refuse on conflict.
+	// confirm: never overwrite silently -- refuse on EITHER a tracked-patch conflict OR an
+	// untracked file that would overwrite a different target file. Atomic: apply nothing.
 	if (!appliesClean) {
 		return {
 			confirmed: true,
@@ -433,9 +454,23 @@ export function applyRunWorkspace(
 			appliesClean: false,
 			...(conflict ? { conflict } : {}),
 			untracked,
+			untrackedConflicts,
 			applied: false,
 			receiptsKept: true,
 			note: `refused: the tracked patch conflicts with ${opts.target}; nothing applied. Resolve the target (or apply manually) and retry.`,
+		};
+	}
+	if (untrackedConflicts.length > 0) {
+		return {
+			confirmed: true,
+			target: opts.target,
+			trackedFiles,
+			appliesClean: true,
+			untracked,
+			untrackedConflicts,
+			applied: false,
+			receiptsKept: true,
+			note: `refused: requested untracked file(s) already exist in ${opts.target} with different content (${untrackedConflicts.join(", ")}); applying would overwrite them. Nothing applied -- remove/rename them in the target, or drop them from include_untracked, and retry.`,
 		};
 	}
 	if (patch.trim().length > 0) {
@@ -448,16 +483,17 @@ export function applyRunWorkspace(
 				appliesClean: true,
 				applied: false,
 				untracked,
+				untrackedConflicts,
 				receiptsKept: true,
 				note: `apply failed after a clean check: ${gitErr(ap)}; nothing partially applied is intended -- inspect ${opts.target}.`,
 			};
 		}
 	}
 	// Copy ONLY the explicitly-requested untracked files that are real candidates (never an
-	// arbitrary path): the caller opts in per file.
+	// arbitrary path): the caller opts in per file. Overwrite conflicts were refused above, so a
+	// surviving target file here is byte-identical (a harmless idempotent re-copy).
 	const appliedUntracked: string[] = [];
-	for (const f of opts.includeUntracked ?? []) {
-		if (!untracked.includes(f)) continue;
+	for (const f of requestedUntracked) {
 		const dst = join(opts.target, f);
 		mkdirSync(dirname(dst), { recursive: true });
 		cpSync(join(opts.worktreePath, f), dst);
@@ -470,6 +506,7 @@ export function applyRunWorkspace(
 		appliesClean: true,
 		applied: true,
 		untracked,
+		untrackedConflicts,
 		appliedUntracked,
 		receiptsKept: true,
 		note: `applied ${trackedFiles.length} tracked file(s)${appliedUntracked.length ? ` + ${appliedUntracked.length} untracked` : ""} to ${opts.target}. Receipts kept; the worktree remains for chit_cleanup.`,

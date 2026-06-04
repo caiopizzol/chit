@@ -527,4 +527,50 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 			teardown();
 		}
 	});
+
+	test("REFUSES to overwrite an existing target file with an included untracked file of different content (#101 slice 1b)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			// the target already has newfile.ts with DIFFERENT content than the run's
+			writeFileSync(join(main, "newfile.ts"), "USER's own newfile, do not clobber\n");
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+				includeUntracked: ["newfile.ts"],
+			});
+			// atomic refusal: nothing applied (NOT the tracked patch, NOT the untracked copy)
+			expect(ap.applied).toBe(false);
+			expect(ap.untrackedConflicts).toEqual(["newfile.ts"]);
+			expect(ap.note).toContain("overwrite");
+			// the user's file is UNTOUCHED, and the tracked change did NOT apply (atomic)
+			expect(readFileSync(join(main, "newfile.ts"), "utf8")).toBe(
+				"USER's own newfile, do not clobber\n",
+			);
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("base line 1"); // tracked NOT applied
+		} finally {
+			teardown();
+		}
+	});
+
+	test("an included untracked file IDENTICAL to the target is a harmless no-op, not a conflict (#101 slice 1b)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			// the target already has newfile.ts with the SAME content as the run's
+			writeFileSync(join(main, "newfile.ts"), "export const n = 1;\n");
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+				includeUntracked: ["newfile.ts"],
+			});
+			expect(ap.applied).toBe(true); // identical content -> not a conflict
+			expect(ap.untrackedConflicts).toEqual([]);
+			expect(ap.appliedUntracked).toEqual(["newfile.ts"]);
+		} finally {
+			teardown();
+		}
+	});
 });
