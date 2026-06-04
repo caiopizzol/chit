@@ -15,6 +15,7 @@ import { loopLogDir } from "./location.ts";
 import {
 	appendIteration,
 	type Clock,
+	findLoopByRunId,
 	LoopStoreError,
 	readLoop,
 	startLoop,
@@ -243,5 +244,56 @@ describe("loop-log store: rejects inconsistent pre-existing files", () => {
 		startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "M1" });
 		expect(appendIteration(cwd, "M1", baseAppend).n).toBe(1);
 		expect(() => appendIteration(cwd, "M1", baseAppend)).toThrow(/iteration budget/);
+	});
+});
+
+describe("loop-log store: header workspace metadata + findLoopByRunId (#100)", () => {
+	const ws = {
+		worktreePath: "/wt/run-1/owner",
+		branch: "chit-run/run-1/owner",
+		baseSha: "basesha",
+		mainRepo: "/main/repo",
+		callerCheckout: "/launching/checkout",
+	};
+
+	test("startLoop records the workspace metadata in the header; it round-trips", () => {
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "W1", workspace: ws });
+		const header = readLoop(cwd, "W1")[0] as unknown as { type: string } & typeof ws;
+		expect(header.worktreePath).toBe(ws.worktreePath);
+		expect(header.branch).toBe(ws.branch);
+		expect(header.baseSha).toBe(ws.baseSha);
+		expect(header.mainRepo).toBe(ws.mainRepo);
+		expect(header.callerCheckout).toBe(ws.callerCheckout);
+	});
+
+	test("a header WITHOUT workspace metadata (in_place / old log) has the fields undefined", () => {
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "W2" });
+		const header = readLoop(cwd, "W2")[0] as unknown as Record<string, unknown>;
+		expect(header.worktreePath).toBeUndefined();
+		expect(header.mainRepo).toBeUndefined();
+	});
+
+	test("findLoopByRunId resolves a loop by runId alone, without its repoKey", () => {
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "F1", workspace: ws });
+		const found = findLoopByRunId("F1");
+		expect(found).toBeDefined();
+		expect(found?.header.loopId).toBe("F1");
+		expect(found?.header.mainRepo).toBe(ws.mainRepo);
+		expect(found?.stop).toBeUndefined(); // not stopped yet
+	});
+
+	test("findLoopByRunId surfaces the stop record once the loop has stopped", () => {
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "F2" });
+		stopLoop(cwd, "F2", { status: "converged", reason: "done" });
+		const found = findLoopByRunId("F2");
+		expect(found?.stop?.status).toBe("converged");
+	});
+
+	test("findLoopByRunId returns undefined for an unknown runId", () => {
+		expect(findLoopByRunId("nope-does-not-exist")).toBeUndefined();
+	});
+
+	test("findLoopByRunId rejects an unsafe runId (no path traversal)", () => {
+		expect(() => findLoopByRunId("../escape")).toThrow(LoopStoreError);
 	});
 });

@@ -26,7 +26,14 @@
 // appending to the same log could interleave; add a lock before any multi-writer
 // use.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
 	type AdapterUsage,
@@ -43,7 +50,7 @@ import {
 	type VerificationSource,
 	validateLoopLog,
 } from "@chit-run/core";
-import { loopLogDir, repoKey, repoRoot } from "./location.ts";
+import { loopLogDir, loopStateDir, repoKey, repoRoot } from "./location.ts";
 
 export class LoopStoreError extends Error {}
 
@@ -90,6 +97,47 @@ function readRecords(path: string, loopId: string): LoopRecord[] {
 	return records;
 }
 
+export interface FoundLoop {
+	path: string;
+	header: LoopHeaderRecord;
+	records: LoopRecord[];
+	stop?: LoopStopRecord; // the terminal stop record, when the loop has stopped
+}
+
+// Find a loop's durable log by runId ALONE, without knowing its repoKey (the dir it lives under).
+// A foreground run that closed its MCP session is gone from memory but its log survives at
+// <state>/chit/loops/<repoKey>/<runId>.jsonl; this scans every repoKey dir for that file so
+// chit_cleanup / chit_trace can recover the run. Returns undefined when no log exists. Throws on a
+// (practically impossible) runId collision across repos -- never guesses which one. runId is
+// validated as a safe loop id, so it can never escape the loops dir.
+export function findLoopByRunId(runId: string): FoundLoop | undefined {
+	const id = safeId(runId);
+	const root = loopStateDir();
+	if (!existsSync(root)) return undefined;
+	const matches: string[] = [];
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const candidate = join(root, entry.name, `${id}.jsonl`);
+		if (existsSync(candidate)) matches.push(candidate);
+	}
+	if (matches.length === 0) return undefined;
+	if (matches.length > 1) {
+		throw new LoopStoreError(
+			`run id ${JSON.stringify(runId)} matches multiple loop logs (${matches.join(", ")}); refusing to guess`,
+		);
+	}
+	const path = matches[0] as string;
+	const records = validateLoopLog(parseLoopLog(readFileSync(path, "utf-8")));
+	const header = records[0] as LoopHeaderRecord;
+	if (header.loopId !== id) {
+		throw new LoopStoreError(
+			`loop log at ${path} declares loopId ${JSON.stringify(header.loopId)}, expected ${JSON.stringify(id)}`,
+		);
+	}
+	const stop = records.find((r): r is LoopStopRecord => r.type === "stop");
+	return { path, header, records, ...(stop && { stop }) };
+}
+
 export interface StartOptions {
 	scope: string;
 	task: string;
@@ -97,6 +145,16 @@ export interface StartOptions {
 	loopId?: string; // default: generated
 	force?: boolean;
 	clock?: Clock;
+	// Managed-worktree metadata (#100): recorded in the loop header so a CLOSED foreground run is
+	// recoverable from its durable log (chit_cleanup / chit_trace fall back to it). Absent for
+	// in_place runs.
+	workspace?: {
+		worktreePath: string;
+		branch: string;
+		baseSha: string;
+		mainRepo: string;
+		callerCheckout: string;
+	};
 }
 
 export function startLoop(cwd: string, opts: StartOptions): { loopId: string; path: string } {
@@ -118,6 +176,13 @@ export function startLoop(cwd: string, opts: StartOptions): { loopId: string; pa
 		repoKey: repoKey(cwd),
 		startedAt: iso((opts.clock ?? realClock)()),
 		maxIterations: opts.maxIterations,
+		...(opts.workspace && {
+			worktreePath: opts.workspace.worktreePath,
+			branch: opts.workspace.branch,
+			baseSha: opts.workspace.baseSha,
+			mainRepo: opts.workspace.mainRepo,
+			callerCheckout: opts.workspace.callerCheckout,
+		}),
 	};
 	// Fresh file (truncates on force); serializeLoopRecord validates first.
 	writeFileSync(path, `${serializeLoopRecord(header)}\n`);

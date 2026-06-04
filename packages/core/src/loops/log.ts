@@ -72,6 +72,17 @@ export interface LoopHeaderRecord {
 	repoKey: string;
 	startedAt: string; // ISO 8601
 	maxIterations: number;
+	// Managed-worktree metadata (#100), present only for an isolated write run. They make a
+	// CLOSED foreground run recoverable from its durable log -- chit_cleanup / chit_trace resolve
+	// the run from these when it is gone from the server's memory. Absent for in_place / pre-0.23
+	// logs (recovery then derives what it can from `repo`/git). `repo` (above) is the WORKTREE's
+	// own toplevel for a managed run; `mainRepo` is the durable repo cleanup must anchor on, and
+	// `callerCheckout` is where chit_apply applies.
+	worktreePath?: string;
+	branch?: string;
+	baseSha?: string;
+	mainRepo?: string;
+	callerCheckout?: string;
 }
 
 export interface LoopIterationRecord {
@@ -262,7 +273,7 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 	if (type === "loop") {
 		const ctx = "loop record";
 		if (o.schema !== 1) throw new LoopLogError(`${ctx}: "schema" must be 1`);
-		return {
+		const rec: LoopHeaderRecord = {
 			type: "loop",
 			schema: 1,
 			loopId: str(o, "loopId", ctx),
@@ -273,6 +284,14 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 			startedAt: str(o, "startedAt", ctx),
 			maxIterations: int(o, "maxIterations", ctx, 1),
 		};
+		// Optional managed-worktree metadata (#100); validated as strings when present. Absent for
+		// in_place / pre-0.23 logs.
+		if (o.worktreePath !== undefined) rec.worktreePath = str(o, "worktreePath", ctx);
+		if (o.branch !== undefined) rec.branch = str(o, "branch", ctx);
+		if (o.baseSha !== undefined) rec.baseSha = str(o, "baseSha", ctx);
+		if (o.mainRepo !== undefined) rec.mainRepo = str(o, "mainRepo", ctx);
+		if (o.callerCheckout !== undefined) rec.callerCheckout = str(o, "callerCheckout", ctx);
+		return rec;
 	}
 	if (type === "iteration") {
 		const ctx = "iteration record";
