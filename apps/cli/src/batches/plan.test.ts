@@ -64,6 +64,12 @@ describe("planTasks", () => {
 		const [t] = planTasks([input({ manifestPath: "/m.json" })]);
 		expect(t?.manifestPath).toBe("/m.json");
 	});
+
+	test("carries through task-level requiredChecks", () => {
+		const checks = [{ command: "bun", args: ["test"] }];
+		const [t] = planTasks([input({ requiredChecks: checks })]);
+		expect(t?.requiredChecks).toEqual(checks);
+	});
 });
 
 describe("normalizeClaim", () => {

@@ -9,6 +9,7 @@
 //   - claimedPaths is required and non-empty UNLESS the task sets allowPathOverlap
 //     (an explicit opt-in to running without a declared footprint).
 
+import type { RequiredCheck } from "@chit-run/core";
 import type { BatchTask } from "./types.ts";
 
 export class PlanError extends Error {}
@@ -59,6 +60,8 @@ export interface TaskInput {
 	claimedPaths?: string[];
 	allowPathOverlap?: boolean;
 	manifestPath?: string;
+	// Per-task chit-executed verification (overrides batch + manifest for this task).
+	requiredChecks?: RequiredCheck[];
 }
 
 // Validate the inputs and produce pending BatchTasks. Throws PlanError on the
@@ -111,6 +114,7 @@ export function planTasks(inputs: TaskInput[]): BatchTask[] {
 		};
 		if (t.allowPathOverlap) task.allowPathOverlap = true;
 		if (t.manifestPath !== undefined) task.manifestPath = t.manifestPath;
+		if (t.requiredChecks !== undefined) task.requiredChecks = t.requiredChecks;
 		return task;
 	});
 }

@@ -9,8 +9,10 @@
 // first wave; advance reconciles finished jobs and launches the next wave;
 // describe is READ-ONLY (never launches or mutates); cancel stops active jobs.
 
+import type { RequiredCheck } from "@chit-run/core";
 import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
+import { pickRequiredChecks } from "../loops/required-checks.ts";
 import { planTasks, resolveManifestPath, type TaskInput } from "./plan.ts";
 import { deriveBatchStatus, isBlocked, isStartable, selectRunnable } from "./schedule.ts";
 import type { BatchStore } from "./store.ts";
@@ -32,6 +34,9 @@ export interface LaunchJobParams {
 	loopId: string;
 	manifestPath?: string;
 	maxIterations: number;
+	// The task's effective override (task ?? batch checks); launchJob resolves it
+	// against the manifest's checks at the snapshot boundary.
+	requiredChecks?: RequiredCheck[];
 }
 
 // Everything the engine touches that has a side effect or reads external state,
@@ -89,6 +94,8 @@ export interface StartBatchOptions {
 	baseBranch?: string; // default: the repo's current HEAD
 	manifestPath?: string; // batch-level default converge manifest
 	maxIterations?: number;
+	// Batch-level chit-executed verification, applied to any task without its own.
+	requiredChecks?: RequiredCheck[];
 }
 
 // Create the batch, persist it, and launch the initial runnable wave.
@@ -114,6 +121,7 @@ export function startBatch(
 		baseSha,
 		maxParallel,
 		...(opts.manifestPath !== undefined && { manifestPath: opts.manifestPath }),
+		...(opts.requiredChecks !== undefined && { requiredChecks: opts.requiredChecks }),
 		status: "planning",
 		tasks,
 		createdAt: now,
@@ -394,6 +402,9 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 			// (jobs/locks/<loopId>.lock), so a bare task id like "docs" would collide
 			// with the same task id in another batch. The batch uuid namespaces it.
 			const loopId = `${c.id}-${t.id}`;
+			// Per-task effective override: task checks beat batch checks (closest wins).
+			// launchJob resolves this against the manifest's checks at the snapshot boundary.
+			const taskChecks = pickRequiredChecks(t.requiredChecks, c.requiredChecks);
 			const { jobId } = deps.launchJob({
 				cwd: worktreePath,
 				scope: `batch-${c.id}-${t.id}`,
@@ -402,6 +413,7 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 				...(resolveManifestPath(t, c.manifestPath) !== undefined && {
 					manifestPath: resolveManifestPath(t, c.manifestPath),
 				}),
+				...(taskChecks && { requiredChecks: taskChecks }),
 				maxIterations,
 			});
 			t.jobId = jobId;

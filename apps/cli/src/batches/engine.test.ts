@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RequiredCheck } from "@chit-run/core";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import {
 	advanceBatch,
@@ -23,7 +24,13 @@ import type { GitRunner } from "./worktree.ts";
 // state to simulate the background worker finishing.
 class FakeJobs {
 	jobs = new Map<string, LoopJobRecord>();
-	launched: Array<{ jobId: string; cwd: string; manifestPath?: string; scope: string }> = [];
+	launched: Array<{
+		jobId: string;
+		cwd: string;
+		manifestPath?: string;
+		scope: string;
+		requiredChecks?: RequiredCheck[];
+	}> = [];
 	cancelled: string[] = [];
 	private seq = 0;
 
@@ -34,6 +41,7 @@ class FakeJobs {
 		loopId: string;
 		manifestPath?: string;
 		maxIterations: number;
+		requiredChecks?: RequiredCheck[];
 	}): { jobId: string; loopId: string } => {
 		const jobId = `job-${++this.seq}`;
 		// Real launchConvergeJob creates jobs as "queued"; the worker flips them to
@@ -54,7 +62,13 @@ class FakeJobs {
 			iterationsCompleted: 0,
 			auditRefs: [],
 		});
-		this.launched.push({ jobId, cwd: p.cwd, manifestPath: p.manifestPath, scope: p.scope });
+		this.launched.push({
+			jobId,
+			cwd: p.cwd,
+			manifestPath: p.manifestPath,
+			scope: p.scope,
+			requiredChecks: p.requiredChecks,
+		});
 		return { jobId, loopId: p.loopId };
 	};
 	get = (jobId: string): LoopJobRecord | undefined => this.jobs.get(jobId);
@@ -305,6 +319,48 @@ describe("needs_attention surfacing", () => {
 		expect(summary.needsAttention).toBe(1);
 		expect(summary.failed).toBe(0);
 		expect(summary.reviewReady).toBe(0);
+	});
+});
+
+describe("required checks cascade (task beats batch, reaching the snapshot boundary)", () => {
+	// The engine cannot prove "batch beats manifest" -- it never loads manifests; that
+	// fallback is launchConvergeJob's snapshot boundary (covered by pickRequiredChecks +
+	// the worker snapshot test). Here we prove task beats batch and the override REACHES
+	// launchJob.
+	const TASKCHK: RequiredCheck = { command: "bun", args: ["test"] };
+	const BATCHCHK: RequiredCheck = { command: "make", args: ["check"] };
+
+	test("startBatch persists batch-level requiredChecks", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 1,
+			requiredChecks: [BATCHCHK],
+		});
+		expect(store.get("c1")?.requiredChecks).toEqual([BATCHCHK]);
+	});
+
+	test("a task's requiredChecks beat the batch's, and reach launchJob", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a", { requiredChecks: [TASKCHK] })],
+			maxParallel: 1,
+			requiredChecks: [BATCHCHK],
+		});
+		expect(jobs.launched.at(-1)?.requiredChecks).toEqual([TASKCHK]); // task wins, not batch
+	});
+
+	test("a task without its own checks gets the batch's at launch", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 1,
+			requiredChecks: [BATCHCHK],
+		});
+		expect(jobs.launched.at(-1)?.requiredChecks).toEqual([BATCHCHK]);
 	});
 });
 

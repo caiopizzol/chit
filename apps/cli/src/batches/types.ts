@@ -1,4 +1,4 @@
-import type { LoopStopStatus, LoopVerdict } from "@chit-run/core";
+import type { LoopStopStatus, LoopVerdict, RequiredCheck } from "@chit-run/core";
 
 // Batch model: a thin coordinator over durable background converge jobs. A
 // batch plans a static graph of tasks, creates one git worktree per task, and
@@ -91,9 +91,11 @@ export interface BatchTask {
 	// overlapping everything (it runs alone, never concurrent with another task).
 	allowPathOverlap?: boolean;
 	// Per-task converge manifest override (absolute). Resolution order:
-	// task.manifestPath -> batch.manifestPath -> the bundled default converge
-	// manifest. This is the ONLY per-task model knob (no arbitrary agent config).
+	// task.manifestPath -> batch.manifestPath -> the bundled default converge manifest.
 	manifestPath?: string;
+	// Per-task chit-executed verification commands. Precedence (closest declared wins,
+	// never a merge): task -> batch -> the manifest policy's requiredChecks.
+	requiredChecks?: RequiredCheck[];
 	// Filled in once the worktree is created and the job is launched.
 	worktreePath?: string; // absolute, recorded so nothing recomputes it
 	branch?: string;
@@ -113,6 +115,9 @@ export interface Batch {
 	// Batch-level default converge manifest (absolute), applied to any task
 	// without its own manifestPath. Undefined -> the bundled default.
 	manifestPath?: string;
+	// Batch-level chit-executed verification, applied to any task without its own
+	// requiredChecks (a task's override wins; the manifest policy's are the fallback).
+	requiredChecks?: RequiredCheck[];
 	status: BatchStatus;
 	tasks: BatchTask[];
 	createdAt: string; // ISO 8601

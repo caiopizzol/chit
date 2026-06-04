@@ -476,6 +476,18 @@ function spawnJobWorker(jobId: string, cwd: string): void {
 	child.unref();
 }
 
+// One chit-executed verification command (spawned as argv, no shell). The shared
+// per-check SHAPE for every surface -- chit_start, batch-level, and task-level -- so
+// they cannot drift. The field NAME follows each surface's convention (required_checks
+// at a snake_case top level; requiredChecks on the camelCase batch task object); the
+// shape is this.
+const requiredCheckInputSchema = z.object({
+	command: z.string().min(1),
+	args: z.array(z.string()).default([]),
+	name: z.string().min(1).optional(),
+	timeoutMs: z.number().int().positive().optional(),
+});
+
 // Launch one detached background converge job: validate the manifest, reserve the
 // loop, create the durable job record, spawn the worker. Shared by chit_start
 // (mode background, loop policy) and the batch engine (one per runnable task), so both refuse the
@@ -981,14 +993,7 @@ server.registerTool(
 					"Run even when a declared permission cannot be enforced (emits warnings). Default off: such a manifest is refused.",
 				),
 			required_checks: z
-				.array(
-					z.object({
-						command: z.string().min(1),
-						args: z.array(z.string()).default([]),
-						name: z.string().min(1).optional(),
-						timeoutMs: z.number().int().positive().optional(),
-					}),
-				)
+				.array(requiredCheckInputSchema)
 				.optional()
 				.describe(
 					"Verification commands chit runs ITSELF after a `proceed` review (loop runs only): each {command, args?, name?, timeoutMs?}, spawned as argv with no shell. Ground truth that overrides the reviewer's self-report -- the loop converges only when they pass, fails one -> revise, blocked -> needs-decision. Replaces (never merges) the manifest's requiredChecks for this run, so a default-loop `task` run gets real verification without a custom manifest. Rejected for a one-shot run.",
@@ -1464,6 +1469,7 @@ const batchDeps: BatchEngineDeps = {
 			cwd: p.cwd,
 			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
 			maxIterations: p.maxIterations,
+			...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
 			loopId: p.loopId,
 			allowUnenforced: false,
 		});
@@ -1516,6 +1522,12 @@ const batchTaskSchema = z.object({
 		.describe(
 			"Per-task converge manifest override (absolute or relative to cwd). Omit to use the bundled default (write-capable Claude implementer + read-only Codex reviewer). To swap the pairing (e.g. a Codex implementer + Claude reviewer), point this at your own converge manifest; its participants can be inline, or reference reusable roles defined in ~/.config/chit/config.json.",
 		),
+	requiredChecks: z
+		.array(requiredCheckInputSchema)
+		.optional()
+		.describe(
+			"Per-task chit-executed verification: replaces the batch's required_checks and the manifest's for this task (closest-wins, no merge). Each {command, args?, name?, timeoutMs?}.",
+		),
 });
 
 function batchError(e: unknown) {
@@ -1551,9 +1563,23 @@ server.registerTool(
 				.min(1)
 				.default(3)
 				.describe("Per-task iteration budget. Default 3."),
+			required_checks: z
+				.array(requiredCheckInputSchema)
+				.optional()
+				.describe(
+					"Batch-level chit-executed verification, applied to every task without its own requiredChecks. A task's requiredChecks override these; the manifest policy's are the fallback. Each {command, args?, name?, timeoutMs?}.",
+				),
 		},
 	},
-	async ({ tasks, cwd, max_parallel, base_branch, manifest_path, max_iterations }) => {
+	async ({
+		tasks,
+		cwd,
+		max_parallel,
+		base_branch,
+		manifest_path,
+		max_iterations,
+		required_checks,
+	}) => {
 		const runCwd = resolve(cwd ?? process.cwd());
 		// Resolve manifest paths to absolute against the batch cwd up front, so the
 		// per-task worktree never re-resolves a relative path against the wrong base.
@@ -1579,6 +1605,7 @@ server.registerTool(
 				...(base_branch !== undefined && { baseBranch: base_branch }),
 				...(batchManifest !== undefined && { manifestPath: batchManifest }),
 				maxIterations: max_iterations,
+				...(required_checks !== undefined && { requiredChecks: required_checks }),
 			});
 			return jsonResult(describeBatch(batch, batchDeps));
 		} catch (e) {
