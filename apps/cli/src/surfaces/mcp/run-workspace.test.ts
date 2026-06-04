@@ -256,4 +256,32 @@ describe("resolveArchivedForegroundLoop (#100): recover a closed foreground run 
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	test("old log: does NOT misclassify a worktree on a DIFFERENT run's chit-run/ branch (#100 review)", () => {
+		// The worktree's HEAD branch belongs to ANOTHER run (chit-run/OTHER/...), not this log's id.
+		// The bare chit-run/ prefix would wrongly accept it; binding to <runId> must reject it.
+		const main = mkdtempSync(join(tmpdir(), "chit-arch-mis-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-arch-misroot-"));
+		const wtPath = join(root, "wt");
+		try {
+			realGit(["init", "-q"], main);
+			realGit(["config", "user.email", "t@chit.test"], main);
+			realGit(["config", "user.name", "t"], main);
+			writeFileSync(join(main, "f.ts"), "base\n");
+			realGit(["add", "."], main);
+			realGit(["commit", "-qm", "base"], main);
+			realGit(["worktree", "add", "-q", "-b", "chit-run/SOMEONE-ELSE/owner", wtPath], main);
+			// the log's id (A4) does NOT match the worktree's branch run id (SOMEONE-ELSE).
+			startLoop(wtPath, { scope: "s", task: "t", maxIterations: 3, loopId: "A4" });
+			const r = resolveArchivedForegroundLoop("A4");
+			expect(r).toBeDefined();
+			expect(r?.workspace).toBeUndefined(); // refused: not THIS run's managed branch
+		} finally {
+			try {
+				realGit(["worktree", "remove", "--force", wtPath], main);
+			} catch {}
+			rmSync(main, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });

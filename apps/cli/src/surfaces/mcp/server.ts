@@ -1585,10 +1585,13 @@ export function resolveArchivedForegroundLoop(runId: string): ArchivedForeground
 	const worktreePath = h.repo;
 	if (!existsSync(worktreePath)) return { found, stopped };
 	const br = realGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath);
-	// A chit-managed run sits on a chit-run/... branch; if HEAD is not that, this was not an
-	// isolated managed run (e.g. in_place) -> nothing to clean.
+	// The branch must be THIS run's managed branch: runWorktree(runId, scope) cuts
+	// `chit-run/<runId>/<scope>`, and the log's loopId IS the runId, so the branch must start with
+	// `chit-run/<runId>/`. Checking the bare `chit-run/` prefix is NOT enough -- a user's own
+	// chit-run/ branch (or another run's) checked out at this path could be misidentified and its
+	// branch deleted. Binding to <runId> makes a false positive impossible.
 	const branch = br.code === 0 ? br.stdout.trim() : "";
-	if (!branch.startsWith("chit-run/")) return { found, stopped };
+	if (!branch.startsWith(`chit-run/${h.loopId}/`)) return { found, stopped };
 	let mainRepo: string;
 	try {
 		mainRepo = mainRepoOfWorktree(realGit, worktreePath);
