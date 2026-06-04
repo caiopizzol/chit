@@ -9,7 +9,13 @@ import { RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
-import { buildStatus, publicRunSummary, publicTimeline, summarizeRunForStatus } from "./status.ts";
+import {
+	buildStatus,
+	needsDecisionNextAction,
+	publicRunSummary,
+	publicTimeline,
+	summarizeRunForStatus,
+} from "./status.ts";
 
 const NOW = Date.parse("2026-06-01T11:00:00.000Z");
 
@@ -318,5 +324,38 @@ describe("buildStatus", () => {
 		expect((out[0] as Record<string, unknown>).manifestId).toBe("m"); // metadata survives
 		expect((out[0] as Record<string, unknown>).type).toBe("run.started"); // discriminant survives
 		expect((out[1] as Record<string, unknown>).stepId).toBe("implement"); // step id is fine
+	});
+});
+
+describe("needsDecisionNextAction branches by verification source + rollup", () => {
+	test("chit + failed -> fix the failed checks and run chit_next", () => {
+		const m = needsDecisionNextAction("R1", "failed", "chit");
+		expect(m).toContain("required checks failed");
+		expect(m).toContain("run chit_next");
+		expect(m).toContain('chit_trace "R1"');
+		expect(m).not.toContain("checksRun"); // never lead with reviewer prose when chit ran
+	});
+
+	test("chit + blocked -> environment/tooling decision", () => {
+		const m = needsDecisionNextAction("R1", "blocked", "chit");
+		expect(m).toContain("could not run required checks");
+		expect(m).toContain("environment/tooling");
+	});
+
+	test("chit + not_run -> required checks did not run, decide manually", () => {
+		const m = needsDecisionNextAction("R1", "not_run", "chit");
+		expect(m).toContain("required checks did not run");
+		expect(m).toContain("decide manually");
+	});
+
+	test("reviewer + not-passed -> inspect the reviewer's checks", () => {
+		const m = needsDecisionNextAction("R1", "failed", "reviewer");
+		expect(m).toContain("reviewer-reported verification did not pass");
+		expect(m).toContain("reviewer's checks");
+	});
+
+	test("absent fields -> generic fallback wording", () => {
+		const m = needsDecisionNextAction("R1");
+		expect(m).toContain("the reviewer returned proceed but verification did not pass");
 	});
 });

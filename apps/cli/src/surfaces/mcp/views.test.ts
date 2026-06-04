@@ -159,7 +159,7 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expectNoLeakage(v);
 	});
 
-	test("a loop view surfaces the latest verification + its source", () => {
+	test("a loop view surfaces the latest verification + source, and the nextAction branches on them", () => {
 		const v = loopRunView(
 			loopSession({
 				terminalStatus: "needs-decision",
@@ -169,6 +169,9 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		);
 		expect(v.lastVerification).toBe("failed");
 		expect(v.lastVerificationSource).toBe("chit");
+		// The view passes the cached fields to needsDecisionNextAction -> the chit-failed
+		// branch (not the generic wording).
+		expect(v.nextAction).toContain("required checks failed");
 	});
 
 	test("a background view surfaces the latest verification + its source", () => {

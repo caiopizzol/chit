@@ -892,7 +892,11 @@ export function loopRunView(session: ConvergeSession) {
 	const stopped = session.terminalStatus !== undefined;
 	const nextAction = stopped
 		? session.terminalStatus === "needs-decision"
-			? needsDecisionNextAction(session.loopId)
+			? needsDecisionNextAction(
+					session.loopId,
+					session.lastVerification,
+					session.lastVerificationSource,
+				)
 			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history`
 		: session.active
 			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
@@ -939,7 +943,7 @@ export function backgroundRunView(job: JobRecord) {
 			: dj.display === "stale"
 				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run`
 				: job.policy === "loop" && job.stopStatus === "needs-decision"
-					? needsDecisionNextAction(job.runId)
+					? needsDecisionNextAction(job.runId, job.lastVerification, job.lastVerificationSource)
 					: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history`,
 	};
 }
