@@ -502,4 +502,17 @@ describe("required checks via the background worker (chit-executed)", () => {
 		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [BLOCK]));
 		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "needs-decision" });
 	});
+
+	test("the job's persisted requiredChecks win over the manifest's (run-level override)", async () => {
+		// The job carries a FAILING run-level check; the manifest (loopSteps) would pass.
+		// The job's win -> revise -> max-iterations, proving the worker prefers the
+		// persisted effective checks over the re-derived manifest ones.
+		seedJob({ maxIterations: 1, requiredChecks: [FAIL] });
+		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [PASS]));
+		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "max-iterations" });
+		expect(readLoop(cwd, "j1").find((r) => r.type === "iteration")).toMatchObject({
+			verification: "failed", // the job's FAIL won, not the manifest's PASS
+			verificationSource: "chit",
+		});
+	});
 });

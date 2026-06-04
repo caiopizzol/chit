@@ -301,8 +301,10 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 					execute: resolved.execute,
 					implementStep: resolved.loopSteps.implementStep,
 					reviewStep: resolved.loopSteps.reviewStep,
-					...(resolved.loopSteps.requiredChecks && {
-						requiredChecks: resolved.loopSteps.requiredChecks,
+					// The job's persisted requiredChecks (the effective run/batch resolution)
+					// win over the manifest's; fall back to the manifest's when the job has none.
+					...((job.requiredChecks ?? resolved.loopSteps.requiredChecks) && {
+						requiredChecks: job.requiredChecks ?? resolved.loopSteps.requiredChecks,
 					}),
 					signal: controller.signal,
 					onTrace: (e: TraceEvent) => {

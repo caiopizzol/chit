@@ -174,3 +174,22 @@ export function checkResultsToLoopChecks(results: CheckResult[]): LoopCheck[] {
 		return check;
 	});
 }
+
+// Resolve the EFFECTIVE required checks for a single run. A public run-level input
+// REPLACES the manifest policy's requiredChecks (never merges); absent, the manifest's
+// stand. required_checks applies ONLY to a loop run, so a one-shot run given checks is
+// rejected with a clear error -- a deliberate contract, since silently ignoring them
+// would mislead the caller into thinking verification will run.
+export function resolveRunRequiredChecks(
+	policyKind: "loop" | "one-shot",
+	runLevel: RequiredCheck[] | undefined,
+	manifestLevel: RequiredCheck[] | undefined,
+): { ok: true; checks: RequiredCheck[] | undefined } | { ok: false; error: string } {
+	if (runLevel !== undefined && policyKind !== "loop") {
+		return {
+			ok: false,
+			error: "required_checks applies only to a loop run; this manifest declares a one-shot policy",
+		};
+	}
+	return { ok: true, checks: runLevel !== undefined ? runLevel : manifestLevel };
+}

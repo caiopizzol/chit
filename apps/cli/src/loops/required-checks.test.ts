@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { RequiredCheck } from "@chit-run/core";
 import {
 	type CheckResult,
 	checkResultsToLoopChecks,
+	resolveRunRequiredChecks,
 	runRequiredCheck,
 	runRequiredChecks,
 } from "./required-checks.ts";
@@ -155,5 +157,35 @@ describe("command vs name + checkResultsToLoopChecks", () => {
 			{ command: "bun run lint", status: "failed", reason: "3 problems" },
 			{ command: "bun run e2e", status: "blocked", reason: "timed out after 80ms" },
 		]);
+	});
+});
+
+describe("resolveRunRequiredChecks (run-level override + one-shot reject)", () => {
+	const A: RequiredCheck = { command: "bun", args: ["test"] };
+	const B: RequiredCheck = { command: "bun", args: ["run", "typecheck"] };
+
+	test("a one-shot run given checks is rejected (not silently ignored)", () => {
+		const r = resolveRunRequiredChecks("one-shot", [A], undefined);
+		if (r.ok) throw new Error("expected reject");
+		expect(r.error).toContain("applies only to a loop");
+	});
+
+	test("a one-shot run with NO run-level checks is fine (nothing to apply)", () => {
+		expect(resolveRunRequiredChecks("one-shot", undefined, undefined)).toEqual({
+			ok: true,
+			checks: undefined,
+		});
+	});
+
+	test("loop run-level checks REPLACE the manifest's (never merge)", () => {
+		expect(resolveRunRequiredChecks("loop", [A], [B])).toEqual({ ok: true, checks: [A] });
+	});
+
+	test("loop with no run-level checks falls back to the manifest's", () => {
+		expect(resolveRunRequiredChecks("loop", undefined, [B])).toEqual({ ok: true, checks: [B] });
+	});
+
+	test("loop run-level [] replaces -- overrides the manifest's checks AWAY", () => {
+		expect(resolveRunRequiredChecks("loop", [], [B])).toEqual({ ok: true, checks: [] });
 	});
 });

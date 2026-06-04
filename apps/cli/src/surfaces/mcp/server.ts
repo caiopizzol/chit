@@ -28,6 +28,7 @@ import {
 	type LoopRecord,
 	type ManifestSpec,
 	parseManifest,
+	type RequiredCheck,
 	type ResolvedManifest,
 	resolveManifest,
 } from "@chit-run/core";
@@ -64,6 +65,7 @@ import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/type
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey } from "../../loops/location.ts";
 import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
+import { resolveRunRequiredChecks } from "../../loops/required-checks.ts";
 import { validateOneShotAuth } from "../../runs/run-once.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import { type ResolvedRun, RunController } from "./controller.ts";
@@ -487,6 +489,10 @@ function launchConvergeJob(p: {
 	maxIterations: number;
 	loopId?: string;
 	force?: boolean;
+	// The EFFECTIVE required checks for this run, persisted on the job so the worker
+	// runs the intended checks without re-deriving them. Undefined -> the worker falls
+	// back to the manifest policy's requiredChecks.
+	requiredChecks?: RequiredCheck[];
 	allowUnenforced: boolean;
 }): { ok: true; jobId: string; loopId: string; warnings: string[] } | { ok: false; error: string } {
 	let raw: unknown;
@@ -553,6 +559,7 @@ function launchConvergeJob(p: {
 		task: p.task,
 		...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
 		maxIterations: p.maxIterations,
+		...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
 		allowUnenforced: p.allowUnenforced,
 		state: "queued",
 		createdAt: new Date().toISOString(),
@@ -966,6 +973,19 @@ server.registerTool(
 				.describe(
 					"Run even when a declared permission cannot be enforced (emits warnings). Default off: such a manifest is refused.",
 				),
+			required_checks: z
+				.array(
+					z.object({
+						command: z.string().min(1),
+						args: z.array(z.string()).default([]),
+						name: z.string().min(1).optional(),
+						timeoutMs: z.number().int().positive().optional(),
+					}),
+				)
+				.optional()
+				.describe(
+					"Verification commands chit runs ITSELF after a `proceed` review (loop runs only): each {command, args?, name?, timeoutMs?}, spawned as argv with no shell. Ground truth that overrides the reviewer's self-report -- the loop converges only when they pass, fails one -> revise, blocked -> needs-decision. Replaces (never merges) the manifest's requiredChecks for this run, so a default-loop `task` run gets real verification without a custom manifest. Rejected for a one-shot run.",
+				),
 		},
 	},
 	async ({
@@ -978,6 +998,7 @@ server.registerTool(
 		audit,
 		max_iterations,
 		allow_unenforced_permissions,
+		required_checks,
 	}) => {
 		if (!task && !manifest_path) {
 			return errorResult("provide `task` (to converge with the built-in loop) or `manifest_path`");
@@ -1007,6 +1028,17 @@ server.registerTool(
 			return errorResult(`invalid manifest: ${(e as Error).message}`);
 		}
 
+		// Resolve the run's effective verification: the run-level `required_checks`
+		// REPLACES the manifest policy's requiredChecks (never merges), and applies only
+		// to a loop run -- a one-shot run given checks is rejected, not silently ignored.
+		const checksRes = resolveRunRequiredChecks(
+			manifest.policy.kind,
+			required_checks,
+			manifest.policy.kind === "loop" ? manifest.policy.requiredChecks : undefined,
+		);
+		if (!checksRes.ok) return errorResult(checksRes.error);
+		const requiredChecks = checksRes.checks;
+
 		if (manifest.policy.kind === "loop") {
 			if (!task) return errorResult("a loop run needs a `task` to converge on");
 			if (scope === undefined) {
@@ -1021,6 +1053,7 @@ server.registerTool(
 					cwd: runCwd,
 					...(manifest_path !== undefined && { manifestPath: manifest_path }),
 					maxIterations: max_iterations,
+					...(requiredChecks && { requiredChecks }),
 					allowUnenforced: allow_unenforced_permissions,
 				});
 				if (!r.ok) return errorResult(r.error);
@@ -1050,7 +1083,8 @@ server.registerTool(
 					maxIterations: max_iterations,
 					force: false,
 					execute: prep.execute,
-					loopSteps: prep.loopSteps,
+					// Run-level required_checks replace the manifest's for this run.
+					loopSteps: { ...prep.loopSteps, ...(requiredChecks && { requiredChecks }) },
 				});
 			} catch (e) {
 				return errorResult(safeMcpError(e));

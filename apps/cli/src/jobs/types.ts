@@ -1,4 +1,4 @@
-import type { LoopStopStatus, LoopVerdict } from "@chit-run/core";
+import type { LoopStopStatus, LoopVerdict, RequiredCheck } from "@chit-run/core";
 
 // A background run: a detached worker executing one run to completion. The job
 // record is the durable source of truth for the JOB (lifecycle, worker identity,
@@ -78,6 +78,11 @@ export interface LoopJobRecord extends BaseJobRecord {
 	// Absolute converge manifest path, or undefined for the embedded default.
 	manifestPath?: string;
 	maxIterations: number;
+	// The EFFECTIVE chit-executed verification commands for this run, persisted at
+	// enqueue so the worker runs the intended checks without re-deriving them (and so a
+	// run-level override survives a later manifest edit). Absent -> the worker falls
+	// back to the manifest policy's requiredChecks.
+	requiredChecks?: RequiredCheck[];
 	// Run despite an unenforceable declared permission (the worker rebuilds the
 	// run in its own process, so it needs the flag the caller validated against).
 	allowUnenforced: boolean;
