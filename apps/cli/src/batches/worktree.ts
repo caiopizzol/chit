@@ -8,7 +8,7 @@
 // inspects after the batch. Cleanup is a separate, explicit step.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -200,5 +200,62 @@ export function removeTaskWorktree(
 		const b = git(["branch", "-D", branch], repo);
 		if (b.code !== 0) return { ok: false, error: `git branch -D failed: ${gitErr(b)}` };
 	}
+	// Best-effort: drop the now-empty <id> parent (chit/<batchId> or chit/<runId>) so a removed
+	// worktree leaves no litter. rmdir fails (ignored) if siblings remain or it is already gone.
+	try {
+		rmdirSync(dirname(worktreePath));
+	} catch {
+		// non-empty (sibling worktrees still present) or already removed -- leave it
+	}
 	return { ok: true };
+}
+
+export interface RunCleanupResult {
+	confirmed: boolean; // false = dry run (nothing removed)
+	worktreePath?: string;
+	branch?: string;
+	removed?: boolean; // set on confirm: did the worktree/branch get retired
+	error?: string;
+	receiptsKept: true; // cleanup NEVER deletes the loop log / audit records
+	note: string;
+}
+
+// Retire ONE run's managed worktree + branch (#98), the single-run analog of cleanupBatch.
+// Default is a DRY RUN (confirm=false): reports what would be removed, removes nothing. With
+// confirm=true it removes the worktree + branch (and the now-empty parent) via removeTaskWorktree.
+// NEVER deletes receipts (loop log / audit) -- those stay as history. A run with no managed
+// worktree (an in_place run) is a no-op. The CALLER must ensure the run is terminal (no live
+// worker) before confirming: removing a worktree from under a live worker corrupts the run.
+export function cleanupRunWorkspace(
+	git: GitRunner,
+	opts: { repo: string; worktreePath?: string; branch?: string; confirm: boolean },
+): RunCleanupResult {
+	if (!opts.worktreePath || !opts.branch) {
+		return {
+			confirmed: opts.confirm,
+			receiptsKept: true,
+			note: "this run has no chit-managed worktree (it ran in_place); nothing to clean.",
+		};
+	}
+	if (!opts.confirm) {
+		return {
+			confirmed: false,
+			worktreePath: opts.worktreePath,
+			branch: opts.branch,
+			receiptsKept: true,
+			note: `dry run: would remove the worktree (${opts.worktreePath}) + branch (${opts.branch}), discarding its uncommitted diff. Receipts (loop log / audit) are kept. Pass confirm=true to remove.`,
+		};
+	}
+	const r = removeTaskWorktree(git, opts.repo, opts.worktreePath, opts.branch);
+	return {
+		confirmed: true,
+		worktreePath: opts.worktreePath,
+		branch: opts.branch,
+		removed: r.ok,
+		...(r.ok ? {} : { error: r.error }),
+		receiptsKept: true,
+		note: r.ok
+			? "removed the worktree + branch. Receipts (loop log / audit) are kept."
+			: `failed to remove the worktree: ${r.error}`,
+	};
 }

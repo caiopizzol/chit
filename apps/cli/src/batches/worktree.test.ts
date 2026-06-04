@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	cleanupRunWorkspace,
 	createTaskWorktree,
 	type GitResult,
 	type GitRunner,
@@ -177,6 +178,70 @@ describe("prepareRunWorkspace isolation (real git): the #85 attribution fix", ()
 			expect(changed).toContain("tracked.ts");
 			expect(changed).not.toContain("untracked.ts");
 			ws.cleanup?.();
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
+	test("an in_place run (no worktree) is a no-op, touches no git", () => {
+		const { git, calls } = scriptedGit([]);
+		const r = cleanupRunWorkspace(git, { repo: "/repo", confirm: true });
+		expect(r.removed).toBeUndefined();
+		expect(r.receiptsKept).toBe(true);
+		expect(r.note).toContain("no chit-managed worktree");
+		expect(calls).toEqual([]);
+	});
+
+	test("dry run reports the worktree + branch but removes nothing", () => {
+		const { git, calls } = scriptedGit([]);
+		const r = cleanupRunWorkspace(git, {
+			repo: "/repo",
+			worktreePath: "/wt/run-1/owner",
+			branch: "chit-run/run-1/owner",
+			confirm: false,
+		});
+		expect(r.confirmed).toBe(false);
+		expect(r.worktreePath).toBe("/wt/run-1/owner");
+		expect(r.branch).toBe("chit-run/run-1/owner");
+		expect(r.note).toContain("dry run");
+		expect(r.receiptsKept).toBe(true);
+		expect(calls).toEqual([]); // nothing removed
+	});
+
+	test("confirm removes a run's worktree + empty parent (real git), keeps receipts", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-cleanup-repo-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-cleanup-wt-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const ws = prepareRunWorkspace(realGit, repo, {
+				runId: "run-clean",
+				scope: "owner",
+				worktreesRoot: root,
+			});
+			// the worktree + its <runId> parent exist
+			expect(realGit(["worktree", "list"], repo).stdout).toContain(ws.worktreePath ?? "MISSING");
+
+			const r = cleanupRunWorkspace(realGit, {
+				repo,
+				worktreePath: ws.worktreePath,
+				branch: ws.branch,
+				confirm: true,
+			});
+			expect(r.confirmed).toBe(true);
+			expect(r.removed).toBe(true);
+			expect(r.receiptsKept).toBe(true);
+			// worktree dir gone AND the now-empty <runId> parent gone (the #98 wart fix)
+			expect(realGit(["worktree", "list"], repo).stdout).not.toContain(`${root}/run-clean`);
+			expect(existsSync(join(root, "run-clean", "owner"))).toBe(false);
+			expect(existsSync(join(root, "run-clean"))).toBe(false);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 			rmSync(root, { recursive: true, force: true });
