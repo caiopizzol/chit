@@ -3,6 +3,7 @@ import type { RequiredCheck } from "@chit-run/core";
 import {
 	type CheckResult,
 	checkResultsToLoopChecks,
+	pickRequiredChecks,
 	resolveRunRequiredChecks,
 	runRequiredCheck,
 	runRequiredChecks,
@@ -187,5 +188,24 @@ describe("resolveRunRequiredChecks (run-level override + one-shot reject)", () =
 
 	test("loop run-level [] replaces -- overrides the manifest's checks AWAY", () => {
 		expect(resolveRunRequiredChecks("loop", [], [B])).toEqual({ ok: true, checks: [] });
+	});
+});
+
+describe("pickRequiredChecks (the one precedence primitive)", () => {
+	const A: RequiredCheck = { command: "a", args: [] };
+	const B: RequiredCheck = { command: "b", args: [] };
+	const C: RequiredCheck = { command: "c", args: [] };
+
+	test("the FIRST declared level wins (closest-declared, never a merge)", () => {
+		expect(pickRequiredChecks(undefined, [A], [B])).toEqual([A]); // skips undefined, takes [A]
+		expect(pickRequiredChecks([A], [B], [C])).toEqual([A]); // [A], not [A, B, C]
+	});
+
+	test("an explicit [] counts as declared and overrides lower levels AWAY", () => {
+		expect(pickRequiredChecks([], [B])).toEqual([]); // empty wins, not [B]
+	});
+
+	test("all undefined -> undefined (nothing declared)", () => {
+		expect(pickRequiredChecks(undefined, undefined)).toBeUndefined();
 	});
 });

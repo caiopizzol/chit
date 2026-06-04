@@ -503,10 +503,11 @@ describe("required checks via the background worker (chit-executed)", () => {
 		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "needs-decision" });
 	});
 
-	test("the job's persisted requiredChecks win over the manifest's (run-level override)", async () => {
-		// The job carries a FAILING run-level check; the manifest (loopSteps) would pass.
-		// The job's win -> revise -> max-iterations, proving the worker prefers the
-		// persisted effective checks over the re-derived manifest ones.
+	test("the job's snapshotted requiredChecks beat the manifest fallback", async () => {
+		// The job carries a FAILING snapshot (the effective checks persisted at enqueue);
+		// the manifest (loopSteps) would pass. The snapshot wins -> revise ->
+		// max-iterations. The worker's manifest fallback is only for legacy jobs without
+		// the field; a job that has it always runs exactly what was snapshotted.
 		seedJob({ maxIterations: 1, requiredChecks: [FAIL] });
 		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [PASS]));
 		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "max-iterations" });

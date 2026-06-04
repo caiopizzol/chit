@@ -175,11 +175,23 @@ export function checkResultsToLoopChecks(results: CheckResult[]): LoopCheck[] {
 	});
 }
 
-// Resolve the EFFECTIVE required checks for a single run. A public run-level input
-// REPLACES the manifest policy's requiredChecks (never merges); absent, the manifest's
-// stand. required_checks applies ONLY to a loop run, so a one-shot run given checks is
-// rejected with a clear error -- a deliberate contract, since silently ignoring them
-// would mislead the caller into thinking verification will run.
+// The precedence resolver for required checks: the FIRST declared level wins
+// (closest-declared-wins, never a merge). An explicit [] counts as declared -- it
+// overrides a lower level AWAY -- so only `undefined` falls through. The single source
+// of precedence for every surface: run vs manifest, and batch task vs batch vs manifest.
+export function pickRequiredChecks(
+	...levels: (RequiredCheck[] | undefined)[]
+): RequiredCheck[] | undefined {
+	for (const level of levels) {
+		if (level !== undefined) return level;
+	}
+	return undefined;
+}
+
+// Resolve a chit_start run's effective checks: the run-level input REPLACES the
+// manifest policy's (never merges), and applies ONLY to a loop -- a one-shot run given
+// checks is rejected with a clear error, not silently ignored (a deliberate contract,
+// since silently ignoring them would mislead the caller into thinking checks will run).
 export function resolveRunRequiredChecks(
 	policyKind: "loop" | "one-shot",
 	runLevel: RequiredCheck[] | undefined,
@@ -191,5 +203,5 @@ export function resolveRunRequiredChecks(
 			error: "required_checks applies only to a loop run; this manifest declares a one-shot policy",
 		};
 	}
-	return { ok: true, checks: runLevel !== undefined ? runLevel : manifestLevel };
+	return { ok: true, checks: pickRequiredChecks(runLevel, manifestLevel) };
 }

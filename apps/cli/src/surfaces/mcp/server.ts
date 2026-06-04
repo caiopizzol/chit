@@ -65,7 +65,7 @@ import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/type
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey } from "../../loops/location.ts";
 import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
-import { resolveRunRequiredChecks } from "../../loops/required-checks.ts";
+import { pickRequiredChecks, resolveRunRequiredChecks } from "../../loops/required-checks.ts";
 import { validateOneShotAuth } from "../../runs/run-once.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import { type ResolvedRun, RunController } from "./controller.ts";
@@ -526,6 +526,13 @@ function launchConvergeJob(p: {
 	);
 	if (!prep.ok) return { ok: false, error: prep.error };
 
+	// The FINAL snapshot boundary for required checks: the caller's override (run-level
+	// for chit_start, task??batch for a batch) REPLACES the manifest's; absent, the
+	// manifest's stand. Persisted on the job so the worker runs exactly these (a later
+	// manifest edit cannot change a queued run); the worker's manifest fallback is then
+	// only for legacy job records that predate this field.
+	const effectiveChecks = pickRequiredChecks(p.requiredChecks, prep.loopSteps.requiredChecks);
+
 	const loopId = p.loopId ?? crypto.randomUUID();
 	try {
 		startLoop(p.cwd, {
@@ -559,7 +566,7 @@ function launchConvergeJob(p: {
 		task: p.task,
 		...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
 		maxIterations: p.maxIterations,
-		...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
+		...(effectiveChecks && { requiredChecks: effectiveChecks }),
 		allowUnenforced: p.allowUnenforced,
 		state: "queued",
 		createdAt: new Date().toISOString(),
