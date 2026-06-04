@@ -1759,7 +1759,7 @@ server.registerTool(
 	"chit_cleanup",
 	{
 		description:
-			"Retire a FINISHED run's chit-managed worktree + branch, by run_id. DRY RUN by default (reports what it would remove, removes nothing); pass confirm=true to actually remove. Refuses while the run is still active (an in-flight foreground iteration or a live background worker) -- chit_cancel it and let it settle first. NEVER deletes receipts: the loop log + audit survive, so chit_trace / chit_audit_show still work afterward. A run that executed in_place (or a one-shot, which is never isolated) has no managed worktree -- a no-op. Keyed by run_id only. If run_id no longer resolves (a foreground run from a closed session -- foreground runs are in-memory only), use the manual `git worktree remove` / `git branch -D` commands from that run's earlier status/trace.",
+			"Retire a FINISHED run's chit-managed worktree + branch, by run_id. DRY RUN by default (reports what it would remove, removes nothing); pass confirm=true to actually remove. Refuses while the run is still active (an in-flight foreground iteration or a live background worker) -- chit_cancel it and let it settle first. NEVER deletes receipts: the loop log + audit survive, so chit_trace / chit_audit_show still work afterward. A run that executed in_place (or a one-shot, which is never isolated) has no managed worktree -- a no-op. Keyed by run_id only (no path input). Recovers a FOREGROUND run from a CLOSED session via its durable loop log (it must have reached a terminal stop); only if the log was pruned is manual `git worktree remove` / `git branch -D` needed.",
 		inputSchema: {
 			run_id: z.string().describe("A run id (from chit_start)"),
 			confirm: z
@@ -1773,9 +1773,41 @@ server.registerTool(
 	async ({ run_id, confirm }) => {
 		const resolved = runController.resolve(run_id, Date.now());
 		if (!resolved) {
-			return errorResult(
-				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect and stay cleanable). Use the manual \`git worktree remove <path>\` and \`git branch -D <branch>\` commands from that run's earlier chit_status / chit_trace output.`,
-			);
+			// Not in memory / not a durable job: a foreground run from a CLOSED session may still be
+			// cleanable from its durable loop log (#100). Recover it, require a terminal stop, and run
+			// the same cleanup. No path input -- the worktree/branch/repo come only from the log/git.
+			let archived: ArchivedForegroundLoop | undefined;
+			try {
+				archived = resolveArchivedForegroundLoop(run_id);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
+			if (!archived) {
+				return errorResult(
+					`run_id ${JSON.stringify(run_id)} is not resolvable by this server and has no recoverable loop log. If it was a foreground run from a closed session whose log was pruned, remove its worktree manually.`,
+				);
+			}
+			if (!archived.stopped) {
+				return errorResult(
+					`run ${JSON.stringify(run_id)} is an archived run that never recorded a terminal stop; not safe to clean (it may have been interrupted). Inspect it with chit_trace.`,
+				);
+			}
+			if (!archived.workspace) {
+				return jsonResult({
+					run_id,
+					confirmed: confirm,
+					receiptsKept: true,
+					note: "this archived run has no recoverable managed worktree (it ran in_place, or its worktree dir is already gone); nothing to clean.",
+				});
+			}
+			const { worktreePath, branch, mainRepo } = archived.workspace;
+			const result = cleanupRunWorkspace(realGit, {
+				repo: mainRepo,
+				worktreePath,
+				branch,
+				confirm,
+			});
+			return jsonResult({ run_id, recovered: "archived_foreground" as const, ...result });
 		}
 		// The run's managed worktree (if any) + whether its worker is still live, per kind --
 		// resolved by the shared helper. cleanup uses worktreePath/branch/repo/workerLive.
