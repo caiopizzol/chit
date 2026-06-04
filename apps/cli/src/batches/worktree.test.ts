@@ -465,6 +465,12 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("RUN line 1"); // tracked applied
 			expect(ap.appliedUntracked).toEqual(["newfile.ts"]);
 			expect(existsSync(join(main, "newfile.ts"))).toBe(true); // explicitly included -> copied
+			// #103 disclosure premise: git apply --3way STAGES the tracked change (it shows under
+			// --cached, NOT git diff), while the copied untracked file is UNSTAGED.
+			expect(realGit(["diff", "--cached", "--name-only"], main).stdout).toContain("f.ts");
+			expect(realGit(["diff", "--name-only"], main).stdout).not.toContain("f.ts");
+			const unstaged = realGit(["status", "--porcelain", "newfile.ts"], main).stdout;
+			expect(unstaged.startsWith("??")).toBe(true); // untracked copy -> unstaged
 		} finally {
 			teardown();
 		}

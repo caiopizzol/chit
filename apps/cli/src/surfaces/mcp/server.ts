@@ -1765,7 +1765,7 @@ server.registerTool(
 	"chit_apply",
 	{
 		description:
-			"Apply a FINISHED run's changes from its chit-managed worktree back into a working checkout, by run_id. DRY RUN by default: reports the tracked files, whether they apply cleanly, and the untracked candidates -- applies NOTHING. Pass confirm=true to apply. Tracked changes apply via git's own 3-way check and are REFUSED (nothing applied) if they conflict with the target's current state -- never an overwrite of your edits. Untracked files (new files the run created) are applied ONLY when named in include_untracked, and a name that would overwrite a different existing target file is refused too. Refuses while the run is still active. Does NOT clean up the worktree (run chit_cleanup separately when done) and never deletes receipts. Target defaults to the run's own repo; pass target_cwd to apply elsewhere. A one-shot / in_place run has no managed worktree to apply.",
+			"Apply a FINISHED run's changes from its chit-managed worktree back into a working checkout, by run_id. DRY RUN by default: reports the tracked files, whether they apply cleanly, and the untracked candidates -- applies NOTHING. Pass confirm=true to apply. Tracked changes apply via git's own 3-way check and are REFUSED (nothing applied) if they conflict with the target's current state -- never an overwrite of your edits. Untracked files (new files the run created) are applied ONLY when named in include_untracked, and a name that would overwrite a different existing target file is refused too. Refuses while the run is still active. Does NOT clean up the worktree (run chit_cleanup separately when done) and never deletes receipts. Applied tracked changes land STAGED (git apply --3way), copied untracked files land unstaged. Target defaults to the checkout you LAUNCHED the run from; pass target_cwd to apply elsewhere. A one-shot / in_place run has no managed worktree to apply.",
 		inputSchema: {
 			run_id: z.string().describe("A run id (from chit_start)"),
 			confirm: z
@@ -1784,7 +1784,7 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe(
-					"Where to apply (defaults to the run's own repo -- the usual case). Pass a path only to apply into a different checkout.",
+					"Where to apply (defaults to the checkout you launched the run from -- the usual case). Pass a path only to apply into a different checkout.",
 				),
 		},
 	},
@@ -1841,15 +1841,18 @@ server.registerTool(
 			confirm,
 			includeUntracked: include_untracked,
 		});
-		// git apply --3way writes to the WORKING TREE (unstaged); the copied untracked files are
-		// unstaged too. Tell the operator where the changes landed so they don't have to discover it.
+		// Disclose WHERE the changes landed -- git stages the two kinds differently:
+		//   tracked patch  -> STAGED (git apply --3way implies --index), seen with git diff --cached
+		//   untracked files -> UNSTAGED (a plain cpSync into the work tree), seen with git diff
+		// so a mixed apply is partly staged + partly unstaged; tell the operator both, exactly.
 		const applied = result.applied === true;
 		return jsonResult({
 			run_id,
 			...result,
 			...(applied && {
-				workingTreeState: "unstaged",
-				reviewWith: `cd ${target} && git status && git diff`,
+				trackedState: result.trackedFiles.length > 0 ? "staged" : "none",
+				untrackedState: (result.appliedUntracked?.length ?? 0) > 0 ? "unstaged" : "none",
+				reviewWith: `cd ${target} && git status${result.trackedFiles.length > 0 ? " && git diff --cached" : ""}${(result.appliedUntracked?.length ?? 0) > 0 ? " && git diff" : ""}`,
 			}),
 		});
 	},
