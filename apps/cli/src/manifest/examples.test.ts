@@ -19,7 +19,12 @@ describe("example manifests", () => {
 			readdirSync(EXAMPLES)
 				.filter((file) => file.endsWith(".json"))
 				.sort(),
-		).toEqual(["consult.json", "converge-codex-writer.json", "converge.json"]);
+		).toEqual([
+			"consult.json",
+			"converge-codex-writer.json",
+			"converge-required-checks.json",
+			"converge.json",
+		]);
 	});
 
 	test("consult normalizes to parallel fan-out", () => {
@@ -76,6 +81,25 @@ describe("example manifests", () => {
 		expect(m.participants.reviewer?.permissions?.filesystem).toBe("read_only");
 	});
 
+	test("converge-required-checks declares the loop's chit-executed requiredChecks", () => {
+		const m = parseManifest(loadExample("converge-required-checks"));
+
+		expect(m.id).toBe("converge-required-checks");
+		// Same loop shape + permission roles as converge.json.
+		expect(m.executionOrder).toEqual([["implement"], ["review"], ["out"]]);
+		expect(m.participants.implementer?.permissions?.filesystem).toBe("write");
+		expect(m.participants.reviewer?.permissions?.filesystem).toBe("read_only");
+
+		// The distinguishing feature: chit runs these structured checks itself after a
+		// proceed review. The parser defaults args and omits the unset timeoutMs.
+		expect(m.policy).toEqual({
+			kind: "loop",
+			implementStep: "implement",
+			reviewStep: "review",
+			requiredChecks: [{ command: "bun", args: ["test"], name: "tests" }],
+		});
+	});
+
 	test("every loop example's reviewer prompt teaches the structured checks contract", () => {
 		// The verification gate reads the reviewer's `checks`; a loop example whose
 		// review prompt omits them makes a `proceed` stop needs-decision (checks not_run).
@@ -94,6 +118,7 @@ describe("example manifests", () => {
 		// to carry the contract.
 		expect(loopExamples.map((e) => e.name).sort()).toEqual([
 			"converge-codex-writer.json",
+			"converge-required-checks.json",
 			"converge.json",
 		]);
 		const offenders = loopExamples
