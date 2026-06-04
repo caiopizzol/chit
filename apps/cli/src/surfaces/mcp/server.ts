@@ -1001,6 +1001,44 @@ export function backgroundRunView(job: JobRecord) {
 	};
 }
 
+// --- #85 dispatch helpers (exported for unit tests) ----------------------------
+// The chit_start handler is a closure not drivable in isolation, so the testable
+// contract for the managed-worktree decisions lives in these pure/injectable helpers
+// that the handler calls.
+
+// Resolve a manifest_path to an absolute path against the CALLER cwd, so the manifest
+// is read from where the user pointed -- identically for foreground and background,
+// never re-resolved against a managed worktree (F2).
+export function resolveManifestPathAbsolute(manifestPath: string, callerCwd: string): string {
+	return isAbsolute(manifestPath) ? manifestPath : resolve(callerCwd, manifestPath);
+}
+
+// A loop MAY write iff some participant is not provably read-only. A provably-all-
+// read-only loop writes nothing (no worktree needed); a role-ref whose permission
+// resolves later reads as may-write here, erring toward isolation -- the safe
+// direction (F1).
+export function loopMayWriteFiles(
+	participants: Record<string, { permissions?: { filesystem?: string } }>,
+): boolean {
+	return Object.values(participants).some((p) => p.permissions?.filesystem !== "read_only");
+}
+
+// Decide + open a write-loop's workspace with the ordering the review requires: config
+// loads FIRST (a config error fails before any worktree exists, F3a), THEN a worktree
+// opens only when the loop may write and in_place is off (F1). Deps are injected so the
+// ordering and the isolate/in-place decision are unit-testable without the handler.
+export function planManagedWorkspace<W>(
+	deps: { ensureConfig: () => void; openWorkspace: (inPlace: boolean) => W },
+	args: {
+		participants: Record<string, { permissions?: { filesystem?: string } }>;
+		inPlace: boolean;
+	},
+): W {
+	deps.ensureConfig(); // F3a: before any worktree is created
+	const mayWrite = loopMayWriteFiles(args.participants);
+	return deps.openWorkspace(args.inPlace || !mayWrite);
+}
+
 // Open a run: the single public entry point. The manifest's policy decides the
 // kind (one-shot DAG vs converge loop); `mode` decides where it runs. `task` (no
 // manifest) converges on a slice with the built-in loop manifest.
@@ -1096,7 +1134,7 @@ server.registerTool(
 		let raw: unknown;
 		let manifestAbs: string | undefined;
 		if (manifest_path) {
-			manifestAbs = isAbsolute(manifest_path) ? manifest_path : resolve(runCwd, manifest_path);
+			manifestAbs = resolveManifestPathAbsolute(manifest_path, runCwd);
 			try {
 				raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
 			} catch (e) {
@@ -1133,28 +1171,26 @@ server.registerTool(
 					"a loop run needs a `scope` (both agents keep their thread across iterations)",
 				);
 			}
-			// Load config BEFORE creating any worktree (F3a): a malformed config throws here,
-			// before isolation, so a config error never leaks a just-created worktree (both
-			// the fg prep below and bg launchConvergeJob then hit the memoized cache).
-			try {
-				getConfig();
-			} catch (e) {
-				return errorResult(safeMcpError(e));
-			}
-			// Managed worktree (#85): a WRITE-CAPABLE loop run is isolated in a chit-managed
-			// worktree cut clean off HEAD so its diff is attributable regardless of caller-tree
-			// dirt; in_place opts out. A provably read-only loop (every participant read_only)
-			// writes nothing, so it needs no worktree and runs in place (F1: "read-only runs
-			// unaffected"); an unknown role-ref errs toward isolating (the safe direction). The
-			// run_id is pre-generated so the worktree (chit-run/<run_id>) and the surfaced
+			// Managed worktree (#85): isolate a write-capable loop in a chit-managed worktree
+			// cut clean off HEAD so its diff is attributable regardless of caller-tree dirt.
+			// planManagedWorkspace enforces the review-required order: config loads first (a
+			// config error fails before any worktree, F3a), then a worktree opens only when the
+			// loop may write and in_place is off (F1: a provably read-only loop runs in place).
+			// The run_id is pre-generated so the worktree (chit-run/<run_id>) and the surfaced
 			// run_id match -- it is the jobId (bg) / loopId (fg) below; both run in ws.cwd.
-			const mayWrite = Object.values(manifest.participants).some(
-				(p) => p.permissions?.filesystem !== "read_only",
-			);
 			const runId = crypto.randomUUID();
 			let ws: ReturnType<typeof prepareRunWorkspace>;
 			try {
-				ws = prepareRunWorkspace(realGit, runCwd, { runId, scope, inPlace: in_place || !mayWrite });
+				ws = planManagedWorkspace(
+					{
+						ensureConfig: () => {
+							getConfig();
+						},
+						openWorkspace: (inPlace) =>
+							prepareRunWorkspace(realGit, runCwd, { runId, scope, inPlace }),
+					},
+					{ participants: manifest.participants, inPlace: in_place },
+				);
 			} catch (e) {
 				return errorResult(safeMcpError(e));
 			}
