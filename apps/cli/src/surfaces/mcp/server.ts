@@ -22,7 +22,7 @@
 // its audit_ref. Everything chit owns about a run is reachable from its run_id.
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
 	type LoopRecord,
@@ -1630,35 +1630,61 @@ server.registerTool(
 				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect and stay cleanable). Use the manual \`git worktree remove <path>\` and \`git branch -D <branch>\` commands from that run's earlier chit_status / chit_trace output.`,
 			);
 		}
-		// Terminal-only guard + the run's worktree, per kind. A one-shot run (fg or bg) is
-		// never isolated, so it has no worktree -> the cleanup primitive reports a no-op.
+		// The run's managed worktree (if any) + whether its worker is still live, per kind.
 		let worktreePath: string | undefined;
 		let branch: string | undefined;
+		let workerLive = false;
 		if (resolved.mode === "background") {
-			if (runWaitState(resolved.job, Date.now()) !== "terminal") {
-				return errorResult(
-					`run ${JSON.stringify(run_id)} is still running in the background; chit_cancel it and wait for it to settle before cleaning up.`,
-				);
-			}
-			worktreePath = resolved.job.worktreePath;
-			branch = resolved.job.branch;
+			const job = resolved.job;
+			worktreePath = job.worktreePath;
+			branch = job.branch;
+			// A worker is live unless the job reached a terminal STATE or its process is gone.
+			// Do NOT trust runWaitState/isStale here: a wedged worker with an old heartbeat but a
+			// live pid is "stale" yet still in the worktree -- removing it would corrupt the run.
+			const terminalState =
+				job.state === "completed" || job.state === "failed" || job.state === "cancelled";
+			workerLive = !terminalState && pidAlive(job.pid);
 		} else if (resolved.run.kind === "loop") {
 			const session = resolved.run.session;
-			if (session.terminalStatus === undefined || session.active) {
-				return errorResult(
-					`run ${JSON.stringify(run_id)} is an active foreground loop; finish it or chit_cancel it before cleaning up.`,
-				);
-			}
 			worktreePath = session.worktreePath;
 			branch = session.branch;
+			workerLive = session.terminalStatus === undefined || session.active !== undefined;
 		}
-		let repo = "";
-		if (worktreePath) {
-			try {
-				repo = mainRepoOfWorktree(realGit, worktreePath);
-			} catch (e) {
-				return errorResult(safeMcpError(e));
-			}
+		// No managed worktree (a one-shot or an in_place run) -> nothing to clean, regardless of
+		// state. Report a no-op, never an error (a one-shot has no worktree to protect).
+		if (!worktreePath || !branch) {
+			return jsonResult({
+				run_id,
+				confirmed: confirm,
+				receiptsKept: true,
+				note: "this run has no chit-managed worktree (a one-shot or in_place run); nothing to clean.",
+			});
+		}
+		// There IS a worktree: refuse while the run is still live (an in-flight iteration or a
+		// live background worker) -- cancel + settle first.
+		if (workerLive) {
+			return errorResult(
+				`run ${JSON.stringify(run_id)} is still active; chit_cancel it and wait for it to settle before cleaning up.`,
+			);
+		}
+		// Idempotent: a prior cleanup (or a manual `git worktree remove`) may have already removed
+		// the worktree. Report it cleanly rather than crashing in mainRepoOfWorktree (which runs git
+		// from the worktree dir).
+		if (!existsSync(worktreePath)) {
+			return jsonResult({
+				run_id,
+				confirmed: confirm,
+				worktreePath,
+				branch,
+				receiptsKept: true,
+				note: "the worktree was already removed; nothing to do. Receipts (loop log / audit) are kept.",
+			});
+		}
+		let repo: string;
+		try {
+			repo = mainRepoOfWorktree(realGit, worktreePath);
+		} catch (e) {
+			return errorResult(safeMcpError(e));
 		}
 		const result = cleanupRunWorkspace(realGit, { repo, worktreePath, branch, confirm });
 		return jsonResult({ run_id, ...result });

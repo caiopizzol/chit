@@ -214,6 +214,8 @@ export function removeTaskWorktree(
 // is the worktree itself, but `git worktree remove` must run from the MAIN repo (git refuses
 // to remove the current working tree), so resolve it via the shared git common dir:
 // <main>/.git -> <main>. `--git-common-dir` may be relative to the worktree, so resolve it.
+// Assumes a non-bare main repo (its common dir is <main>/.git) -- always true for chit, whose
+// worktrees are only ever cut from a working checkout (a bare repo has no working tree to run in).
 export function mainRepoOfWorktree(git: GitRunner, worktreePath: string): string {
 	const r = git(["rev-parse", "--git-common-dir"], worktreePath);
 	if (r.code !== 0) {
