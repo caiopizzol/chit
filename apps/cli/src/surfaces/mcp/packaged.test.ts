@@ -51,9 +51,9 @@ describe("packaged chit binary", () => {
 		expect(out).toContain('"tools"');
 	}, 20000);
 
-	// The release-boundary contract: the packaged binary exposes EXACTLY the 15
+	// The release-boundary contract: the packaged binary exposes EXACTLY the 16
 	// unified tools and ZERO of the removed run/converge/job tool names.
-	test("tools/list is exactly the 15 unified tools, with no removed names", async () => {
+	test("tools/list is exactly the 16 unified tools, with no removed names", async () => {
 		const proc = Bun.spawn(["bun", DIST, "mcp"], { stdin: "pipe", stdout: "pipe" });
 		const init = {
 			jsonrpc: "2.0",
@@ -76,6 +76,7 @@ describe("packaged chit binary", () => {
 		const names = [...out.matchAll(/"name":"(chit_[a-z_]+)"/g)].map((m) => m[1] as string);
 		const unique = [...new Set(names)].sort();
 		expect(unique).toEqual([
+			"chit_apply",
 			"chit_audit_list",
 			"chit_audit_show",
 			"chit_batch_advance",

@@ -50,6 +50,7 @@ import {
 import { PlanError } from "../../batches/plan.ts";
 import { BatchStore, BatchStoreError } from "../../batches/store.ts";
 import {
+	applyRunWorkspace,
 	cleanupRunWorkspace,
 	createTaskWorktree,
 	mainRepoOfWorktree,
@@ -1697,6 +1698,100 @@ server.registerTool(
 			}
 		}
 		const result = cleanupRunWorkspace(realGit, { repo, worktreePath, branch, confirm });
+		return jsonResult({ run_id, ...result });
+	},
+);
+
+// Apply a finished run's diff back to a working checkout, by run_id. The single-run bridge
+// from "the agents did the work in a managed worktree" to "it's in my checkout", honoring
+// "never overwrite user changes silently": the tracked patch is gated by git apply --check
+// --3way and refused on conflict; untracked files are applied ONLY when named and never
+// overwrite a differing target. Dry-run-default, terminal-only, NO cleanup coupling.
+// (The resolution + liveness guard mirrors chit_cleanup; a shared resolver is a deferred
+// follow-up so this slice does not refactor the thrice-reviewed cleanup handler.)
+server.registerTool(
+	"chit_apply",
+	{
+		description:
+			"Apply a FINISHED run's changes from its chit-managed worktree back into a working checkout, by run_id. DRY RUN by default: reports the tracked files, whether they apply cleanly, and the untracked candidates -- applies NOTHING. Pass confirm=true to apply. Tracked changes apply via git's own 3-way check and are REFUSED (nothing applied) if they conflict with the target's current state -- never an overwrite of your edits. Untracked files (new files the run created) are applied ONLY when named in include_untracked, and a name that would overwrite a different existing target file is refused too. Refuses while the run is still active. Does NOT clean up the worktree (run chit_cleanup separately when done) and never deletes receipts. Target defaults to the run's own repo; pass target_cwd to apply elsewhere. A one-shot / in_place run has no managed worktree to apply.",
+		inputSchema: {
+			run_id: z.string().describe("A run id (from chit_start)"),
+			confirm: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Apply the changes. Default false = dry run: report what would apply (and whether it applies cleanly), apply nothing.",
+				),
+			include_untracked: z
+				.array(z.string())
+				.default([])
+				.describe(
+					"Untracked files (from the dry run's `untracked` list) to also copy into the target. Default none. A listed file that would overwrite a DIFFERENT existing target file is refused (the whole apply is refused, atomic).",
+				),
+			target_cwd: z
+				.string()
+				.optional()
+				.describe(
+					"Where to apply (defaults to the run's own repo -- the usual case). Pass a path only to apply into a different checkout.",
+				),
+		},
+	},
+	async ({ run_id, confirm, include_untracked, target_cwd }) => {
+		const resolved = runController.resolve(run_id, Date.now());
+		if (!resolved) {
+			return errorResult(
+				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect). Re-run, or apply that run's worktree diff manually.`,
+			);
+		}
+		// The run's managed worktree + base + repo + liveness, per kind (mirrors chit_cleanup; apply
+		// works from the worktree + baseSha, so unlike cleanup it needs no branch).
+		let worktreePath: string | undefined;
+		let baseSha: string | undefined;
+		let storedRepo: string | undefined;
+		let workerLive = false;
+		if (resolved.mode === "background") {
+			const job = resolved.job;
+			worktreePath = job.worktreePath;
+			baseSha = job.baseSha;
+			storedRepo = job.repo;
+			if (job.state === "queued") workerLive = !isStale(job, Date.now());
+			else if (job.state === "running") workerLive = pidAlive(job.pid);
+		} else if (resolved.run.kind === "loop") {
+			const session = resolved.run.session;
+			worktreePath = session.worktreePath;
+			baseSha = session.baseSha;
+			storedRepo = session.repo;
+			workerLive = session.terminalStatus === undefined || session.active !== undefined;
+		}
+		// No managed worktree (a one-shot or an in_place run): nothing to apply -- those edits are
+		// already in the caller's checkout. Clear no-op, not a crash.
+		if (!worktreePath || !baseSha) {
+			return jsonResult({
+				run_id,
+				confirmed: confirm,
+				applied: false,
+				note: "this run has no chit-managed worktree (a one-shot or in_place run); its changes, if any, are already in your checkout -- nothing to apply.",
+			});
+		}
+		// Refuse while the run is still live: its diff is still changing.
+		if (workerLive) {
+			return errorResult(
+				`run ${JSON.stringify(run_id)} is still active; let it finish (or chit_cancel it) before applying -- its diff is not final yet.`,
+			);
+		}
+		const target = target_cwd ? resolve(target_cwd) : storedRepo;
+		if (!target) {
+			return errorResult(
+				`run ${JSON.stringify(run_id)} predates repo tracking; pass target_cwd to say where to apply.`,
+			);
+		}
+		const result = applyRunWorkspace(realGit, {
+			worktreePath,
+			baseSha,
+			target,
+			confirm,
+			includeUntracked: include_untracked,
+		});
 		return jsonResult({ run_id, ...result });
 	},
 );
