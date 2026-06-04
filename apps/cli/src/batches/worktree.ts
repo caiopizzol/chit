@@ -21,7 +21,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 export class WorktreeError extends Error {}
 
@@ -433,38 +433,44 @@ export function applyRunWorkspace(
 	// Untracked-copy PREFLIGHT (ALL checks before ANY mutation, so a copy can never fail mid-apply
 	// and leave a partial result): a requested untracked file is a conflict if copying it would
 	//   - overwrite an existing target file with DIFFERENT content (identical = harmless no-op), or
-	//   - collide with the target's layout: the dst is itself a directory, or a parent path
-	//     component exists as a non-directory (so mkdir would fail after the tracked patch applied), or
-	//   - escape the target tree (a `..` or a symlinked parent resolving outside target).
+	//   - overwrite a directory or a symlink at the dst, or
+	//   - have a parent path component that is NOT a plain directory -- a file (mkdir would fail) OR
+	//     a symlink (could redirect the copy outside the target; lstat so a dangling symlink still
+	//     counts). A name from git ls-files has no `..`, so with every parent a real in-target
+	//     directory the dst is provably contained -- no realpath dance needed.
 	// Only requested files that are real candidates (in the git untracked list) are considered.
 	const requestedUntracked = (opts.includeUntracked ?? []).filter((f) => untracked.includes(f));
 	const untrackedConflicts: string[] = [];
-	const targetReal = existsSync(opts.target) ? realpathSync(opts.target) : opts.target;
+	// lstat WITHOUT following symlinks: a dangling/symlink entry must still register as "present".
+	const lexists = (p: string): ReturnType<typeof lstatSync> | undefined => {
+		try {
+			return lstatSync(p);
+		} catch {
+			return undefined;
+		}
+	};
 	for (const f of requestedUntracked) {
 		const dst = join(opts.target, f);
-		// containment: the dst must stay within the target tree.
-		const rel = relative(targetReal, existsSync(dirname(dst)) ? realpathSync(dirname(dst)) : dst);
-		if (rel === ".." || rel.startsWith(`..${sep}`)) {
-			untrackedConflicts.push(f);
-			continue;
-		}
-		// a parent path component exists as a non-directory -> mkdir would fail.
+		// every parent component between target and dst must be a real directory (not a file, not a
+		// symlink) -- else mkdir fails or the copy escapes, AFTER the tracked patch already applied.
 		let parent = dirname(dst);
-		let collides = false;
-		while (parent.startsWith(opts.target) && parent !== opts.target) {
-			if (existsSync(parent) && !lstatSync(parent).isDirectory()) {
-				collides = true;
+		let badParent = false;
+		while (parent !== opts.target && parent.startsWith(`${opts.target}${sep}`)) {
+			const st = lexists(parent);
+			if (st && (!st.isDirectory() || st.isSymbolicLink())) {
+				badParent = true;
 				break;
 			}
 			parent = dirname(parent);
 		}
-		if (collides) {
+		if (badParent) {
 			untrackedConflicts.push(f);
 			continue;
 		}
-		if (existsSync(dst)) {
-			// a directory at dst, or a file with different content -> conflict.
-			if (lstatSync(dst).isDirectory()) {
+		const st = lexists(dst);
+		if (st) {
+			// a directory or symlink at dst, or a regular file with different content -> conflict.
+			if (st.isDirectory() || st.isSymbolicLink()) {
 				untrackedConflicts.push(f);
 				continue;
 			}

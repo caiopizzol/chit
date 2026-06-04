@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -633,6 +634,47 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 		} finally {
 			teardown();
 			rmSync(nonGit, { recursive: true, force: true });
+		}
+	});
+
+	test("a DANGLING symlink parent in the target refuses atomically (#101 re-review: lstat, not existsSync)", () => {
+		const main = mkdtempSync(join(tmpdir(), "chit-apply-sym-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-apply-symwt-"));
+		try {
+			realGit(["init", "-q"], main);
+			realGit(["config", "user.email", "t@chit.test"], main);
+			realGit(["config", "user.name", "t"], main);
+			writeFileSync(join(main, "f.ts"), "base\n");
+			realGit(["add", "."], main);
+			realGit(["commit", "-qm", "base"], main);
+			const ws = prepareRunWorkspace(realGit, main, {
+				runId: "r-sym",
+				scope: "o",
+				worktreesRoot: root,
+			});
+			const wt = ws.worktreePath;
+			const base = ws.baseSha;
+			if (!wt || !base) return;
+			writeFileSync(join(wt, "f.ts"), "RUN\n");
+			mkdirSync(join(wt, "dir"));
+			writeFileSync(join(wt, "dir", "new.ts"), "x\n");
+			// target has `dir` as a DANGLING symlink (points outside, target missing). existsSync(dir)
+			// is FALSE (follows the dead link); only lstat catches it.
+			symlinkSync("/nonexistent/outside/target", join(main, "dir"));
+
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+				includeUntracked: ["dir/new.ts"],
+			});
+			expect(ap.applied).toBe(false); // refused (symlink parent caught by lstat)
+			expect(ap.untrackedConflicts).toContain("dir/new.ts");
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toBe("base\n"); // tracked NOT applied (atomic)
+		} finally {
+			rmSync(main, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
