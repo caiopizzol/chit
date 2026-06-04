@@ -8,7 +8,7 @@
 // inspects after the batch. Cleanup is a separate, explicit step.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmdirSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -166,8 +166,14 @@ export function prepareRunWorkspace(
 	cleanup?: () => void;
 } {
 	if (opts.inPlace) return { cwd: callerCwd };
-	const repo = repoToplevel(git, callerCwd);
-	const baseSha = resolveBaseSha(git, repo, opts.baseRef ?? "HEAD");
+	// The DURABLE common/main repo (NOT repoToplevel: if the caller runs from a linked worktree,
+	// repoToplevel is that linked checkout, which may later be removed -- cleanup must anchor on
+	// the main repo that owns the shared .git). mainRepoOfWorktree resolves it for both a main-repo
+	// caller and a linked-worktree caller. baseSha still comes from the caller's HEAD (the state
+	// the user expects the run to branch from), resolved from callerCwd; the commit lives in the
+	// shared object store, so the main repo can cut a worktree at it.
+	const repo = mainRepoOfWorktree(git, callerCwd);
+	const baseSha = resolveBaseSha(git, callerCwd, opts.baseRef ?? "HEAD");
 	const { worktreePath, branch } = runWorktree(opts.runId, opts.scope, opts.worktreesRoot);
 	createWorktree(git, repo, worktreePath, branch, baseSha);
 	return {
@@ -175,8 +181,8 @@ export function prepareRunWorkspace(
 		worktreePath,
 		branch,
 		baseSha,
-		// The MAIN repo (recorded so cleanup runs git worktree remove / branch -D from here even
-		// after the worktree dir is gone -- no fragile re-derivation from a missing worktree).
+		// The main repo, recorded so cleanup runs git worktree remove / branch -D from here even
+		// after the worktree dir is gone -- no fragile re-derivation from a missing worktree.
 		repo,
 		// removeTaskWorktree is the generic path+branch remover (force-remove + branch -D),
 		// safe for a run worktree too. Never auto-called: the caller cleans up explicitly.
@@ -233,7 +239,15 @@ export function mainRepoOfWorktree(git: GitRunner, worktreePath: string): string
 			`cannot resolve the main repo for worktree ${JSON.stringify(worktreePath)}: ${gitErr(r)}`,
 		);
 	}
-	return dirname(resolve(worktreePath, r.stdout.trim()));
+	// --git-common-dir is relative for a main repo (".git") but absolute+realpath'd for a linked
+	// worktree; canonicalize so the stored repo is consistent regardless. realpathSync needs the
+	// path to exist (true for a real repo); a fake/scripted path falls back to the joined value.
+	const main = dirname(resolve(worktreePath, r.stdout.trim()));
+	try {
+		return realpathSync(main);
+	} catch {
+		return main;
+	}
 }
 
 export interface RunCleanupResult {

@@ -117,7 +117,7 @@ describe("prepareRunWorkspace", () => {
 		const root = mkdtempSync(join(tmpdir(), "chit-rw-"));
 		try {
 			const { git, calls } = scriptedGit([
-				{ match: (a) => a.includes("--show-toplevel"), result: ok("/repo\n") },
+				{ match: (a) => a.includes("--git-common-dir"), result: ok("/repo/.git\n") }, // mainRepoOfWorktree -> /repo
 				{ match: (a) => a.includes("--verify"), result: fail("no such branch") }, // branch absent -> creatable
 				{ match: (a) => a[0] === "rev-parse", result: ok("basesha\n") }, // resolveBaseSha(HEAD)
 				{ match: (a) => a[0] === "worktree" && a[1] === "add", result: ok() },
@@ -128,6 +128,7 @@ describe("prepareRunWorkspace", () => {
 				worktreesRoot: root,
 			});
 			expect(ws.baseSha).toBe("basesha");
+			expect(ws.repo).toBe("/repo"); // the durable main repo (from --git-common-dir), not the caller cwd
 			expect(ws.branch).toBe("chit-run/run-1/owner-readout");
 			expect(ws.worktreePath).toBe(join(root, "run-1", "owner-readout"));
 			expect(ws.cwd).toBe(join(root, "run-1", "owner-readout")); // the run executes IN the worktree
@@ -142,8 +143,8 @@ describe("prepareRunWorkspace", () => {
 
 	test("propagates a baseSha resolution failure without creating anything", () => {
 		const { git } = scriptedGit([
-			{ match: (a) => a.includes("--show-toplevel"), result: ok("/repo\n") },
-			{ match: (a) => a[0] === "rev-parse", result: fail("unknown revision") },
+			{ match: (a) => a.includes("--git-common-dir"), result: ok("/repo/.git\n") },
+			{ match: (a) => a[0] === "rev-parse", result: fail("unknown revision") }, // resolveBaseSha(HEAD) fails
 		]);
 		expect(() =>
 			prepareRunWorkspace(git, "/repo", { runId: "r", scope: "s", worktreesRoot: "/wt" }),
@@ -320,6 +321,41 @@ describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
 			ws.cleanup?.();
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("records the MAIN repo even when the caller is itself a linked worktree (#98 review)", () => {
+		const main = mkdtempSync(join(tmpdir(), "chit-main-"));
+		const linkedParent = mkdtempSync(join(tmpdir(), "chit-linked-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-wt4-"));
+		const linked = join(linkedParent, "wt");
+		try {
+			realGit(["init", "-q"], main);
+			realGit(["config", "user.email", "t@chit.test"], main);
+			realGit(["config", "user.name", "t"], main);
+			writeFileSync(join(main, "f.ts"), "base\n");
+			realGit(["add", "."], main);
+			realGit(["commit", "-qm", "base"], main);
+			// The CALLER runs chit from a LINKED worktree of `main`, not main itself.
+			realGit(["worktree", "add", "--detach", "-q", linked], main);
+
+			const ws = prepareRunWorkspace(realGit, linked, {
+				runId: "run-linked",
+				scope: "owner",
+				worktreesRoot: root,
+			});
+			// repo must be the DURABLE main repo, NOT the linked caller checkout (which could be
+			// removed later, breaking cleanup).
+			expect(ws.repo).toBe(realpathSync(main));
+			expect(ws.repo).not.toBe(realpathSync(linked));
+			ws.cleanup?.();
+		} finally {
+			try {
+				realGit(["worktree", "remove", "--force", linked], main);
+			} catch {}
+			rmSync(main, { recursive: true, force: true });
+			rmSync(linkedParent, { recursive: true, force: true });
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
