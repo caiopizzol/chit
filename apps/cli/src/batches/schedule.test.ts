@@ -94,6 +94,17 @@ describe("deriveBatchStatus", () => {
 	test("failed when a task failed and nothing else moves", () => {
 		expect(deriveBatchStatus(states("failed"))).toBe("failed");
 	});
+	test("a failed task outranks a review_ready sibling: mixed -> needs_human (verdict integrity)", () => {
+		// THE regression: a failed task must not be masked by a review_ready sibling. The
+		// headline must never read "ready" while a task is unresolved; mixed terminal states
+		// are needs_human so the operator decides what to do with the failure, while clean
+		// review_ready siblings stay reviewable per-task.
+		expect(deriveBatchStatus(states("failed", "review_ready"))).toBe("needs_human");
+		expect(deriveBatchStatus(states("review_ready", "failed"))).toBe("needs_human"); // order-independent
+		expect(deriveBatchStatus(states("failed", "needs_attention", "review_ready"))).toBe(
+			"needs_human",
+		);
+	});
 	test("needs_human when a pending task is stuck behind a failed dep", () => {
 		const c = batch([task("a", { status: "failed" }), task("b", { dependencies: ["a"] })]);
 		expect(deriveBatchStatus(c)).toBe("needs_human");

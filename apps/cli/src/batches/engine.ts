@@ -554,6 +554,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	const startableBlocked = c.tasks.filter((t) => isStartable(t, c)).length;
 	const blocked = c.tasks.filter((t) => isBlocked(t, c)).length;
 	const needsAttention = c.tasks.filter((t) => t.status === "needs_attention").length;
+	const failed = c.tasks.filter((t) => t.status === "failed").length;
 
 	// Every terminal state shares one close-out instruction. Naming the next tool
 	// call matters: an agent follows nextAction literally, and the old bare "review
@@ -573,12 +574,17 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 		nextAction = `batch failed; one or more tasks broke during execution (a dead worker, a worktree error, or a thrown run -- see each task's status/error). ${reviewAndRetire}`;
 	} else if (c.status === "needs_human") {
 		// needs_human means a human must decide: a task that finished without converging
-		// clean (needs_attention), and/or a pending task blocked by an unfinished dep.
-		// Name whichever applies, and keep clean review_ready siblings reviewable.
+		// clean (needs_attention), a task that failed in execution while a sibling is
+		// review_ready, and/or a pending task blocked by an unfinished dep. Name whichever
+		// applies, and keep clean review_ready siblings reviewable.
 		const parts: string[] = [];
 		if (needsAttention > 0)
 			parts.push(
 				`${needsAttention} task(s) need attention: the run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect each one's worktree (changedFiles) and receipt, then decide: fix and start a fresh batch, rerun with a higher budget, or discard.`,
+			);
+		if (failed > 0)
+			parts.push(
+				`${failed} task(s) failed during execution (a dead worker, a worktree error, a reviewer/adapter timeout, or a thrown run -- see each one's status/error); inspect each failed task's worktree directly (its changedFiles may be empty if it broke mid-review, so the work can still be there) and its receipt before deciding to rerun or discard.`,
 			);
 		if (blocked > 0)
 			parts.push(

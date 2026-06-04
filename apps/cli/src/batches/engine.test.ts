@@ -311,6 +311,24 @@ describe("needs_attention surfacing", () => {
 		expect(view.nextAction).toContain("review_ready tasks");
 	});
 
+	test("a failed task does not let the headline read ready_for_review; nextAction names it", () => {
+		// Regression for the masking bug: task A fails (e.g. a reviewer/adapter timeout) while
+		// task B converges. The batch must NOT headline ready_for_review (verdict integrity) --
+		// it is needs_human, the failed task is named, and the clean sibling stays reviewable.
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a"), task("b")], maxParallel: 2 });
+		const ja = present(jobs.launched[0], "launched a").jobId;
+		const jb = present(jobs.launched[1], "launched b").jobId;
+		jobs.finish(ja, { state: "failed", failure: "codex exec timed out after 900000ms" });
+		jobs.finish(jb, { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1");
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(view.status).toBe("needs_human"); // NOT ready_for_review (the masking bug)
+		expect(view.tasks.find((t) => t.id === "a")?.status).toBe("failed");
+		expect(view.tasks.find((t) => t.id === "b")?.status).toBe("review_ready");
+		expect(view.nextAction).toContain("failed during execution");
+		expect(view.nextAction).toContain("review_ready tasks");
+	});
+
 	test("summarizeBatch counts needs_attention separately from failed", () => {
 		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
 		jobs.finish(firstJob(), { stopStatus: "blocked" });

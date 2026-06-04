@@ -69,13 +69,13 @@ export function selectRunnable(batch: Batch): BatchTask[] {
 }
 
 // The batch status derived from its tasks. running while anything is active or
-// startable; needs_human when stuck (pending tasks blocked by an unfinished dep) OR
-// any terminal task needs_attention (it did not converge clean -- this outranks
-// review_ready so the headline never reads "ready" while a task is unresolved);
-// ready_for_review when every task is terminal, at least one is review_ready, and
-// none needs attention; failed if a task failed and nothing else can move; cancelled
-// when all terminal tasks are cancelled/failed with no review_ready and a cancel
-// happened (the engine sets cancelled explicitly).
+// startable; needs_human when stuck (pending tasks blocked by an unfinished dep), any
+// terminal task needs_attention (did not converge clean), OR a task failed while a
+// sibling is review_ready -- an unresolved task (needs_attention or failed) must never
+// let the headline read "ready" (verdict integrity); ready_for_review when every task
+// is terminal, at least one is review_ready, and none failed or needs attention; failed
+// when a task failed and nothing is reviewable; cancelled when all terminal tasks are
+// cancelled/failed with no review_ready and a cancel happened (the engine sets it).
 export function deriveBatchStatus(batch: Batch): BatchStatus {
 	const tasks = batch.tasks;
 	if (tasks.length === 0) return "ready_for_review";
@@ -91,11 +91,14 @@ export function deriveBatchStatus(batch: Batch): BatchStatus {
 	const anyFailed = tasks.some((t) => t.status === "failed");
 
 	if (stuckPending) return "needs_human"; // pending with unsatisfiable deps
-	// A terminal task that did not converge clean needs a human decision; that
-	// outranks review_ready for the headline (verdict integrity: never read "ready"
-	// while any task is unresolved). review_ready siblings stay reviewable per-task.
+	// Verdict integrity: the headline must never read "ready" while any task is
+	// unresolved. needs_attention (did not converge clean) and failed (broke in
+	// execution) are BOTH unresolved, so both outrank review_ready. A failed task mixed
+	// with a review_ready sibling is needs_human (a human decides what to do with the
+	// failure; the clean siblings stay reviewable per-task); an all-failed terminal set
+	// with nothing reviewable is "failed".
 	if (anyNeedsAttention) return "needs_human";
+	if (anyFailed) return anyReviewReady ? "needs_human" : "failed";
 	if (anyReviewReady) return "ready_for_review";
-	if (anyFailed) return "failed";
 	return "ready_for_review"; // all terminal: none review_ready/needs_attention/failed (e.g. all cancelled)
 }
