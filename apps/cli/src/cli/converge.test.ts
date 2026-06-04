@@ -3,7 +3,12 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type NormalizedRegistry, parseManifest, resolveManifest } from "@chit-run/core";
+import {
+	type NormalizedRegistry,
+	parseManifest,
+	type RequiredCheck,
+	resolveManifest,
+} from "@chit-run/core";
 
 // buildExecute / makeAuditedExecute / validateConvergeManifest / resolveLoopPolicy
 // consume a ResolvedManifest now (the type-safety invariant). These fixtures are
@@ -1338,5 +1343,97 @@ describe("stopReasonFor (the one wording source for every loop driver)", () => {
 		expect(stopReasonFor("cancelled", { detail: "mid-iteration (signal)" })).toBe(
 			"cancelled mid-iteration (signal)",
 		);
+	});
+});
+
+describe("chit-executed required checks (authoritative over the reviewer's self-report)", () => {
+	// Real binaries (like the runner's own tests): true/false/sleep. The reviewer's
+	// self-reported checks in reviewJson are IGNORED on the chit path -- chit runs its own.
+	const PASS: RequiredCheck = { command: "true", args: [] };
+	const FAIL: RequiredCheck = { command: "false", args: [] };
+	const BLOCK: RequiredCheck = { command: "sleep", args: ["5"], timeoutMs: 50 };
+
+	const run = async (
+		loopId: string,
+		review: string,
+		requiredChecks: RequiredCheck[],
+		maxIterations = 1,
+	) => {
+		const { execute } = fakeExecute([review]);
+		const res = await convergeLoop({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations,
+			loopId,
+			execute,
+			requiredChecks,
+		});
+		return { status: res.status, it: firstIteration(loopId) };
+	};
+
+	test("reviewer proceed + all chit checks pass -> converged, verificationSource chit", async () => {
+		const { status, it } = await run("C1", reviewJson("proceed"), [PASS]);
+		expect(status).toBe("converged");
+		expect(it.verification).toBe("passed");
+		expect(it.verificationSource).toBe("chit");
+		expect(it.decision).toBe("proceed");
+	});
+
+	test("reviewer proceed + a failed chit check -> the decision diverges to revise", async () => {
+		// maxIterations 1: the iteration is a revise (no stop), so the budget runs out and
+		// the LOOP stops max-iterations -- but the ITERATION records decision revise.
+		const { status, it } = await run("C2", reviewJson("proceed"), [PASS, FAIL]);
+		expect(it.verdict).toBe("proceed"); // the reviewer approved
+		expect(it.decision).toBe("revise"); // chit overrode it: a real declared check failed
+		expect(it.verification).toBe("failed");
+		expect(it.verificationSource).toBe("chit");
+		expect(status).toBe("max-iterations");
+	});
+
+	test("reviewer proceed + a blocked chit check (none failed) -> needs-decision, decision stays proceed", async () => {
+		const { status, it } = await run("C3", reviewJson("proceed"), [PASS, BLOCK]);
+		expect(it.verification).toBe("blocked");
+		// The reviewer approved and chit could not verify -- NOT a reviewer block.
+		expect(it.decision).toBe("proceed");
+		expect(status).toBe("needs-decision");
+	});
+
+	test("failed dominates blocked: one failed + one blocked -> revise", async () => {
+		const { status, it } = await run("C4", reviewJson("proceed"), [FAIL, BLOCK]);
+		expect(it.verification).toBe("failed");
+		expect(it.decision).toBe("revise");
+		expect(status).toBe("max-iterations");
+	});
+
+	test("reviewer revise -> chit checks are NOT run; verification stays reviewer-sourced", async () => {
+		// Even though the declared check WOULD fail, a revise verdict skips chit checks.
+		const { it } = await run("C5", reviewJson("revise", { checks: [] }), [FAIL]);
+		expect(it.decision).toBe("revise");
+		expect(it.verificationSource).toBe("reviewer");
+	});
+
+	test("reviewer block -> chit checks are NOT run; blocked, reviewer-sourced", async () => {
+		const { status, it } = await run("C6", reviewJson("block"), [PASS]);
+		expect(status).toBe("blocked");
+		expect(it.verificationSource).toBe("reviewer");
+	});
+
+	test("a failed chit check feeds its failures into the next prior_review (failure first)", async () => {
+		const { execute, calls } = fakeExecute([reviewJson("proceed"), reviewJson("proceed")]);
+		await convergeLoop({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 2,
+			loopId: "C7",
+			execute,
+			requiredChecks: [FAIL],
+		});
+		expect(calls[0]?.prior_review).toBe(""); // iteration 1 has no prior review
+		const fed = calls[1]?.prior_review ?? "";
+		expect(fed).toContain("These checks failed:"); // chit's failure summary...
+		expect(fed).toContain("Reviewer notes:"); // ...then the reviewer's text
+		expect(fed.indexOf("These checks failed:")).toBeLessThan(fed.indexOf("Reviewer notes:"));
 	});
 });

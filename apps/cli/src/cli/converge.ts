@@ -30,10 +30,12 @@ import {
 	type NormalizedRegistry,
 	type NormalizedRole,
 	parseManifest,
+	type RequiredCheck,
 	type ResolvedManifest,
 	resolveManifest,
 	resolveParticipantSnapshots,
 	type Verification,
+	type VerificationSource,
 } from "@chit-run/core";
 import { buildAdapter } from "../adapters/factory.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
@@ -41,6 +43,11 @@ import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
 import { loadConfig } from "../config/load.ts";
 import { appendIteration, startLoop, stopLoop } from "../loops/log-store.ts";
+import {
+	type CheckResult,
+	checkResultsToLoopChecks,
+	runRequiredChecks,
+} from "../loops/required-checks.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
@@ -85,10 +92,16 @@ const REVIEW_STEP_ID = "review";
 export interface LoopSteps {
 	implementStep: string;
 	reviewStep: string;
+	// chit-executed verification commands from the loop policy, when declared.
+	requiredChecks?: RequiredCheck[];
 }
 export function resolveLoopPolicy(manifest: ResolvedManifest): LoopSteps {
 	if (manifest.policy.kind === "loop") {
-		return { implementStep: manifest.policy.implementStep, reviewStep: manifest.policy.reviewStep };
+		return {
+			implementStep: manifest.policy.implementStep,
+			reviewStep: manifest.policy.reviewStep,
+			...(manifest.policy.requiredChecks && { requiredChecks: manifest.policy.requiredChecks }),
+		};
 	}
 	return { implementStep: IMPLEMENT_STEP_ID, reviewStep: REVIEW_STEP_ID };
 }
@@ -138,6 +151,8 @@ export interface ConvergeLoopOptions {
 	// to the converge constants when absent.
 	implementStep?: string;
 	reviewStep?: string;
+	// chit-executed verification commands (from the loop policy), when declared.
+	requiredChecks?: RequiredCheck[];
 }
 
 export interface ConvergeResult {
@@ -364,6 +379,9 @@ export interface ConvergeIterationContext {
 	// that don't yet resolve a manifest's loop policy keep their prior behavior.
 	implementStep?: string;
 	reviewStep?: string;
+	// chit-executed verification: when present AND the reviewer returns proceed, chit
+	// runs these in cwd and their result is authoritative over the reviewer's report.
+	requiredChecks?: RequiredCheck[];
 	// When present, threaded to execute so the iteration's manifest run can be
 	// cancelled mid-flight. Absent for the CLI driver (uncancellable, as before).
 	signal?: AbortSignal;
@@ -474,23 +492,30 @@ export async function runConvergeIteration(
 	const review = parseReview(reviewText);
 	const usage = sumTraceUsage(result.trace);
 	const { changedFiles, workspaceWarnings } = gitWorkspace(ctx.cwd);
+
+	// Decide the iteration. Reviewer-sourced by default; when the reviewer returns
+	// proceed AND the loop declares requiredChecks, chit runs them itself and their
+	// result is authoritative (and can override the proceed to revise). See
+	// decideIteration for the full matrix.
+	const outcome = await decideIteration(review, reviewText, ctx);
+
 	appendIteration(ctx.cwd, ctx.loopId, {
 		implementSummary: capSummary(result.outputs[implementStep] ?? ""),
 		changedFiles,
 		workspaceWarnings,
 		checksRun: review.checksRun,
-		// verification is ALWAYS recorded: it is the rollup the loop gates `converged`
-		// on, and chit_trace surfaces it as the reason a run stopped needs-decision. The
-		// not_run (no checks) and blocked (only-malformed checks) cases are exactly the
-		// ones that stop needs-decision, so they MUST carry the rollup or the trace
-		// hides why. The checks list is recorded when the reviewer reported any; an
-		// empty list adds nothing the rollup does not already say.
-		...(review.checks.length > 0 && { checks: review.checks }),
-		verification: review.verification,
+		// verification is ALWAYS recorded (the rollup the loop gates `converged` on, and
+		// chit_trace surfaces as the reason a run stopped); the checks list when there
+		// are any. verificationSource says whether it is the reviewer's self-report or
+		// chit-executed (ground truth).
+		...(outcome.checks.length > 0 && { checks: outcome.checks }),
+		verification: outcome.verification,
+		verificationSource: outcome.verificationSource,
 		verdict: review.verdict,
 		findingCount: review.findingCount,
-		// Autonomous driver: it follows the reviewer, so decision == verdict.
-		decision: review.verdict,
+		// The decision can DIVERGE from the verdict: a proceed whose chit-run checks
+		// failed is recorded as a revise (chit sent it back).
+		decision: outcome.decision,
 		// The check (review) step's own duration, not the whole-run wall time.
 		checkDurationMs: reviewDurationMs(result.trace, reviewStep),
 		// Total token/cost across the run's calls (implement + review).
@@ -499,33 +524,118 @@ export async function runConvergeIteration(
 		...(result.auditRunId && { auditRef: result.auditRunId }),
 	});
 
-	// The gate: a proceed verdict converges clean ONLY when verification passed.
-	// proceed + failed/blocked/not_run -> needs-decision (the reviewer approved but
-	// the checks do not back it, so a human must decide -- chit never reports success
-	// more strongly than the evidence supports). block -> blocked; revise leaves it
-	// undefined so the caller threads reviewText back in and runs another round.
-	const stopStatus: LoopStopStatus | undefined =
-		review.verdict === "proceed"
-			? review.verification === "passed"
-				? "converged"
-				: "needs-decision"
-			: review.verdict === "block"
-				? "blocked"
-				: undefined;
-
 	return {
 		ok: true,
 		verdict: review.verdict,
 		findingCount: review.findingCount,
 		checksRun: review.checksRun,
-		decision: review.verdict,
+		decision: outcome.decision,
 		changedFiles,
 		workspaceWarnings,
 		...(usage && { usage }),
 		...(result.auditRunId && { auditRunId: result.auditRunId }),
-		reviewText,
-		...(stopStatus && { stopStatus }),
+		// The next iteration's prior_review: the reviewer's text, with chit's check
+		// failures prepended when chit overrode a proceed to revise.
+		reviewText: outcome.priorReview,
+		...(outcome.stopStatus && { stopStatus: outcome.stopStatus }),
 	};
+}
+
+// The outcome of one iteration: what to record + what the loop does next. The
+// decision can diverge from the reviewer's verdict (a proceed whose chit-run checks
+// failed becomes a revise). priorReview is what the NEXT iteration sees.
+interface IterationOutcome {
+	checks: LoopCheck[];
+	verification: Verification;
+	verificationSource: VerificationSource;
+	decision: LoopVerdict;
+	stopStatus?: LoopStopStatus;
+	priorReview: string;
+}
+
+// Decide an iteration from the reviewer's verdict and -- only when the reviewer
+// returned proceed and the loop declares requiredChecks -- chit's own check results,
+// which are AUTHORITATIVE over the reviewer's self-report. block/revise are the
+// reviewer's call alone (the loop already cannot converge), so chit does not run
+// checks there. On a proceed with declared checks:
+//   all passed           -> converged (decision stays proceed)
+//   any failed           -> revise (decision diverges; failures fed to prior_review;
+//                           failed dominates a co-occurring blocked, as it is actionable)
+//   blocked, none failed  -> needs-decision; decision stays proceed (the reviewer
+//                           approved -- chit simply could not verify, NOT a reviewer block)
+async function decideIteration(
+	review: ParsedReview,
+	reviewText: string,
+	ctx: ConvergeIterationContext,
+): Promise<IterationOutcome> {
+	const required = ctx.requiredChecks;
+	if (review.verdict !== "proceed" || !required || required.length === 0) {
+		// Reviewer-sourced (Stage 1): the verdict is the decision and the reviewer's own
+		// checks are the verification.
+		const stopStatus: LoopStopStatus | undefined =
+			review.verdict === "proceed"
+				? review.verification === "passed"
+					? "converged"
+					: "needs-decision"
+				: review.verdict === "block"
+					? "blocked"
+					: undefined;
+		return {
+			checks: review.checks,
+			verification: review.verification,
+			verificationSource: "reviewer",
+			decision: review.verdict,
+			...(stopStatus && { stopStatus }),
+			priorReview: reviewText,
+		};
+	}
+
+	// Reviewer proceed + declared checks: chit runs them; their rollup is the truth.
+	const results = await runRequiredChecks(required, {
+		cwd: ctx.cwd,
+		...(ctx.signal && { signal: ctx.signal }),
+	});
+	const checks = checkResultsToLoopChecks(results);
+	// deriveVerification orders failed before blocked, so failed dominates a co-occurring
+	// blocked exactly as intended. malformed is false: chit's own results are never that.
+	const verification = deriveVerification(checks, false);
+	const base = { checks, verification, verificationSource: "chit" as const };
+
+	if (verification === "failed") {
+		// Actionable: override the reviewer's proceed to revise and feed the failures
+		// back so the implementer fixes them.
+		return {
+			...base,
+			decision: "revise",
+			priorReview: `${checkFailureFeedback(results)}\n\nReviewer notes:\n${reviewText}`,
+		};
+	}
+	if (verification === "passed") {
+		return { ...base, decision: "proceed", stopStatus: "converged", priorReview: reviewText };
+	}
+	// blocked (or, defensively, not_run): chit could not verify. Keep the reviewer's
+	// proceed -- do NOT rewrite their judgment -- but stop for a human to decide.
+	return { ...base, decision: "proceed", stopStatus: "needs-decision", priorReview: reviewText };
+}
+
+// The compact, structured summary of FAILED chit checks (the actionable ones),
+// prepended to the next prior_review so the implementer fixes the failures the
+// reviewer's proceed missed. Blocked checks are not listed: they are not something the
+// implementer fixes by editing code.
+function checkFailureFeedback(results: CheckResult[]): string {
+	const lines = results
+		.filter((r) => r.status === "failed")
+		.map((r) => {
+			const head = `- ${r.command}${r.exitCode !== undefined ? `: exit ${r.exitCode}` : ""}`;
+			const body = r.output
+				? r.output
+						.split("\n")
+						.map((l) => `  ${l}`)
+						.join("\n")
+				: "";
+			return body ? `${head}\n${body}` : head;
+		});
+	return `Chit ran required checks after the reviewer returned proceed. These checks failed:\n${lines.join("\n")}`;
 }
 
 // The single source of truth for a loop's terminal stop reason, shared by every
@@ -586,6 +696,7 @@ export async function convergeLoop(opts: ConvergeLoopOptions): Promise<ConvergeR
 				execute: opts.execute,
 				...(opts.implementStep && { implementStep: opts.implementStep }),
 				...(opts.reviewStep && { reviewStep: opts.reviewStep }),
+				...(opts.requiredChecks && { requiredChecks: opts.requiredChecks }),
 			});
 		} catch (e) {
 			if (e instanceof ConvergeExecuteError) {
@@ -996,6 +1107,7 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 			execute: buildExecute(manifest, registry, parsed.scope, parsed.cwd),
 			implementStep: loopSteps.implementStep,
 			reviewStep: loopSteps.reviewStep,
+			...(loopSteps.requiredChecks && { requiredChecks: loopSteps.requiredChecks }),
 		});
 	} catch (e) {
 		// Any failure from the loop exits cleanly with a `chit converge:` message

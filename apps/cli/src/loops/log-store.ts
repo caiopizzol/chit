@@ -40,6 +40,7 @@ import {
 	parseLoopLog,
 	serializeLoopRecord,
 	type Verification,
+	type VerificationSource,
 	validateLoopLog,
 } from "@chit-run/core";
 import { loopLogDir, repoKey, repoRoot } from "./location.ts";
@@ -134,6 +135,8 @@ export interface AppendOptions {
 	// written together (verification is meaningless without the checks it summarizes).
 	checks?: LoopCheck[];
 	verification?: Verification;
+	// Where verification came from: the reviewer's self-report or chit-executed checks.
+	verificationSource?: VerificationSource;
 	verdict: LoopVerdict;
 	findingCount: number;
 	decision: LoopVerdict;
@@ -180,6 +183,7 @@ export function appendIteration(
 	// (so a needs-decision run shows why); record it whenever provided. The checks list
 	// is recorded when the reviewer reported any (an empty list adds nothing new).
 	if (opts.verification !== undefined) rec.verification = opts.verification;
+	if (opts.verificationSource !== undefined) rec.verificationSource = opts.verificationSource;
 	if (opts.checks !== undefined && opts.checks.length > 0) rec.checks = opts.checks;
 	if (opts.auditRef !== undefined) rec.auditRef = opts.auditRef;
 	if (opts.usage !== undefined) rec.usage = opts.usage;
