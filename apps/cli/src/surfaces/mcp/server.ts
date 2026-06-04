@@ -50,7 +50,9 @@ import {
 import { PlanError } from "../../batches/plan.ts";
 import { BatchStore, BatchStoreError } from "../../batches/store.ts";
 import {
+	cleanupRunWorkspace,
 	createTaskWorktree,
+	mainRepoOfWorktree,
 	prepareRunWorkspace,
 	realGit,
 	removeTaskWorktree,
@@ -1600,6 +1602,66 @@ server.registerTool(
 			cancelledSteps: running,
 			run: oneShotRunView(run),
 		});
+	},
+);
+
+// Retire a finished run's managed worktree by run_id. The single-run analog of
+// chit_batch_cleanup: dry-run-default, terminal-only, receipts always kept, keyed by
+// run_id ONLY (no path input -- agents never pass arbitrary filesystem paths).
+server.registerTool(
+	"chit_cleanup",
+	{
+		description:
+			"Retire a FINISHED run's chit-managed worktree + branch, by run_id. DRY RUN by default (reports what it would remove, removes nothing); pass confirm=true to actually remove. Refuses while the run is still active (an in-flight foreground iteration or a live background worker) -- chit_cancel it and let it settle first. NEVER deletes receipts: the loop log + audit survive, so chit_trace / chit_audit_show still work afterward. A run that executed in_place (or a one-shot, which is never isolated) has no managed worktree -- a no-op. Keyed by run_id only. If run_id no longer resolves (a foreground run from a closed session -- foreground runs are in-memory only), use the manual `git worktree remove` / `git branch -D` commands from that run's earlier status/trace.",
+		inputSchema: {
+			run_id: z.string().describe("A run id (from chit_start)"),
+			confirm: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Remove the worktree + branch. Default false = dry run: report what would be removed, remove nothing.",
+				),
+		},
+	},
+	async ({ run_id, confirm }) => {
+		const resolved = runController.resolve(run_id, Date.now());
+		if (!resolved) {
+			return errorResult(
+				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect and stay cleanable). Use the manual \`git worktree remove <path>\` and \`git branch -D <branch>\` commands from that run's earlier chit_status / chit_trace output.`,
+			);
+		}
+		// Terminal-only guard + the run's worktree, per kind. A one-shot run (fg or bg) is
+		// never isolated, so it has no worktree -> the cleanup primitive reports a no-op.
+		let worktreePath: string | undefined;
+		let branch: string | undefined;
+		if (resolved.mode === "background") {
+			if (runWaitState(resolved.job, Date.now()) !== "terminal") {
+				return errorResult(
+					`run ${JSON.stringify(run_id)} is still running in the background; chit_cancel it and wait for it to settle before cleaning up.`,
+				);
+			}
+			worktreePath = resolved.job.worktreePath;
+			branch = resolved.job.branch;
+		} else if (resolved.run.kind === "loop") {
+			const session = resolved.run.session;
+			if (session.terminalStatus === undefined || session.active) {
+				return errorResult(
+					`run ${JSON.stringify(run_id)} is an active foreground loop; finish it or chit_cancel it before cleaning up.`,
+				);
+			}
+			worktreePath = session.worktreePath;
+			branch = session.branch;
+		}
+		let repo = "";
+		if (worktreePath) {
+			try {
+				repo = mainRepoOfWorktree(realGit, worktreePath);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
+		}
+		const result = cleanupRunWorkspace(realGit, { repo, worktreePath, branch, confirm });
+		return jsonResult({ run_id, ...result });
 	},
 );
 

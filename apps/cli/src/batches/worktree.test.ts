@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +14,7 @@ import {
 	createTaskWorktree,
 	type GitResult,
 	type GitRunner,
+	mainRepoOfWorktree,
 	prepareRunWorkspace,
 	realGit,
 	resolveBaseSha,
@@ -228,6 +236,12 @@ describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
 			});
 			// the worktree + its <runId> parent exist
 			expect(realGit(["worktree", "list"], repo).stdout).toContain(ws.worktreePath ?? "MISSING");
+			// mainRepoOfWorktree resolves the worktree back to the main repo (so cleanup can run
+			// `git worktree remove` from there, not from the worktree being removed).
+			const wt = ws.worktreePath;
+			expect(wt).toBeTruthy();
+			// git reports the realpath (macOS /tmp -> /private/tmp); compare realpaths.
+			if (wt) expect(mainRepoOfWorktree(realGit, wt)).toBe(realpathSync(repo));
 
 			const r = cleanupRunWorkspace(realGit, {
 				repo,

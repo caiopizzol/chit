@@ -10,7 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export class WorktreeError extends Error {}
 
@@ -208,6 +208,20 @@ export function removeTaskWorktree(
 		// non-empty (sibling worktrees still present) or already removed -- leave it
 	}
 	return { ok: true };
+}
+
+// The MAIN repo a linked worktree belongs to. A worktree's own `rev-parse --show-toplevel`
+// is the worktree itself, but `git worktree remove` must run from the MAIN repo (git refuses
+// to remove the current working tree), so resolve it via the shared git common dir:
+// <main>/.git -> <main>. `--git-common-dir` may be relative to the worktree, so resolve it.
+export function mainRepoOfWorktree(git: GitRunner, worktreePath: string): string {
+	const r = git(["rev-parse", "--git-common-dir"], worktreePath);
+	if (r.code !== 0) {
+		throw new WorktreeError(
+			`cannot resolve the main repo for worktree ${JSON.stringify(worktreePath)}: ${gitErr(r)}`,
+		);
+	}
+	return dirname(resolve(worktreePath, r.stdout.trim()));
 }
 
 export interface RunCleanupResult {

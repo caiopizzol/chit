@@ -85,6 +85,7 @@ describe("packaged chit binary", () => {
 			"chit_batch_start",
 			"chit_batch_status",
 			"chit_cancel",
+			"chit_cleanup",
 			"chit_next",
 			"chit_start",
 			"chit_status",
