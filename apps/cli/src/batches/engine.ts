@@ -518,6 +518,17 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 			if (job) {
 				view.runState = job.state === "running" && deps.isStale(job) ? "stale" : job.state;
 				if (job.phase !== undefined) view.phase = job.phase;
+				// Surface the live cached signal from the most recent completed iteration, so a
+				// mid-loop task (or one whose job has finished but is not yet reconciled into
+				// t.result) shows its verdict + verification instead of a blank. Reconcile later
+				// copies the final values from t.result; until then the live job is the source.
+				// A batch task is always a loop job; narrow for the loop-only cached fields.
+				if (job.policy === "loop") {
+					if (job.lastVerdict !== undefined) view.lastVerdict = job.lastVerdict;
+					if (job.lastVerification !== undefined) view.lastVerification = job.lastVerification;
+					if (job.lastVerificationSource !== undefined)
+						view.lastVerificationSource = job.lastVerificationSource;
+				}
 			}
 		}
 		if (t.result) {

@@ -578,7 +578,11 @@ function launchConvergeJob(p: {
 		task: p.task,
 		...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
 		maxIterations: p.maxIterations,
-		...(effectiveChecks && { requiredChecks: effectiveChecks }),
+		// Always persist the resolved checks -- even "none", recorded as [] -- so the
+		// worker runs exactly this snapshot and never re-resolves the manifest for a new
+		// job. [] is treated as reviewer-sourced downstream; the worker's manifest fallback
+		// is then reachable only by legacy records that predate this field.
+		requiredChecks: effectiveChecks ?? [],
 		allowUnenforced: p.allowUnenforced,
 		state: "queued",
 		createdAt: new Date().toISOString(),

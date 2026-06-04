@@ -364,6 +364,57 @@ describe("required checks cascade (task beats batch, reaching the snapshot bound
 	});
 });
 
+describe("live verification surfacing (before reconcile)", () => {
+	// The worker caches lastVerdict/lastVerification/lastVerificationSource on the job each
+	// iteration. chit_batch_status must show them while the task is still "running" -- it
+	// should not wait for chit_batch_advance to copy the final values into t.result.
+	test("a mid-loop running task surfaces the live job's last verdict + verification", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		const jobId = firstJob();
+		const j = present(jobs.jobs.get(jobId), "launched job");
+		// One iteration done, still looping (a revise round chit verified itself).
+		jobs.jobs.set(jobId, {
+			...j,
+			state: "running",
+			iterationsCompleted: 1,
+			lastVerdict: "revise",
+			lastVerification: "failed",
+			lastVerificationSource: "chit",
+		});
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		const t = present(
+			view.tasks.find((x) => x.id === "a"),
+			"task a view",
+		);
+		expect(t.status).toBe("running");
+		expect(t.lastVerdict).toBe("revise");
+		expect(t.lastVerification).toBe("failed");
+		expect(t.lastVerificationSource).toBe("chit");
+	});
+
+	test("a finished-but-unreconciled task still surfaces the job's verification", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		// The job finished and cached its verification, but advance has not reconciled it,
+		// so the task is still "running" with no t.result. The view must show what the job
+		// recorded, not a blank.
+		jobs.finish(firstJob(), {
+			lastVerdict: "proceed",
+			lastVerification: "passed",
+			lastVerificationSource: "chit",
+			stopStatus: "converged",
+		});
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		const t = present(
+			view.tasks.find((x) => x.id === "a"),
+			"task a view",
+		);
+		expect(t.status).toBe("running"); // not yet reconciled
+		expect(t.runState).toBe("completed"); // the live job is done
+		expect(t.lastVerification).toBe("passed");
+		expect(t.lastVerificationSource).toBe("chit");
+	});
+});
+
 describe("cancelBatch", () => {
 	test("cancels active jobs and marks the batch cancelled", () => {
 		startBatch(store, deps, {

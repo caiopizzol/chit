@@ -521,4 +521,14 @@ describe("required checks via the background worker (chit-executed)", () => {
 			verificationSource: "chit",
 		});
 	});
+
+	test("an empty ([]) snapshot stays reviewer-sourced, never falling back to the manifest", async () => {
+		// [] is the snapshot for "no checks declared at launch" (launchConvergeJob persists
+		// it), NOT a legacy gap. The worker must honor it: run no chit checks and keep the
+		// reviewer's verification. The manifest's FAIL must never run -- if the worker fell
+		// back, the iteration would be chit-sourced and failed instead of reviewer-sourced.
+		seedJob({ maxIterations: 1, requiredChecks: [] });
+		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [FAIL]));
+		expect(firstIter()).toMatchObject({ verificationSource: "reviewer" });
+	});
 });
