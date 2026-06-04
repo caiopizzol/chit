@@ -76,6 +76,37 @@ Audit logs and adapter calls always see this shape (the `Role:` label is the fix
 
 A pure string template. No agent call. Output is bound to `steps.<id>.output`.
 
+## Execution policy
+
+An optional top-level `policy` decides what a run *does*. Absent, it defaults to one-shot, so every existing manifest is unchanged.
+
+```json
+{
+  "policy": { "kind": "one-shot" }
+}
+```
+
+- **one-shot** (the default) runs the step DAG once.
+- **loop** is the converge pattern: an implementer step and a reviewer step run in turn, and chit reads the reviewer's `proceed | revise | block` verdict each round. `implementStep` and `reviewStep` name the call steps; `maxIterations` is the budget (default 3).
+
+```jsonc
+{
+  "policy": {
+    "kind": "loop",
+    "implementStep": "implement",
+    "reviewStep": "review",
+    "maxIterations": 3,
+    // chit runs these ITSELF after a proceed review (ground truth, not the reviewer's
+    // word). All pass -> converged; any fails -> revise; one cannot run -> needs-decision.
+    "requiredChecks": [
+      { "command": "bun", "args": ["test"], "name": "tests", "timeoutMs": 120000 }
+    ]
+  }
+}
+```
+
+`requiredChecks` is **structured, not a shell string**: `{ command, args?, name?, timeoutMs? }`, spawned as argv with no shell (a metacharacter in an arg is a literal argument). `command` is required; `args` defaults to `[]`; `name` is a display label; `timeoutMs` defaults to 120000. No `env`, `cwd`, or shell strings -- this is chit-executed verification, not a CI language. When declared, chit's result is authoritative over the reviewer's self-reported checks. A run can override these per invocation (`chit_start`'s `required_checks`, or a batch's task/batch-level checks) without editing the manifest; see the [MCP reference](/docs/mcp#chit-executed-verification).
+
 ## Templates
 
 Mustache-style references only. No filters, conditionals, or loops in the template language.

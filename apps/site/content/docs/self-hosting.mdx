@@ -55,6 +55,8 @@ Treat the reviewer as an independent second opinion, not ground truth: verify ea
    ```
 
    Either way it loops implement and check to the reviewer's verdict (`proceed` converges only when its verification passed -- the reviewer reports structured `checks`; a `proceed` with no passing checks stops as `needs-decision` for you to judge. `block` stops, anything else revises and retries up to the budget, default 3; an unparseable verdict is treated as `block`, never an implicit proceed). It records the loop under chit's state dir (keyed by repo, not in the working tree) and audits each iteration by default.
+
+   To make that verification ground truth instead of the reviewer's word, declare `policy.requiredChecks` in the manifest (or pass `required_checks` to `chit_start` over MCP): chit then runs those commands itself after a `proceed` review, as argv with no shell, and only a clean pass converges. A failure sends the loop back to revise; a check that cannot run stops as `needs-decision` for you. See [Execution policy](/docs/manifest-schema#execution-policy).
 3. Inspect what happened: `chit_trace` (or read the loop log) lists each iteration's `auditRef`. Open a transcript with `chit_audit_show` over MCP (pass that `audit_ref`), or with `chit audit show <run-id>` from the terminal (the CLI takes the audit run id that `chit audit list` prints). The transcript carries the prompts, outputs, live adapter events, usage, and the recorded per-participant config.
 4. Run the final gates yourself (see above). The reviewer could not.
 5. Checkpoint with the human. Push only on explicit approval.

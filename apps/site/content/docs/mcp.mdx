@@ -76,8 +76,29 @@ Open a run and return its `run_id`. Inputs:
 - `audit` - persist a full audit transcript (prompts/outputs/usage as blobs), default `false` since blobs can hold secrets. Background runs are always audited.
 - `max_iterations` - loop iteration budget, default `3` (loop runs only).
 - `allow_unenforced_permissions` - run even when a declared permission cannot be enforced (emits warnings), default `false` (such a manifest is otherwise refused).
+- `required_checks?` - verification commands chit runs **itself** after a `proceed` review (loop runs only), each `{ command, args?, name?, timeoutMs? }`. They REPLACE the manifest's `policy.requiredChecks` for this run (never merge), so a default-loop `task` run gets real verification without a custom manifest. Rejected for a one-shot run. See [Chit-executed verification](#chit-executed-verification).
 
-Returns the run view with the initial ready set (one-shot) or the open loop (loop). Errors: unreadable or invalid manifest, a one-shot manifest given a `task`, a loop run with no `scope`, unknown agent, enforcement gap without the flag.
+Returns the run view with the initial ready set (one-shot) or the open loop (loop). Errors: unreadable or invalid manifest, a one-shot manifest given a `task`, a loop run with no `scope`, unknown agent, enforcement gap without the flag, `required_checks` on a one-shot run.
+
+### Chit-executed verification
+
+A loop's verification can be the reviewer's self-report (advisory) or commands **chit runs itself** (ground truth). Declare the latter and chit stops taking the reviewer's word on whether the work actually passes.
+
+- **chit does not choose checks.** You declare them; chit runs exactly those, nothing inferred.
+- **Run as argv, no shell.** Each check is `{ command, args?, name?, timeoutMs? }`, spawned directly: a metacharacter in an arg is a literal argument, never interpreted. No `env`, `cwd`, or shell strings.
+- **The gate** (only after a `proceed` review; `block`/`revise` skip it). chit runs the declared checks in the run's cwd: all **passed** -> converged; any **failed** -> the loop **revises**, with the failing checks fed into the next iteration's prior_review; a check that could not run (blocked/timed out) with none failed -> **needs-decision** for a human.
+- **The record is honest.** Each iteration carries `verification` + `verificationSource` (`"chit"` or `"reviewer"`). When the source is `chit`, `checks` / `verification` / `verificationSource` are the authoritative signal -- not the reviewer's `checksRun` prose. `chit_status` and `chit_trace` surface them.
+
+You can declare checks at several levels; the **closest-declared wins, never merged** (an explicit `[]` overrides a lower level away):
+
+| where | field | beats |
+| --- | --- | --- |
+| `chit_start` | `required_checks` | the manifest |
+| `chit_batch_start`, per task | `requiredChecks` | batch + manifest |
+| `chit_batch_start`, top level | `required_checks` | the manifest |
+| manifest `policy` | `requiredChecks` | (the fallback) |
+
+The field NAME follows each surface's convention: snake_case `required_checks` at an MCP tool's top level; camelCase `requiredChecks` on the manifest policy and on a batch **task** object (which is already camelCase, beside `manifestPath`). The shape is identical everywhere.
 
 ### chit_next
 
@@ -127,7 +148,7 @@ You hand chit a reviewed task graph; chit runs it. Each task declares `claimedPa
 
 ### chit_batch_start
 
-Plan the graph, create worktrees, launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{ id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath? }`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`. `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). Returns the batch overview (see status).
+Plan the graph, create worktrees, launch the initial runnable wave, return immediately. Inputs: `tasks` (each `{ id, title, body, dependencies?, claimedPaths?, allowPathOverlap?, manifestPath?, requiredChecks? }`), `cwd?`, `max_parallel?` (default 2), `base_branch?` (default HEAD), `manifest_path?`, `max_iterations?`, `required_checks?` (batch-level, applied to any task without its own). `claimedPaths` is required per task unless `allowPathOverlap` is set (which makes the task run alone). A task's `requiredChecks` beat the batch-level `required_checks`, which beat the manifest's -- see [Chit-executed verification](#chit-executed-verification). Returns the batch overview (see status).
 
 ### chit_batch_list
 
