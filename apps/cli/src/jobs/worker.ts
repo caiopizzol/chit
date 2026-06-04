@@ -301,6 +301,9 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 					execute: resolved.execute,
 					implementStep: resolved.loopSteps.implementStep,
 					reviewStep: resolved.loopSteps.reviewStep,
+					...(resolved.loopSteps.requiredChecks && {
+						requiredChecks: resolved.loopSteps.requiredChecks,
+					}),
 					signal: controller.signal,
 					onTrace: (e: TraceEvent) => {
 						if (e.type === "step.started" && e.stepId === resolved.loopSteps.implementStep)

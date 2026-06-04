@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LoopIterationRecord, LoopStopRecord } from "@chit-run/core";
+import type { LoopIterationRecord, LoopStopRecord, RequiredCheck } from "@chit-run/core";
 import type { ConvergeExecute } from "../../cli/converge.ts";
 import { readLoop } from "../../loops/log-store.ts";
 import {
@@ -416,5 +416,54 @@ describe("loop policy: non-default step ids (Stage 2)", () => {
 		// implementSummary from outputs["build"]; checkDuration from the "check" step.
 		expect(it?.implementSummary).toContain("built the slice");
 		expect(it?.checkDurationMs).toBe(777);
+	});
+});
+
+describe("required checks via runNextIteration (chit-executed, the MCP driver)", () => {
+	const PASS: RequiredCheck = { command: "true", args: [] };
+	const FAIL: RequiredCheck = { command: "false", args: [] };
+	const BLOCK: RequiredCheck = { command: "sleep", args: ["5"], timeoutMs: 50 };
+
+	const startWithChecks = (execute: ConvergeExecute, requiredChecks: RequiredCheck[]) =>
+		startConvergeSession({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			execute,
+			loopId: "L1",
+			loopSteps: { implementStep: "implement", reviewStep: "review", requiredChecks },
+		});
+
+	test("proceed + passing checks -> converged via chit (verificationSource chit)", async () => {
+		const session = startWithChecks(scriptedExecute([reviewJson("proceed")]), [PASS]);
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.stopStatus).toBe("converged");
+		const it = iterations("L1")[0];
+		expect(it?.verification).toBe("passed");
+		expect(it?.verificationSource).toBe("chit");
+	});
+
+	test("proceed + a failed check -> the iteration is a revise (no stop, decision diverges)", async () => {
+		const session = startWithChecks(
+			scriptedExecute([reviewJson("proceed"), reviewJson("proceed")]),
+			[FAIL],
+		);
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.stopStatus).toBeUndefined(); // revise -> the loop continues
+		const it = iterations("L1")[0];
+		expect(it?.decision).toBe("revise");
+		expect(it?.verification).toBe("failed");
+		expect(it?.verificationSource).toBe("chit");
+	});
+
+	test("proceed + a blocked-only check -> needs-decision", async () => {
+		const session = startWithChecks(scriptedExecute([reviewJson("proceed")]), [BLOCK]);
+		const r = await runNextIteration(session);
+		if (r.kind !== "iteration") throw new Error("expected iteration");
+		expect(r.stopStatus).toBe("needs-decision");
+		expect(iterations("L1")[0]?.verification).toBe("blocked");
 	});
 });

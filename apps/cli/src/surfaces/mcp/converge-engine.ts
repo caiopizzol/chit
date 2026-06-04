@@ -12,7 +12,13 @@
 // (the audited execute boundary, the prior_review to thread forward, and the
 // live AbortController for an in-flight iteration).
 
-import type { AdapterUsage, LoopRecord, LoopStopStatus, LoopVerdict } from "@chit-run/core";
+import type {
+	AdapterUsage,
+	LoopRecord,
+	LoopStopStatus,
+	LoopVerdict,
+	RequiredCheck,
+} from "@chit-run/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
@@ -39,6 +45,8 @@ export interface ConvergeSession {
 	// so each iteration reads the right outputs even for a non-default-named loop.
 	implementStep: string;
 	reviewStep: string;
+	// chit-executed verification commands resolved from the loop policy, when declared.
+	requiredChecks?: RequiredCheck[];
 	// Count of COMPLETED (appended) iterations. The next iteration is this + 1.
 	iteration: number;
 	// The last review text, threaded into the next iteration as prior_review.
@@ -97,6 +105,7 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		execute: opts.execute,
 		implementStep: opts.loopSteps?.implementStep ?? "implement",
 		reviewStep: opts.loopSteps?.reviewStep ?? "review",
+		...(opts.loopSteps?.requiredChecks && { requiredChecks: opts.loopSteps.requiredChecks }),
 		iteration: 0,
 		priorReview: "",
 		auditRefs: [],
@@ -191,6 +200,7 @@ export async function runNextIteration(
 				execute: session.execute,
 				implementStep: session.implementStep,
 				reviewStep: session.reviewStep,
+				...(session.requiredChecks && { requiredChecks: session.requiredChecks }),
 				signal: controller.signal,
 			});
 		} catch (e) {

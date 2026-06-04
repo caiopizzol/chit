@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LoopVerdict } from "@chit-run/core";
+import type { LoopVerdict, RequiredCheck } from "@chit-run/core";
 import type { ConvergeExecute } from "../cli/converge.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import { JobStore } from "./store.ts";
@@ -454,5 +454,52 @@ describe("background one-shot worker", () => {
 		await runJobWorker("os1", dep); // second sees non-queued, never runs
 		expect(runs).toBe(1);
 		expect(store.get("os1")?.state).toBe("completed");
+	});
+});
+
+describe("required checks via the background worker (chit-executed)", () => {
+	const PASS: RequiredCheck = { command: "true", args: [] };
+	const FAIL: RequiredCheck = { command: "false", args: [] };
+	const BLOCK: RequiredCheck = { command: "sleep", args: ["5"], timeoutMs: 50 };
+
+	const depsWithChecks = (
+		execute: ConvergeExecute,
+		requiredChecks: RequiredCheck[],
+	): JobWorkerDeps => ({
+		jobStore: store,
+		resolveExecute: () => ({
+			ok: true as const,
+			execute,
+			loopSteps: { implementStep: "implement", reviewStep: "review", requiredChecks },
+		}),
+		installSignalHandlers: false,
+		heartbeatMs: 1_000_000,
+		now: () => 1000,
+	});
+
+	const firstIter = () => readLoop(cwd, "j1").find((r) => r.type === "iteration");
+
+	test("proceed + passing checks -> completed converged via chit", async () => {
+		seedJob();
+		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [PASS]));
+		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "converged" });
+		expect(firstIter()).toMatchObject({ verification: "passed", verificationSource: "chit" });
+	});
+
+	test("proceed + a failed check -> revise loop to max-iterations (decision revise recorded)", async () => {
+		seedJob({ maxIterations: 1 });
+		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [FAIL]));
+		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "max-iterations" });
+		expect(firstIter()).toMatchObject({
+			decision: "revise",
+			verification: "failed",
+			verificationSource: "chit",
+		});
+	});
+
+	test("proceed + a blocked-only check -> needs-decision", async () => {
+		seedJob();
+		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [BLOCK]));
+		expect(store.get("j1")).toMatchObject({ state: "completed", stopStatus: "needs-decision" });
 	});
 });

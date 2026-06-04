@@ -7,6 +7,7 @@ import {
 	type NormalizedRegistry,
 	parseManifest,
 	type RequiredCheck,
+	type ResolvedManifest,
 	resolveManifest,
 } from "@chit-run/core";
 
@@ -1435,5 +1436,20 @@ describe("chit-executed required checks (authoritative over the reviewer's self-
 		expect(fed).toContain("These checks failed:"); // chit's failure summary...
 		expect(fed).toContain("Reviewer notes:"); // ...then the reviewer's text
 		expect(fed.indexOf("These checks failed:")).toBeLessThan(fed.indexOf("Reviewer notes:"));
+	});
+
+	test("resolveLoopPolicy threads requiredChecks from the manifest policy (not hardcoded)", () => {
+		// Proves the checks come FROM the policy via resolveLoopPolicy (the path every
+		// driver uses), not from test setup: a loop policy declaring requiredChecks
+		// resolves to loopSteps carrying them.
+		const steps = resolveLoopPolicy({
+			policy: {
+				kind: "loop",
+				implementStep: "implement",
+				reviewStep: "review",
+				requiredChecks: [PASS, FAIL],
+			},
+		} as ResolvedManifest);
+		expect(steps.requiredChecks).toEqual([PASS, FAIL]);
 	});
 });
