@@ -40,6 +40,11 @@ export interface ConvergeSession {
 	loopId: string;
 	scope: string;
 	cwd: string;
+	// Managed-worktree fields (#85): set when this run is isolated in a chit-managed
+	// worktree (cwd IS the worktree path). Recorded for surfacing; absent for in_place runs.
+	worktreePath?: string;
+	branch?: string;
+	baseSha?: string;
 	task: string;
 	maxIterations: number;
 	execute: ConvergeExecute;
@@ -82,6 +87,8 @@ export interface StartConvergeOptions {
 	maxIterations: number;
 	loopId?: string;
 	force?: boolean;
+	// A chit-managed worktree this run executes in (cwd is already the worktree path).
+	worktree?: { worktreePath: string; branch: string; baseSha: string };
 	execute: ConvergeExecute;
 	// The manifest's resolved loop steps (from prepareConvergeExecute). Defaults to
 	// the converge constants when omitted, so callers that don't yet resolve a
@@ -106,6 +113,11 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		loopId,
 		scope: opts.scope,
 		cwd: opts.cwd,
+		...(opts.worktree && {
+			worktreePath: opts.worktree.worktreePath,
+			branch: opts.worktree.branch,
+			baseSha: opts.worktree.baseSha,
+		}),
 		task: opts.task,
 		maxIterations: opts.maxIterations,
 		execute: opts.execute,

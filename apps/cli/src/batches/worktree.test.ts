@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
 	type GitResult,
 	type GitRunner,
 	prepareRunWorkspace,
+	realGit,
 	resolveBaseSha,
 	runWorktree,
 	taskWorktree,
@@ -138,5 +139,47 @@ describe("prepareRunWorkspace", () => {
 		expect(() =>
 			prepareRunWorkspace(git, "/repo", { runId: "r", scope: "s", worktreesRoot: "/wt" }),
 		).toThrow(WorktreeError);
+	});
+});
+
+describe("prepareRunWorkspace isolation (real git): the #85 attribution fix", () => {
+	test("the managed worktree is clean off baseSha even when the caller tree is dirty", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-repo-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-wt-"));
+		try {
+			// A real repo with one committed file = baseSha.
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "chit test"], repo);
+			writeFileSync(join(repo, "tracked.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			// DIRTY the caller checkout: an uncommitted edit + an untracked file -- the noise
+			// that pollutes an in-place run's changedFiles and the reviewer's HEAD diff.
+			writeFileSync(join(repo, "tracked.ts"), "DIRTY EDIT\n");
+			writeFileSync(join(repo, "untracked.ts"), "noise\n");
+
+			const ws = prepareRunWorkspace(realGit, repo, {
+				runId: "run-iso",
+				scope: "owner",
+				worktreesRoot: root,
+			});
+
+			// The worktree is cut clean off baseSha: NONE of the caller's dirt is present.
+			expect(realGit(["status", "--porcelain"], ws.cwd).stdout.trim()).toBe("");
+			expect(readFileSync(join(ws.cwd, "tracked.ts"), "utf8")).toBe("base\n"); // base, not "DIRTY EDIT"
+
+			// A run editing inside the worktree shows ONLY its own change -- the caller's
+			// dirty tracked edit and untracked file never leak in. THIS is the bug #85 fixes:
+			// changedFiles (computed from this worktree) is attributable to the run.
+			writeFileSync(join(ws.cwd, "tracked.ts"), "run edit\n");
+			const changed = realGit(["status", "--porcelain"], ws.cwd).stdout;
+			expect(changed).toContain("tracked.ts");
+			expect(changed).not.toContain("untracked.ts");
+			ws.cleanup?.();
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
