@@ -143,6 +143,36 @@ describe("runRequiredCheck", () => {
 		expect(r.output).toBe("ERR");
 	});
 
+	test("stdout's trailing whitespace is internal when stderr follows (combine, then trim)", async () => {
+		// stdout ends in a newline, then stderr has content. In the combined output that
+		// newline is INTERNAL, so it must survive -- matching boundedTail(stdout + stderr),
+		// not a per-stream trim that would record "OUTERR".
+		const r = await runRequiredCheck(
+			{ command: "sh", args: ["-c", 'printf "OUT\\n"; printf ERR >&2; exit 1'] },
+			{ cwd: CWD },
+		);
+		expect(r.status).toBe("failed");
+		expect(r.output).toBe("OUT\nERR");
+	});
+
+	test("whitespace between stdout and stderr content counts toward truncation", async () => {
+		// "A", far more than MAX newlines, then stderr "B". The newlines are internal (B
+		// follows), so the combined output is truncated and ends at the real tail (B) with a
+		// marker -- not the bare "AB".
+		const r = await runRequiredCheck(
+			{
+				command: "sh",
+				args: [
+					"-c",
+					'printf A; i=0; while [ $i -lt 3000 ]; do printf "\\n"; i=$((i+1)); done; printf B >&2',
+				],
+			},
+			{ cwd: CWD },
+		);
+		expect(r.output).toContain("truncated");
+		expect(r.output.endsWith("B")).toBe(true);
+	});
+
 	test("output is bounded to a tail (does not balloon the loop log)", async () => {
 		// seq floods ~1MB of stdout; the result keeps only a bounded tail.
 		const r = await runRequiredCheck({ command: "seq", args: ["1", "200000"] }, { cwd: CWD });

@@ -54,7 +54,7 @@ const DRAIN_GRACE_MS = 100;
 // path can take the tail-so-far without waiting for EOF.
 function streamBoundedTail(stream: ReadableStream<Uint8Array>): {
 	done: Promise<void>;
-	read: () => string;
+	full: () => string;
 	truncated: () => boolean;
 	cancel: () => void;
 } {
@@ -101,7 +101,10 @@ function streamBoundedTail(stream: ReadableStream<Uint8Array>): {
 	})();
 	return {
 		done,
-		read: () => tail,
+		// The stream's bounded output INCLUDING its own trailing whitespace. Trailing-vs-
+		// internal is decided by the COMBINER (stdout's trailing whitespace is internal when
+		// stderr has content), so this stream cannot trim it away on its own.
+		full: () => tail + pendingWs,
 		truncated: () => dropped,
 		cancel: () => {
 			void reader.cancel().catch(() => {});
@@ -109,21 +112,21 @@ function streamBoundedTail(stream: ReadableStream<Uint8Array>): {
 	};
 }
 
-// Combine the two bounded tails into the recorded output: trailing whitespace trimmed, a
-// truncation marker prepended when either stream dropped content (or the combined tail
-// still exceeds the cap). Same recorded shape as before, but bounded as it streamed.
+// Combine the two bounded streams into the recorded output, reproducing the old
+// boundedTail(stdout + stderr): concatenate FIRST -- stdout's trailing whitespace is
+// internal once stderr has content -- then trim the true trailing whitespace and keep the
+// last MAX chars. Memory stays bounded because each stream already capped its contribution.
+// The per-stream `truncated` flag still marks the case where a stream dropped content while
+// streaming even though the trimmed combination fits (e.g. a huge log with a short tail).
 function combineOutput(
-	out: { read: () => string; truncated: () => boolean },
-	err: { read: () => string; truncated: () => boolean },
+	out: { full: () => string; truncated: () => boolean },
+	err: { full: () => string; truncated: () => boolean },
 ): string {
-	let text = `${out.read()}${err.read()}`;
-	let truncated = out.truncated() || err.truncated();
-	if (text.length > MAX_OUTPUT_CHARS) {
-		text = text.slice(text.length - MAX_OUTPUT_CHARS);
-		truncated = true;
+	const trimmed = `${out.full()}${err.full()}`.trimEnd();
+	if (trimmed.length > MAX_OUTPUT_CHARS) {
+		return `...(output truncated to last ${MAX_OUTPUT_CHARS} chars)\n${trimmed.slice(trimmed.length - MAX_OUTPUT_CHARS)}`;
 	}
-	const trimmed = text.trimEnd();
-	return truncated
+	return out.truncated() || err.truncated()
 		? `...(output truncated to last ${MAX_OUTPUT_CHARS} chars)\n${trimmed}`
 		: trimmed;
 }
