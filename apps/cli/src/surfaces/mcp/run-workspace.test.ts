@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { isAbsolute, join } from "node:path";
-import { loopMayWriteFiles, planManagedWorkspace, resolveManifestPathAbsolute } from "./server.ts";
+import type { ResolvedRun } from "./controller.ts";
+import {
+	loopMayWriteFiles,
+	planManagedWorkspace,
+	resolveManifestPathAbsolute,
+	resolveRunWorkspace,
+} from "./server.ts";
 
 // The chit_start managed-worktree dispatch (#85) is a closure inside registerTool,
 // not drivable without an MCP transport. These pin its decision logic, extracted into
@@ -81,5 +87,79 @@ describe("planManagedWorkspace: ordering + isolate decision (F1 + F3a)", () => {
 			),
 		).toThrow("bad config");
 		expect(opened).toBe(false); // the worktree was never created
+	});
+});
+
+describe("resolveRunWorkspace: shared run->worktree metadata + liveness (chit_cleanup + chit_apply)", () => {
+	const NOW = 1_000;
+	// Deps the helper injects: by default the process is alive and nothing is stale, so a
+	// queued/running worker reads live -- each test overrides only what it exercises.
+	const deps = (over: { isStale?: boolean; pidAlive?: boolean } = {}) => ({
+		isStale: () => over.isStale ?? false,
+		pidAlive: () => over.pidAlive ?? true,
+		now: NOW,
+	});
+	const meta = { worktreePath: "/wt", branch: "chit/x", baseSha: "abc123", repo: "/repo" };
+	// Minimal ResolvedRun shapes -- only the fields the helper reads.
+	const bgJob = (state: string, extra: Record<string, unknown> = {}) =>
+		({ mode: "background", job: { ...meta, state, pid: 42, ...extra } }) as unknown as ResolvedRun;
+	const fgLoop = (session: Record<string, unknown>) =>
+		({
+			mode: "foreground",
+			run: { kind: "loop", session: { ...meta, ...session } },
+		}) as unknown as ResolvedRun;
+	const oneShot = () =>
+		({ mode: "foreground", run: { kind: "one-shot", run: {} } }) as unknown as ResolvedRun;
+
+	test("background: returns all four metadata fields off the job", () => {
+		const r = resolveRunWorkspace(bgJob("completed"), deps());
+		expect(r).toMatchObject(meta);
+	});
+
+	test("background queued: live unless stale-queued", () => {
+		expect(resolveRunWorkspace(bgJob("queued"), deps({ isStale: false })).workerLive).toBe(true);
+		expect(resolveRunWorkspace(bgJob("queued"), deps({ isStale: true })).workerLive).toBe(false);
+	});
+
+	test("background running: live iff the pid is alive (NOT via isStale)", () => {
+		// stale heartbeat but a live pid -> still live (removing it would corrupt the run).
+		expect(
+			resolveRunWorkspace(bgJob("running"), deps({ pidAlive: true, isStale: true })).workerLive,
+		).toBe(true);
+		expect(resolveRunWorkspace(bgJob("running"), deps({ pidAlive: false })).workerLive).toBe(false);
+	});
+
+	test("background terminal (completed/failed/cancelled): not live", () => {
+		for (const state of ["completed", "failed", "cancelled"]) {
+			expect(resolveRunWorkspace(bgJob(state), deps({ pidAlive: true })).workerLive).toBe(false);
+		}
+	});
+
+	test("foreground loop: returns metadata off the session", () => {
+		const r = resolveRunWorkspace(fgLoop({ terminalStatus: "passed" }), deps());
+		expect(r).toMatchObject(meta);
+	});
+
+	test("foreground loop active (no terminalStatus, or active set): live", () => {
+		expect(resolveRunWorkspace(fgLoop({}), deps()).workerLive).toBe(true);
+		expect(
+			resolveRunWorkspace(fgLoop({ terminalStatus: "passed", active: {} }), deps()).workerLive,
+		).toBe(true);
+	});
+
+	test("foreground loop terminal (terminalStatus set, no active): not live", () => {
+		expect(
+			resolveRunWorkspace(fgLoop({ terminalStatus: "passed", active: undefined }), deps())
+				.workerLive,
+		).toBe(false);
+	});
+
+	test("one-shot / foreground non-loop: no worktree, never live", () => {
+		const r = resolveRunWorkspace(oneShot(), deps({ pidAlive: true }));
+		expect(r.worktreePath).toBeUndefined();
+		expect(r.branch).toBeUndefined();
+		expect(r.baseSha).toBeUndefined();
+		expect(r.repo).toBeUndefined();
+		expect(r.workerLive).toBe(false);
 	});
 });

@@ -1042,6 +1042,63 @@ export function planManagedWorkspace<W>(
 	return deps.openWorkspace(args.inPlace || !mayWrite);
 }
 
+// Resolve a run's managed-worktree metadata + worker liveness from an ALREADY-resolved
+// ResolvedRun -- the one block chit_cleanup and chit_apply share. It takes the resolved
+// value (not the run_id) on purpose: the two handlers print DIFFERENT not-found messages,
+// so each keeps its own `if (!resolved)` guard and calls this only after it succeeds. It
+// returns EVERY field either caller might want -- cleanup uses branch, apply uses baseSha,
+// both use worktreePath/repo/workerLive -- and each picks what it needs. Liveness deps
+// (isStale, pidAlive, now) are injected so the per-kind rules are unit-testable without the
+// handler. A one-shot / foreground non-loop run has no managed worktree: all fields
+// undefined, workerLive false.
+export function resolveRunWorkspace(
+	resolved: ResolvedRun,
+	deps: {
+		isStale: (job: JobRecord, now: number) => boolean;
+		pidAlive: (pid: number | undefined) => boolean;
+		now: number;
+	},
+): {
+	worktreePath?: string;
+	branch?: string;
+	baseSha?: string;
+	repo?: string;
+	workerLive: boolean;
+} {
+	if (resolved.mode === "background") {
+		const job = resolved.job;
+		// A worker is live unless we can prove it is gone. Per state:
+		//   queued  -> the worker is spawning into the worktree (it has no pid yet); live
+		//              UNLESS stale-queued (the spawn never produced a pid within the window).
+		//   running -> live iff the process is actually alive. Do NOT trust isStale here: a
+		//              wedged worker with an old heartbeat but a live pid is "stale" yet still
+		//              in the worktree -- removing it would corrupt the run.
+		//   completed/failed/cancelled -> terminal, safe.
+		let workerLive = false;
+		if (job.state === "queued") workerLive = !deps.isStale(job, deps.now);
+		else if (job.state === "running") workerLive = deps.pidAlive(job.pid);
+		return {
+			worktreePath: job.worktreePath,
+			branch: job.branch,
+			baseSha: job.baseSha,
+			repo: job.repo,
+			workerLive,
+		};
+	}
+	if (resolved.run.kind === "loop") {
+		const session = resolved.run.session;
+		return {
+			worktreePath: session.worktreePath,
+			branch: session.branch,
+			baseSha: session.baseSha,
+			repo: session.repo,
+			workerLive: session.terminalStatus === undefined || session.active !== undefined,
+		};
+	}
+	// one-shot / foreground non-loop: no managed worktree to protect, nothing live to guard.
+	return { workerLive: false };
+}
+
 // Open a run: the single public entry point. The manifest's policy decides the
 // kind (one-shot DAG vs converge loop); `mode` decides where it runs. `task` (no
 // manifest) converges on a slice with the built-in loop manifest.
@@ -1636,32 +1693,18 @@ server.registerTool(
 				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect and stay cleanable). Use the manual \`git worktree remove <path>\` and \`git branch -D <branch>\` commands from that run's earlier chit_status / chit_trace output.`,
 			);
 		}
-		// The run's managed worktree (if any) + whether its worker is still live, per kind.
-		let worktreePath: string | undefined;
-		let branch: string | undefined;
-		let storedRepo: string | undefined;
-		let workerLive = false;
-		if (resolved.mode === "background") {
-			const job = resolved.job;
-			worktreePath = job.worktreePath;
-			branch = job.branch;
-			storedRepo = job.repo;
-			// A worker is live unless we can prove it is gone. Per state:
-			//   queued  -> the worker is spawning into the worktree (it has no pid yet); live
-			//              UNLESS stale-queued (the spawn never produced a pid within the window).
-			//   running -> live iff the process is actually alive. Do NOT trust isStale here: a
-			//              wedged worker with an old heartbeat but a live pid is "stale" yet still
-			//              in the worktree -- removing it would corrupt the run.
-			//   completed/failed/cancelled -> terminal, safe.
-			if (job.state === "queued") workerLive = !isStale(job, Date.now());
-			else if (job.state === "running") workerLive = pidAlive(job.pid);
-		} else if (resolved.run.kind === "loop") {
-			const session = resolved.run.session;
-			worktreePath = session.worktreePath;
-			branch = session.branch;
-			storedRepo = session.repo;
-			workerLive = session.terminalStatus === undefined || session.active !== undefined;
-		}
+		// The run's managed worktree (if any) + whether its worker is still live, per kind --
+		// resolved by the shared helper. cleanup uses worktreePath/branch/repo/workerLive.
+		const {
+			worktreePath,
+			branch,
+			repo: storedRepo,
+			workerLive,
+		} = resolveRunWorkspace(resolved, {
+			isStale,
+			pidAlive,
+			now: Date.now(),
+		});
 		// No managed worktree (a one-shot or an in_place run) -> nothing to clean, regardless of
 		// state. Report a no-op, never an error (a one-shot has no worktree to protect).
 		if (!worktreePath || !branch) {
@@ -1707,8 +1750,6 @@ server.registerTool(
 // "never overwrite user changes silently": the tracked patch is gated by git apply --check
 // --3way and refused on conflict; untracked files are applied ONLY when named and never
 // overwrite a differing target. Dry-run-default, terminal-only, NO cleanup coupling.
-// (The resolution + liveness guard mirrors chit_cleanup; a shared resolver is a deferred
-// follow-up so this slice does not refactor the thrice-reviewed cleanup handler.)
 server.registerTool(
 	"chit_apply",
 	{
@@ -1743,26 +1784,18 @@ server.registerTool(
 				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect). Re-run, or apply that run's worktree diff manually.`,
 			);
 		}
-		// The run's managed worktree + base + repo + liveness, per kind (mirrors chit_cleanup; apply
-		// works from the worktree + baseSha, so unlike cleanup it needs no branch).
-		let worktreePath: string | undefined;
-		let baseSha: string | undefined;
-		let storedRepo: string | undefined;
-		let workerLive = false;
-		if (resolved.mode === "background") {
-			const job = resolved.job;
-			worktreePath = job.worktreePath;
-			baseSha = job.baseSha;
-			storedRepo = job.repo;
-			if (job.state === "queued") workerLive = !isStale(job, Date.now());
-			else if (job.state === "running") workerLive = pidAlive(job.pid);
-		} else if (resolved.run.kind === "loop") {
-			const session = resolved.run.session;
-			worktreePath = session.worktreePath;
-			baseSha = session.baseSha;
-			storedRepo = session.repo;
-			workerLive = session.terminalStatus === undefined || session.active !== undefined;
-		}
+		// The run's managed worktree + base + repo + liveness, per kind -- resolved by the shared
+		// helper. apply works from the worktree + baseSha, so unlike cleanup it needs no branch.
+		const {
+			worktreePath,
+			baseSha,
+			repo: storedRepo,
+			workerLive,
+		} = resolveRunWorkspace(resolved, {
+			isStale,
+			pidAlive,
+			now: Date.now(),
+		});
 		// No managed worktree (a one-shot or an in_place run): nothing to apply -- those edits are
 		// already in the caller's checkout. Clear no-op, not a crash.
 		if (!worktreePath || !baseSha) {
