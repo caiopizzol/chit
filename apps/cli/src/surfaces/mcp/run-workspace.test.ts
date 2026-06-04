@@ -1,9 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { realGit } from "../../batches/worktree.ts";
+import { startLoop, stopLoop } from "../../loops/log-store.ts";
 import type { ResolvedRun } from "./controller.ts";
 import {
 	loopMayWriteFiles,
 	planManagedWorkspace,
+	resolveArchivedForegroundLoop,
 	resolveManifestPathAbsolute,
 	resolveRunWorkspace,
 } from "./server.ts";
@@ -167,5 +172,88 @@ describe("resolveRunWorkspace: shared run->worktree metadata + liveness (chit_cl
 		expect(r.baseSha).toBeUndefined();
 		expect(r.repo).toBeUndefined();
 		expect(r.workerLive).toBe(false);
+	});
+});
+
+describe("resolveArchivedForegroundLoop (#100): recover a closed foreground run from its log", () => {
+	let stateDir: string;
+	let savedXdg: string | undefined;
+	let cwd: string;
+	beforeEach(() => {
+		stateDir = mkdtempSync(join(tmpdir(), "chit-arch-state-"));
+		savedXdg = process.env.XDG_STATE_HOME;
+		process.env.XDG_STATE_HOME = stateDir;
+		cwd = mkdtempSync(join(tmpdir(), "chit-arch-cwd-"));
+	});
+	afterEach(() => {
+		if (savedXdg === undefined) delete process.env.XDG_STATE_HOME;
+		else process.env.XDG_STATE_HOME = savedXdg;
+		rmSync(stateDir, { recursive: true, force: true });
+		rmSync(cwd, { recursive: true, force: true });
+	});
+
+	const ws = {
+		worktreePath: "/wt/A1/owner",
+		branch: "chit-run/A1/owner",
+		baseSha: "basesha",
+		mainRepo: "/main/repo",
+		callerCheckout: "/launch",
+	};
+
+	test("future log (0.23+): recovers workspace straight from the header; stopped reflects the stop record", () => {
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "A1", workspace: ws });
+		const open = resolveArchivedForegroundLoop("A1");
+		expect(open?.stopped).toBe(false);
+		expect(open?.workspace).toEqual({
+			worktreePath: ws.worktreePath,
+			branch: ws.branch,
+			baseSha: ws.baseSha,
+			mainRepo: ws.mainRepo,
+		});
+		stopLoop(cwd, "A1", { status: "converged", reason: "done" });
+		expect(resolveArchivedForegroundLoop("A1")?.stopped).toBe(true);
+	});
+
+	test("unknown runId -> undefined", () => {
+		expect(resolveArchivedForegroundLoop("nope")).toBeUndefined();
+	});
+
+	test("old log whose worktree dir is gone -> found but no recoverable workspace", () => {
+		// no workspace metadata; header.repo = repoRoot(cwd) = cwd, which we then delete.
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "A2" });
+		rmSync(cwd, { recursive: true, force: true });
+		const r = resolveArchivedForegroundLoop("A2");
+		expect(r).toBeDefined();
+		expect(r?.workspace).toBeUndefined();
+	});
+
+	test("old log: derives branch + main repo from the worktree's git when it still exists", () => {
+		// A real managed worktree: main repo + a chit-run/<id> branch checked out in a worktree.
+		const main = mkdtempSync(join(tmpdir(), "chit-arch-main-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-arch-root-"));
+		const wtPath = join(root, "wt");
+		try {
+			realGit(["init", "-q"], main);
+			realGit(["config", "user.email", "t@chit.test"], main);
+			realGit(["config", "user.name", "t"], main);
+			writeFileSync(join(main, "f.ts"), "base\n");
+			realGit(["add", "."], main);
+			realGit(["commit", "-qm", "base"], main);
+			realGit(["worktree", "add", "-q", "-b", "chit-run/A3/owner", wtPath], main);
+			// an OLD-style log: header.repo points at the worktree (no workspace metadata).
+			startLoop(wtPath, { scope: "s", task: "t", maxIterations: 3, loopId: "A3" });
+			const r = resolveArchivedForegroundLoop("A3");
+			expect(r?.workspace?.worktreePath).toBe(
+				realGit(["rev-parse", "--show-toplevel"], wtPath).stdout.trim(),
+			);
+			expect(r?.workspace?.branch).toBe("chit-run/A3/owner"); // derived from git HEAD
+			expect(r?.workspace?.mainRepo).toBe(realpathSync(main)); // derived
+		} finally {
+			try {
+				realGit(["worktree", "remove", "--force", wtPath], main);
+			} catch {}
+			rmSync(main, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

@@ -68,7 +68,14 @@ import { JobStore, JobStoreError } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
 import { repoKey } from "../../loops/location.ts";
-import { LoopStoreError, readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
+import {
+	type FoundLoop,
+	findLoopByRunId,
+	LoopStoreError,
+	readLoop,
+	startLoop,
+	stopLoop,
+} from "../../loops/log-store.ts";
 import { pickRequiredChecks, resolveRunRequiredChecks } from "../../loops/required-checks.ts";
 import { validateOneShotAuth } from "../../runs/run-once.ts";
 import { prepareInputs } from "../../runtime/render.ts";
@@ -1543,6 +1550,54 @@ export function publicLoopRecords(records: LoopRecord[]): unknown[] {
 	});
 }
 
+// A closed-session foreground run recovered from its durable loop log (#100): the run is gone
+// from server memory, but the log survives. `workspace` is the run's managed-worktree metadata,
+// recovered from the header when present (loops written by 0.23+) or DERIVED for older logs (the
+// header's `repo` is the worktree path for a managed run; branch + main repo come from git while
+// the worktree dir still exists). `stopped` gates cleanup (only a terminal run is cleanable).
+export interface ArchivedForegroundLoop {
+	found: FoundLoop;
+	stopped: boolean;
+	workspace?: { worktreePath: string; branch: string; baseSha?: string; mainRepo: string };
+}
+
+export function resolveArchivedForegroundLoop(runId: string): ArchivedForegroundLoop | undefined {
+	const found = findLoopByRunId(runId);
+	if (!found) return undefined;
+	const h = found.header;
+	const stopped = found.stop !== undefined;
+	// Future logs (0.23+) carry the workspace metadata directly.
+	if (h.worktreePath && h.branch && h.mainRepo) {
+		return {
+			found,
+			stopped,
+			workspace: {
+				worktreePath: h.worktreePath,
+				branch: h.branch,
+				...(h.baseSha && { baseSha: h.baseSha }),
+				mainRepo: h.mainRepo,
+			},
+		};
+	}
+	// Older logs: the header's `repo` is the worktree toplevel for a managed run. Derive branch +
+	// main repo from git, but only while the worktree dir still exists. If it is gone (or this was
+	// an in_place run with no separate worktree), there is no recoverable worktree -> no workspace.
+	const worktreePath = h.repo;
+	if (!existsSync(worktreePath)) return { found, stopped };
+	const br = realGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath);
+	// A chit-managed run sits on a chit-run/... branch; if HEAD is not that, this was not an
+	// isolated managed run (e.g. in_place) -> nothing to clean.
+	const branch = br.code === 0 ? br.stdout.trim() : "";
+	if (!branch.startsWith("chit-run/")) return { found, stopped };
+	let mainRepo: string;
+	try {
+		mainRepo = mainRepoOfWorktree(realGit, worktreePath);
+	} catch {
+		return { found, stopped };
+	}
+	return { found, stopped, workspace: { worktreePath, branch, mainRepo } };
+}
+
 // The history of any run: a one-shot's step transcript, or a loop/background
 // run's durable loop log. Read-only.
 server.registerTool(
@@ -1556,7 +1611,25 @@ server.registerTool(
 	},
 	async ({ run_id }) => {
 		const resolved = runController.resolve(run_id, Date.now());
-		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
+		if (!resolved) {
+			// Not in memory / not a durable job: a foreground run from a CLOSED session may still
+			// have its durable loop log (#100). Recover its history read-only.
+			let archived: ArchivedForegroundLoop | undefined;
+			try {
+				archived = resolveArchivedForegroundLoop(run_id);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
+			if (!archived) return errorResult(`unknown run_id ${run_id}`);
+			return jsonResult({
+				run_id,
+				mode: "archived_foreground" as const,
+				execution: "loop" as const,
+				active: false,
+				...(archived.workspace && workspaceView(archived.workspace)),
+				records: publicLoopRecords(archived.found.records),
+			});
+		}
 		if (resolved.mode === "background") {
 			const job = resolved.job;
 			if (job.policy === "loop") {
