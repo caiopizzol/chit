@@ -8,8 +8,17 @@
 // inspects after the batch. Cleanup is a separate, explicit step.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmdirSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 export class WorktreeError extends Error {}
@@ -318,5 +327,151 @@ export function cleanupRunWorkspace(
 		note: didRemove
 			? "removed the worktree + branch. Receipts (loop log / audit) are kept."
 			: "already removed; nothing to do. Receipts (loop log / audit) are kept.",
+	};
+}
+
+export interface RunApplyResult {
+	confirmed: boolean; // false = dry run (nothing applied)
+	target: string;
+	trackedFiles: string[]; // files in the run's tracked diff (baseSha -> worktree)
+	appliesClean: boolean; // does that patch apply to the target (git apply --check --3way)?
+	applied?: boolean; // set on confirm: was the tracked patch actually applied
+	conflict?: string; // when !appliesClean: git's conflict report (no markers are written)
+	untracked: string[]; // unignored untracked candidates in the worktree -- NOT applied unless included
+	appliedUntracked?: string[]; // set on confirm: which untracked files were copied (a subset of `untracked`)
+	receiptsKept: true; // apply NEVER touches the loop log / audit
+	note: string;
+}
+
+// Apply ONE finished run's diff back to a working checkout (#101). The run's work lives
+// UNCOMMITTED in its managed worktree, so the patch is `git diff baseSha` from the worktree.
+// Dry-run by default (confirm=false): report whether it applies + the untracked candidates,
+// change nothing. The conflict gate is git's own `apply --check --3way` (catches a dirty OR a
+// diverged target on a touched file -- more robust than a file-overlap heuristic); on conflict
+// it REFUSES and reports, never writing conflict markers. Untracked files are NEVER auto-applied
+// (a plain diff misses them, and blindly copying sweeps in residue like a lockfile or drops new
+// source): they are listed, and only files named in `includeUntracked` (validated against that
+// list) are copied. NEVER removes the worktree (chit_cleanup is the separate step) or touches
+// receipts. The CALLER must ensure the run is terminal.
+export function applyRunWorkspace(
+	git: GitRunner,
+	opts: {
+		worktreePath: string;
+		baseSha: string;
+		target: string;
+		confirm: boolean;
+		includeUntracked?: string[];
+	},
+): RunApplyResult {
+	const lines = (s: string): string[] =>
+		s
+			.split("\n")
+			.map((x) => x.trim())
+			.filter(Boolean);
+
+	// The run's tracked diff vs the base it was cut from.
+	const diff = git(["diff", opts.baseSha], opts.worktreePath);
+	if (diff.code !== 0) {
+		return {
+			confirmed: opts.confirm,
+			target: opts.target,
+			trackedFiles: [],
+			appliesClean: false,
+			untracked: [],
+			receiptsKept: true,
+			note: `could not compute the run's diff from ${opts.baseSha}: ${gitErr(diff)}`,
+		};
+	}
+	const patch = diff.stdout;
+	const trackedFiles = lines(git(["diff", "--name-only", opts.baseSha], opts.worktreePath).stdout);
+	// Unignored untracked files only (--exclude-standard drops gitignored residue); these are
+	// CANDIDATES, surfaced for explicit inclusion -- never auto-applied.
+	const untracked = lines(
+		git(["ls-files", "--others", "--exclude-standard"], opts.worktreePath).stdout,
+	);
+
+	// Conflict gate: does the tracked patch apply cleanly to the target? (empty patch is trivially clean)
+	const withPatch = <T>(fn: (patchFile: string) => T): T => {
+		const dir = mkdtempSync(join(tmpdir(), "chit-apply-"));
+		try {
+			const patchFile = join(dir, "run.patch");
+			writeFileSync(patchFile, patch);
+			return fn(patchFile);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	};
+	let appliesClean = true;
+	let conflict: string | undefined;
+	if (patch.trim().length > 0) {
+		const check = withPatch((pf) => git(["apply", "--check", "--3way", pf], opts.target));
+		appliesClean = check.code === 0;
+		if (!appliesClean) conflict = gitErr(check);
+	}
+
+	if (!opts.confirm) {
+		return {
+			confirmed: false,
+			target: opts.target,
+			trackedFiles,
+			appliesClean,
+			...(conflict ? { conflict } : {}),
+			untracked,
+			receiptsKept: true,
+			note: appliesClean
+				? `dry run: ${trackedFiles.length} tracked file(s) apply cleanly to ${opts.target}; ${untracked.length} untracked candidate(s) (pass include_untracked to copy specific ones). confirm=true to apply.`
+				: `dry run: the tracked patch does NOT apply cleanly to ${opts.target} (it conflicts with the target's current state). Nothing applied.`,
+		};
+	}
+
+	// confirm: never overwrite silently -- refuse on conflict.
+	if (!appliesClean) {
+		return {
+			confirmed: true,
+			target: opts.target,
+			trackedFiles,
+			appliesClean: false,
+			...(conflict ? { conflict } : {}),
+			untracked,
+			applied: false,
+			receiptsKept: true,
+			note: `refused: the tracked patch conflicts with ${opts.target}; nothing applied. Resolve the target (or apply manually) and retry.`,
+		};
+	}
+	if (patch.trim().length > 0) {
+		const ap = withPatch((pf) => git(["apply", "--3way", pf], opts.target));
+		if (ap.code !== 0) {
+			return {
+				confirmed: true,
+				target: opts.target,
+				trackedFiles,
+				appliesClean: true,
+				applied: false,
+				untracked,
+				receiptsKept: true,
+				note: `apply failed after a clean check: ${gitErr(ap)}; nothing partially applied is intended -- inspect ${opts.target}.`,
+			};
+		}
+	}
+	// Copy ONLY the explicitly-requested untracked files that are real candidates (never an
+	// arbitrary path): the caller opts in per file.
+	const appliedUntracked: string[] = [];
+	for (const f of opts.includeUntracked ?? []) {
+		if (!untracked.includes(f)) continue;
+		const dst = join(opts.target, f);
+		mkdirSync(dirname(dst), { recursive: true });
+		cpSync(join(opts.worktreePath, f), dst);
+		appliedUntracked.push(f);
+	}
+	return {
+		confirmed: true,
+		target: opts.target,
+		trackedFiles,
+		appliesClean: true,
+		applied: true,
+		untracked,
+		appliedUntracked,
+		receiptsKept: true,
+		note: `applied ${trackedFiles.length} tracked file(s)${appliedUntracked.length ? ` + ${appliedUntracked.length} untracked` : ""} to ${opts.target}. Receipts kept; the worktree remains for chit_cleanup.`,
 	};
 }

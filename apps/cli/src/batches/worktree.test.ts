@@ -10,6 +10,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	applyRunWorkspace,
 	cleanupRunWorkspace,
 	createTaskWorktree,
 	type GitResult,
@@ -394,6 +395,136 @@ describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
 			rmSync(main, { recursive: true, force: true });
 			rmSync(linkedParent, { recursive: true, force: true });
 			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () => {
+	// Build a repo + a managed worktree whose "run" changed line 1 of f.ts (tracked) and added a
+	// new untracked source file. Returns the pieces + a teardown.
+	function applySetup() {
+		const main = mkdtempSync(join(tmpdir(), "chit-apply-main-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-apply-wt-"));
+		realGit(["init", "-q"], main);
+		realGit(["config", "user.email", "t@chit.test"], main);
+		realGit(["config", "user.name", "t"], main);
+		writeFileSync(join(main, "f.ts"), "base line 1\nbase line 2\n");
+		realGit(["add", "."], main);
+		realGit(["commit", "-qm", "base"], main);
+		const ws = prepareRunWorkspace(realGit, main, {
+			runId: "run-apply",
+			scope: "owner",
+			worktreesRoot: root,
+		});
+		const wt = ws.worktreePath;
+		const base = ws.baseSha;
+		if (!wt || !base) throw new Error("setup: expected an isolated worktree");
+		writeFileSync(join(wt, "f.ts"), "RUN line 1\nbase line 2\n"); // tracked change
+		writeFileSync(join(wt, "newfile.ts"), "export const n = 1;\n"); // untracked new source
+		return {
+			main,
+			wt,
+			base,
+			teardown: () => {
+				rmSync(main, { recursive: true, force: true });
+				rmSync(root, { recursive: true, force: true });
+			},
+		};
+	}
+
+	test("dry-run reports a clean apply + untracked candidates and changes nothing; confirm applies tracked + explicitly-included untracked", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+			});
+			expect(dry.confirmed).toBe(false);
+			expect(dry.appliesClean).toBe(true);
+			expect(dry.trackedFiles).toContain("f.ts");
+			expect(dry.untracked).toContain("newfile.ts");
+			expect(existsSync(join(main, "newfile.ts"))).toBe(false); // dry run applied nothing
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("base line 1");
+
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+				includeUntracked: ["newfile.ts"],
+			});
+			expect(ap.applied).toBe(true);
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("RUN line 1"); // tracked applied
+			expect(ap.appliedUntracked).toEqual(["newfile.ts"]);
+			expect(existsSync(join(main, "newfile.ts"))).toBe(true); // explicitly included -> copied
+		} finally {
+			teardown();
+		}
+	});
+
+	test("untracked files are NOT auto-applied without explicit inclusion (no silent residue / no lost source)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+			});
+			expect(ap.applied).toBe(true);
+			expect(ap.appliedUntracked).toEqual([]);
+			expect(ap.untracked).toContain("newfile.ts"); // listed as a candidate...
+			expect(existsSync(join(main, "newfile.ts"))).toBe(false); // ...but not copied
+		} finally {
+			teardown();
+		}
+	});
+
+	test("refuses (does not apply) when the target conflicts with the run's change on the same lines", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			// the target dirties f.ts line 1 differently -> overlaps the run's change
+			writeFileSync(join(main, "f.ts"), "TARGET DIRTY line 1\nbase line 2\n");
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+			});
+			expect(dry.appliesClean).toBe(false);
+			expect(dry.conflict).toBeTruthy();
+
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+			});
+			expect(ap.applied).toBe(false);
+			expect(ap.note).toContain("refused");
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("TARGET DIRTY"); // target untouched
+		} finally {
+			teardown();
+		}
+	});
+
+	test("applies even when the target is dirty in a DIFFERENT (non-overlapping) file", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			writeFileSync(join(main, "other.ts"), "dirty other\n"); // dirty, but not a file the run touched
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+			});
+			expect(ap.applied).toBe(true);
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("RUN line 1");
+			expect(readFileSync(join(main, "other.ts"), "utf8")).toBe("dirty other\n"); // the target's own dirt preserved
+		} finally {
+			teardown();
 		}
 	});
 });
