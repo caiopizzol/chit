@@ -77,19 +77,17 @@ export function repoToplevel(git: GitRunner, cwd: string): string {
 	return r.stdout.trim();
 }
 
-// Create the task's worktree + branch off baseSha. Conservative: refuses if the
-// branch or the worktree path already exists (never clobbers prior work).
-// `git worktree add -b` creates the leaf dir but not missing parents, so the
-// parent is created first. Returns the absolute worktree path + branch.
-export function createTaskWorktree(
+// Create a worktree + branch off baseSha at an explicit path/branch. Conservative:
+// refuses if the branch or the worktree path already exists (never clobbers prior
+// work). `git worktree add -b` creates the leaf dir but not missing parents, so the
+// parent is created first. The generic core shared by batch tasks and single runs.
+export function createWorktree(
 	git: GitRunner,
 	repo: string,
-	batchId: string,
-	taskId: string,
+	worktreePath: string,
+	branch: string,
 	baseSha: string,
 ): { worktreePath: string; branch: string } {
-	const { worktreePath, branch } = taskWorktree(batchId, taskId);
-
 	if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo).code === 0) {
 		throw new WorktreeError(`branch ${JSON.stringify(branch)} already exists`);
 	}
@@ -103,6 +101,79 @@ export function createTaskWorktree(
 		throw new WorktreeError(`git worktree add failed: ${gitErr(r)}`);
 	}
 	return { worktreePath, branch };
+}
+
+// Batch wrapper: a task's worktree at the batch layout. Behavior-identical to the
+// generic createWorktree at taskWorktree(batchId, taskId)'s path/branch.
+export function createTaskWorktree(
+	git: GitRunner,
+	repo: string,
+	batchId: string,
+	taskId: string,
+	baseSha: string,
+): { worktreePath: string; branch: string } {
+	const { worktreePath, branch } = taskWorktree(batchId, taskId);
+	return createWorktree(git, repo, worktreePath, branch, baseSha);
+}
+
+// Make a scope safe as a git branch component and a path leaf: lowercase, runs of
+// non-alphanumerics collapse to a single hyphen, trimmed; empty falls back to "run".
+function slugify(scope: string): string {
+	const slug = scope
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || "run";
+}
+
+// Where a single run's managed worktree + branch live, parallel to taskWorktree:
+//   <root>/<runId>/<scope-slug>            (root defaults to ~/worktrees/chit)
+//   branch: chit-run/<runId>/<scope-slug>
+// Deterministic so a human (or supervising agent) can find the run's diff.
+export function runWorktree(
+	runId: string,
+	scope: string,
+	root: string = join(homedir(), "worktrees", "chit"),
+): { worktreePath: string; branch: string } {
+	const slug = slugify(scope);
+	return { worktreePath: join(root, runId, slug), branch: `chit-run/${runId}/${slug}` };
+}
+
+// The shared run-workspace primitive for write-capable loop runs, used by BOTH the
+// foreground and background paths (Slice B wires it in; this slice only adds + tests
+// it, no behavior change). It isolates the run in a managed worktree cut clean off
+// baseSha, so the run's diff is attributable no matter how dirty the caller's tree is
+// (that is the point -- the caller tree's state does not matter). `inPlace` opts OUT,
+// running in the caller's checkout (only when edits are intentionally wanted there).
+// One-shot / read-only runs do not call this. The worktree is NEVER auto-removed (it
+// IS the review artifact); `cleanup` is returned for an explicit later step.
+export function prepareRunWorkspace(
+	git: GitRunner,
+	callerCwd: string,
+	opts: {
+		runId: string;
+		scope: string;
+		inPlace?: boolean;
+		baseRef?: string;
+		worktreesRoot?: string;
+	},
+): { cwd: string; worktreePath?: string; branch?: string; baseSha?: string; cleanup?: () => void } {
+	if (opts.inPlace) return { cwd: callerCwd };
+	const repo = repoToplevel(git, callerCwd);
+	const baseSha = resolveBaseSha(git, repo, opts.baseRef ?? "HEAD");
+	const { worktreePath, branch } = runWorktree(opts.runId, opts.scope, opts.worktreesRoot);
+	createWorktree(git, repo, worktreePath, branch, baseSha);
+	return {
+		cwd: worktreePath,
+		worktreePath,
+		branch,
+		baseSha,
+		// removeTaskWorktree is the generic path+branch remover (force-remove + branch -D),
+		// safe for a run worktree too. Never auto-called: the caller cleans up explicitly.
+		cleanup: () => {
+			removeTaskWorktree(git, repo, worktreePath, branch);
+		},
+	};
 }
 
 // Retire a task's worktree + branch. Used by chit_batch_cleanup AFTER the

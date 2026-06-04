@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createTaskWorktree,
 	type GitResult,
 	type GitRunner,
+	prepareRunWorkspace,
 	resolveBaseSha,
+	runWorktree,
 	taskWorktree,
 	WorktreeError,
 } from "./worktree.ts";
@@ -73,5 +76,67 @@ describe("createTaskWorktree", () => {
 		expect(() => createTaskWorktree(git, "/repo", "c-uniq-xyz", "t-uniq-xyz", "base")).toThrow(
 			/git worktree add failed.*invalid reference/,
 		);
+	});
+});
+
+describe("runWorktree layout", () => {
+	test("uses <root>/<runId>/<scope-slug> and a chit-run branch", () => {
+		const { worktreePath, branch } = runWorktree("run-9", "PII Env Gate", "/wt");
+		expect(worktreePath).toBe(join("/wt", "run-9", "pii-env-gate"));
+		expect(branch).toBe("chit-run/run-9/pii-env-gate");
+	});
+	test("defaults the root to ~/worktrees/chit and slugs an empty scope to 'run'", () => {
+		const { worktreePath, branch } = runWorktree("r1", "   ");
+		expect(worktreePath).toBe(join(homedir(), "worktrees", "chit", "r1", "run"));
+		expect(branch).toBe("chit-run/r1/run");
+	});
+});
+
+describe("prepareRunWorkspace", () => {
+	test("in_place runs in the caller checkout: no worktree, no cleanup, touches no git", () => {
+		const { git, calls } = scriptedGit([]);
+		const ws = prepareRunWorkspace(git, "/repo", { runId: "r", scope: "s", inPlace: true });
+		expect(ws.cwd).toBe("/repo");
+		expect(ws.worktreePath).toBeUndefined();
+		expect(ws.branch).toBeUndefined();
+		expect(ws.cleanup).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("isolates a write run in a managed worktree cut off baseSha", () => {
+		const root = mkdtempSync(join(tmpdir(), "chit-rw-"));
+		try {
+			const { git, calls } = scriptedGit([
+				{ match: (a) => a.includes("--show-toplevel"), result: ok("/repo\n") },
+				{ match: (a) => a.includes("--verify"), result: fail("no such branch") }, // branch absent -> creatable
+				{ match: (a) => a[0] === "rev-parse", result: ok("basesha\n") }, // resolveBaseSha(HEAD)
+				{ match: (a) => a[0] === "worktree" && a[1] === "add", result: ok() },
+			]);
+			const ws = prepareRunWorkspace(git, "/repo/sub", {
+				runId: "run-1",
+				scope: "Owner Readout",
+				worktreesRoot: root,
+			});
+			expect(ws.baseSha).toBe("basesha");
+			expect(ws.branch).toBe("chit-run/run-1/owner-readout");
+			expect(ws.worktreePath).toBe(join(root, "run-1", "owner-readout"));
+			expect(ws.cwd).toBe(join(root, "run-1", "owner-readout")); // the run executes IN the worktree
+			expect(typeof ws.cleanup).toBe("function");
+			expect(
+				calls.some((a) => a[0] === "worktree" && a[1] === "add" && a.includes("basesha")),
+			).toBe(true); // cut off the resolved baseSha
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("propagates a baseSha resolution failure without creating anything", () => {
+		const { git } = scriptedGit([
+			{ match: (a) => a.includes("--show-toplevel"), result: ok("/repo\n") },
+			{ match: (a) => a[0] === "rev-parse", result: fail("unknown revision") },
+		]);
+		expect(() =>
+			prepareRunWorkspace(git, "/repo", { runId: "r", scope: "s", worktreesRoot: "/wt" }),
+		).toThrow(WorktreeError);
 	});
 });

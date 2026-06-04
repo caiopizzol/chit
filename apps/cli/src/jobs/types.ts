@@ -47,7 +47,15 @@ export interface BaseJobRecord {
 	runId: string; // the ONE public id (the user's run_id)
 	policy: RunPolicyKind;
 	repoKey: string;
-	cwd: string;
+	cwd: string; // where the run executes (a managed worktree when isolated; else the caller's checkout)
+
+	// Managed-worktree fields (#85): set when a write run is isolated in a chit-managed
+	// worktree -- where its diff lives + the base it was cut from, so changedFiles is
+	// attributable. Absent for in_place runs and one-shot/read-only runs. Populated by
+	// Slice B (this slice only declares them).
+	worktreePath?: string;
+	branch?: string;
+	baseSha?: string;
 
 	state: JobState;
 	createdAt: string; // ISO 8601, when the queued record was written
