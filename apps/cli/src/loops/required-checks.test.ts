@@ -64,6 +64,23 @@ describe("runRequiredCheck", () => {
 		expect(r.output).toContain("timed out after 80ms");
 	});
 
+	test("the timeout is HARD: a SIGTERM-ignoring process with a pipe-holding child still returns promptly", async () => {
+		// `trap "" TERM` makes the shell ignore SIGTERM; `sleep 5` is an orphanable
+		// grandchild that keeps the stdout pipe open past the shell's death. A soft (SIGTERM)
+		// kill plus an unbounded stream read would wait ~5s; the hard SIGKILL timeout and the
+		// capped post-exit pipe flush must return in well under that.
+		const t0 = Date.now();
+		const r = await runRequiredCheck(
+			{ command: "sh", args: ["-c", 'trap "" TERM; sleep 5'], timeoutMs: 150 },
+			{ cwd: CWD },
+		);
+		const elapsed = Date.now() - t0;
+		expect(r.status).toBe("blocked");
+		expect(r.timedOut).toBe(true);
+		expect(r.output).toContain("timed out after 150ms");
+		expect(elapsed).toBeLessThan(2000); // a trapped SIGTERM would have hung ~5s
+	});
+
 	test("output is bounded to a tail (does not balloon the loop log)", async () => {
 		// seq floods ~1MB of stdout; the result keeps only a bounded tail.
 		const r = await runRequiredCheck({ command: "seq", args: ["1", "200000"] }, { cwd: CWD });

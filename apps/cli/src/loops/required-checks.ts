@@ -43,12 +43,72 @@ function baseOf(check: RequiredCheck): { command: string; name?: string } {
 	return base;
 }
 
-// Keep only the last MAX_OUTPUT_CHARS, with a marker, so a huge log degrades to its
-// (usually most relevant) tail instead of bloating the loop record.
-function boundedTail(s: string): string {
-	const t = s.trimEnd();
-	if (t.length <= MAX_OUTPUT_CHARS) return t;
-	return `...(output truncated to last ${MAX_OUTPUT_CHARS} chars)\n${t.slice(t.length - MAX_OUTPUT_CHARS)}`;
+// A small grace after the process exits for its pipes to flush, so a well-behaved
+// command's full output is captured -- but capped, never awaited: a surviving grandchild
+// can hold a pipe open past the process's own exit, and the runner must not hang on it.
+const DRAIN_GRACE_MS = 100;
+
+// Stream a pipe into a running bounded tail: keep ONLY the last MAX_OUTPUT_CHARS in
+// memory (so a noisy command can never balloon memory before truncation) and remember
+// whether anything was dropped. read()/truncated() expose the live state, so the timeout
+// path can take the tail-so-far without waiting for EOF.
+function streamBoundedTail(stream: ReadableStream<Uint8Array>): {
+	done: Promise<void>;
+	read: () => string;
+	truncated: () => boolean;
+	cancel: () => void;
+} {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let tail = "";
+	let dropped = false;
+	const append = (chunk: string): void => {
+		if (!chunk) return;
+		tail += chunk;
+		if (tail.length > MAX_OUTPUT_CHARS) {
+			tail = tail.slice(tail.length - MAX_OUTPUT_CHARS);
+			dropped = true;
+		}
+	};
+	const done = (async () => {
+		try {
+			for (;;) {
+				const { done: d, value } = await reader.read();
+				if (d) break;
+				append(decoder.decode(value, { stream: true }));
+			}
+			append(decoder.decode());
+		} catch {
+			// reader cancelled or stream errored: keep whatever tail we captured
+		}
+	})();
+	return {
+		done,
+		read: () => tail,
+		truncated: () => dropped,
+		cancel: () => {
+			void reader.cancel().catch(() => {});
+		},
+	};
+}
+
+// Combine the two bounded tails into the recorded output: trailing whitespace trimmed, a
+// truncation marker prepended when either stream dropped content (or the combined tail
+// still exceeds the cap). Same recorded shape as before, but bounded as it streamed.
+function combineOutput(
+	out: { read: () => string; truncated: () => boolean },
+	err: { read: () => string; truncated: () => boolean },
+): string {
+	let text = `${out.read()}${err.read()}`;
+	let truncated = out.truncated() || err.truncated();
+	if (text.length > MAX_OUTPUT_CHARS) {
+		text = text.slice(text.length - MAX_OUTPUT_CHARS);
+		truncated = true;
+	}
+	const trimmed = text.trimEnd();
+	return truncated
+		? `...(output truncated to last ${MAX_OUTPUT_CHARS} chars)\n${trimmed}`
+		: trimmed;
 }
 
 // Run one required check. Never throws: a command that cannot start is `blocked`
@@ -82,26 +142,50 @@ export async function runRequiredCheck(
 		};
 	}
 
+	// Kill the whole process, ignoring an "already exited" throw from a late timer/abort.
+	const safeKill = (): void => {
+		try {
+			proc.kill("SIGKILL");
+		} catch {
+			// the process already exited; nothing to kill
+		}
+	};
+
 	let timedOut = false;
+	// Stream both pipes immediately with bounded memory (draining also prevents a full
+	// pipe buffer from deadlocking the child).
+	const out = streamBoundedTail(proc.stdout);
+	const err = streamBoundedTail(proc.stderr);
+
+	// A HARD timeout: SIGKILL cannot be caught or ignored, so the process is gone -- and
+	// `proc.exited` therefore resolves -- within timeoutMs no matter how the command
+	// handles signals. (SIGTERM, the default, can be trapped and would not be a real
+	// timeout.) An abort behaves the same.
 	const timer = setTimeout(() => {
 		timedOut = true;
-		proc.kill();
+		safeKill();
 	}, timeoutMs);
-	const onAbort = () => proc.kill();
+	const onAbort = () => safeKill();
 	if (opts.signal) {
-		if (opts.signal.aborted) proc.kill();
+		if (opts.signal.aborted) safeKill();
 		else opts.signal.addEventListener("abort", onAbort, { once: true });
 	}
 
 	try {
-		// Drain both pipes concurrently (a full pipe buffer would otherwise deadlock the
-		// child), then await its exit.
-		const stdoutP = new Response(proc.stdout).text();
-		const stderrP = new Response(proc.stderr).text();
 		const exitCode = await proc.exited;
-		const [stdout, stderr] = await Promise.all([stdoutP, stderrP]);
+		// The process is gone (the timeout/abort SIGKILL guarantees this resolves). Let the
+		// pipes flush so a well-behaved command's full output is captured, but CAP the wait:
+		// a surviving grandchild can hold a pipe open past the process's exit, and we must
+		// never hang on it. The bounded tail captured so far is what we record. Clear the
+		// grace timer once the drains win, so it never keeps the CLI/worker alive at exit.
+		let graceTimer: ReturnType<typeof setTimeout> | undefined;
+		const grace = new Promise<void>((res) => {
+			graceTimer = setTimeout(res, DRAIN_GRACE_MS);
+		});
+		await Promise.race([Promise.all([out.done, err.done]), grace]);
+		clearTimeout(graceTimer);
 		const durationMs = now() - start;
-		const output = boundedTail(`${stdout}${stderr}`);
+		const output = combineOutput(out, err);
 
 		if (timedOut) {
 			return {
@@ -134,6 +218,9 @@ export async function runRequiredCheck(
 	} finally {
 		clearTimeout(timer);
 		if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+		// Release the pipe readers so a stream still held open (grandchild) does not leak.
+		out.cancel();
+		err.cancel();
 	}
 }
 
