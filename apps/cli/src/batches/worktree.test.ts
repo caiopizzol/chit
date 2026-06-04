@@ -389,6 +389,10 @@ describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
 			// removed later, breaking cleanup).
 			expect(ws.repo).toBe(realpathSync(main));
 			expect(ws.repo).not.toBe(realpathSync(linked));
+			// callerCheckout must be the LINKED launching checkout (#103: chit_apply's default
+			// target), distinct from the durable main repo.
+			expect(ws.callerCheckout).toBe(realpathSync(linked));
+			expect(ws.callerCheckout).not.toBe(ws.repo);
 			ws.cleanup?.();
 		} finally {
 			try {

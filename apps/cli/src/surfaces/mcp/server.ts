@@ -509,7 +509,13 @@ function launchConvergeJob(p: {
 	runId?: string;
 	// A chit-managed worktree this run executes in (cwd is already the worktree path).
 	// Recorded for surfacing + cleanup; absent for in_place / batch runs.
-	worktree?: { worktreePath: string; branch: string; baseSha: string; repo: string };
+	worktree?: {
+		worktreePath: string;
+		branch: string;
+		baseSha: string;
+		repo: string;
+		callerCheckout: string;
+	};
 	force?: boolean;
 	// The EFFECTIVE required checks for this run, persisted on the job so the worker
 	// runs the intended checks without re-deriving them. Undefined -> the worker falls
@@ -589,6 +595,7 @@ function launchConvergeJob(p: {
 			branch: p.worktree.branch,
 			baseSha: p.worktree.baseSha,
 			repo: p.worktree.repo,
+			callerCheckout: p.worktree.callerCheckout,
 		}),
 		scope: p.scope,
 		task: p.task,
@@ -1063,6 +1070,7 @@ export function resolveRunWorkspace(
 	branch?: string;
 	baseSha?: string;
 	repo?: string;
+	callerCheckout?: string;
 	workerLive: boolean;
 } {
 	if (resolved.mode === "background") {
@@ -1082,6 +1090,7 @@ export function resolveRunWorkspace(
 			branch: job.branch,
 			baseSha: job.baseSha,
 			repo: job.repo,
+			callerCheckout: job.callerCheckout,
 			workerLive,
 		};
 	}
@@ -1092,6 +1101,7 @@ export function resolveRunWorkspace(
 			branch: session.branch,
 			baseSha: session.baseSha,
 			repo: session.repo,
+			callerCheckout: session.callerCheckout,
 			workerLive: session.terminalStatus === undefined || session.active !== undefined,
 		};
 	}
@@ -1255,12 +1265,13 @@ server.registerTool(
 				return errorResult(safeMcpError(e));
 			}
 			const worktree =
-				ws.worktreePath && ws.branch && ws.baseSha && ws.repo
+				ws.worktreePath && ws.branch && ws.baseSha && ws.repo && ws.callerCheckout
 					? {
 							worktreePath: ws.worktreePath,
 							branch: ws.branch,
 							baseSha: ws.baseSha,
 							repo: ws.repo,
+							callerCheckout: ws.callerCheckout,
 						}
 					: undefined;
 			if (mode === "background") {
@@ -1784,12 +1795,15 @@ server.registerTool(
 				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect). Re-run, or apply that run's worktree diff manually.`,
 			);
 		}
-		// The run's managed worktree + base + repo + liveness, per kind -- resolved by the shared
-		// helper. apply works from the worktree + baseSha, so unlike cleanup it needs no branch.
+		// The run's managed worktree + base + caller checkout + liveness, per kind -- resolved by the
+		// shared helper. apply works from the worktree + baseSha; it defaults its target to the
+		// LAUNCHING checkout (where the user is working), NOT the durable main repo (which cleanup
+		// uses). storedRepo is the fallback for pre-0.22 records that lack callerCheckout.
 		const {
 			worktreePath,
 			baseSha,
 			repo: storedRepo,
+			callerCheckout,
 			workerLive,
 		} = resolveRunWorkspace(resolved, {
 			isStale,
@@ -1812,7 +1826,9 @@ server.registerTool(
 				`run ${JSON.stringify(run_id)} is still active; let it finish (or chit_cancel it) before applying -- its diff is not final yet.`,
 			);
 		}
-		const target = target_cwd ? resolve(target_cwd) : storedRepo;
+		// Default to the LAUNCHING checkout (where the user ran chit); fall back to the main repo
+		// for pre-0.22 records with no recorded callerCheckout. target_cwd overrides either.
+		const target = target_cwd ? resolve(target_cwd) : (callerCheckout ?? storedRepo);
 		if (!target) {
 			return errorResult(
 				`run ${JSON.stringify(run_id)} predates repo tracking; pass target_cwd to say where to apply.`,
@@ -1825,7 +1841,17 @@ server.registerTool(
 			confirm,
 			includeUntracked: include_untracked,
 		});
-		return jsonResult({ run_id, ...result });
+		// git apply --3way writes to the WORKING TREE (unstaged); the copied untracked files are
+		// unstaged too. Tell the operator where the changes landed so they don't have to discover it.
+		const applied = result.applied === true;
+		return jsonResult({
+			run_id,
+			...result,
+			...(applied && {
+				workingTreeState: "unstaged",
+				reviewWith: `cd ${target} && git status && git diff`,
+			}),
+		});
 	},
 );
 

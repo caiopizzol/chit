@@ -57,6 +57,7 @@ export interface BaseJobRecord {
 	branch?: string;
 	baseSha?: string;
 	repo?: string; // the MAIN repo the worktree was cut from (so cleanup retires it even if the worktree dir is gone)
+	callerCheckout?: string; // the LAUNCHING checkout (a linked worktree or the main repo) -- chit_apply's default target
 
 	state: JobState;
 	createdAt: string; // ISO 8601, when the queued record was written

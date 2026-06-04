@@ -99,7 +99,13 @@ describe("resolveRunWorkspace: shared run->worktree metadata + liveness (chit_cl
 		pidAlive: () => over.pidAlive ?? true,
 		now: NOW,
 	});
-	const meta = { worktreePath: "/wt", branch: "chit/x", baseSha: "abc123", repo: "/repo" };
+	const meta = {
+		worktreePath: "/wt",
+		branch: "chit/x",
+		baseSha: "abc123",
+		repo: "/repo",
+		callerCheckout: "/caller",
+	};
 	// Minimal ResolvedRun shapes -- only the fields the helper reads.
 	const bgJob = (state: string, extra: Record<string, unknown> = {}) =>
 		({ mode: "background", job: { ...meta, state, pid: 42, ...extra } }) as unknown as ResolvedRun;

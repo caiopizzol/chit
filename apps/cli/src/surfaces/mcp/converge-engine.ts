@@ -46,6 +46,7 @@ export interface ConvergeSession {
 	branch?: string;
 	baseSha?: string;
 	repo?: string; // the MAIN repo the worktree was cut from (for cleanup after the worktree is gone)
+	callerCheckout?: string; // the LAUNCHING checkout (chit_apply's default target)
 	task: string;
 	maxIterations: number;
 	execute: ConvergeExecute;
@@ -89,7 +90,13 @@ export interface StartConvergeOptions {
 	loopId?: string;
 	force?: boolean;
 	// A chit-managed worktree this run executes in (cwd is already the worktree path).
-	worktree?: { worktreePath: string; branch: string; baseSha: string; repo: string };
+	worktree?: {
+		worktreePath: string;
+		branch: string;
+		baseSha: string;
+		repo: string;
+		callerCheckout: string;
+	};
 	execute: ConvergeExecute;
 	// The manifest's resolved loop steps (from prepareConvergeExecute). Defaults to
 	// the converge constants when omitted, so callers that don't yet resolve a
@@ -119,6 +126,7 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 			branch: opts.worktree.branch,
 			baseSha: opts.worktree.baseSha,
 			repo: opts.worktree.repo,
+			callerCheckout: opts.worktree.callerCheckout,
 		}),
 		task: opts.task,
 		maxIterations: opts.maxIterations,

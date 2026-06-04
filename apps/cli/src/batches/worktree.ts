@@ -174,6 +174,7 @@ export function prepareRunWorkspace(
 	branch?: string;
 	baseSha?: string;
 	repo?: string;
+	callerCheckout?: string;
 	cleanup?: () => void;
 } {
 	if (opts.inPlace) return { cwd: callerCwd };
@@ -185,6 +186,12 @@ export function prepareRunWorkspace(
 	// shared object store, so the main repo can cut a worktree at it.
 	const repo = mainRepoOfWorktree(git, callerCwd);
 	const baseSha = resolveBaseSha(git, callerCwd, opts.baseRef ?? "HEAD");
+	// The LAUNCHING checkout: the work tree root the user ran chit from (a linked worktree, or the
+	// main repo). DISTINCT from `repo`: when launched from a linked worktree, callerCheckout is that
+	// worktree while repo is the durable main repo. chit_apply defaults its target here (where the
+	// user is working); cleanup still anchors on repo. repoToplevel resolves the caller's own work
+	// tree root (so a run launched from a subdir applies at the checkout root).
+	const callerCheckout = repoToplevel(git, callerCwd);
 	const { worktreePath, branch } = runWorktree(opts.runId, opts.scope, opts.worktreesRoot);
 	createWorktree(git, repo, worktreePath, branch, baseSha);
 	return {
@@ -195,6 +202,7 @@ export function prepareRunWorkspace(
 		// The main repo, recorded so cleanup runs git worktree remove / branch -D from here even
 		// after the worktree dir is gone -- no fragile re-derivation from a missing worktree.
 		repo,
+		callerCheckout,
 		// removeTaskWorktree is the generic path+branch remover (force-remove + branch -D),
 		// safe for a run worktree too. Never auto-called: the caller cleans up explicitly.
 		cleanup: () => {
