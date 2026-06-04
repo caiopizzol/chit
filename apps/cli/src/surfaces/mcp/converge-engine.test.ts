@@ -121,6 +121,31 @@ describe("startConvergeSession", () => {
 		expect(records.some((r) => r.type === "stop")).toBe(false);
 		expect(describeConverge(session).status).toBe("open");
 	});
+
+	test("a managed-worktree session records all five workspace fields in the loop header (#100 slice B)", () => {
+		startConvergeSession({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			loopId: "WL1",
+			execute: scriptedExecute([]),
+			worktree: {
+				worktreePath: "/wt/WL1/owner",
+				branch: "chit-run/WL1/owner",
+				baseSha: "basesha",
+				repo: "/main/repo",
+				callerCheckout: "/launching/checkout",
+			},
+		});
+		// the durable HEADER carries the metadata, so a closed run is recoverable from the log.
+		const header = readLoop(cwd, "WL1")[0] as unknown as Record<string, unknown>;
+		expect(header.worktreePath).toBe("/wt/WL1/owner");
+		expect(header.branch).toBe("chit-run/WL1/owner");
+		expect(header.baseSha).toBe("basesha");
+		expect(header.mainRepo).toBe("/main/repo"); // opts.worktree.repo -> header.mainRepo
+		expect(header.callerCheckout).toBe("/launching/checkout");
+	});
 });
 
 describe("runNextIteration: verdict-driven stops", () => {

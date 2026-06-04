@@ -116,6 +116,18 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		maxIterations: opts.maxIterations,
 		loopId: opts.loopId,
 		force: opts.force,
+		// Persist the managed-worktree metadata in the loop HEADER so a closed-session run is
+		// recoverable from its durable log (#100). repo here is the worktree's MAIN repo (recorded
+		// as mainRepo, distinct from the header's own `repo` = the worktree toplevel).
+		...(opts.worktree && {
+			workspace: {
+				worktreePath: opts.worktree.worktreePath,
+				branch: opts.worktree.branch,
+				baseSha: opts.worktree.baseSha,
+				mainRepo: opts.worktree.repo,
+				callerCheckout: opts.worktree.callerCheckout,
+			},
+		}),
 	});
 	return {
 		loopId,
