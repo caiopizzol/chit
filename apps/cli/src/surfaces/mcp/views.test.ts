@@ -142,12 +142,28 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(v.branch).toBe("chit-run/run-x/owner");
 		expect(v.baseSha).toBe("basesha");
 		expect(v.callerCheckoutEdited).toBe(false);
-		// The terminal nextAction points at the worktree, says the checkout was untouched,
-		// and gives the exact manual retirement commands (no single-run cleanup tool yet).
+		// The terminal nextAction points at the worktree, says the checkout was untouched, and
+		// PREFERS chit_cleanup (resolvable run) -- with the manual git commands only as fallback.
 		expect(v.nextAction).toContain("/wt/run-x/owner");
 		expect(v.nextAction).toContain("checkout was not edited");
-		expect(v.nextAction).toContain("git worktree remove /wt/run-x/owner");
+		expect(v.nextAction).toContain("chit_cleanup");
+		expect(v.nextAction).toContain("confirm: true");
+		expect(v.nextAction).toContain("git worktree remove /wt/run-x/owner"); // fallback still present
 		expect(v.nextAction).toContain("git branch -D chit-run/run-x/owner");
+	});
+
+	test("a needs-decision (failed-ish) managed-worktree loop view also prefers chit_cleanup", () => {
+		const v = loopRunView(
+			loopSession({
+				loopId: "loop-nd-wt",
+				terminalStatus: "needs-decision",
+				worktreePath: "/wt/loop-nd-wt/owner",
+				branch: "chit-run/loop-nd-wt/owner",
+				baseSha: "basesha",
+			}),
+		);
+		expect(v.nextAction).toContain("chit_cleanup");
+		expect(v.nextAction).toContain("verification did not pass"); // the needs-decision reason is still there
 	});
 
 	test("an ACTIVE managed-worktree loop view does NOT suggest cleanup (only terminal states do)", () => {
@@ -166,6 +182,7 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(v.worktreePath).toBeUndefined();
 		expect(v.callerCheckoutEdited).toBeUndefined();
 		expect(v.nextAction).not.toContain("managed worktree");
+		expect(v.nextAction).not.toContain("chit_cleanup"); // nothing to clean -> no cleanup guidance
 	});
 
 	test("background view is keyed by run_id (== job id), drops the job/loop handles", () => {
@@ -204,6 +221,7 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(v.callerCheckoutEdited).toBe(false);
 		expect(v.nextAction).toContain("/wt/bg-wt/owner");
 		expect(v.nextAction).toContain("checkout was not edited");
+		expect(v.nextAction).toContain("chit_cleanup"); // prefers the tool, keyed by this run_id
 		expectNoLeakage(v);
 	});
 

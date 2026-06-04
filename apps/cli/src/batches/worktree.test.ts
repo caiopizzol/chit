@@ -263,6 +263,43 @@ describe("cleanupRunWorkspace (#98): single-run worktree retirement", () => {
 		}
 	});
 
+	test("confirm twice is honestly idempotent: 2nd call is alreadyRemoved, not a phantom removal (0.20.1)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-idem-repo-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-idem-wt-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const ws = prepareRunWorkspace(realGit, repo, {
+				runId: "run-idem",
+				scope: "owner",
+				worktreesRoot: root,
+			});
+			const opts = {
+				repo: ws.repo ?? repo,
+				worktreePath: ws.worktreePath,
+				branch: ws.branch,
+				confirm: true,
+			};
+			// First call actually retires the worktree + branch.
+			const first = cleanupRunWorkspace(realGit, opts);
+			expect(first.removed).toBe(true);
+			expect(first.alreadyRemoved).toBeUndefined();
+			// Second call: nothing left -> alreadyRemoved, NOT a phantom "removed".
+			const second = cleanupRunWorkspace(realGit, opts);
+			expect(second.removed).toBe(false);
+			expect(second.alreadyRemoved).toBe(true);
+			expect(second.receiptsKept).toBe(true);
+			expect(second.note).toContain("already removed");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	test("confirm removes the BRANCH even when the worktree dir was already removed (#98 review)", () => {
 		const repo = mkdtempSync(join(tmpdir(), "chit-cleanup-repo2-"));
 		const root = mkdtempSync(join(tmpdir(), "chit-cleanup-wt2-"));

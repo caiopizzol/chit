@@ -901,18 +901,17 @@ function workspaceView(r: { worktreePath?: string; branch?: string; baseSha?: st
 }
 
 // A run's diff is in its managed worktree, not the caller checkout: a TERMINAL-state
-// hint that points an operator/agent there and tells them how to retire it manually
-// (chit does not auto-clean a successful run -- the worktree IS the review artifact, and
-// there is no single-run cleanup tool yet). Only called on terminal nextActions, never
-// on an active run. Empty for in_place runs (no worktree). The `git branch -D` line is
-// included only when the chit-created branch is known, and is gated on removing the
-// worktree first (the branch is checked out in it, so -D fails until then).
-function worktreeInspectHint(r: { worktreePath?: string; branch?: string }): string {
+// hint that points an operator/agent there and tells them how to retire it. chit does not
+// auto-clean a successful run (the worktree IS the review artifact). Prefer chit_cleanup
+// (it resolves this run_id) over raw git; the manual commands are the fallback for an
+// unresolvable run (a foreground run from a closed session). Only called on terminal
+// nextActions, never on an active run. Empty for in_place runs (no worktree).
+function worktreeInspectHint(r: { worktreePath?: string; branch?: string }, runId: string): string {
 	if (!r.worktreePath) return "";
-	const retire = r.branch
-		? ` Inspect it, then retire it manually: \`git worktree remove ${r.worktreePath}\` and (if desired, after removing the worktree) \`git branch -D ${r.branch}\`.`
-		: ` Inspect it, then retire it manually with \`git worktree remove ${r.worktreePath}\`.`;
-	return ` The run's changes are in its managed worktree (${r.worktreePath}); your checkout was not edited.${retire}`;
+	const manual = r.branch
+		? `\`git worktree remove ${r.worktreePath}\` then \`git branch -D ${r.branch}\``
+		: `\`git worktree remove ${r.worktreePath}\``;
+	return ` The run's changes are in its managed worktree (${r.worktreePath}); your checkout was not edited. Retire it with chit_cleanup { run_id: "${runId}" } (dry run), then chit_cleanup { run_id: "${runId}", confirm: true } to remove -- or, if this run is no longer resolvable (a foreground run from a closed session), manually: ${manual}.`;
 }
 
 export function unifiedRunView(resolved: ResolvedRun) {
@@ -949,8 +948,8 @@ export function loopRunView(session: ConvergeSession) {
 					session.loopId,
 					session.lastVerification,
 					session.lastVerificationSource,
-				) + worktreeInspectHint(session)
-			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history.${worktreeInspectHint(session)}`
+				) + worktreeInspectHint(session, session.loopId)
+			: `loop ${session.terminalStatus}; chit_trace "${session.loopId}" for the history.${worktreeInspectHint(session, session.loopId)}`
 		: session.active
 			? `iteration in flight; chit_cancel "${session.loopId}" to stop it`
 			: `chit_next "${session.loopId}" to run the next iteration; chit_cancel "${session.loopId}" to stop`;
@@ -996,11 +995,11 @@ export function backgroundRunView(job: JobRecord) {
 		nextAction: live
 			? `running in the background; chit_status "${job.runId}" to poll, chit_cancel "${job.runId}" to stop`
 			: dj.display === "stale"
-				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run.${worktreeInspectHint(job)}`
+				? `worker appears dead; chit_trace "${job.runId}" for what it recorded, then start a fresh run.${worktreeInspectHint(job, job.runId)}`
 				: job.policy === "loop" && job.stopStatus === "needs-decision"
 					? needsDecisionNextAction(job.runId, job.lastVerification, job.lastVerificationSource) +
-						worktreeInspectHint(job)
-					: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history.${worktreeInspectHint(job)}`,
+						worktreeInspectHint(job, job.runId)
+					: `${dj.display}${stopSuffix}; chit_trace "${job.runId}" for the history.${worktreeInspectHint(job, job.runId)}`,
 	};
 }
 

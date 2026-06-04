@@ -204,17 +204,23 @@ export function removeTaskWorktree(
 	repo: string,
 	worktreePath: string,
 	branch: string,
-): { ok: true } | { ok: false; error: string } {
+): { ok: true; removedWorktree: boolean; removedBranch: boolean } | { ok: false; error: string } {
+	// Report WHAT was actually removed (vs already gone), so callers can give an honest
+	// idempotent response instead of claiming a removal that did nothing.
+	let removedWorktree = false;
 	if (existsSync(worktreePath)) {
 		const r = git(["worktree", "remove", "--force", worktreePath], repo);
 		if (r.code !== 0) return { ok: false, error: `git worktree remove failed: ${gitErr(r)}` };
+		removedWorktree = true;
 	} else {
 		// The worktree dir is gone but git may still track it; prune stale entries.
 		git(["worktree", "prune"], repo);
 	}
+	let removedBranch = false;
 	if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo).code === 0) {
 		const b = git(["branch", "-D", branch], repo);
 		if (b.code !== 0) return { ok: false, error: `git branch -D failed: ${gitErr(b)}` };
+		removedBranch = true;
 	}
 	// Best-effort: drop the now-empty <id> parent (chit/<batchId> or chit/<runId>) so a removed
 	// worktree leaves no litter. rmdir fails (ignored) if siblings remain or it is already gone.
@@ -223,7 +229,7 @@ export function removeTaskWorktree(
 	} catch {
 		// non-empty (sibling worktrees still present) or already removed -- leave it
 	}
-	return { ok: true };
+	return { ok: true, removedWorktree, removedBranch };
 }
 
 // The MAIN repo a linked worktree belongs to. A worktree's own `rev-parse --show-toplevel`
@@ -254,7 +260,8 @@ export interface RunCleanupResult {
 	confirmed: boolean; // false = dry run (nothing removed)
 	worktreePath?: string;
 	branch?: string;
-	removed?: boolean; // set on confirm: did the worktree/branch get retired
+	removed?: boolean; // set on confirm: did THIS call actually retire the worktree/branch
+	alreadyRemoved?: boolean; // set on confirm: nothing to do, it was already gone (idempotent re-run)
 	error?: string;
 	receiptsKept: true; // cleanup NEVER deletes the loop log / audit records
 	note: string;
@@ -287,15 +294,29 @@ export function cleanupRunWorkspace(
 		};
 	}
 	const r = removeTaskWorktree(git, opts.repo, opts.worktreePath, opts.branch);
+	if (!r.ok) {
+		return {
+			confirmed: true,
+			worktreePath: opts.worktreePath,
+			branch: opts.branch,
+			removed: false,
+			error: r.error,
+			receiptsKept: true,
+			note: `failed to remove the worktree: ${r.error}`,
+		};
+	}
+	// Honest idempotency: report removed ONLY when this call actually retired something; a re-run
+	// (worktree + branch already gone) reports alreadyRemoved, not a phantom removal.
+	const didRemove = r.removedWorktree || r.removedBranch;
 	return {
 		confirmed: true,
 		worktreePath: opts.worktreePath,
 		branch: opts.branch,
-		removed: r.ok,
-		...(r.ok ? {} : { error: r.error }),
+		removed: didRemove,
+		...(didRemove ? {} : { alreadyRemoved: true }),
 		receiptsKept: true,
-		note: r.ok
+		note: didRemove
 			? "removed the worktree + branch. Receipts (loop log / audit) are kept."
-			: `failed to remove the worktree: ${r.error}`,
+			: "already removed; nothing to do. Receipts (loop log / audit) are kept.",
 	};
 }
