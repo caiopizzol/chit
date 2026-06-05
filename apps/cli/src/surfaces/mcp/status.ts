@@ -73,6 +73,10 @@ export interface LoopStatusSummary {
 	lastVerificationSource?: ConvergeSession["lastVerificationSource"];
 	// The per-call timeout override (ms) this run was launched with, when set.
 	callTimeoutMs?: ConvergeSession["callTimeoutMs"];
+	// Wall-clock ms from start to terminal, mirrored from the in-memory session
+	// (endedAtMs - startedAtMs); present only once the loop has stopped, so a status
+	// poll reports a terminal run's elapsed without re-reading the durable loop log.
+	elapsedMs?: number;
 	auditRefs: string[];
 	nextAction: string;
 }
@@ -135,6 +139,12 @@ export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSumm
 			lastVerificationSource: session.lastVerificationSource,
 		}),
 		...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
+		// Terminal elapsed straight from the in-memory mirror: endedAtMs is set in
+		// lockstep with terminalStatus (see converge-engine), so its presence means the
+		// loop has stopped and the value is ready without a loop-log read.
+		...(session.endedAtMs !== undefined && {
+			elapsedMs: session.endedAtMs - session.startedAtMs,
+		}),
 		auditRefs: session.auditRefs,
 		nextAction,
 	};

@@ -334,6 +334,28 @@ describe("buildStatus", () => {
 		expect(status.active.loops.map((l) => l.run_id)).toEqual(["loop-a", "loop-b"]);
 	});
 
+	test("a terminal foreground loop exposes elapsed timing from the in-memory session mirror", () => {
+		// endedAtMs is set in lockstep with terminalStatus on the session (the mirror of
+		// the loop log's totalElapsedMs), so the overview reports a stopped loop's elapsed
+		// straight from memory: endedAtMs - startedAtMs, with no loop-log read.
+		const terminal = {
+			...fakeSession("loop-done", NOW - 90_000),
+			terminalStatus: "converged",
+			endedAtMs: NOW - 30_000,
+		} as unknown as ConvergeSession;
+		const status = buildStatus(
+			controllerOf([], [terminal]),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+		);
+		const loop = status.active.loops.find((l) => l.run_id === "loop-done");
+		expect(loop?.status).toBe("converged");
+		expect(loop?.elapsedMs).toBe(60_000); // endedAtMs - startedAtMs, from the mirror
+	});
+
 	test("recent_limit of 0 returns no recent runs", () => {
 		const status = buildStatus(
 			emptyController(),
