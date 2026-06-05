@@ -133,6 +133,40 @@ describe("buildStatus", () => {
 		expect(byId.done?.stopStatus).toBe("converged");
 	});
 
+	test("a background loop job's callTimeoutMs override is surfaced in the overview (and omitted when unset)", () => {
+		const jobStore = emptyJobStore();
+		const base: Omit<LoopJobRecord, "runId" | "loopId" | "state" | "createdAt"> = {
+			policy: "loop",
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 0,
+			auditRefs: [],
+		};
+		jobStore.create({
+			...base,
+			runId: "withCt",
+			loopId: "withCt",
+			state: "completed",
+			createdAt: "2026-06-01T10:01:00.000Z",
+			callTimeoutMs: 600_000,
+		});
+		jobStore.create({
+			...base,
+			runId: "noCt",
+			loopId: "noCt",
+			state: "completed",
+			createdAt: "2026-06-01T10:00:00.000Z",
+		});
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
+		const byId = Object.fromEntries(status.jobs.map((j) => [j.run_id, j]));
+		expect(byId.withCt?.callTimeoutMs).toBe(600_000); // the override shows in the list view
+		expect(byId.noCt?.callTimeoutMs).toBeUndefined(); // absent when no override was set
+	});
+
 	test("running job: timing fields + nextAction names the phase and ages", () => {
 		const jobStore = emptyJobStore();
 		jobStore.create({

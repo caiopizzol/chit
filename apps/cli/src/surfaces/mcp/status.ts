@@ -214,6 +214,9 @@ export interface JobStatusSummary {
 	lastVerification?: LoopJobRecord["lastVerification"];
 	lastVerificationSource?: LoopJobRecord["lastVerificationSource"];
 	stopStatus?: LoopJobRecord["stopStatus"];
+	// The per-call timeout override (ms) this loop run was launched with, when set, so
+	// the overview list shows the active budget like the single-run detail view does.
+	callTimeoutMs?: LoopJobRecord["callTimeoutMs"];
 	auditRefs: string[];
 	createdAt: string;
 	// Programmatic timing (omitted when not derivable; see jobTiming).
@@ -279,6 +282,8 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 				lastVerificationSource: job.lastVerificationSource,
 			}),
 		...(job.policy === "loop" && job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
+		...(job.policy === "loop" &&
+			job.callTimeoutMs !== undefined && { callTimeoutMs: job.callTimeoutMs }),
 		auditRefs: job.auditRefs,
 		createdAt: job.createdAt,
 		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),
