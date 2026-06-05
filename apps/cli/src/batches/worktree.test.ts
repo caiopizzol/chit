@@ -479,6 +479,95 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 		}
 	});
 
+	test("dry-run with include_untracked reports wouldApplyUntracked (and still applies nothing)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+				includeUntracked: ["newfile.ts"],
+			});
+			expect(dry.confirmed).toBe(false);
+			expect(dry.wouldApplyUntracked).toEqual(["newfile.ts"]); // what confirm WOULD copy
+			expect(dry.note).toContain("would copy 1 of 1 requested untracked file(s)");
+			expect(existsSync(join(main, "newfile.ts"))).toBe(false); // dry run still applies nothing
+		} finally {
+			teardown();
+		}
+	});
+
+	test("dry-run surfaces a request that selects NOTHING (typo / tracked name silently matched nothing before)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			// "typo.ts" is not a candidate; "f.ts" is tracked (also not an untracked candidate).
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+				includeUntracked: ["typo.ts", "f.ts"],
+			});
+			expect(dry.wouldApplyUntracked).toEqual([]); // the request selected nothing -- visible now
+			expect(dry.note).toContain("would copy 0 of 2 requested untracked file(s)");
+			expect(dry.untracked).toContain("newfile.ts"); // the real candidate is still listed
+		} finally {
+			teardown();
+		}
+	});
+
+	test("dry-run WITHOUT include_untracked keeps its prior shape (no wouldApplyUntracked, same hint)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+			});
+			expect("wouldApplyUntracked" in dry).toBe(false); // no empty-list noise when nothing was requested
+			expect(dry.note).toContain("pass include_untracked to copy specific ones");
+		} finally {
+			teardown();
+		}
+	});
+
+	test("a mixed request (one clean, one conflicting) would apply NOTHING -- dry-run mirrors confirm's atomicity", () => {
+		const { main, wt, base, teardown } = applySetup();
+		try {
+			// A second untracked file in the worktree that ALREADY exists in the target with
+			// different content -> a conflict. Confirm is ALL-OR-NOTHING: it refuses the whole
+			// apply, so the dry run must NOT claim the clean newfile.ts "would apply" (independent
+			// review caught exactly that mismatch).
+			writeFileSync(join(wt, "clash.ts"), "run version\n");
+			writeFileSync(join(main, "clash.ts"), "target version\n");
+			const request = ["newfile.ts", "clash.ts"];
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+				includeUntracked: request,
+			});
+			expect(dry.untrackedConflicts).toEqual(["clash.ts"]);
+			expect(dry.wouldApplyUntracked).toEqual([]); // this exact request copies nothing
+			// The invariant: confirm with the SAME request behaves exactly as the dry run said.
+			const ap = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: true,
+				includeUntracked: request,
+			});
+			expect(ap.applied).toBe(false); // atomic refusal
+			expect(ap.appliedUntracked).toBeUndefined();
+			expect(existsSync(join(main, "newfile.ts"))).toBe(false); // the clean file was NOT copied either
+		} finally {
+			teardown();
+		}
+	});
+
 	test("untracked files are NOT auto-applied without explicit inclusion (no silent residue / no lost source)", () => {
 		const { main, wt, base, teardown } = applySetup();
 		try {

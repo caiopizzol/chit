@@ -349,6 +349,10 @@ export interface RunApplyResult {
 	conflict?: string; // when !appliesClean: git's conflict report (no markers are written)
 	untracked: string[]; // unignored untracked candidates in the worktree -- NOT applied unless included
 	untrackedConflicts: string[]; // requested untracked files that already exist in the target with DIFFERENT content (would overwrite -> refused)
+	// Set on a DRY RUN when include_untracked was passed: the requested files that WOULD be copied on
+	// confirm (requested AND a real candidate AND not a conflict). Surfaces both what the request
+	// selected and what it silently missed (a typo / already-tracked name is just absent here).
+	wouldApplyUntracked?: string[];
 	appliedUntracked?: string[]; // set on confirm: which untracked files were copied (a subset of `untracked`)
 	receiptsKept: true; // apply NEVER touches the loop log / audit
 	note: string;
@@ -489,6 +493,21 @@ export function applyRunWorkspace(
 
 	if (!opts.confirm) {
 		const clean = appliesClean && untrackedConflicts.length === 0;
+		// What the include_untracked request WOULD copy on confirm. Reported only when the caller
+		// actually requested files: it answers "what did my request select" (a typo or an
+		// already-tracked name is visibly absent), without adding empty-list noise otherwise.
+		// MIRRORS CONFIRM'S ATOMICITY exactly (the invariant: this == confirm's appliedUntracked for
+		// the same request/state): ANY conflict -- tracked patch or untracked overwrite -- refuses the
+		// whole apply, so a mixed request copies NOTHING; never present the clean subset as "would
+		// apply" (drop the conflicting names from include_untracked and re-dry-run instead).
+		const requestedCount = (opts.includeUntracked ?? []).length;
+		const wouldApplyUntracked = clean ? requestedUntracked : [];
+		// The clean note reflects the request: with one, say exactly what would be copied; without
+		// one, keep pointing at include_untracked as the way to copy candidates.
+		const untrackedClause =
+			requestedCount > 0
+				? `would copy ${wouldApplyUntracked.length} of ${requestedCount} requested untracked file(s)${untracked.length > wouldApplyUntracked.length ? ` (${untracked.length} candidate(s) total)` : ""}`
+				: `${untracked.length} untracked candidate(s) (pass include_untracked to copy specific ones)`;
 		return {
 			confirmed: false,
 			target: opts.target,
@@ -497,9 +516,10 @@ export function applyRunWorkspace(
 			...(conflict ? { conflict } : {}),
 			untracked,
 			untrackedConflicts,
+			...(requestedCount > 0 && { wouldApplyUntracked }),
 			receiptsKept: true,
 			note: clean
-				? `dry run: ${trackedFiles.length} tracked file(s) apply cleanly to ${opts.target}; ${untracked.length} untracked candidate(s) (pass include_untracked to copy specific ones). confirm=true to apply.`
+				? `dry run: ${trackedFiles.length} tracked file(s) apply cleanly to ${opts.target}; ${untrackedClause}. confirm=true to apply.`
 				: !appliesClean
 					? `dry run: the tracked patch does NOT apply cleanly to ${opts.target} (it conflicts with the target's current state). Nothing applied.`
 					: `dry run: requested untracked file(s) already exist in ${opts.target} with different content (${untrackedConflicts.join(", ")}); applying would overwrite them. Nothing applied.`,
