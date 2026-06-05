@@ -945,6 +945,12 @@ header.app .loops-btn {
 	margin: 6px 0 0;
 	font-size: 13px;
 }
+.rail-statusline {
+	margin: 6px 0 0;
+	font-family: var(--mono, monospace);
+	font-size: 12px;
+	color: var(--carbon);
+}
 .rail-iters {
 	list-style: none;
 	margin: 0;

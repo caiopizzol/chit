@@ -40,6 +40,7 @@ import { type DiffRow, lineDiff } from "./diff.ts";
 import { canonicalize, referenceToken } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
+import { loopStatusLine } from "./loopStatus.ts";
 import type { CallData, FormatData, InputData } from "./nodes.tsx";
 import { nodeTypes } from "./nodes.tsx";
 import type {
@@ -659,6 +660,11 @@ function LoopRail({
 	const stop = records.find((r) => r.type === "stop");
 	const iterations = records.filter((r) => r.type === "iteration");
 	const status = stop?.type === "stop" ? stop.status : "in-progress";
+	// The compact summary of the LAST COMPLETED round, recomposed from the durable
+	// records -- the same line chit_status returns. Absent until a round completes,
+	// and never the in-flight activity line (that lives only in the MCP server's
+	// memory and does not reach Studio); see loopStatus.ts.
+	const statusLine = loopStatusLine(records);
 	return (
 		<div className="loop-rail">
 			{header?.type === "loop" && (
@@ -672,6 +678,7 @@ function LoopRail({
 					</div>
 					<p className="rail-scope">{header.scope}</p>
 					<p className="rail-task">{header.task}</p>
+					{statusLine && <p className="rail-statusline">{statusLine}</p>}
 				</div>
 			)}
 			<ol className="rail-iters">
