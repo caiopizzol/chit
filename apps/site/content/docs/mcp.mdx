@@ -105,7 +105,7 @@ The field NAME follows each surface's convention: snake_case `required_checks` a
 Advance the run by one unit and return control; emits a heartbeat while the unit runs. Inputs: `run_id`, and `step_id?` (one-shot only: advance just that ready step instead of the whole ready wave).
 
 - One-shot: runs the ready wave (or the named step). Returns `{ ran[], ...run view }`, each `ran` entry `{ step, durationMs, output }` or `{ step, cancelled: true, durationMs }`. When nothing is ready, the run is complete.
-- Loop: runs one implement-to-review iteration. Returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, workspaceWarnings, usage?, auditRef?, stopStatus?, ...run view }`. A set `stopStatus` means the loop also stopped this round. A cancelled iteration returns `{ cancelled: true, iteration, ...run view }` and records a clean `cancelled` stop, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, ...run view }` and closes the loop `blocked`.
+- Loop: runs one implement-to-review iteration. Returns `{ iteration, verdict, decision, findingCount, checksRun, changedFiles, workspaceWarnings, usage?, auditRef?, stopStatus?, statusLine, ...run view }`. `statusLine` is a compact one-line summary of the round this call ran -- `iteration N · <outcome>[ · checks][ · stop]`, e.g. `iteration 1 · proceed · 3/3 required checks passed · converged` -- so an agent reading the call back recovers the outcome from the returned data even when no live heartbeat reached it. A set `stopStatus` means the loop also stopped this round. A cancelled iteration returns `{ cancelled: true, iteration, statusLine, ...run view }` and records a clean `cancelled` stop, never a fake-successful round. A graceful manifest failure returns `{ failed: true, iteration, failure, statusLine, ...run view }` and closes the loop `blocked`.
 
 `chit_next` rejects a run that has already finished, and a loop that already has an iteration in flight (one advancer per loop; a foreground call and a background worker cannot advance the same loop at once).
 
@@ -114,6 +114,14 @@ Advance the run by one unit and return control; emits a heartbeat while the unit
 ### chit_status
 
 Run status. With a `run_id`: that run's status, and whether it is foreground (supervised by this session) or a durable background run. With no `run_id`: the operator overview of what is active in this server now plus a compact list of recently finished runs (newest first). Read-only: it never sweeps or touches the in-memory stores, so polling never keeps a run alive. Inputs: `run_id?`, `recent_limit?` (overview only, default 5; 0 for none). Active foreground state is per-session; background runs and recent history are durable across reconnect.
+
+For a foreground **loop** run, the view is the audit surface you read between and during iterations, recomposed from the run's own state so it is there whether or not a live heartbeat arrived:
+
+- `statusLine` -- the compact summary of the **last completed** round, the same line `chit_next` returned for it. Absent until the first round completes.
+- `activity` -- present **only while an iteration is in flight**: `{ iteration, phase, elapsedMs, phaseElapsedMs, lastActivityAgeMs, statusLine }`. `phase` is `implementing | reviewing | running required checks | cancelling` (absent in the brief spin-up before the first phase, where the line reads `starting`); `elapsedMs` is the run's wall time so far, `phaseElapsedMs` the current phase's; the nested `statusLine` is the live line `iteration N · <phase> · <dur>`. A settled or never-run loop reports no `activity`.
+- Terminal receipt -- once stopped, `elapsedMs` (total wall time) and `stopReason` (why it stopped), beside the terminal `status` (`converged | blocked | max-iterations | needs-decision | cancelled`).
+
+`lastActivityAgeMs` is the age of the last activity **mark** -- an iteration start, a phase transition, or a cancel -- not a periodic beat. A foreground run has no worker heartbeat, so an age of minutes is healthy mid-phase: a single implement or review step legitimately runs that long. This is the opposite of the background job view's `lastHeartbeatAgeMs`, a ~10s periodic worker heartbeat where a stale age means the worker has died.
 
 `chit_status` is a snapshot. When you want to wait for something to happen rather than poll, use `chit_wait`.
 
@@ -185,6 +193,8 @@ Show one audited run as a receipt, by its `audit_ref` (from `chit_trace`'s `audi
 ## Observability (heartbeat)
 
 While a call step runs, `chit_next` emits, every ~5s, both a progress notification (with `progressToken`) and a logging notification carrying the same latest-state text. Claude Code renders the latest heartbeat live in the collapsed tool call; the full transcript is `chit_trace`.
+
+Those live notifications are **best-effort UI**. A client may render them, drop them, or never surface them in the calling model's transcript at all, so an agent must not treat them as a data source. The durable audit surface to rely on is the **returned** data: `chit_next`'s `statusLine`, `chit_status`'s `statusLine` and in-flight `activity`, and the full `chit_trace` history. Each is recomposed from the run's own state and is readable whether or not a heartbeat ever arrived.
 
 There is no within-step streaming of the agent's output to the MCP client. The heartbeat is latest-state text, not a token stream, and `chit_next` returns only the unit's final result. On an audited run the adapter does capture the agent's live event stream as `adapter.event` records, but that feeds the [audit log](/docs/audit-log), not the MCP client.
 

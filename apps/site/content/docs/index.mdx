@@ -43,7 +43,7 @@ The same chit, three execution modes; you choose how much to watch.
 
 - Manifests are static DAGs: no loops, no conditionals, no dynamic routing. Iteration lives in an orchestrator on top.
 - Studio cannot run a chit; it is a read-and-inspect editor, and it needs a source checkout in this version.
-- No client-facing token stream over MCP: a long step shows a latest-state heartbeat, not the model's live tokens.
+- No client-facing token stream over MCP: a long step shows a latest-state heartbeat (best-effort UI), not the model's live tokens. The durable record an agent reads back is `chit_status` / `chit_trace`, not the heartbeat.
 - chit is not a general workflow engine: no hosted scheduler, no cron, no SaaS connectors, no dynamic router.
 
 ## Where to go next
