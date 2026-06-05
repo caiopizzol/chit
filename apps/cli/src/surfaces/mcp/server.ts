@@ -979,6 +979,10 @@ export function oneShotRunView(run: Run) {
 export function loopRunView(session: ConvergeSession) {
 	const status = session.terminalStatus ?? (session.active ? "running" : "open");
 	const stopped = session.terminalStatus !== undefined;
+	// The compact summary of the last completed iteration -- the same line chit_next
+	// returns, recomposed from the session mirror so chit_status shows it after a long
+	// chit_next. Absent until a round completes (an open never-run loop invents nothing).
+	const statusLine = loopStatusLineFromSession(session);
 	const nextAction = stopped
 		? session.terminalStatus === "needs-decision"
 			? needsDecisionNextAction(
@@ -995,6 +999,7 @@ export function loopRunView(session: ConvergeSession) {
 		mode: "foreground" as const,
 		execution: "loop" as const,
 		status,
+		...(statusLine !== undefined && { statusLine }),
 		...workspaceView(session),
 		iterationsCompleted: session.iteration,
 		cancellable: !stopped,
@@ -1032,29 +1037,66 @@ function checkSummary(
 	return `${passed}/${checks.length} ${noun} passed`;
 }
 
+// The shared composition behind both status lines: "iteration N · outcome[ · checks][ · stop]".
+// chit_next feeds it the transient NextResult; chit_status feeds it the session mirror. Routing
+// both through one composer is what keeps the live (chit_next) and audit (chit_status) narrations
+// from drifting. Its vocabulary mirrors the heartbeat lines so all three read the same.
+function composeLoopStatusLine(parts: {
+	iteration: number;
+	// The outcome word: a completed round's verdict, or a cancelled/failed round's fate.
+	outcome: string;
+	// The round's structured checks, or undefined when the round ran none (a cancelled/
+	// failed round) -- the rollup is the WHY behind a verification gate stop.
+	checks: LoopCheck[] | undefined;
+	source: ConvergeSession["lastVerificationSource"];
+	// The stop status attributed to THIS line's round -- appended when that round took
+	// the loop terminal, unless the outcome word already states it (a cancelled round
+	// stops "cancelled"). Callers must pass the round's OWN stop, never a later one.
+	stop: ConvergeSession["terminalStatus"];
+}): string {
+	const out = [`iteration ${parts.iteration}`, parts.outcome];
+	const checks = parts.checks ? checkSummary(parts.checks, parts.source) : undefined;
+	if (checks) out.push(checks);
+	if (parts.stop && parts.stop !== parts.outcome) out.push(parts.stop);
+	return out.join(" · ");
+}
+
 // One compact, human-readable line summarizing the iteration that just ran, added to
 // every chit_next loop response. The live heartbeats (notifications/progress,
 // sendLoggingMessage) are UI-only best effort and may never reach the calling model,
 // so an agent auditing the call later must be able to read what happened from the
-// RETURNED data alone -- this is that line. Its vocabulary mirrors the heartbeat lines
-// (iteration · outcome · checks · stop) so the live and returned narration read the
-// same. Derived only from data the handler already holds; no new instrumentation.
+// RETURNED data alone -- this is that line. Derived only from data the handler already
+// holds; no new instrumentation.
 export function loopStatusLine(result: NextResult, session: ConvergeSession): string {
-	const parts = [`iteration ${result.iteration}`];
-	// The outcome word: the verdict for a completed round, else the round's fate.
-	const outcome = result.kind === "iteration" ? result.verdict : result.kind;
-	parts.push(outcome);
-	// A completed round carries its structured check rollup -- the WHY behind a
-	// verification gate stop (e.g. proceed but checks failed -> needs-decision).
-	if (result.kind === "iteration") {
-		const checks = checkSummary(result.checks, session.lastVerificationSource);
-		if (checks) parts.push(checks);
-	}
-	// The terminal stop status when this round took the loop terminal, unless the
-	// outcome word already states it (a cancelled round stops "cancelled").
-	const stop = session.terminalStatus;
-	if (stop && stop !== outcome) parts.push(stop);
-	return parts.join(" · ");
+	return composeLoopStatusLine({
+		iteration: result.iteration,
+		outcome: result.kind === "iteration" ? result.verdict : result.kind,
+		checks: result.kind === "iteration" ? result.checks : undefined,
+		source: session.lastVerificationSource,
+		// This call's round is the one that just (maybe) stopped the loop, so the
+		// current terminalStatus IS the round's own stop.
+		stop: session.terminalStatus,
+	});
+}
+
+// The chit_status counterpart to loopStatusLine: the SAME compact line, recomposed from the
+// session mirror (the last completed iteration's cached bits) rather than the transient
+// NextResult, so an agent that calls chit_status after a long chit_next reads the same summary.
+// Absent until a round has completed (lastVerdict is the outcome word, set in lockstep with the
+// other last* fields) -- an open loop with no completed iteration must not invent a line.
+function loopStatusLineFromSession(session: ConvergeSession): string | undefined {
+	if (session.lastVerdict === undefined) return undefined;
+	return composeLoopStatusLine({
+		iteration: session.iteration,
+		outcome: session.lastVerdict,
+		checks: session.lastChecks,
+		source: session.lastVerificationSource,
+		// The completed round's OWN stop (lastStopStatus), never the loop's current
+		// terminalStatus: a later cancelled/failed attempt that completed no round sets
+		// terminalStatus without advancing the mirror, and its stop must not be
+		// attributed to this earlier round's line.
+		stop: session.lastStopStatus,
+	});
 }
 
 // A failed/blocked run can leave real edits UNCOMMITTED in its worktree that no completed-iteration
@@ -1612,23 +1654,26 @@ server.registerTool(
 				if (result.kind === "cancelled") {
 					heartbeat(`${run_id} · iteration ${result.iteration} · cancelled`);
 					return jsonResult({
-						// A compact summary of the unit that just ran, so an agent auditing this
-						// call can read the outcome from the RETURNED data even if no live
-						// heartbeat ever reached it. See loopStatusLine.
-						statusLine: loopStatusLine(result, session),
 						cancelled: true,
 						iteration: result.iteration,
 						...loopRunView(session),
+						// A compact summary of the round THIS call ran, so an agent auditing the
+						// call reads its outcome from the RETURNED data even if no live heartbeat
+						// reached it. Placed after the spread so it wins over loopRunView's
+						// statusLine (which summarizes the last COMPLETED round, not this one),
+						// keeping chit_next's returned statusLine unchanged. See loopStatusLine.
+						statusLine: loopStatusLine(result, session),
 					});
 				}
 				if (result.kind === "failed") {
 					heartbeat(`${run_id} · iteration ${result.iteration} · failed`);
 					return jsonResult({
-						statusLine: loopStatusLine(result, session),
 						failed: true,
 						iteration: result.iteration,
 						failure: result.failure,
 						...loopRunView(session),
+						// After the spread: this call's round wins over loopRunView's last-completed line.
+						statusLine: loopStatusLine(result, session),
 					});
 				}
 				heartbeat(
@@ -1637,7 +1682,6 @@ server.registerTool(
 					}`,
 				);
 				return jsonResult({
-					statusLine: loopStatusLine(result, session),
 					iteration: result.iteration,
 					verdict: result.verdict,
 					decision: result.decision,
@@ -1650,6 +1694,9 @@ server.registerTool(
 					...(result.auditRunId && { auditRef: result.auditRunId }),
 					...(result.stopStatus && { stopStatus: result.stopStatus }),
 					...loopRunView(session),
+					// After the spread for the same reason as the other arms; for a completed
+					// round this equals loopRunView's statusLine, so it is unchanged either way.
+					statusLine: loopStatusLine(result, session),
 				});
 			} catch (e) {
 				return errorResult(safeMcpError(e));

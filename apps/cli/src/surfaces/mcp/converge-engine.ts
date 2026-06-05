@@ -78,6 +78,16 @@ export interface ConvergeSession {
 	// loop log is the durable source of truth).
 	lastVerification?: Verification;
 	lastVerificationSource?: VerificationSource;
+	// Latest iteration's structured per-check results ([] when none ran), cached so a
+	// status view can recompose the same check rollup chit_next returns. Set in lockstep
+	// with the other last* fields (a round completed); the loop log stays the source of truth.
+	lastChecks?: LoopCheck[];
+	// The stop status the last COMPLETED round itself produced (converged /
+	// needs-decision / max-iterations / blocked, or undefined while the loop continues),
+	// set in lockstep with the other last* fields. Distinct from terminalStatus: a LATER
+	// cancelled/failed attempt sets terminalStatus without advancing this mirror, so a
+	// status view never attributes that stop to the earlier completed round.
+	lastStopStatus?: LoopStopStatus;
 	// Audit run ids for completed audited iterations, in order. The loop log also
 	// records these as auditRef; mirrored here so status/trace need not re-read
 	// the log just for the refs.
@@ -325,6 +335,7 @@ export async function runNextIteration(
 		session.lastDecision = iter.decision;
 		session.lastVerification = iter.verification;
 		session.lastVerificationSource = iter.verificationSource;
+		session.lastChecks = iter.checks;
 		if (iter.auditRunId !== undefined) session.auditRefs.push(iter.auditRunId);
 
 		if (iter.stopStatus !== undefined) {
@@ -343,6 +354,10 @@ export async function runNextIteration(
 				);
 			}
 		}
+		// The stop THIS round produced. At round start the loop was non-terminal (a
+		// terminal run is refused above), so whatever terminalStatus holds after the
+		// stop decision is this round's own doing -- undefined when the loop continues.
+		session.lastStopStatus = session.terminalStatus;
 
 		return {
 			kind: "iteration",

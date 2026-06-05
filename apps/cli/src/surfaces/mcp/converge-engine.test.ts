@@ -472,6 +472,9 @@ describe("required checks via runNextIteration (chit-executed, the MCP driver)",
 		// The session caches the latest verification + source for status views.
 		expect(session.lastVerification).toBe("passed");
 		expect(session.lastVerificationSource).toBe("chit");
+		// ...and the structured checks too, in lockstep -- the mirror equals the durable record.
+		expect(session.lastChecks).toEqual(it?.checks);
+		expect(session.lastChecks?.every((c) => c.status === "passed")).toBe(true);
 	});
 
 	test("proceed + a failed check -> the iteration is a revise (no stop, decision diverges)", async () => {
@@ -632,5 +635,85 @@ describe("runNextIteration: stopReason mirrors terminalStatus", () => {
 		await runNextIteration(session);
 		expect(session.terminalStatus).toBeUndefined();
 		expect(session.stopReason).toBeUndefined();
+	});
+});
+
+describe("runNextIteration: lastChecks mirrors the completed iteration", () => {
+	// The session caches the last round's structured checks alongside the other last*
+	// fields (set in lockstep on a completed iteration), so a status view can recompose
+	// the chit_next check rollup without re-reading the loop log. Each case ties the
+	// mirror to the durable iteration record, the source of truth.
+	test("set from the reviewer's reported checks, in lockstep with lastVerdict", async () => {
+		const session = start(
+			scriptedExecute([
+				reviewJson("revise", { checks: [{ command: "bun test", status: "passed" }] }),
+			]),
+		);
+		await runNextIteration(session);
+		// Both advance together on the completed round...
+		expect(session.lastVerdict).toBe("revise");
+		expect(session.lastChecks).toEqual([{ command: "bun test", status: "passed" }]);
+		// ...and the mirror is faithful to the durable record.
+		expect(session.lastChecks).toEqual(iterations("L1")[0]?.checks);
+	});
+
+	test("set to [] when the completed round ran no checks", async () => {
+		const session = start(scriptedExecute([reviewJson("revise", { checks: [] })]));
+		await runNextIteration(session);
+		expect(session.lastChecks).toEqual([]);
+	});
+
+	test("absent until a round completes; a cancelled-first round leaves it unset", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		expect(session.lastChecks).toBeUndefined(); // fresh: nothing has completed
+		const controller = new AbortController();
+		controller.abort();
+		await runNextIteration(session, { signal: controller.signal });
+		// Cancelled with no iteration record appended -> the mirror never advanced.
+		expect(session.terminalStatus).toBe("cancelled");
+		expect(session.lastChecks).toBeUndefined();
+	});
+});
+
+describe("runNextIteration: lastStopStatus is the completed round's OWN stop", () => {
+	// terminalStatus can be set by a LATER cancelled/failed attempt that completed no
+	// round; lastStopStatus advances only with the completed-iteration mirror, so a
+	// status view can attribute a stop clause to the right round (never borrow a later
+	// round's stop for an earlier round's line).
+	test("set on a converging round, in lockstep with terminalStatus", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("converged");
+		expect(session.lastStopStatus).toBe("converged");
+	});
+
+	test("a continuing revise leaves it unset (the round produced no stop)", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBeUndefined();
+		expect(session.lastStopStatus).toBeUndefined();
+	});
+
+	test("a budget-exhausting revise records max-iterations as its own stop", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("revise")]), 2);
+		await runNextIteration(session);
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("max-iterations");
+		expect(session.lastStopStatus).toBe("max-iterations");
+	});
+
+	test("a later cancelled attempt sets terminalStatus but never advances this mirror", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session); // round 1 completes: revise, the loop stays open
+		expect(session.lastVerdict).toBe("revise");
+		expect(session.lastStopStatus).toBeUndefined();
+		const controller = new AbortController();
+		controller.abort();
+		await runNextIteration(session, { signal: controller.signal }); // round 2: cancelled, no record
+		expect(session.terminalStatus).toBe("cancelled");
+		// The completed-round mirror did not advance: verdict still round 1's, stop still none --
+		// the exact state whose status line must not read "... · cancelled".
+		expect(session.lastVerdict).toBe("revise");
+		expect(session.lastStopStatus).toBeUndefined();
 	});
 });

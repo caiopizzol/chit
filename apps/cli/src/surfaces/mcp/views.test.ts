@@ -467,6 +467,109 @@ describe("loopStatusLine: a compact RETURNED summary an agent can audit without 
 	});
 });
 
+describe("loopRunView statusLine: the chit_status mirror of the chit_next line", () => {
+	// Live MCP notifications never reach the calling model's transcript, so after a long
+	// chit_next an agent re-reads the run via chit_status -> loopRunView. These pin that the
+	// view recomposes the SAME compact line from the session mirror (the last completed
+	// iteration's cached bits), and invents none before a round completes.
+	const passed = (command: string) => ({ command, status: "passed" as const });
+	const blocked = (command: string) => ({ command, status: "blocked" as const });
+
+	test("a converged round surfaces the same line chit_next returned (the example shape)", () => {
+		// The session as runNextIteration leaves it after a proceed + all-checks-passed round
+		// that converged via chit-executed required checks: iteration/verdict/checks/source/stop
+		// all set in lockstep.
+		const session = loopSession({
+			iteration: 1,
+			lastVerdict: "proceed",
+			lastVerificationSource: "chit",
+			lastChecks: [passed("bun test"), passed("tsc"), passed("biome")],
+			terminalStatus: "converged",
+			lastStopStatus: "converged",
+		});
+		const v = loopRunView(session) as Record<string, unknown>;
+		expect(v.statusLine).toBe("iteration 1 · proceed · 3/3 required checks passed · converged");
+		// ...and it equals what chit_next composes from the transient result for that round,
+		// so the live and audit surfaces cannot drift.
+		const result = {
+			kind: "iteration",
+			iteration: 1,
+			verdict: "proceed",
+			checks: [passed("bun test"), passed("tsc"), passed("biome")],
+		} as NextResult;
+		expect(v.statusLine).toBe(loopStatusLine(result, session));
+		expectNoLeakage(v);
+	});
+
+	test("a needs-decision round names how many required checks passed (the gate's WHY)", () => {
+		// Reachable: proceed but a check could only be BLOCKED (e.g. a read-only sandbox) ->
+		// verification blocked -> needs-decision; 2 of 3 passed.
+		const v = loopRunView(
+			loopSession({
+				iteration: 1,
+				lastVerdict: "proceed",
+				lastVerificationSource: "chit",
+				lastChecks: [passed("bun test"), passed("tsc"), blocked("git push --dry-run")],
+				terminalStatus: "needs-decision",
+				lastStopStatus: "needs-decision",
+			}),
+		) as Record<string, unknown>;
+		expect(v.statusLine).toBe(
+			"iteration 1 · proceed · 2/3 required checks passed · needs-decision",
+		);
+	});
+
+	test("an OPEN loop after a revise shows the round line with no stop clause", () => {
+		// A revise that did not exhaust the budget leaves the loop open (terminalStatus unset);
+		// the line is the completed round, no terminal word appended.
+		const v = loopRunView(
+			loopSession({
+				iteration: 2,
+				lastVerdict: "revise",
+				lastVerificationSource: "reviewer",
+				lastChecks: [passed("the tests")],
+			}),
+		) as Record<string, unknown>;
+		expect(v.statusLine).toBe("iteration 2 · revise · 1/1 checks passed");
+	});
+
+	test("an open loop with NO completed iteration invents no statusLine (field absent)", () => {
+		// A freshly opened loop (chit_start, before the first chit_next): iteration 0, no last*
+		// mirror -> the field must be absent, never a fabricated line.
+		const v = loopRunView(loopSession({ iteration: 0 })) as Record<string, unknown>;
+		expect(v.statusLine).toBeUndefined();
+	});
+
+	test("a loop cancelled before any iteration completed still has no statusLine", () => {
+		// Cancelling the first chit_next writes a cancelled stop with NO iteration record, so the
+		// mirror stays empty: terminal, but nothing completed -> no line to show.
+		const v = loopRunView(loopSession({ iteration: 0, terminalStatus: "cancelled" })) as Record<
+			string,
+			unknown
+		>;
+		expect(v.statusLine).toBeUndefined();
+	});
+
+	test("a later cancelled attempt is not attributed to the earlier completed round's line", () => {
+		// Reachable mixed state: round 1 completed as a revise (loop stayed open, so no
+		// lastStopStatus), then the NEXT chit_next was cancelled mid-flight -- stopTerminal
+		// set terminalStatus without advancing the completed-iteration mirror. The line must
+		// stay the completed round's own story: no "· cancelled" clause borrowed from round 2
+		// (the view's status + stopReason fields carry the cancellation, where it belongs).
+		const v = loopRunView(
+			loopSession({
+				iteration: 1,
+				lastVerdict: "revise",
+				lastVerificationSource: "reviewer",
+				lastChecks: [passed("the tests")],
+				terminalStatus: "cancelled",
+			}),
+		) as Record<string, unknown>;
+		expect(v.statusLine).toBe("iteration 1 · revise · 1/1 checks passed");
+		expect(v.status).toBe("cancelled"); // the cancellation still shows where it belongs
+	});
+});
+
 describe("backgroundRunView: partial-work visibility on a failed run (partial-work slice)", () => {
 	test("a FAILED loop run with a dirty worktree surfaces partialWork (not changedFiles: [])", () => {
 		const repo = mkdtempSync(join(tmpdir(), "chit-bgpw-"));
