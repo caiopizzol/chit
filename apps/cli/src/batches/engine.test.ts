@@ -329,6 +329,34 @@ describe("needs_attention surfacing", () => {
 		expect(view.nextAction).toContain("review_ready tasks");
 	});
 
+	test("a failed task surfaces partialWork (uncommitted worktree diff) the timeout left behind", () => {
+		// The exact #100-followup bug: the implementer timed out at iteration 0, so changedFiles is
+		// empty, but the worktree has real uncommitted work. The view must surface it, not hide it.
+		deps.loopDetail = () => ({
+			changedFiles: [], // no completed iteration
+			workspaceWarnings: [],
+			partialWork: {
+				partialWorkPresent: true,
+				dirtyFiles: ["server.ts", "tests.ts"],
+				insertions: 110,
+				deletions: 24,
+			},
+		});
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), {
+			state: "failed",
+			failure: 'manifest run failed at step "implement": claude --print timed out after 900000ms',
+		});
+		advanceBatch(store, deps, "c1");
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		const a = view.tasks.find((t) => t.id === "a");
+		expect(a?.status).toBe("failed");
+		expect(a?.changedFiles).toEqual([]); // still empty (no iteration)...
+		expect(a?.partialWork?.files).toEqual(["server.ts", "tests.ts"]); // ...but the work is surfaced
+		expect(a?.partialWork?.diffStat).toBe("2 file(s), +110 -24");
+		expect(a?.partialWork?.note).toContain("timed out after 15m");
+	});
+
 	test("summarizeBatch counts needs_attention separately from failed", () => {
 		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
 		jobs.finish(firstJob(), { stopStatus: "blocked" });

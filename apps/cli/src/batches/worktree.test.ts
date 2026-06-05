@@ -15,8 +15,10 @@ import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
 	createTaskWorktree,
+	describePartialWork,
 	type GitResult,
 	type GitRunner,
+	inspectPartialWork,
 	mainRepoOfWorktree,
 	prepareRunWorkspace,
 	realGit,
@@ -686,5 +688,75 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 			rmSync(main, { recursive: true, force: true });
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("inspectPartialWork + describePartialWork (partial-work visibility)", () => {
+	test("inspectPartialWork reports uncommitted tracked + untracked work; clean/missing -> none", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-pw-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "a\nb\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			expect(inspectPartialWork(realGit, repo).partialWorkPresent).toBe(false); // clean
+			expect(inspectPartialWork(realGit, join(repo, "nope")).partialWorkPresent).toBe(false); // missing
+			// dirty: edit a tracked file + add an untracked one
+			writeFileSync(join(repo, "f.ts"), "A\nb\nc\n");
+			writeFileSync(join(repo, "new.ts"), "x\n");
+			const pw = inspectPartialWork(realGit, repo);
+			expect(pw.partialWorkPresent).toBe(true);
+			expect(pw.dirtyFiles).toContain("f.ts");
+			expect(pw.dirtyFiles).toContain("new.ts"); // untracked counts as dirty
+			expect(pw.insertions).toBeGreaterThan(0); // tracked insertions counted
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("STAGED partial work (the implementer git add'd before timing out) is counted, not +0/-0 (#review)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-pw-staged-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "a\nb\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			// edit AND stage it (implementer committed work to the index, then the step died)
+			writeFileSync(join(repo, "f.ts"), "a\nb\nc\nd\n");
+			realGit(["add", "f.ts"], repo);
+			const pw = inspectPartialWork(realGit, repo);
+			expect(pw.partialWorkPresent).toBe(true);
+			expect(pw.dirtyFiles).toContain("f.ts");
+			expect(pw.insertions).toBe(2); // counted vs HEAD even though staged (plain git diff would be 0)
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("describePartialWork: none -> undefined; present -> view; timeout failure reframed to minutes", () => {
+		expect(
+			describePartialWork(
+				{ partialWorkPresent: false, dirtyFiles: [], insertions: 0, deletions: 0 },
+				"/wt",
+			),
+		).toBeUndefined();
+		const pw = {
+			partialWorkPresent: true,
+			dirtyFiles: ["a.ts", "b.ts"],
+			insertions: 110,
+			deletions: 24,
+		};
+		const v = describePartialWork(pw, "/wt/run/scope", "claude --print timed out after 900000ms");
+		expect(v?.files).toEqual(["a.ts", "b.ts"]);
+		expect(v?.diffStat).toBe("2 file(s), +110 -24");
+		expect(v?.note).toContain("timed out after 15m"); // 900000ms -> 15m
+		expect(v?.note).toContain("git -C /wt/run/scope diff");
+		const v2 = describePartialWork(pw, "/wt", "some other error");
+		expect(v2?.note).not.toContain("timed out");
+		expect(v2?.note).toContain("uncommitted work");
 	});
 });

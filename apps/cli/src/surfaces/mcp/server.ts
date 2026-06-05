@@ -53,7 +53,10 @@ import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
 	createTaskWorktree,
+	describePartialWork,
+	inspectPartialWork,
 	mainRepoOfWorktree,
+	type PartialWorkView,
 	prepareRunWorkspace,
 	realGit,
 	removeTaskWorktree,
@@ -988,6 +991,31 @@ export function loopRunView(session: ConvergeSession) {
 	};
 }
 
+// A failed/blocked run can leave real edits UNCOMMITTED in its worktree that no completed-iteration
+// record captured (e.g. the implementer timed out before iteration 1) -- so changedFiles reads
+// empty and the work looks lost. For a terminal-but-not-clean loop run with a worktree, surface
+// that partial work (files + diffstat) and reframe a timeout failure honestly. Returns {} when
+// there is nothing to add (a clean run, no worktree, or a worktree with no uncommitted work), so
+// the happy path is unchanged.
+function partialWorkView(job: JobRecord): { partialWork?: PartialWorkView } {
+	if (job.policy !== "loop" || !job.worktreePath) return {};
+	// Surface partial work only when the run is NOT cleanly progressing:
+	//   - failed: the worker recorded a terminal failure.
+	//   - blocked: a blocked stop (e.g. the implement step timed out -> the loop stops blocked).
+	//   - stale: the worker DIED mid-step without recording a terminal state (state stuck "running",
+	//     but isStale) -- it can have left real work too. A HEALTHY running run is excluded, so a hot
+	//     status poll never does git I/O and the live worktree (still changing) is not inspected.
+	// A converged / needs-decision run already reports its diff via changedFiles.
+	const stale = job.state === "running" && isStale(job, Date.now());
+	if (!(job.state === "failed" || job.stopStatus === "blocked" || stale)) return {};
+	const pw = describePartialWork(
+		inspectPartialWork(realGit, job.worktreePath),
+		job.worktreePath,
+		job.failure,
+	);
+	return pw ? { partialWork: pw } : {};
+}
+
 // A durable background run, re-presented from describeJob under run_id with the
 // unified verbs. Drops the jobId/loopId handles and the job-tool nextAction prose.
 export function backgroundRunView(job: JobRecord) {
@@ -1007,6 +1035,7 @@ export function backgroundRunView(job: JobRecord) {
 		execution: "job" as const,
 		...rest,
 		...workspaceView(job),
+		...partialWorkView(job),
 		nextAction: live
 			? `running in the background; chit_status "${job.runId}" to poll, chit_cancel "${job.runId}" to stop`
 			: dj.display === "stale"
@@ -2005,16 +2034,23 @@ const batchDeps: BatchEngineDeps = {
 	},
 	isStale: (job) => isStale(job, Date.now()),
 	loopDetail: (worktreePath, loopId) => {
+		// The worktree's uncommitted state -- so a task that failed mid-step surfaces work no
+		// completed iteration captured (read-only; empty for a missing/clean worktree).
+		const partialWork = inspectPartialWork(realGit, worktreePath);
 		try {
 			const iters = readLoop(worktreePath, loopId).filter((r) => r.type === "iteration");
 			const last = iters.at(-1);
 			if (last && last.type === "iteration") {
-				return { changedFiles: last.changedFiles, workspaceWarnings: last.workspaceWarnings ?? [] };
+				return {
+					changedFiles: last.changedFiles,
+					workspaceWarnings: last.workspaceWarnings ?? [],
+					partialWork,
+				};
 			}
 		} catch {
 			// loop log not readable (worker still starting, or removed); no detail
 		}
-		return { changedFiles: [], workspaceWarnings: [] };
+		return { changedFiles: [], workspaceWarnings: [], partialWork };
 	},
 	now: () => Date.now(),
 };

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AuditStoreError } from "../../audit/store.ts";
+import { realGit } from "../../batches/worktree.ts";
 import { LockError } from "../../jobs/lock.ts";
 import { JobStoreError } from "../../jobs/store.ts";
 import type { LoopJobRecord } from "../../jobs/types.ts";
@@ -346,5 +350,86 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(safeMcpError(new Error("step implement failed: bad input"))).toBe(
 			"step implement failed: bad input",
 		);
+	});
+});
+
+describe("backgroundRunView: partial-work visibility on a failed run (partial-work slice)", () => {
+	test("a FAILED loop run with a dirty worktree surfaces partialWork (not changedFiles: [])", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-bgpw-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			// the implementer wrote work then the step timed out -> uncommitted in the worktree
+			writeFileSync(join(repo, "f.ts"), "WORK IN PROGRESS\n");
+			writeFileSync(join(repo, "new.ts"), "x\n");
+			const v = backgroundRunView(
+				job({
+					runId: "bg-fail",
+					state: "failed",
+					worktreePath: repo,
+					failure:
+						'manifest run failed at step "implement": claude --print timed out after 900000ms',
+					lastHeartbeatAt: undefined,
+				}),
+			) as Record<string, unknown>;
+			const pw = v.partialWork as { files: string[]; diffStat: string; note: string } | undefined;
+			expect(pw).toBeDefined();
+			expect(pw?.files).toContain("f.ts");
+			expect(pw?.files).toContain("new.ts");
+			expect(pw?.note).toContain("timed out after 15m");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("a CONVERGED (clean-terminal) run does NOT add partialWork even with a worktree", () => {
+		// the happy path is unchanged: changedFiles already covers a converged run's diff.
+		const v = backgroundRunView(
+			job({
+				runId: "bg-ok",
+				state: "completed",
+				stopStatus: "converged",
+				worktreePath: "/wt/does-not-exist",
+			}),
+		) as Record<string, unknown>;
+		expect(v.partialWork).toBeUndefined();
+	});
+
+	test("a STALE run (worker died mid-step, state stuck running) surfaces partialWork too", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-stale-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			writeFileSync(join(repo, "f.ts"), "half-written work\n"); // the dead worker's partial edit
+			// state "running" but a stale heartbeat (worker dead) -> derived stale, never recorded a stop.
+			const v = backgroundRunView(
+				job({
+					runId: "bg-stale",
+					state: "running",
+					worktreePath: repo,
+					lastHeartbeatAt: "2020-01-01T00:00:00.000Z", // far in the past -> isStale
+				}),
+			) as Record<string, unknown>;
+			const pw = v.partialWork as { files: string[] } | undefined;
+			expect(pw?.files).toContain("f.ts");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("a HEALTHY running run does NOT add partialWork (no git I/O on a hot poll)", () => {
+		// the default job() is a live-running job (fresh heartbeat) -> not stale -> excluded.
+		const v = backgroundRunView(
+			job({ runId: "bg-live", state: "running", worktreePath: "/wt/does-not-exist" }),
+		) as Record<string, unknown>;
+		expect(v.partialWork).toBeUndefined();
 	});
 });

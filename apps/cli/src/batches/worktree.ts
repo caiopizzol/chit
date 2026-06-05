@@ -574,3 +574,74 @@ export function applyRunWorkspace(
 		note: `applied ${trackedFiles.length} tracked file(s)${appliedUntracked.length ? ` + ${appliedUntracked.length} untracked` : ""} to ${opts.target}. Receipts kept; the worktree remains for chit_cleanup.`,
 	};
 }
+
+export interface PartialWork {
+	partialWorkPresent: boolean;
+	dirtyFiles: string[]; // every uncommitted path (tracked-modified + untracked), from git status
+	insertions: number; // tracked line insertions (git diff --numstat; untracked files are not counted)
+	deletions: number;
+}
+
+// Inspect a run's worktree for UNCOMMITTED work (#100-followup). A run that fails mid-step (e.g.
+// the implementer times out before iteration 1 completes) leaves real edits in the worktree that
+// NO completed-iteration record captures -- so changedFiles reads empty and the work looks lost.
+// This reads the worktree's git state directly so a failed run can surface "partial work is here".
+// Read-only; safe on any path (returns empty for a missing/non-git worktree).
+export function inspectPartialWork(git: GitRunner, worktreePath: string): PartialWork {
+	const empty: PartialWork = {
+		partialWorkPresent: false,
+		dirtyFiles: [],
+		insertions: 0,
+		deletions: 0,
+	};
+	if (!existsSync(worktreePath)) return empty;
+	const st = git(["status", "--porcelain"], worktreePath);
+	if (st.code !== 0) return empty;
+	// porcelain v1: "XY <path>" (or "XY <old> -> <new>" for a rename); the path starts at col 3.
+	const dirtyFiles = st.stdout
+		.split("\n")
+		.map((l) => l.slice(3).trim())
+		.filter(Boolean);
+	let insertions = 0;
+	let deletions = 0;
+	// vs HEAD (not the index): an implementer that `git add`ed before timing out has STAGED work --
+	// plain `git diff --numstat` (working tree vs index) would miss it and report +0/-0 while the
+	// file still shows dirty. `--numstat HEAD` counts staged + unstaged tracked changes vs the base.
+	const ns = git(["diff", "--numstat", "HEAD"], worktreePath);
+	if (ns.code === 0) {
+		for (const line of ns.stdout.split("\n")) {
+			const [add, del] = line.split("\t");
+			if (add && add !== "-") insertions += Number.parseInt(add, 10) || 0;
+			if (del && del !== "-") deletions += Number.parseInt(del, 10) || 0;
+		}
+	}
+	return { partialWorkPresent: dirtyFiles.length > 0, dirtyFiles, insertions, deletions };
+}
+
+export interface PartialWorkView {
+	worktreePath: string;
+	files: string[];
+	diffStat: string;
+	note: string;
+}
+
+// Format inspected partial work into the surface both chit_status (single run) and chit_batch_status
+// (a task) show, with an honest, actionable note. Reframes a timeout failure ("...timed out after
+// 900000ms") into minutes. Returns undefined when there is no partial work to surface.
+export function describePartialWork(
+	pw: PartialWork,
+	worktreePath: string,
+	failure?: string,
+): PartialWorkView | undefined {
+	if (!pw.partialWorkPresent) return undefined;
+	const m = failure?.match(/timed out after (\d+)\s*ms/);
+	const timeoutNote = m
+		? ` The implementer timed out after ${Math.round(Number(m[1]) / 60_000)}m before committing this work.`
+		: "";
+	return {
+		worktreePath,
+		files: pw.dirtyFiles,
+		diffStat: `${pw.dirtyFiles.length} file(s), +${pw.insertions} -${pw.deletions}`,
+		note: `the run ended without converging, but real uncommitted work is in its worktree.${timeoutNote} Inspect it with \`git -C ${worktreePath} diff\` (and \`git -C ${worktreePath} status\` for untracked files); it is NOT lost. chit_apply can bring it into a checkout, or chit_cleanup discards it.`,
+	};
+}

@@ -23,7 +23,14 @@ import {
 	type TaskResult,
 	type TaskStatus,
 } from "./types.ts";
-import { type GitRunner, repoToplevel, resolveBaseSha, WorktreeError } from "./worktree.ts";
+import {
+	describePartialWork,
+	type GitRunner,
+	type PartialWork,
+	repoToplevel,
+	resolveBaseSha,
+	WorktreeError,
+} from "./worktree.ts";
 
 export class BatchEngineError extends Error {}
 
@@ -68,6 +75,9 @@ export interface BatchEngineDeps {
 	) => {
 		changedFiles: string[];
 		workspaceWarnings: string[];
+		// The worktree's UNCOMMITTED state (real: inspectPartialWork), so a task that failed mid-step
+		// can surface work no completed iteration captured. Absent when not inspected.
+		partialWork?: PartialWork;
 	};
 	// Remove a task's worktree + branch (real: removeTaskWorktree with realGit).
 	// Injected so cleanup is testable without touching real git/fs. Only called by
@@ -382,6 +392,12 @@ function settleTask(
 		result.lastVerification = extra.job.lastVerification;
 	if (extra.job?.lastVerificationSource !== undefined)
 		result.lastVerificationSource = extra.job.lastVerificationSource;
+	// A failed task can leave real uncommitted work in its worktree that changedFiles (which only
+	// reflects completed iterations) misses. Surface it so the work is findable, not assumed lost.
+	if (status === "failed" && detail?.partialWork && t.worktreePath) {
+		const pw = describePartialWork(detail.partialWork, t.worktreePath, extra.failure);
+		if (pw) result.partialWork = pw;
+	}
 	t.result = result;
 	if (status === "failed" && extra.failure !== undefined) t.error = extra.failure;
 }
@@ -455,6 +471,8 @@ export interface BatchTaskView {
 	changedFiles?: string[];
 	workspaceWarnings?: string[];
 	auditRefs?: string[];
+	// Uncommitted work in a FAILED task's worktree that changedFiles missed (see TaskResult).
+	partialWork?: TaskResult["partialWork"];
 	error?: string;
 }
 
@@ -541,6 +559,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 			view.changedFiles = t.result.changedFiles;
 			view.workspaceWarnings = t.result.workspaceWarnings;
 			view.auditRefs = t.result.auditRefs;
+			if (t.result.partialWork !== undefined) view.partialWork = t.result.partialWork;
 		}
 		if (t.error !== undefined) view.error = t.error;
 		return view;

@@ -5,6 +5,7 @@ import type {
 	Verification,
 	VerificationSource,
 } from "@chit-run/core";
+import type { PartialWorkView } from "./worktree.ts";
 
 // Batch model: a thin coordinator over durable background converge jobs. A
 // batch plans a static graph of tasks, creates one git worktree per task, and
@@ -84,6 +85,11 @@ export interface TaskResult {
 	changedFiles: string[];
 	workspaceWarnings: string[];
 	auditRefs: string[];
+	// Set when a task ended NOT-clean (failed / blocked) but real UNCOMMITTED work is in its
+	// worktree that no completed iteration captured (e.g. the implementer timed out before
+	// iteration 1) -- so changedFiles reads empty yet the work is salvageable. Surfaced so the
+	// operator can find/apply/discard it instead of assuming it was lost.
+	partialWork?: PartialWorkView;
 }
 
 export interface BatchTask {
