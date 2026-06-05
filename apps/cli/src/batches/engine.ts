@@ -47,6 +47,20 @@ export interface LaunchJobParams {
 	// The task's effective call-timeout override (ms): task ?? batch. Forwarded to the
 	// converge job, which applies it to every participant's adapter.
 	callTimeoutMs?: number;
+	// The task's chit-managed worktree, recorded on the JOB RECORD (not just the batch task
+	// state) so chit_apply / chit_cleanup resolve a batch task's diff exactly like a single
+	// background run -- the parity the single-run background path already has. Every task
+	// worktree is cut from the batch's baseSha; repo (the main repo cleanup retires from)
+	// and callerCheckout (apply's default target) are both the batch's caller repo, the
+	// checkout chit_batch_start launched from. Always set: launchWave creates the worktree
+	// before it launches the job.
+	worktree: {
+		worktreePath: string;
+		branch: string;
+		baseSha: string;
+		repo: string;
+		callerCheckout: string;
+	};
 }
 
 // Everything the engine touches that has a side effect or reads external state,
@@ -439,6 +453,17 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 				scope: `batch-${c.id}-${t.id}`,
 				task: t.body,
 				loopId,
+				// Record the managed worktree on the job record so chit_apply can reconstruct and
+				// land this task's diff (baseSha -> worktree), and default its target to where the
+				// batch was launched. baseSha/repo/callerCheckout come off the batch: every task
+				// worktree is cut from c.baseSha at c.repo, and c.repo is the launching checkout.
+				worktree: {
+					worktreePath,
+					branch,
+					baseSha: c.baseSha,
+					repo: c.repo,
+					callerCheckout: c.repo,
+				},
 				...(resolveManifestPath(t, c.manifestPath) !== undefined && {
 					manifestPath: resolveManifestPath(t, c.manifestPath),
 				}),

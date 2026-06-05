@@ -11,6 +11,7 @@ import {
 	cancelBatch,
 	cleanupBatch,
 	describeBatch,
+	type LaunchJobParams,
 	listBatches,
 	startBatch,
 	summarizeBatch,
@@ -31,30 +32,26 @@ class FakeJobs {
 		scope: string;
 		requiredChecks?: RequiredCheck[];
 		callTimeoutMs?: number;
+		worktree: LaunchJobParams["worktree"];
 	}> = [];
 	cancelled: string[] = [];
 	private seq = 0;
 
-	launch = (p: {
-		cwd: string;
-		scope: string;
-		task: string;
-		loopId: string;
-		manifestPath?: string;
-		maxIterations: number;
-		requiredChecks?: RequiredCheck[];
-		callTimeoutMs?: number;
-	}): { jobId: string; loopId: string } => {
+	// Typed against the real dep contract so the fake cannot drift from what the engine passes.
+	launch = (p: LaunchJobParams): { jobId: string; loopId: string } => {
 		const jobId = `job-${++this.seq}`;
 		// Real launchConvergeJob creates jobs as "queued"; the worker flips them to
 		// "running". Mirror that here so the reconcile path is tested against reality
-		// (a just-launched queued job must NOT be reconciled as failed).
+		// (a just-launched queued job must NOT be reconciled as failed). It also spreads
+		// the worktree metadata onto the record (worktreePath/branch/baseSha/repo/
+		// callerCheckout) -- mirror that so a launched batch task is applyable like real.
 		this.jobs.set(jobId, {
 			runId: jobId,
 			policy: "loop",
 			loopId: p.loopId,
 			repoKey: "k",
 			cwd: p.cwd,
+			...p.worktree,
 			scope: p.scope,
 			task: p.task,
 			maxIterations: p.maxIterations,
@@ -71,6 +68,7 @@ class FakeJobs {
 			scope: p.scope,
 			requiredChecks: p.requiredChecks,
 			callTimeoutMs: p.callTimeoutMs,
+			worktree: p.worktree,
 		});
 		return { jobId, loopId: p.loopId };
 	};
@@ -167,6 +165,37 @@ describe("startBatch", () => {
 		expect(c.status).toBe("running");
 		// worktree + job ids recorded on the launched tasks
 		expect(running.every((t) => t.worktreePath && t.branch && t.jobId)).toBe(true);
+	});
+
+	test("records the task's managed worktree on the launched job (so chit_apply can resolve it)", () => {
+		// The fix: launchWave must pass worktreePath/branch/baseSha/repo/callerCheckout through
+		// launchJob onto the job record, mirroring the single-run background path -- otherwise
+		// resolveRunWorkspace finds nothing and chit_apply misreports the task as in_place.
+		const c = startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 1,
+		});
+		const a = taskOf(c, "a");
+		const aWorktree = present(a.worktreePath, "task a worktreePath");
+		const aBranch = present(a.branch, "task a branch");
+		// The metadata launchJob RECEIVED: the task's own worktree + the batch's base/repo
+		// (every task worktree is cut from c.baseSha at c.repo; c.repo is the launching checkout).
+		const launched = present(jobs.launched.at(-1), "launched a");
+		expect(launched.worktree).toEqual({
+			worktreePath: aWorktree,
+			branch: aBranch,
+			baseSha: c.baseSha,
+			repo: c.repo,
+			callerCheckout: c.repo,
+		});
+		// And it landed on the JOB RECORD -- the exact fields resolveRunWorkspace reads to make a
+		// batch task applyable (and that partialWorkView gates on for a failed task).
+		const job = present(jobs.get(launched.jobId), "job record");
+		expect(job.worktreePath).toBe(aWorktree);
+		expect(job.baseSha).toBe(c.baseSha);
+		expect(job.callerCheckout).toBe(c.repo);
 	});
 
 	test("resolves the per-task manifest override (task > batch > default)", () => {

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { applyRunWorkspace, realGit } from "../../batches/worktree.ts";
+import type { LoopJobRecord } from "../../jobs/types.ts";
 import { startLoop, stopLoop } from "../../loops/log-store.ts";
 import type { ResolvedRun } from "./controller.ts";
 import {
@@ -127,6 +128,42 @@ describe("resolveRunWorkspace: shared run->worktree metadata + liveness (chit_cl
 	test("background: returns all four metadata fields off the job", () => {
 		const r = resolveRunWorkspace(bgJob("completed"), deps());
 		expect(r).toMatchObject(meta);
+	});
+
+	test("a batch task's job (repo == callerCheckout) resolves to an APPLYABLE workspace", () => {
+		// launchWave now records the task worktree on the job record, with repo and callerCheckout
+		// both the batch's caller repo. resolveRunWorkspace must surface the apply triplet
+		// (worktreePath + baseSha + a target) so chit_apply takes its apply path, not the
+		// "no chit-managed worktree (one-shot or in_place)" no-op it used to hit for batch tasks.
+		// A fully-valid LoopJobRecord, shaped exactly as launchWave -> launchConvergeJob persists a
+		// converged batch task (runId == loopId == `<batchId>-<taskId>`, cwd == worktreePath, repo
+		// == callerCheckout == the batch's caller repo) -- no partial cast, a reachable state.
+		const batchJob = {
+			runId: "c1-a",
+			policy: "loop",
+			loopId: "c1-a",
+			repoKey: "k",
+			cwd: "/wt/c1/a",
+			worktreePath: "/wt/c1/a",
+			branch: "chit-batch/c1/a",
+			baseSha: "abc123",
+			repo: "/batch-caller",
+			callerCheckout: "/batch-caller", // a batch's repo and launching checkout are the same
+			scope: "batch-c1-a",
+			task: "do a",
+			maxIterations: 3,
+			allowUnenforced: false,
+			state: "completed",
+			createdAt: "2026-06-02T00:00:00.000Z",
+			iterationsCompleted: 1,
+			auditRefs: [],
+			stopStatus: "converged",
+		} satisfies LoopJobRecord;
+		const r = resolveRunWorkspace({ mode: "background", job: batchJob }, deps());
+		expect(r.worktreePath).toBe("/wt/c1/a"); // -> not the no-op branch
+		expect(r.baseSha).toBe("abc123"); // -> the diff can be reconstructed
+		expect(r.callerCheckout).toBe("/batch-caller"); // -> apply's default target
+		expect(r.workerLive).toBe(false); // -> a terminal task is not refused as "still active"
 	});
 
 	test("background queued: live unless stale-queued", () => {

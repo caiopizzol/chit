@@ -536,7 +536,9 @@ function launchConvergeJob(p: {
 	// and the surfaced run_id match. Undefined -> generated here (batch tasks).
 	runId?: string;
 	// A chit-managed worktree this run executes in (cwd is already the worktree path).
-	// Recorded for surfacing + cleanup; absent for in_place / batch runs.
+	// Recorded for surfacing + cleanup (chit_apply / chit_cleanup read it); absent only for an
+	// in_place run. Set for an isolated single run AND for every batch task (the batch forwards
+	// each task's worktree, so a batch task applies exactly like a single background run).
 	worktree?: {
 		worktreePath: string;
 		branch: string;
@@ -2292,6 +2294,10 @@ const batchDeps: BatchEngineDeps = {
 			task: p.task,
 			scope: p.scope,
 			cwd: p.cwd,
+			// Forward the task's managed worktree so the job record carries worktreePath/branch/
+			// baseSha/repo/callerCheckout -- the same fields a single background run stores, which
+			// chit_apply / chit_cleanup read to resolve and apply a batch task's diff.
+			worktree: p.worktree,
 			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
 			maxIterations: p.maxIterations,
 			...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
