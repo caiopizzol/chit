@@ -277,6 +277,22 @@ function parseReview(reviewText: string): ParsedReview {
 	};
 }
 
+// Map a step.started trace event to the loop phase it represents: the implement
+// step -> "implementing", the review step -> "reviewing", anything else (or any
+// non-step.started event) -> undefined. The SINGLE source for the trace-event ->
+// phase mapping, shared by the background worker's onTrace and the foreground
+// chit_next heartbeats, so the two surfaces can never drift.
+export function phaseOfStepStart(
+	event: TraceEvent,
+	implementStep: string,
+	reviewStep: string,
+): "implementing" | "reviewing" | undefined {
+	if (event.type !== "step.started") return undefined;
+	if (event.stepId === implementStep) return "implementing";
+	if (event.stepId === reviewStep) return "reviewing";
+	return undefined;
+}
+
 // The review step's own duration from the run trace — the check duration. 0 if
 // the trace has no completed review step (e.g. an injected fake without one).
 // Keyed on the configured reviewStep, not a literal, so a loop policy with a
@@ -388,6 +404,11 @@ export interface ConvergeIterationContext {
 	// When present, threaded to execute so a driver (the background worker) can
 	// observe per-step progress and surface the current phase.
 	onTrace?: (event: TraceEvent) => void;
+	// When present, invoked immediately BEFORE chit runs the required checks, and
+	// ONLY when there are checks to run, so a foreground driver can surface a
+	// "running required checks" phase. Guarded: a throwing callback never breaks
+	// the iteration (it still completes and appends).
+	onChecksStart?: () => void;
 }
 
 // The structured next-state a single iteration hands back so the caller can
@@ -417,6 +438,11 @@ export type ConvergeIterationResult =
 			// the loop log stays the durable source of truth.
 			verification: Verification;
 			verificationSource: VerificationSource;
+			// The per-check results recorded on this iteration's log record (the SAME
+			// outcome.checks; [] when no checks ran), returned so the MCP next response
+			// can surface per-check names/statuses without re-reading the loop log. The
+			// log stays the durable source of truth.
+			checks: LoopCheck[];
 			// The same changed files, workspace warnings, and usage written to the
 			// iteration record, also returned so a caller (the MCP next response) can
 			// surface them without re-reading the loop log. changedFiles is task work
@@ -537,6 +563,7 @@ export async function runConvergeIteration(
 		decision: outcome.decision,
 		verification: outcome.verification,
 		verificationSource: outcome.verificationSource,
+		checks: outcome.checks,
 		changedFiles,
 		workspaceWarnings,
 		...(usage && { usage }),
@@ -598,6 +625,16 @@ async function decideIteration(
 	}
 
 	// Reviewer proceed + declared checks: chit runs them; their rollup is the truth.
+	// Signal the checks phase first (we are past the no-checks early return, so there
+	// is always at least one check to run here). Guarded so a throwing callback can
+	// never break the iteration.
+	if (ctx.onChecksStart) {
+		try {
+			ctx.onChecksStart();
+		} catch {
+			// Progress signalling is best-effort; swallow so the iteration still runs.
+		}
+	}
 	const results = await runRequiredChecks(required, {
 		cwd: ctx.cwd,
 		...(ctx.signal && { signal: ctx.signal }),

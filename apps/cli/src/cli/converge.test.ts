@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,7 +21,7 @@ function resolved(raw: unknown) {
 import * as adapterFactory from "../adapters/factory.ts";
 import { AuditStore } from "../audit/store.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
-import type { AdapterMap } from "../runtime/types.ts";
+import type { AdapterMap, TraceEvent } from "../runtime/types.ts";
 import { FileSessionStore } from "../sessions/store.ts";
 import {
 	buildExecute,
@@ -29,6 +29,7 @@ import {
 	type ConvergeIO,
 	convergeLoop,
 	makeAuditedExecute,
+	phaseOfStepStart,
 	rejectCallTimeoutForOneShot,
 	resolveLoopPolicy,
 	runConverge,
@@ -1454,6 +1455,186 @@ describe("chit-executed required checks (authoritative over the reviewer's self-
 			},
 		} as ResolvedManifest);
 		expect(steps.requiredChecks).toEqual([PASS, FAIL]);
+	});
+});
+
+describe("onChecksStart (foreground checks-phase signal) + returned checks", () => {
+	const PASS: RequiredCheck = { command: "true", args: [] };
+	const FAIL: RequiredCheck = { command: "false", args: [] };
+
+	test("invoked exactly once, BEFORE the first check runs, only when checks are present", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS1" });
+		// A check that creates a marker file when it runs, so we can prove the signal
+		// fired BEFORE the check executed (the marker must not yet exist at signal time).
+		const marker = join(cwd, "check-ran");
+		const probe: RequiredCheck = { command: "touch", args: [marker] };
+		let calls = 0;
+		let markerExistedAtSignal: boolean | undefined;
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute: fakeExecute([reviewJson("proceed")]).execute,
+			requiredChecks: [probe],
+			onChecksStart: () => {
+				calls++;
+				markerExistedAtSignal = existsSync(marker);
+			},
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		expect(calls).toBe(1); // exactly once
+		expect(markerExistedAtSignal).toBe(false); // fired before the check ran
+		expect(existsSync(marker)).toBe(true); // and the check did run afterward
+	});
+
+	test("NOT invoked when there are no required checks", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS2" });
+		let called = false;
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute: fakeExecute([reviewJson("proceed")]).execute,
+			onChecksStart: () => {
+				called = true;
+			},
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		expect(called).toBe(false);
+	});
+
+	test("NOT invoked on a non-proceed verdict (no checks run even when declared)", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS3" });
+		let called = false;
+		await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute: fakeExecute([reviewJson("revise", { checks: [] })]).execute,
+			requiredChecks: [FAIL],
+			onChecksStart: () => {
+				called = true;
+			},
+		});
+		expect(called).toBe(false);
+	});
+
+	test("a THROWING onChecksStart does not break the iteration (it still completes and appends)", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS4" });
+		const res = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute: fakeExecute([reviewJson("proceed")]).execute,
+			requiredChecks: [PASS],
+			onChecksStart: () => {
+				throw new Error("callback blew up");
+			},
+		});
+		if (!res.ok) throw new Error("expected ok iteration");
+		// The iteration completed normally despite the throwing callback...
+		expect(res.verification).toBe("passed");
+		expect(res.decision).toBe("proceed");
+		// ...and the iteration record was appended.
+		expect(firstIteration(loopId).verification).toBe("passed");
+	});
+
+	test("the ok result carries structured checks: [] without checks, populated with them", async () => {
+		// No requiredChecks + a reviewer that reports no checks -> the result's checks is [].
+		const noChecks = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS5" });
+		const r0 = await runConvergeIteration({
+			cwd,
+			loopId: noChecks.loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute: fakeExecute([reviewJson("revise", { checks: [] })]).execute,
+		});
+		if (!r0.ok) throw new Error("expected ok iteration");
+		expect(r0.checks).toEqual([]);
+
+		// chit-executed checks -> the result carries their names/statuses (the same
+		// array recorded on the iteration log).
+		const withChecks = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS6" });
+		const r1 = await runConvergeIteration({
+			cwd,
+			loopId: withChecks.loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute: fakeExecute([reviewJson("proceed")]).execute,
+			requiredChecks: [PASS],
+		});
+		if (!r1.ok) throw new Error("expected ok iteration");
+		expect(r1.checks).toEqual([{ command: "true", status: "passed" }]);
+		// Matches the durable iteration record exactly.
+		expect(firstIteration(withChecks.loopId).checks).toEqual([
+			{ command: "true", status: "passed" },
+		]);
+	});
+
+	test("reviewer-reported checks are returned even when chit runs none", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS7" });
+		const r = await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			// A revise carrying a reviewer-reported check; no requiredChecks, so the
+			// reviewer's self-report is the source.
+			execute: fakeExecute([
+				reviewJson("revise", { checks: [{ command: "bun test", status: "passed" }] }),
+			]).execute,
+		});
+		if (!r.ok) throw new Error("expected ok iteration");
+		expect(r.checks).toEqual([{ command: "bun test", status: "passed" }]);
+	});
+});
+
+describe("phaseOfStepStart (the one trace-event -> phase mapping)", () => {
+	const impl: TraceEvent = { type: "step.started", stepId: "implement", kind: "call" };
+	const rev: TraceEvent = { type: "step.started", stepId: "review", kind: "call" };
+
+	test("the implement step maps to implementing", () => {
+		expect(phaseOfStepStart(impl, "implement", "review")).toBe("implementing");
+	});
+	test("the review step maps to reviewing", () => {
+		expect(phaseOfStepStart(rev, "implement", "review")).toBe("reviewing");
+	});
+	test("keys on the given step ids, not literals (non-default names)", () => {
+		const build: TraceEvent = { type: "step.started", stepId: "build", kind: "call" };
+		const check: TraceEvent = { type: "step.started", stepId: "check", kind: "call" };
+		expect(phaseOfStepStart(build, "build", "check")).toBe("implementing");
+		expect(phaseOfStepStart(check, "build", "check")).toBe("reviewing");
+	});
+	test("any other step.started maps to undefined", () => {
+		const other: TraceEvent = { type: "step.started", stepId: "format", kind: "format" };
+		expect(phaseOfStepStart(other, "implement", "review")).toBeUndefined();
+	});
+	test("a non-step.started event maps to undefined", () => {
+		const completed: TraceEvent = {
+			type: "step.completed",
+			stepId: "implement",
+			output: "",
+			durationMs: 1,
+		};
+		expect(phaseOfStepStart(completed, "implement", "review")).toBeUndefined();
+		const failed: TraceEvent = {
+			type: "step.failed",
+			stepId: "review",
+			error: "x",
+			durationMs: 1,
+		};
+		expect(phaseOfStepStart(failed, "implement", "review")).toBeUndefined();
 	});
 });
 

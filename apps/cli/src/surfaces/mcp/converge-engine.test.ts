@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { LoopIterationRecord, LoopStopRecord, RequiredCheck } from "@chit-run/core";
 import type { ConvergeExecute } from "../../cli/converge.ts";
 import { readLoop } from "../../loops/log-store.ts";
+import type { TraceEvent } from "../../runtime/types.ts";
 import {
 	ConvergeEngineError,
 	cancelConverge,
@@ -310,7 +311,7 @@ describe("runNextIteration: cancellation", () => {
 		const session = start(scriptedExecute([reviewJson("proceed")]));
 		const controller = new AbortController();
 		controller.abort();
-		const r = await runNextIteration(session, controller.signal);
+		const r = await runNextIteration(session, { signal: controller.signal });
 		expect(r.kind).toBe("cancelled");
 		expect(session.terminalStatus).toBe("cancelled");
 		// The crux: a cancelled iteration is never recorded as a (fake) successful
@@ -323,7 +324,7 @@ describe("runNextIteration: cancellation", () => {
 		const gated = gatedExecute(reviewJson("proceed"));
 		const session = start(gated.execute);
 		const controller = new AbortController();
-		const pending = runNextIteration(session, controller.signal);
+		const pending = runNextIteration(session, { signal: controller.signal });
 		await gated.onStarted; // the iteration is now in flight (active set)
 		expect(session.active).toBeDefined();
 		controller.abort(); // Esc / chit_converge_cancel propagates here
@@ -493,5 +494,94 @@ describe("required checks via runNextIteration (chit-executed, the MCP driver)",
 		if (r.kind !== "iteration") throw new Error("expected iteration");
 		expect(r.stopStatus).toBe("needs-decision");
 		expect(iterations("L1")[0]?.verification).toBe("blocked");
+	});
+});
+
+describe("runNextIteration: live trace -> opts.onTrace", () => {
+	test("an opts.onTrace passed to runNextIteration reaches the execute's ctx", async () => {
+		const review = reviewJson("proceed");
+		// A fake execute that forwards a step.started event through ctx.onTrace, the
+		// same channel the real audited execute uses to surface per-step progress.
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctx?.onTrace?.({ type: "step.started", stepId: "implement", kind: "call" });
+			ctx?.onTrace?.({ type: "step.started", stepId: "review", kind: "call" });
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review },
+				trace: [{ type: "step.completed", stepId: "review", output: review, durationMs: 1 }],
+			};
+		};
+		const session = start(execute);
+		const seen: TraceEvent[] = [];
+		const r = await runNextIteration(session, { onTrace: (e) => seen.push(e) });
+		expect(r.kind).toBe("iteration");
+		expect(seen.map((e) => e.type === "step.started" && e.stepId)).toEqual(["implement", "review"]);
+	});
+});
+
+describe("runNextIteration: structured checks in the iteration arm", () => {
+	test("checks is [] when no checks ran and populated when the reviewer reports them", async () => {
+		// No checks reported -> the iteration arm carries an empty array.
+		const none = start(scriptedExecute([reviewJson("revise", { checks: [] })]));
+		const r0 = await runNextIteration(none);
+		if (r0.kind !== "iteration") throw new Error("expected iteration");
+		expect(r0.checks).toEqual([]);
+
+		// Reviewer-reported checks flow through to the iteration arm with names/statuses.
+		const withChecks = startConvergeSession({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			execute: scriptedExecute([
+				reviewJson("revise", { checks: [{ command: "bun test", status: "passed" }] }),
+			]),
+			loopId: "L2",
+		});
+		const r1 = await runNextIteration(withChecks);
+		if (r1.kind !== "iteration") throw new Error("expected iteration");
+		expect(r1.checks).toEqual([{ command: "bun test", status: "passed" }]);
+	});
+});
+
+describe("runNextIteration: endedAtMs mirrors terminalStatus", () => {
+	test("set on converged", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("converged");
+		expect(typeof session.endedAtMs).toBe("number");
+	});
+
+	test("set on a blocked verdict", async () => {
+		const session = start(scriptedExecute([reviewJson("block")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("blocked");
+		expect(typeof session.endedAtMs).toBe("number");
+	});
+
+	test("set on max-iterations", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("revise")]), 2);
+		await runNextIteration(session);
+		expect(session.endedAtMs).toBeUndefined(); // still open after the first revise
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("max-iterations");
+		expect(typeof session.endedAtMs).toBe("number");
+	});
+
+	test("set on cancelled", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		const controller = new AbortController();
+		controller.abort();
+		await runNextIteration(session, { signal: controller.signal });
+		expect(session.terminalStatus).toBe("cancelled");
+		expect(typeof session.endedAtMs).toBe("number");
+	});
+
+	test("absent while the loop is still open", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBeUndefined();
+		expect(session.endedAtMs).toBeUndefined();
 	});
 });

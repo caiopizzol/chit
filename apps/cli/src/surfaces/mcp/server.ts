@@ -62,7 +62,11 @@ import {
 	removeTaskWorktree,
 	WorktreeError,
 } from "../../batches/worktree.ts";
-import { prepareConvergeExecute, rejectCallTimeoutForOneShot } from "../../cli/converge.ts";
+import {
+	phaseOfStepStart,
+	prepareConvergeExecute,
+	rejectCallTimeoutForOneShot,
+} from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import { loadConfig } from "../../config/load.ts";
 import { formatDuration, isStale, jobTiming, pidAlive, runWaitState } from "../../jobs/health.ts";
@@ -1546,9 +1550,17 @@ server.registerTool(
 				// it rather than throwing a raw store error past the handler.
 				return errorResult(safeMcpError(e));
 			}
-			heartbeat(`${run_id} · iteration ${session.iteration + 1} · starting`);
+			const n = session.iteration + 1;
+			heartbeat(`${run_id} · iteration ${n} · starting`);
 			try {
-				const result = await runNextIteration(session, extra.signal);
+				const result = await runNextIteration(session, {
+					signal: extra.signal,
+					onTrace: (e) => {
+						const phase = phaseOfStepStart(e, session.implementStep, session.reviewStep);
+						if (phase) heartbeat(`${run_id} · iteration ${n} · ${phase}`);
+					},
+					onChecksStart: () => heartbeat(`${run_id} · iteration ${n} · running required checks`),
+				});
 				if (result.kind === "cancelled") {
 					heartbeat(`${run_id} · iteration ${result.iteration} · cancelled`);
 					return jsonResult({
@@ -1577,6 +1589,7 @@ server.registerTool(
 					decision: result.decision,
 					findingCount: result.findingCount,
 					checksRun: result.checksRun,
+					checks: result.checks,
 					changedFiles: result.changedFiles,
 					workspaceWarnings: result.workspaceWarnings,
 					...(result.usage && { usage: result.usage }),

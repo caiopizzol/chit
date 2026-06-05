@@ -14,6 +14,7 @@
 
 import type {
 	AdapterUsage,
+	LoopCheck,
 	LoopRecord,
 	LoopStopStatus,
 	LoopVerdict,
@@ -30,6 +31,7 @@ import {
 	stopReasonFor,
 } from "../../cli/converge.ts";
 import { readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
+import type { TraceEvent } from "../../runtime/types.ts";
 
 export class ConvergeEngineError extends Error {}
 
@@ -85,6 +87,12 @@ export interface ConvergeSession {
 	// lock: one iteration at a time, because the loop log is single-writer.
 	active?: AbortController;
 	startedAtMs: number;
+	// Wall-clock ms when the loop went terminal, set in lockstep with terminalStatus
+	// (set if and only if terminalStatus is set). The durable stop record's
+	// endedAt/totalElapsedMs (stopLoop computes them) stay the source of truth; this
+	// is the in-memory mirror so status views can report a terminal run's elapsed
+	// without re-reading the log.
+	endedAtMs?: number;
 }
 
 export interface StartConvergeOptions {
@@ -175,6 +183,10 @@ export type NextResult =
 			decision: LoopVerdict;
 			findingCount: number;
 			checksRun: string;
+			// The per-check results from the iteration ([] when none ran), surfaced so
+			// the next response can report per-check names/statuses; the loop log stays
+			// the durable source of truth.
+			checks: LoopCheck[];
 			changedFiles: string[];
 			workspaceWarnings: string[];
 			usage?: AdapterUsage;
@@ -188,6 +200,10 @@ export type NextResult =
 function stopTerminal(session: ConvergeSession, status: LoopStopStatus, reason: string): void {
 	stopLoop(session.cwd, session.loopId, { status, reason });
 	session.terminalStatus = status;
+	// Mirror the terminal time in memory in lockstep with terminalStatus. stopLoop
+	// runs first, so if it throws (stopBlocked's swallow path) neither is set and the
+	// two stay consistent with the still-open log.
+	session.endedAtMs = Date.now();
 }
 
 // Close blocked on an error path. Best-effort: a failure to write the stop must
@@ -215,8 +231,17 @@ function stopBlocked(session: ConvergeSession, reason: string): void {
 // single-writer, so concurrent appends are rejected up front).
 export async function runNextIteration(
 	session: ConvergeSession,
-	signal?: AbortSignal,
+	opts?: {
+		signal?: AbortSignal;
+		// Live per-step trace, forwarded to the iteration so a foreground driver can
+		// surface the current phase (implementing/reviewing).
+		onTrace?: (e: TraceEvent) => void;
+		// Invoked before chit runs the required checks (only when there are any), so a
+		// foreground driver can surface a "running required checks" phase.
+		onChecksStart?: () => void;
+	},
 ): Promise<NextResult> {
+	const signal = opts?.signal;
 	if (session.terminalStatus !== undefined) {
 		throw new ConvergeEngineError(
 			`this run is already ${session.terminalStatus}; start a new run to continue`,
@@ -251,6 +276,8 @@ export async function runNextIteration(
 				reviewStep: session.reviewStep,
 				...(session.requiredChecks && { requiredChecks: session.requiredChecks }),
 				signal: controller.signal,
+				...(opts?.onTrace && { onTrace: opts.onTrace }),
+				...(opts?.onChecksStart && { onChecksStart: opts.onChecksStart }),
 			});
 		} catch (e) {
 			// Cancellation never lands here: an aborted adapter call settles as a
@@ -317,6 +344,7 @@ export async function runNextIteration(
 			decision: iter.decision,
 			findingCount: iter.findingCount,
 			checksRun: iter.checksRun,
+			checks: iter.checks,
 			changedFiles: iter.changedFiles,
 			workspaceWarnings: iter.workspaceWarnings,
 			...(iter.usage !== undefined && { usage: iter.usage }),

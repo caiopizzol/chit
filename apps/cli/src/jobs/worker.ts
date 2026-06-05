@@ -24,6 +24,7 @@ import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
 	type LoopSteps,
+	phaseOfStepStart,
 	prepareConvergeExecute,
 	runConvergeIteration,
 	stopReasonFor,
@@ -312,10 +313,12 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 					}),
 					signal: controller.signal,
 					onTrace: (e: TraceEvent) => {
-						if (e.type === "step.started" && e.stepId === resolved.loopSteps.implementStep)
-							setPhase("implementing");
-						else if (e.type === "step.started" && e.stepId === resolved.loopSteps.reviewStep)
-							setPhase("reviewing");
+						const phase = phaseOfStepStart(
+							e,
+							resolved.loopSteps.implementStep,
+							resolved.loopSteps.reviewStep,
+						);
+						if (phase) setPhase(phase);
 					},
 				});
 			} catch (e) {
