@@ -14,6 +14,7 @@
 		"./graph-model": "./src/graph-model.ts",
 		"./install-marker": "./src/install-marker.ts",
 		"./loops/log": "./src/loops/log.ts",
+		"./loops/status-line": "./src/loops/status-line.ts",
 		"./shared": "./src/shared.ts",
 		"./show": "./src/show.ts"
 	},

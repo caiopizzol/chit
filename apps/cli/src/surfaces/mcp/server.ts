@@ -25,7 +25,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
-	type LoopCheck,
+	composeLoopStatusLine,
 	type LoopRecord,
 	type ManifestSpec,
 	parseManifest,
@@ -1082,44 +1082,6 @@ export function loopRunView(session: ConvergeSession, now: number = Date.now()) 
 		auditRefs: session.auditRefs,
 		nextAction,
 	};
-}
-
-// A concise check rollup for the status line: "N/M required checks passed" for
-// chit-executed checks (ground truth), "N/M checks passed" for the reviewer's
-// self-reported ones (advisory) -- the same distinction status.ts draws. Undefined
-// when no checks ran (the verdict + stop status already carry the round).
-function checkSummary(
-	checks: LoopCheck[],
-	source: ConvergeSession["lastVerificationSource"],
-): string | undefined {
-	if (checks.length === 0) return undefined;
-	const passed = checks.filter((c) => c.status === "passed").length;
-	const noun = source === "chit" ? "required checks" : "checks";
-	return `${passed}/${checks.length} ${noun} passed`;
-}
-
-// The shared composition behind both status lines: "iteration N · outcome[ · checks][ · stop]".
-// chit_next feeds it the transient NextResult; chit_status feeds it the session mirror. Routing
-// both through one composer is what keeps the live (chit_next) and audit (chit_status) narrations
-// from drifting. Its vocabulary mirrors the heartbeat lines so all three read the same.
-function composeLoopStatusLine(parts: {
-	iteration: number;
-	// The outcome word: a completed round's verdict, or a cancelled/failed round's fate.
-	outcome: string;
-	// The round's structured checks, or undefined when the round ran none (a cancelled/
-	// failed round) -- the rollup is the WHY behind a verification gate stop.
-	checks: LoopCheck[] | undefined;
-	source: ConvergeSession["lastVerificationSource"];
-	// The stop status attributed to THIS line's round -- appended when that round took
-	// the loop terminal, unless the outcome word already states it (a cancelled round
-	// stops "cancelled"). Callers must pass the round's OWN stop, never a later one.
-	stop: ConvergeSession["terminalStatus"];
-}): string {
-	const out = [`iteration ${parts.iteration}`, parts.outcome];
-	const checks = parts.checks ? checkSummary(parts.checks, parts.source) : undefined;
-	if (checks) out.push(checks);
-	if (parts.stop && parts.stop !== parts.outcome) out.push(parts.stop);
-	return out.join(" · ");
 }
 
 // One compact, human-readable line summarizing the iteration that just ran, added to

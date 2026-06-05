@@ -1,11 +1,12 @@
 // Recompose the compact "last completed iteration" status line for the loop view
-// from the DURABLE loop records, mirroring the line the CLI/MCP surfaces return
-// (composeLoopStatusLine in apps/cli/src/surfaces/mcp/server.ts). chit_status's
-// top-level `statusLine` summarizes the last round that completed; that string is
-// derived from the in-memory session mirror, but every field behind it -- the
-// iteration's verdict, its structured checks + verification source, and the stop
-// the round produced -- is also written to the loop log, which Studio reads. So
-// Studio can show the same line without the MCP server's memory.
+// from the DURABLE loop records, using the shared @chit-run/core composer
+// (composeLoopStatusLine) -- the SAME composer the CLI/MCP surfaces feed from their
+// in-memory session, so the live, audit, and durable narrations cannot drift.
+// chit_status's top-level `statusLine` summarizes the last round that completed; that
+// string is derived from the in-memory session mirror, but every field behind it -- the
+// iteration's verdict, its structured checks + verification source, and the stop the
+// round produced -- is also written to the loop log, which Studio reads. So Studio can
+// show the same line without the MCP server's memory.
 //
 // What Studio CANNOT show is the in-flight `activity` snapshot (iteration / phase /
 // elapsedMs / phaseElapsedMs / lastActivityAgeMs and its nested live statusLine):
@@ -13,32 +14,17 @@
 // never persisted, so it does not flow through the durable log this view reads.
 // This line is therefore the LAST COMPLETED round, never a live one.
 //
-// DRIFT NOTE: this duplicates the CLI's composer/checkSummary. Studio cannot import
-// them (they sit in the CLI package behind node-only deps). The drift-proof home is
-// @chit-run/core (browser-safe), imported by both surfaces; that extraction touches
-// files outside apps/studio and is out of this change's scope.
+// Studio's only local piece is attributedStop below: mapping a durable stop record to
+// the round that caused it. The CLI gets that mapping for free (its session mirror's
+// lastStopStatus is set in lockstep with the completing round); Studio must recover it
+// from the records, so that logic stays here.
 
-import type {
-	LoopCheck,
-	LoopIterationRecord,
-	LoopRecord,
-	LoopStopStatus,
-	VerificationSource,
+import {
+	composeLoopStatusLine,
+	type LoopIterationRecord,
+	type LoopRecord,
+	type LoopStopStatus,
 } from "@chit-run/core";
-
-// The check rollup behind the line, mirroring the CLI's checkSummary: "N/M required
-// checks passed" for chit-executed checks (ground truth), "N/M checks passed" for the
-// reviewer's self-reported ones (advisory). Undefined when the round recorded no checks
-// (an older record, or a round that ran none) so the line omits the segment entirely.
-function checkSummary(
-	checks: LoopCheck[] | undefined,
-	source: VerificationSource | undefined,
-): string | undefined {
-	if (!checks || checks.length === 0) return undefined;
-	const passed = checks.filter((c) => c.status === "passed").length;
-	const noun = source === "chit" ? "required checks" : "checks";
-	return `${passed}/${checks.length} ${noun} passed`;
-}
 
 // The stop status the LAST COMPLETED iteration's own verdict gate produced, recovered
 // from the durable stop record. The CLI mirrors this as session.lastStopStatus, set in
@@ -72,13 +58,15 @@ export function loopStatusLine(records: LoopRecord[]): string | undefined {
 	if (!last) return undefined;
 	const stopRec = records.find((r) => r.type === "stop");
 	const stop = attributedStop(last, stopRec?.type === "stop" ? stopRec.status : undefined);
-	const parts = [`iteration ${last.n}`, last.verdict];
-	const checks = checkSummary(last.checks, last.verificationSource);
-	if (checks) parts.push(checks);
-	// The CLI composer drops the stop word when it would merely restate the outcome
+	// The shared composer drops the stop word when it would merely restate the outcome
 	// (`stop !== outcome`); here outcome is always a verdict and a LoopVerdict and a
 	// LoopStopStatus can never share a spelling (the type system proves it), so an
 	// attributed stop is always appended.
-	if (stop) parts.push(stop);
-	return parts.join(" · ");
+	return composeLoopStatusLine({
+		iteration: last.n,
+		outcome: last.verdict,
+		checks: last.checks,
+		source: last.verificationSource,
+		stop,
+	});
 }

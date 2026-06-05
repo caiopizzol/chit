@@ -10,6 +10,7 @@ export * from "./config/types.ts";
 export * from "./graph-model.ts";
 export * from "./install-marker.ts";
 export * from "./loops/log.ts";
+export * from "./loops/status-line.ts";
 export * from "./manifest/parse.ts";
 export * from "./manifest/types.ts";
 export * from "./resolve/resolve.ts";
