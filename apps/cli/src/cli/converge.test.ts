@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,15 +18,18 @@ function resolved(raw: unknown) {
 	return resolveManifest(parseManifest(raw), { roles: {} });
 }
 
+import * as adapterFactory from "../adapters/factory.ts";
 import { AuditStore } from "../audit/store.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import type { AdapterMap } from "../runtime/types.ts";
 import { FileSessionStore } from "../sessions/store.ts";
 import {
+	buildExecute,
 	type ConvergeExecute,
 	type ConvergeIO,
 	convergeLoop,
 	makeAuditedExecute,
+	rejectCallTimeoutForOneShot,
 	resolveLoopPolicy,
 	runConverge,
 	runConvergeIteration,
@@ -1451,5 +1454,101 @@ describe("chit-executed required checks (authoritative over the reviewer's self-
 			},
 		} as ResolvedManifest);
 		expect(steps.requiredChecks).toEqual([PASS, FAIL]);
+	});
+});
+
+describe("call_timeout_ms override (slice 2: per-run adapter budget)", () => {
+	// A two-participant converge manifest (claude implementer + codex reviewer). buildExecute
+	// is the single chokepoint that builds every converge path's adapters, so testing it here
+	// covers the foreground, background, and CLI paths (they all flow through it).
+	function twoParticipantManifest(): ResolvedManifest {
+		return resolved({
+			schema: 1,
+			id: "c",
+			description: "converge-shaped",
+			inputs: { task: { type: "string" }, prior_review: { type: "string", optional: true } },
+			participants: {
+				impl: { agent: "claude", instructions: "implement", session: "per_scope" },
+				rev: { agent: "codex", instructions: "review", session: "per_scope" },
+			},
+			steps: {
+				implement: { call: "impl", prompt: "{{ inputs.task }}" },
+				review: { call: "rev", prompt: "{{ steps.implement.output }}" },
+				out: { format: "{{ steps.review.output }}" },
+			},
+			output: "out",
+			policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+		});
+	}
+
+	// claude carries a config-level callTimeoutMs (90s); codex carries none. This lets the
+	// no-override test prove the config value is preserved per agent, not flattened.
+	function twoAgentRegistry(): NormalizedRegistry {
+		return {
+			agents: {
+				claude: {
+					id: "claude",
+					adapter: "claude-cli",
+					passModelOnResume: false,
+					builtIn: true,
+					callTimeoutMs: 90_000,
+				},
+				codex: { id: "codex", adapter: "codex-exec", passModelOnResume: false, builtIn: true },
+			},
+		} as unknown as NormalizedRegistry;
+	}
+
+	test("the override reaches BOTH participants' adapters (implementer + reviewer)", () => {
+		const spy = spyOn(adapterFactory, "buildAdapter");
+		try {
+			buildExecute(twoParticipantManifest(), twoAgentRegistry(), "s", cwd, 120_000);
+			const seen = spy.mock.calls.map((c) => c[0].callTimeoutMs);
+			expect(seen).toHaveLength(2); // one adapter per participant
+			expect(seen.every((v) => v === 120_000)).toBe(true); // override wins for every agent
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	test("no override preserves each agent's configured callTimeoutMs (no regression)", () => {
+		const spy = spyOn(adapterFactory, "buildAdapter");
+		try {
+			buildExecute(twoParticipantManifest(), twoAgentRegistry(), "s", cwd);
+			const byId = Object.fromEntries(spy.mock.calls.map((c) => [c[0].id, c[0].callTimeoutMs]));
+			expect(byId.claude).toBe(90_000); // claude keeps its config value
+			expect(byId.codex).toBeUndefined(); // codex had none -> still none (adapter default applies)
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	test("the agent record is NOT mutated (override is per-run only)", () => {
+		const registry = twoAgentRegistry();
+		const spy = spyOn(adapterFactory, "buildAdapter");
+		try {
+			buildExecute(twoParticipantManifest(), registry, "s", cwd, 5_000);
+		} finally {
+			spy.mockRestore();
+		}
+		// The registry's claude still carries its own 90s, not the 5s run override.
+		expect(registry.agents.claude.callTimeoutMs).toBe(90_000);
+		expect(registry.agents.codex.callTimeoutMs).toBeUndefined();
+	});
+
+	describe("rejectCallTimeoutForOneShot (loop-only guard, mirrors required_checks)", () => {
+		test("a one-shot run given the override is rejected with a clear error", () => {
+			const err = rejectCallTimeoutForOneShot(120_000, "one-shot");
+			expect(err).toBe(
+				"call_timeout_ms applies only to a loop run; this manifest declares a one-shot policy",
+			);
+		});
+
+		test("a loop run with the override is allowed (null)", () => {
+			expect(rejectCallTimeoutForOneShot(120_000, "loop")).toBeNull();
+		});
+
+		test("a one-shot run with NO override is allowed (null)", () => {
+			expect(rejectCallTimeoutForOneShot(undefined, "one-shot")).toBeNull();
+		});
 	});
 });

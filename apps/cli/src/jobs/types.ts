@@ -99,6 +99,11 @@ export interface LoopJobRecord extends BaseJobRecord {
 	// run-level override survives a later manifest edit). Absent -> the worker falls
 	// back to the manifest policy's requiredChecks.
 	requiredChecks?: RequiredCheck[];
+	// The EFFECTIVE per-call timeout override (ms) for this run, persisted at enqueue
+	// so the detached worker -- which rebuilds the run in its own process -- applies the
+	// caller's budget instead of re-deriving the adapter default. Absent -> the agents'
+	// configured callTimeoutMs (or the adapter default) stands.
+	callTimeoutMs?: number;
 	// Run despite an unenforceable declared permission (the worker rebuilds the
 	// run in its own process, so it needs the flag the caller validated against).
 	allowUnenforced: boolean;

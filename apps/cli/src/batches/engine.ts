@@ -44,6 +44,9 @@ export interface LaunchJobParams {
 	// The task's effective override (task ?? batch checks); launchJob resolves it
 	// against the manifest's checks at the snapshot boundary.
 	requiredChecks?: RequiredCheck[];
+	// The task's effective call-timeout override (ms): task ?? batch. Forwarded to the
+	// converge job, which applies it to every participant's adapter.
+	callTimeoutMs?: number;
 }
 
 // Everything the engine touches that has a side effect or reads external state,
@@ -106,6 +109,8 @@ export interface StartBatchOptions {
 	maxIterations?: number;
 	// Batch-level chit-executed verification, applied to any task without its own.
 	requiredChecks?: RequiredCheck[];
+	// Batch-level call-timeout override (ms), applied to any task without its own.
+	callTimeoutMs?: number;
 }
 
 // Create the batch, persist it, and launch the initial runnable wave.
@@ -132,6 +137,7 @@ export function startBatch(
 		maxParallel,
 		...(opts.manifestPath !== undefined && { manifestPath: opts.manifestPath }),
 		...(opts.requiredChecks !== undefined && { requiredChecks: opts.requiredChecks }),
+		...(opts.callTimeoutMs !== undefined && { callTimeoutMs: opts.callTimeoutMs }),
 		status: "planning",
 		tasks,
 		createdAt: now,
@@ -425,6 +431,9 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 			// Per-task effective override: task checks beat batch checks (closest wins).
 			// launchJob resolves this against the manifest's checks at the snapshot boundary.
 			const taskChecks = pickRequiredChecks(t.requiredChecks, c.requiredChecks);
+			// Scalar override -> first-defined-wins is just `??` (no "declared empty" case
+			// like requiredChecks' [], so no pick* helper is needed): task beats batch.
+			const taskCallTimeoutMs = t.callTimeoutMs ?? c.callTimeoutMs;
 			const { jobId } = deps.launchJob({
 				cwd: worktreePath,
 				scope: `batch-${c.id}-${t.id}`,
@@ -434,6 +443,7 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 					manifestPath: resolveManifestPath(t, c.manifestPath),
 				}),
 				...(taskChecks && { requiredChecks: taskChecks }),
+				...(taskCallTimeoutMs !== undefined && { callTimeoutMs: taskCallTimeoutMs }),
 				maxIterations,
 			});
 			t.jobId = jobId;
@@ -473,6 +483,9 @@ export interface BatchTaskView {
 	auditRefs?: string[];
 	// Uncommitted work in a FAILED task's worktree that changedFiles missed (see TaskResult).
 	partialWork?: TaskResult["partialWork"];
+	// The EFFECTIVE per-call timeout (ms) this task runs under (task ?? batch override),
+	// surfaced so the operator can see the active budget. Absent -> agent config / default.
+	callTimeoutMs?: number;
 	error?: string;
 }
 
@@ -530,6 +543,11 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 			...(t.branch !== undefined && { branch: t.branch }),
 			...(t.worktreePath !== undefined && { worktreePath: t.worktreePath }),
 			...(t.jobId !== undefined && { run_id: t.jobId }),
+			// The effective budget for this task (task override beats batch), so status shows
+			// the active value without the caller re-deriving the precedence.
+			...((t.callTimeoutMs ?? c.callTimeoutMs) !== undefined && {
+				callTimeoutMs: t.callTimeoutMs ?? c.callTimeoutMs,
+			}),
 		};
 		if (t.status === "running" && t.jobId) {
 			const job = deps.getJob(t.jobId);

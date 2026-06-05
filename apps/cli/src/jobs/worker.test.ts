@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoopVerdict, RequiredCheck } from "@chit-run/core";
 import type { ConvergeExecute } from "../cli/converge.ts";
+import * as convergeMod from "../cli/converge.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
 import { JobStore } from "./store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "./types.ts";
@@ -282,6 +283,41 @@ describe("background converge worker", () => {
 		// still running, no iterations appended
 		expect(store.get("j1")?.state).toBe("running");
 		expect(readLoop(cwd, "j1").filter((r) => r.type === "iteration")).toHaveLength(0);
+	});
+
+	test("the worker forwards the job's persisted callTimeoutMs into prepareConvergeExecute", async () => {
+		// The override never survives outside the job record, so the DETACHED worker must
+		// re-apply job.callTimeoutMs when it rebuilds the run in its own process. Exercise the
+		// REAL defaultResolveExecute (no resolveExecute injection) and intercept the chokepoint
+		// to read the value it was handed -- the spy also returns a fake execute so no real
+		// adapter spawns. A fresh empty config dir keeps loadConfig on the built-in registry.
+		const savedCfg = process.env.XDG_CONFIG_HOME;
+		const cfgHome = mkdtempSync(join(tmpdir(), "chit-worker-cfg-"));
+		mkdirSync(join(cfgHome, "chit"), { recursive: true });
+		process.env.XDG_CONFIG_HOME = cfgHome;
+		const spy = spyOn(convergeMod, "prepareConvergeExecute").mockReturnValue({
+			ok: true,
+			execute: fakeExecute([{ verdict: "proceed" }]),
+			loopSteps: { implementStep: "implement", reviewStep: "review" },
+			warnings: [],
+		});
+		try {
+			seedJob({ callTimeoutMs: 234_000 });
+			await runJobWorker("j1", {
+				jobStore: store,
+				installSignalHandlers: false,
+				heartbeatMs: 1_000_000,
+				now: () => 1000,
+			});
+			// prepareConvergeExecute(raw, registry, scope, cwd, allowUnenforced, roles, callTimeoutMs)
+			expect(spy.mock.calls.at(0)?.[6]).toBe(234_000);
+			expect(store.get("j1")?.state).toBe("completed");
+		} finally {
+			spy.mockRestore();
+			if (savedCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = savedCfg;
+			rmSync(cfgHome, { recursive: true, force: true });
+		}
 	});
 });
 

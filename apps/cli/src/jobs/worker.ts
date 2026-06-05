@@ -105,6 +105,10 @@ function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 		job.cwd,
 		job.allowUnenforced,
 		config.roles,
+		// Apply the run's persisted call-timeout override (if any) in the worker's own
+		// process: the override never survives outside the job record, so re-deriving here
+		// is the only way the detached run honours the caller's budget.
+		job.callTimeoutMs,
 	);
 	return prep.ok
 		? { ok: true, execute: prep.execute, loopSteps: prep.loopSteps }

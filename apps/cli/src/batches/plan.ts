@@ -62,6 +62,8 @@ export interface TaskInput {
 	manifestPath?: string;
 	// Per-task chit-executed verification (overrides batch + manifest for this task).
 	requiredChecks?: RequiredCheck[];
+	// Per-task call-timeout override (ms); overrides the batch-level value for this task.
+	callTimeoutMs?: number;
 }
 
 // Validate the inputs and produce pending BatchTasks. Throws PlanError on the
@@ -115,6 +117,7 @@ export function planTasks(inputs: TaskInput[]): BatchTask[] {
 		if (t.allowPathOverlap) task.allowPathOverlap = true;
 		if (t.manifestPath !== undefined) task.manifestPath = t.manifestPath;
 		if (t.requiredChecks !== undefined) task.requiredChecks = t.requiredChecks;
+		if (t.callTimeoutMs !== undefined) task.callTimeoutMs = t.callTimeoutMs;
 		return task;
 	});
 }

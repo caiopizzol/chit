@@ -112,6 +112,9 @@ export interface BatchTask {
 	// Per-task chit-executed verification commands. Precedence (closest declared wins,
 	// never a merge): task -> batch -> the manifest policy's requiredChecks.
 	requiredChecks?: RequiredCheck[];
+	// Per-task call-timeout override (ms). Precedence (closest wins): task -> batch ->
+	// the agents' configured callTimeoutMs (or the adapter default).
+	callTimeoutMs?: number;
 	// Filled in once the worktree is created and the job is launched.
 	worktreePath?: string; // absolute, recorded so nothing recomputes it
 	branch?: string;
@@ -134,6 +137,9 @@ export interface Batch {
 	// Batch-level chit-executed verification, applied to any task without its own
 	// requiredChecks (a task's override wins; the manifest policy's are the fallback).
 	requiredChecks?: RequiredCheck[];
+	// Batch-level call-timeout override (ms), applied to any task without its own
+	// callTimeoutMs (a task's override wins; agent config / adapter default otherwise).
+	callTimeoutMs?: number;
 	status: BatchStatus;
 	tasks: BatchTask[];
 	createdAt: string; // ISO 8601

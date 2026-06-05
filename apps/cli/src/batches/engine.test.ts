@@ -30,6 +30,7 @@ class FakeJobs {
 		manifestPath?: string;
 		scope: string;
 		requiredChecks?: RequiredCheck[];
+		callTimeoutMs?: number;
 	}> = [];
 	cancelled: string[] = [];
 	private seq = 0;
@@ -42,6 +43,7 @@ class FakeJobs {
 		manifestPath?: string;
 		maxIterations: number;
 		requiredChecks?: RequiredCheck[];
+		callTimeoutMs?: number;
 	}): { jobId: string; loopId: string } => {
 		const jobId = `job-${++this.seq}`;
 		// Real launchConvergeJob creates jobs as "queued"; the worker flips them to
@@ -68,6 +70,7 @@ class FakeJobs {
 			manifestPath: p.manifestPath,
 			scope: p.scope,
 			requiredChecks: p.requiredChecks,
+			callTimeoutMs: p.callTimeoutMs,
 		});
 		return { jobId, loopId: p.loopId };
 	};
@@ -407,6 +410,50 @@ describe("required checks cascade (task beats batch, reaching the snapshot bound
 			requiredChecks: [BATCHCHK],
 		});
 		expect(jobs.launched.at(-1)?.requiredChecks).toEqual([BATCHCHK]);
+	});
+});
+
+describe("call-timeout cascade (task beats batch, reaching launchJob)", () => {
+	// Same shape as the required-checks cascade: the engine proves task beats batch and
+	// the effective value REACHES launchJob (which forwards it to the converge job, where
+	// buildExecute applies it to every adapter -- covered by converge.test.ts).
+
+	test("startBatch persists the batch-level callTimeoutMs", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 1,
+			callTimeoutMs: 600_000,
+		});
+		expect(store.get("c1")?.callTimeoutMs).toBe(600_000);
+	});
+
+	test("a task's callTimeoutMs beats the batch's, and reaches launchJob", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a", { callTimeoutMs: 120_000 })],
+			maxParallel: 1,
+			callTimeoutMs: 600_000,
+		});
+		expect(jobs.launched.at(-1)?.callTimeoutMs).toBe(120_000); // task wins, not batch
+	});
+
+	test("a task without its own callTimeoutMs gets the batch's at launch", () => {
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 1,
+			callTimeoutMs: 600_000,
+		});
+		expect(jobs.launched.at(-1)?.callTimeoutMs).toBe(600_000);
+	});
+
+	test("no override anywhere -> launchJob gets no callTimeoutMs (agent config / default stands)", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		expect(jobs.launched.at(-1)?.callTimeoutMs).toBeUndefined();
 	});
 });
 

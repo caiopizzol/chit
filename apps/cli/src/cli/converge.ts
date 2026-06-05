@@ -759,13 +759,20 @@ export function buildExecute(
 	registry: NormalizedRegistry,
 	scope: string,
 	cwd: string,
+	// Per-run hard call-timeout override (ms). When set it REPLACES each resolved
+	// agent's callTimeoutMs for this run only -- applied to EVERY participant, so the
+	// implementer and reviewer share one budget. The agent record is never mutated (a
+	// per-run copy), so config-level callTimeoutMs is untouched for other runs.
+	// Undefined -> each agent keeps its own config (or the adapter default).
+	callTimeoutMs?: number,
 ): ConvergeExecute {
 	const baseAdapters: AdapterMap = {};
 	for (const p of Object.values(manifest.participants)) {
 		if (!(p.agent in baseAdapters)) {
 			const agent = registry.agents[p.agent];
 			if (!agent) continue; // validated by the caller via findUnknownAgents
-			baseAdapters[p.agent] = buildAdapter(agent);
+			const effectiveAgent = callTimeoutMs === undefined ? agent : { ...agent, callTimeoutMs };
+			baseAdapters[p.agent] = buildAdapter(effectiveAgent);
 		}
 	}
 	return makeAuditedExecute(
@@ -783,6 +790,22 @@ export type PrepareConvergeResult =
 	| { ok: true; execute: ConvergeExecute; loopSteps: LoopSteps; warnings: string[] }
 	| { ok: false; error: string };
 
+// The run-level `call_timeout_ms` override budgets the loop's implement/review adapter
+// calls; a one-shot run has no such loop. Reject it rather than silently ignore it --
+// honoring it would be a lie, and silently dropping it would mislead the caller into
+// thinking it took effect. Mirrors resolveRunRequiredChecks' one-shot guard (the other
+// loop-only run knob). Returns an error string for a one-shot run given the override, or
+// null when there is nothing to reject (loop run, or no override).
+export function rejectCallTimeoutForOneShot(
+	callTimeoutMs: number | undefined,
+	policyKind: "loop" | "one-shot",
+): string | null {
+	if (callTimeoutMs !== undefined && policyKind !== "loop") {
+		return "call_timeout_ms applies only to a loop run; this manifest declares a one-shot policy";
+	}
+	return null;
+}
+
 // Load + validate a converge manifest and build its audited execute. Shared by
 // the MCP converge surface and the background worker so both refuse the same
 // manifests (non-converge shape, unknown agent, unenforceable permission) and
@@ -795,6 +818,10 @@ export function prepareConvergeExecute(
 	cwd: string,
 	allowUnenforced: boolean,
 	roles: Record<string, NormalizedRole> = {},
+	// Optional per-run call-timeout override (ms), forwarded to buildExecute so the
+	// chokepoint that builds every converge path's adapters also applies the run/task
+	// budget. Undefined -> agents keep their configured callTimeoutMs.
+	callTimeoutMs?: number,
 ): PrepareConvergeResult {
 	// Parse + RESOLVE here: prepareConvergeExecute is the single chokepoint every
 	// converge path (CLI, worker, MCP launchers) flows through, so resolving role
@@ -843,7 +870,7 @@ export function prepareConvergeExecute(
 	);
 	return {
 		ok: true,
-		execute: buildExecute(manifest, registry, scope, cwd),
+		execute: buildExecute(manifest, registry, scope, cwd, callTimeoutMs),
 		loopSteps: resolveLoopPolicy(manifest),
 		warnings,
 	};

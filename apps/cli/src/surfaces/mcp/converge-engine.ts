@@ -56,6 +56,11 @@ export interface ConvergeSession {
 	reviewStep: string;
 	// chit-executed verification commands resolved from the loop policy, when declared.
 	requiredChecks?: RequiredCheck[];
+	// The per-call timeout override (ms) this run was launched with, if any. Recorded
+	// only for status surfacing -- the override is already baked into `execute` (the
+	// adapters were built with it); this is the value to show the operator, not a knob
+	// the loop re-reads.
+	callTimeoutMs?: number;
 	// Count of COMPLETED (appended) iterations. The next iteration is this + 1.
 	iteration: number;
 	// The last review text, threaded into the next iteration as prior_review.
@@ -102,6 +107,9 @@ export interface StartConvergeOptions {
 	// the converge constants when omitted, so callers that don't yet resolve a
 	// policy keep their prior behavior.
 	loopSteps?: LoopSteps;
+	// The per-call timeout override (ms) the run was launched with, recorded on the
+	// session for status surfacing. Undefined when no override was given.
+	callTimeoutMs?: number;
 	// Wall-clock now, injectable for deterministic tests. Defaults to Date.now.
 	now?: () => number;
 }
@@ -146,6 +154,7 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		implementStep: opts.loopSteps?.implementStep ?? "implement",
 		reviewStep: opts.loopSteps?.reviewStep ?? "review",
 		...(opts.loopSteps?.requiredChecks && { requiredChecks: opts.loopSteps.requiredChecks }),
+		...(opts.callTimeoutMs !== undefined && { callTimeoutMs: opts.callTimeoutMs }),
 		iteration: 0,
 		priorReview: "",
 		auditRefs: [],

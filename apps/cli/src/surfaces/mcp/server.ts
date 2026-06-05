@@ -62,7 +62,7 @@ import {
 	removeTaskWorktree,
 	WorktreeError,
 } from "../../batches/worktree.ts";
-import { prepareConvergeExecute } from "../../cli/converge.ts";
+import { prepareConvergeExecute, rejectCallTimeoutForOneShot } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import { loadConfig } from "../../config/load.ts";
 import { formatDuration, isStale, jobTiming, pidAlive, runWaitState } from "../../jobs/health.ts";
@@ -531,6 +531,10 @@ function launchConvergeJob(p: {
 	// runs the intended checks without re-deriving them. Undefined -> the worker falls
 	// back to the manifest policy's requiredChecks.
 	requiredChecks?: RequiredCheck[];
+	// The EFFECTIVE per-call timeout override (ms) for this run. Persisted on the job
+	// so the detached worker applies it (the validation prep below DISCARDS its execute,
+	// so the value only matters via the job record). Undefined -> agent config / default.
+	callTimeoutMs?: number;
 	allowUnenforced: boolean;
 }): { ok: true; jobId: string; loopId: string; warnings: string[] } | { ok: false; error: string } {
 	let raw: unknown;
@@ -616,6 +620,7 @@ function launchConvergeJob(p: {
 		// job. [] is treated as reviewer-sourced downstream; the worker's manifest fallback
 		// is then reachable only by legacy records that predate this field.
 		requiredChecks: effectiveChecks ?? [],
+		...(p.callTimeoutMs !== undefined && { callTimeoutMs: p.callTimeoutMs }),
 		allowUnenforced: p.allowUnenforced,
 		state: "queued",
 		createdAt: new Date().toISOString(),
@@ -836,6 +841,7 @@ function describeJob(job: JobRecord) {
 				lastVerificationSource: job.lastVerificationSource,
 			}),
 			...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
+			...(job.callTimeoutMs !== undefined && { callTimeoutMs: job.callTimeoutMs }),
 			...(latest !== undefined && { latest }),
 			nextAction,
 		};
@@ -986,6 +992,7 @@ export function loopRunView(session: ConvergeSession) {
 		}),
 		...(session.lastDecision !== undefined && { lastDecision: session.lastDecision }),
 		...(session.failure !== undefined && { failure: session.failure }),
+		...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
 		auditRefs: session.auditRefs,
 		nextAction,
 	};
@@ -1213,6 +1220,14 @@ server.registerTool(
 				.describe(
 					"DANGER, advanced opt-out. By default a loop run is ISOLATED in a chit-managed worktree (chit-run/<run_id>/<scope>) cut clean off HEAD, so its diff is attributable and a dirty caller checkout never pollutes the review or the reviewer. Set true ONLY when you intentionally want the edits applied to the CURRENT checkout -- a dirty caller tree is then mixed into the run's diff. Ignored for one-shot runs.",
 				),
+			call_timeout_ms: z
+				.number()
+				.int()
+				.positive()
+				.optional()
+				.describe(
+					"Hard per-call timeout in ms for BOTH the implementer and the reviewer (loop runs only). Raise it when a slice's implement step legitimately needs longer than the 15-min default and is being killed mid-work; lower it to fail fast. Overrides the agents' configured callTimeoutMs for this run only. Rejected for a one-shot run.",
+				),
 		},
 	},
 	async ({
@@ -1227,6 +1242,7 @@ server.registerTool(
 		allow_unenforced_permissions,
 		required_checks,
 		in_place,
+		call_timeout_ms,
 	}) => {
 		if (!task && !manifest_path) {
 			return errorResult("provide `task` (to converge with the built-in loop) or `manifest_path`");
@@ -1269,6 +1285,12 @@ server.registerTool(
 		);
 		if (!checksRes.ok) return errorResult(checksRes.error);
 		const requiredChecks = checksRes.checks;
+
+		// call_timeout_ms governs the loop's adapter calls; a one-shot run has no
+		// implement/review loop to budget. Reject rather than silently ignore it (mirrors
+		// required_checks) -- the guard is a shared pure helper so its wording stays single-sourced.
+		const callTimeoutErr = rejectCallTimeoutForOneShot(call_timeout_ms, manifest.policy.kind);
+		if (callTimeoutErr) return errorResult(callTimeoutErr);
 
 		if (manifest.policy.kind === "loop") {
 			if (!task) return errorResult("a loop run needs a `task` to converge on");
@@ -1322,6 +1344,7 @@ server.registerTool(
 					...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
 					maxIterations: max_iterations,
 					...(requiredChecks && { requiredChecks }),
+					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
 					allowUnenforced: allow_unenforced_permissions,
 				});
 				if (!r.ok) {
@@ -1343,6 +1366,7 @@ server.registerTool(
 				ws.cwd, // agents implement/review IN the managed worktree (== runCwd when in_place)
 				allow_unenforced_permissions,
 				getConfig().roles,
+				call_timeout_ms, // per-run override -> applied to every participant's adapter
 			);
 			if (!prep.ok) {
 				ws.cleanup?.(); // setup failed before the loop opened: retire the empty worktree
@@ -1361,6 +1385,7 @@ server.registerTool(
 					execute: prep.execute,
 					// Run-level required_checks replace the manifest's for this run.
 					loopSteps: { ...prep.loopSteps, ...(requiredChecks && { requiredChecks }) },
+					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
 				});
 			} catch (e) {
 				ws.cleanup?.(); // the loop never opened: retire the empty worktree
@@ -2022,6 +2047,7 @@ const batchDeps: BatchEngineDeps = {
 			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
 			maxIterations: p.maxIterations,
 			...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
+			...(p.callTimeoutMs !== undefined && { callTimeoutMs: p.callTimeoutMs }),
 			loopId: p.loopId,
 			allowUnenforced: false,
 		});
@@ -2087,6 +2113,14 @@ const batchTaskSchema = z.object({
 		.describe(
 			"Per-task chit-executed verification: replaces the batch's required_checks and the manifest's for this task (closest-wins, no merge). Each {command, args?, name?, timeoutMs?}.",
 		),
+	callTimeoutMs: z
+		.number()
+		.int()
+		.positive()
+		.optional()
+		.describe(
+			"Per-task hard per-call timeout (ms) for the implementer and reviewer; overrides the batch-level call_timeout_ms for this task (closest wins).",
+		),
 });
 
 function batchError(e: unknown) {
@@ -2128,6 +2162,14 @@ server.registerTool(
 				.describe(
 					"Batch-level chit-executed verification, applied to every task without its own requiredChecks. A task's requiredChecks override these; the manifest policy's are the fallback. Each {command, args?, name?, timeoutMs?}.",
 				),
+			call_timeout_ms: z
+				.number()
+				.int()
+				.positive()
+				.optional()
+				.describe(
+					"Batch-level hard per-call timeout (ms) for the implementer and reviewer, applied to every task without its own callTimeoutMs. A task's callTimeoutMs overrides this; agent config / the 15-min default is the fallback.",
+				),
 		},
 	},
 	async ({
@@ -2138,6 +2180,7 @@ server.registerTool(
 		manifest_path,
 		max_iterations,
 		required_checks,
+		call_timeout_ms,
 	}) => {
 		const runCwd = resolve(cwd ?? process.cwd());
 		// Resolve manifest paths to absolute against the batch cwd up front, so the
@@ -2165,6 +2208,7 @@ server.registerTool(
 				...(batchManifest !== undefined && { manifestPath: batchManifest }),
 				maxIterations: max_iterations,
 				...(required_checks !== undefined && { requiredChecks: required_checks }),
+				...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
 			});
 			return jsonResult(describeBatch(batch, batchDeps));
 		} catch (e) {

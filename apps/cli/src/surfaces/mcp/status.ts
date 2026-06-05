@@ -70,6 +70,8 @@ export interface LoopStatusSummary {
 	// chit-executed). When source is "chit", these are the authoritative signal.
 	lastVerification?: ConvergeSession["lastVerification"];
 	lastVerificationSource?: ConvergeSession["lastVerificationSource"];
+	// The per-call timeout override (ms) this run was launched with, when set.
+	callTimeoutMs?: ConvergeSession["callTimeoutMs"];
 	auditRefs: string[];
 	nextAction: string;
 }
@@ -131,6 +133,7 @@ export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSumm
 		...(session.lastVerificationSource !== undefined && {
 			lastVerificationSource: session.lastVerificationSource,
 		}),
+		...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
 		auditRefs: session.auditRefs,
 		nextAction,
 	};
