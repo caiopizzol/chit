@@ -625,23 +625,56 @@ export interface PartialWorkView {
 	note: string;
 }
 
+// The default converge loop's step ids (mirror converge.ts IMPLEMENT_STEP_ID / REVIEW_STEP_ID,
+// kept local to avoid pulling the heavy converge driver into this leaf module). A custom manifest
+// can name its steps anything; those fall through to the generic clause, which is never wrong,
+// just less specific.
+const IMPLEMENT_STEP_ID = "implement";
+const REVIEW_STEP_ID = "review";
+
+// Build the partial-work note's failure clause, attributed to the step that ACTUALLY failed.
+// The job's failure string is the only structured signal this surface has: the worker wraps a
+// step failure as `manifest run failed at step "<step>": <error>` (converge.ts), so the failed
+// step and any adapter timeout are both recoverable from it. The old note always blamed the
+// implementer, which was wrong when the REVIEW step timed out -- there the implementer had
+// finished and its completed work is the uncommitted residue. Exported for direct testing.
+export function partialWorkFailureClause(failure?: string): string {
+	if (!failure) return "";
+	const step = failure.match(/failed at step "([^"]+)"/)?.[1];
+	const timeoutMatch = failure.match(/timed out after (\d+)\s*ms/);
+
+	if (timeoutMatch) {
+		const mins = Math.round(Number(timeoutMatch[1]) / 60_000);
+		if (step === IMPLEMENT_STEP_ID) {
+			return ` The implementer timed out after ${mins}m before committing this work.`;
+		}
+		if (step === REVIEW_STEP_ID) {
+			return ` The implementer's work here is complete but uncommitted; the reviewer timed out after ${mins}m before the run could converge.`;
+		}
+		if (step) return ` Step "${step}" timed out after ${mins}m before the run could converge.`;
+		// Timed out but the failure carries no step (raw adapter error): name no actor we cannot
+		// confirm, rather than wrongly blaming the implementer.
+		return ` A call timed out after ${mins}m before the run could converge.`;
+	}
+	// A non-timeout failure: name the step when known, make no timeout/actor claim.
+	if (step) return ` The run failed during the "${step}" step.`;
+	return "";
+}
+
 // Format inspected partial work into the surface both chit_status (single run) and chit_batch_status
-// (a task) show, with an honest, actionable note. Reframes a timeout failure ("...timed out after
-// 900000ms") into minutes. Returns undefined when there is no partial work to surface.
+// (a task) show, with an honest, actionable note. The failure clause is attributed to the step that
+// failed (see partialWorkFailureClause). Returns undefined when there is no partial work to surface.
 export function describePartialWork(
 	pw: PartialWork,
 	worktreePath: string,
 	failure?: string,
 ): PartialWorkView | undefined {
 	if (!pw.partialWorkPresent) return undefined;
-	const m = failure?.match(/timed out after (\d+)\s*ms/);
-	const timeoutNote = m
-		? ` The implementer timed out after ${Math.round(Number(m[1]) / 60_000)}m before committing this work.`
-		: "";
+	const failureClause = partialWorkFailureClause(failure);
 	return {
 		worktreePath,
 		files: pw.dirtyFiles,
 		diffStat: `${pw.dirtyFiles.length} file(s), +${pw.insertions} -${pw.deletions}`,
-		note: `the run ended without converging, but real uncommitted work is in its worktree.${timeoutNote} Inspect it with \`git -C ${worktreePath} diff\` (and \`git -C ${worktreePath} status\` for untracked files); it is NOT lost. chit_apply can bring it into a checkout, or chit_cleanup discards it.`,
+		note: `the run ended without converging, but real uncommitted work is in its worktree.${failureClause} Inspect it with \`git -C ${worktreePath} diff\` (and \`git -C ${worktreePath} status\` for untracked files); it is NOT lost. chit_apply can bring it into a checkout, or chit_cleanup discards it.`,
 	};
 }

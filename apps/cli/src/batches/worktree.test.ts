@@ -20,6 +20,7 @@ import {
 	type GitRunner,
 	inspectPartialWork,
 	mainRepoOfWorktree,
+	partialWorkFailureClause,
 	prepareRunWorkspace,
 	realGit,
 	resolveBaseSha,
@@ -737,7 +738,7 @@ describe("inspectPartialWork + describePartialWork (partial-work visibility)", (
 		}
 	});
 
-	test("describePartialWork: none -> undefined; present -> view; timeout failure reframed to minutes", () => {
+	test("describePartialWork: none -> undefined; present -> view with files/diffstat/inspect hint", () => {
 		expect(
 			describePartialWork(
 				{ partialWorkPresent: false, dirtyFiles: [], insertions: 0, deletions: 0 },
@@ -750,13 +751,59 @@ describe("inspectPartialWork + describePartialWork (partial-work visibility)", (
 			insertions: 110,
 			deletions: 24,
 		};
-		const v = describePartialWork(pw, "/wt/run/scope", "claude --print timed out after 900000ms");
+		const v = describePartialWork(pw, "/wt/run/scope", 'manifest run failed at step "review": x');
 		expect(v?.files).toEqual(["a.ts", "b.ts"]);
 		expect(v?.diffStat).toBe("2 file(s), +110 -24");
-		expect(v?.note).toContain("timed out after 15m"); // 900000ms -> 15m
+		expect(v?.note).toContain("uncommitted work");
 		expect(v?.note).toContain("git -C /wt/run/scope diff");
-		const v2 = describePartialWork(pw, "/wt", "some other error");
-		expect(v2?.note).not.toContain("timed out");
-		expect(v2?.note).toContain("uncommitted work");
+	});
+
+	// The actor-attribution bug: the old note always blamed the implementer, even when the
+	// REVIEW step timed out (the implementer had finished; its work is the residue). The clause
+	// is now derived from the failed step in the failure string.
+	describe("partialWorkFailureClause: attributes the timeout to the step that failed", () => {
+		const reviewTimeout =
+			'manifest run failed at step "review": codex exec timed out after 600000ms';
+		const implementTimeout =
+			'manifest run failed at step "implement": claude --print timed out after 2000ms';
+
+		test("a REVIEW-step timeout blames the reviewer, NOT the implementer", () => {
+			const clause = partialWorkFailureClause(reviewTimeout);
+			expect(clause).toContain("reviewer timed out after 10m");
+			expect(clause).toContain("complete but uncommitted");
+			expect(clause).not.toContain("The implementer timed out"); // the actual bug
+		});
+
+		test("an IMPLEMENT-step timeout still names the implementer", () => {
+			const clause = partialWorkFailureClause(implementTimeout);
+			expect(clause).toContain("The implementer timed out after 0m"); // 2000ms -> 0m
+			expect(clause).not.toContain("reviewer");
+		});
+
+		test("a non-default step timeout names the step generically (no actor guess)", () => {
+			const clause = partialWorkFailureClause(
+				'manifest run failed at step "build": claude --print timed out after 300000ms',
+			);
+			expect(clause).toContain('Step "build" timed out after 5m');
+			expect(clause).not.toContain("implementer");
+			expect(clause).not.toContain("reviewer");
+		});
+
+		test("a timeout with no step (raw adapter error) names no unconfirmed actor", () => {
+			const clause = partialWorkFailureClause("claude --print timed out after 900000ms");
+			expect(clause).toContain("A call timed out after 15m");
+			expect(clause).not.toContain("implementer");
+		});
+
+		test("a non-timeout step failure names the step, claims no timeout", () => {
+			const clause = partialWorkFailureClause('manifest run failed at step "review": boom');
+			expect(clause).toContain('failed during the "review" step');
+			expect(clause).not.toContain("timed out");
+		});
+
+		test("no failure / unparseable failure -> empty clause (base note only)", () => {
+			expect(partialWorkFailureClause(undefined)).toBe("");
+			expect(partialWorkFailureClause("some other error")).toBe("");
+		});
 	});
 });

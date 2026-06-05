@@ -360,6 +360,33 @@ describe("needs_attention surfacing", () => {
 		expect(a?.partialWork?.note).toContain("timed out after 15m");
 	});
 
+	test("a REVIEW-step timeout attributes the partialWork note to the reviewer, not the implementer", () => {
+		// The Task B bug end to end: the implementer finished and produced a file, then the
+		// reviewer timed out (a wedge / inherited long timeout). The recorded failure is step
+		// "review", so the partial-work note must NOT blame the implementer (it did its job).
+		deps.loopDetail = () => ({
+			changedFiles: [],
+			workspaceWarnings: [],
+			partialWork: {
+				partialWorkPresent: true,
+				dirtyFiles: ["BATCH-TIMEOUT-SMOKE.md"],
+				insertions: 1,
+				deletions: 0,
+			},
+		});
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), {
+			state: "failed",
+			failure: 'manifest run failed at step "review": codex exec timed out after 600000ms',
+		});
+		advanceBatch(store, deps, "c1");
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		const a = view.tasks.find((t) => t.id === "a");
+		expect(a?.partialWork?.files).toEqual(["BATCH-TIMEOUT-SMOKE.md"]);
+		expect(a?.partialWork?.note).toContain("reviewer timed out after 10m");
+		expect(a?.partialWork?.note).not.toContain("The implementer timed out"); // the fixed bug
+	});
+
 	test("summarizeBatch counts needs_attention separately from failed", () => {
 		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
 		jobs.finish(firstJob(), { stopStatus: "blocked" });
