@@ -865,7 +865,7 @@ describe("inspectPartialWork + describePartialWork (partial-work visibility)", (
 
 		test("an IMPLEMENT-step timeout still names the implementer", () => {
 			const clause = partialWorkFailureClause(implementTimeout);
-			expect(clause).toContain("The implementer timed out after 0m"); // 2000ms -> 0m
+			expect(clause).toContain("The implementer timed out after 2s"); // 2000ms -> 2s
 			expect(clause).not.toContain("reviewer");
 		});
 

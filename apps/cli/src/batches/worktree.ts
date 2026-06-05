@@ -22,6 +22,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { formatDuration } from "../jobs/health.ts";
 
 export class WorktreeError extends Error {}
 
@@ -664,17 +665,17 @@ export function partialWorkFailureClause(failure?: string): string {
 	const timeoutMatch = failure.match(/timed out after (\d+)\s*ms/);
 
 	if (timeoutMatch) {
-		const mins = Math.round(Number(timeoutMatch[1]) / 60_000);
+		const elapsed = formatDuration(Number(timeoutMatch[1]));
 		if (step === IMPLEMENT_STEP_ID) {
-			return ` The implementer timed out after ${mins}m before committing this work.`;
+			return ` The implementer timed out after ${elapsed} before committing this work.`;
 		}
 		if (step === REVIEW_STEP_ID) {
-			return ` The implementer's work here is complete but uncommitted; the reviewer timed out after ${mins}m before the run could converge.`;
+			return ` The implementer's work here is complete but uncommitted; the reviewer timed out after ${elapsed} before the run could converge.`;
 		}
-		if (step) return ` Step "${step}" timed out after ${mins}m before the run could converge.`;
+		if (step) return ` Step "${step}" timed out after ${elapsed} before the run could converge.`;
 		// Timed out but the failure carries no step (raw adapter error): name no actor we cannot
 		// confirm, rather than wrongly blaming the implementer.
-		return ` A call timed out after ${mins}m before the run could converge.`;
+		return ` A call timed out after ${elapsed} before the run could converge.`;
 	}
 	// A non-timeout failure: name the step when known, make no timeout/actor claim.
 	if (step) return ` The run failed during the "${step}" step.`;
