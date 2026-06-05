@@ -19,6 +19,10 @@ import {
 
 const NOW = Date.parse("2026-06-01T11:00:00.000Z");
 
+// The server-version block is computed by the handler (it reads disk) and injected
+// into buildStatus, so these pure-assembly tests pass a fixed value.
+const TEST_SERVER = { version: "1.2.3" } as const;
+
 // A fresh, empty job store under a temp dir (never touches the real state dir).
 function emptyJobStore(): JobStore {
 	return new JobStore(mkdtempSync(join(tmpdir(), "chit-status-jobs-")));
@@ -76,11 +80,35 @@ function emptyController(): RunController {
 
 describe("buildStatus", () => {
 	test("empty stores produce empty active sections and empty recent", () => {
-		const status = buildStatus(emptyController(), emptyAuditStore(), emptyJobStore(), 5, NOW);
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+		);
 		expect(status.active.runs).toEqual([]);
 		expect(status.active.loops).toEqual([]);
 		expect(status.jobs).toEqual([]);
 		expect(status.recent).toEqual([]);
+	});
+
+	test("the injected server block is carried through to the overview", () => {
+		const server = {
+			version: "0.1.0",
+			installedVersion: "0.2.0",
+			note: "running 0.1.0, installed 0.2.0; reconnect to pick it up",
+		};
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			server,
+		);
+		expect(status.server).toEqual(server);
 	});
 
 	test("durable jobs: in-flight always shown, terminal capped, stale derived", () => {
@@ -125,7 +153,7 @@ describe("buildStatus", () => {
 			stopStatus: "converged",
 		});
 
-		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW, TEST_SERVER);
 		const byId = Object.fromEntries(status.jobs.map((j) => [j.run_id, j]));
 		expect(byId.live?.display).toBe("running");
 		expect(byId.stale?.display).toBe("stale");
@@ -161,7 +189,7 @@ describe("buildStatus", () => {
 			state: "completed",
 			createdAt: "2026-06-01T10:00:00.000Z",
 		});
-		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW, TEST_SERVER);
 		const byId = Object.fromEntries(status.jobs.map((j) => [j.run_id, j]));
 		expect(byId.withCt?.callTimeoutMs).toBe(600_000); // the override shows in the list view
 		expect(byId.noCt?.callTimeoutMs).toBeUndefined(); // absent when no override was set
@@ -189,7 +217,7 @@ describe("buildStatus", () => {
 			phase: "implementing",
 			phaseStartedAt: new Date(NOW - 30_000).toISOString(),
 		});
-		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW, TEST_SERVER);
 		const j = status.jobs.find((x) => x.run_id === "run1");
 		expect(j?.elapsedMs).toBe(120_000);
 		expect(j?.lastHeartbeatAgeMs).toBe(5_000);
@@ -217,7 +245,7 @@ describe("buildStatus", () => {
 			createdAt: "2026-06-01T10:50:00.000Z",
 			failure: "boom",
 		});
-		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW, TEST_SERVER);
 		const j = status.jobs.find((x) => x.run_id === "fail1");
 		expect(j?.nextAction).not.toContain("chit_audit_show");
 	});
@@ -240,7 +268,7 @@ describe("buildStatus", () => {
 			createdAt: "2026-06-01T10:50:00.000Z",
 			stopStatus: "converged",
 		});
-		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW);
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW, TEST_SERVER);
 		const j = status.jobs.find((x) => x.run_id === "done1");
 		// nextAction names the audit_ref argument explicitly, so a cold agent calls
 		// chit_audit_show correctly first-try (the receipt handle, not a control run_id).
@@ -277,6 +305,7 @@ describe("buildStatus", () => {
 			emptyJobStore(),
 			5,
 			NOW,
+			TEST_SERVER,
 		);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["new", "old"]);
@@ -299,13 +328,21 @@ describe("buildStatus", () => {
 			emptyJobStore(),
 			5,
 			NOW,
+			TEST_SERVER,
 		);
 
 		expect(status.active.loops.map((l) => l.run_id)).toEqual(["loop-a", "loop-b"]);
 	});
 
 	test("recent_limit of 0 returns no recent runs", () => {
-		const status = buildStatus(emptyController(), emptyAuditStore(), emptyJobStore(), 0, NOW);
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			0,
+			NOW,
+			TEST_SERVER,
+		);
 		expect(status.recent).toEqual([]);
 	});
 
@@ -323,6 +360,7 @@ describe("buildStatus", () => {
 			emptyJobStore(),
 			5,
 			NOW,
+			TEST_SERVER,
 		);
 
 		expect(status.active.runs.map((r) => r.run_id)).toEqual(["r1"]);

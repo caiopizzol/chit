@@ -101,6 +101,7 @@ import {
 	type StepControllers,
 	startRun,
 } from "./engine.ts";
+import { describeServerVersion, RUNNING_VERSION, resolveOwnVersion } from "./server-version.ts";
 import {
 	buildStatus,
 	needsDecisionNextAction,
@@ -300,7 +301,13 @@ server.registerTool(
 	},
 	async ({ run_id, recent_limit }) => {
 		if (run_id === undefined) {
-			return jsonResult(buildStatus(runController, auditStore, jobStore, recent_limit, Date.now()));
+			// Re-read the on-disk version now and compare against the startup capture, so
+			// the overview warns when the installed binary has been upgraded past this
+			// running server (a reconnect is needed to pick it up).
+			const server = describeServerVersion(RUNNING_VERSION, resolveOwnVersion());
+			return jsonResult(
+				buildStatus(runController, auditStore, jobStore, recent_limit, Date.now(), server),
+			);
 		}
 		const resolved = runController.resolve(run_id, Date.now());
 		if (!resolved) return errorResult(`unknown run_id ${run_id}`);

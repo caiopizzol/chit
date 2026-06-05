@@ -28,6 +28,7 @@ import type { RunController } from "./controller.ts";
 import type { ControlledRun } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import { isComplete, type Run, readySteps } from "./engine.ts";
+import type { ServerVersionInfo } from "./server-version.ts";
 
 // A compact per-run line for the overview. Deliberately omits the (possibly
 // large) final output and per-step detail: drill into one run with chit_trace, or
@@ -296,6 +297,10 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 }
 
 export interface ChitStatus {
+	// The running MCP server's version, plus a skew warning when the on-disk binary
+	// is newer than the running process. Computed by the handler (it reads disk) and
+	// injected here so buildStatus stays pure; see server-version.ts.
+	server: ServerVersionInfo;
 	active: {
 		runs: RunStatusSummary[];
 		loops: LoopStatusSummary[];
@@ -335,13 +340,15 @@ function recentRuns(auditStore: AuditStore, recentLimit: number): RunSummary[] {
 
 // Assemble the overview. `recentLimit` caps the durable history slice (newest
 // first; 0 omits it). Active runs and loops are returned newest-first, each under
-// its run_id with the unified verbs (chit_next/chit_cancel/chit_trace).
+// its run_id with the unified verbs (chit_next/chit_cancel/chit_trace). `server` is
+// passed in (the handler computes it from disk) so this stays pure and fs-free.
 export function buildStatus(
 	controller: RunController,
 	auditStore: AuditStore,
 	jobStore: JobStore,
 	recentLimit: number,
 	nowMs: number,
+	server: ServerVersionInfo,
 ): ChitStatus {
 	// One foreground store now holds both kinds (run_id-keyed); split by kind to
 	// keep the same two-section overview. byNewest sorts each by startedAtMs, so
@@ -352,6 +359,7 @@ export function buildStatus(
 	);
 	const loops = fg.filter((c): c is Extract<ControlledRun, { kind: "loop" }> => c.kind === "loop");
 	return {
+		server,
 		active: {
 			runs: byNewest(runs.map((c) => c.run)).map(summarizeRunForStatus),
 			loops: byNewest(loops.map((c) => c.session)).map(summarizeLoopForStatus),
