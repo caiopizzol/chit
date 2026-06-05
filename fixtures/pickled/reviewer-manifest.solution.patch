@@ -1,0 +1,38 @@
+diff --git a/review-check.json b/review-check.json
+new file mode 100644
+index 0000000..9bc15cb
+--- /dev/null
++++ b/review-check.json
+@@ -0,0 +1,32 @@
++{
++  "schema": 1,
++  "id": "review-check",
++  "description": "Ask a read-only Codex reviewer to inspect a task and diff summary.",
++  "inputs": {
++    "task": { "type": "string" },
++    "diff_summary": { "type": "string" }
++  },
++  "requires": {
++    "can_show_markdown": true
++  },
++  "participants": {
++    "reviewer": {
++      "agent": "codex",
++      "instructions": "Read-only implementation reviewer. Inspect the task and diff summary. Return concrete findings and cite what needs to change.",
++      "session": "per_scope",
++      "permissions": {
++        "filesystem": "read_only"
++      }
++    }
++  },
++  "steps": {
++    "review": {
++      "call": "reviewer",
++      "prompt": "Task:\\n{{ inputs.task }}\\n\\nDiff summary:\\n{{ inputs.diff_summary }}\\n\\nReview this change. Return findings ordered by severity and note any remaining risk."
++    },
++    "out": {
++      "format": "## Review\\n\\n{{ steps.review.output }}"
++    }
++  },
++  "output": "out"
++}

@@ -1,0 +1,215 @@
+# yaml-language-server: $schema=https://pickled.dev/schema/pickled.schema.json
+
+schemaVersion: 2
+
+product:
+  name: chit
+  description: Thin runtime for declared multi-agent routines.
+
+sources:
+  readme: { path: ./README.md }
+  cli_readme: { path: ./apps/cli/README.md }
+  getting_started: { path: ./apps/site/content/docs/getting-started.mdx }
+  mcp_docs: { path: ./apps/site/content/docs/mcp.mdx }
+  manifest_schema: { path: ./apps/site/content/docs/manifest-schema.mdx }
+  examples: { path: ./examples/README.md }
+
+agents:
+  quick:
+    provider: claude-code
+    model: claude-haiku-4-5
+    maxTurns: 5
+  builder:
+    provider: claude-code
+    model: claude-haiku-4-5
+    maxTurns: 30
+
+contexts:
+  given_readme: { mode: inject, source: readme }
+  given_cli_readme: { mode: inject, source: cli_readme }
+  given_getting_started: { mode: inject, source: getting_started }
+  given_mcp_docs: { mode: inject, source: mcp_docs }
+  given_manifest_schema: { mode: inject, source: manifest_schema }
+  given_examples: { mode: inject, source: examples }
+
+facts:
+  install_and_doctor:
+    statement: Installs chit with Bun and uses doctor as a no-agent preflight.
+    match:
+      allOf: ["bun install -g @chit-run/cli@latest", "chit doctor"]
+      anyOf: ["runs no agents", "no agents"]
+  mcp_registration:
+    statement: Registers the stdio MCP server in Claude Code.
+    match:
+      allOf: ["claude mcp add chit --scope local -- chit mcp", "stdio MCP server"]
+  first_run_worktree:
+    statement: Says the first run should happen in a git worktree because the implementer edits files.
+    match:
+      allOf: ["git worktree", "implementer edits files"]
+  mcp_run_loop:
+    statement: Starts a run with chit_start and advances it with chit_next.
+    match:
+      allOf: ["chit_start", "chit_next", "run_id"]
+  mcp_inspection:
+    statement: Names the status, trace, and audit inspection tools.
+    match:
+      allOf: ["chit_status", "chit_trace", "chit_audit_list", "chit_audit_show"]
+  foreground_background:
+    statement: Distinguishes foreground and background run modes.
+    match:
+      allOf: ["foreground", "background"]
+      anyOf: ["one iteration per", "detached worker", "survives a reconnect"]
+  batch_worktrees:
+    statement: Explains batch runs as several tasks, one git worktree per task.
+    match:
+      allOf: ["batch", "one per git worktree"]
+  manifest_required_fields:
+    statement: Names the required top-level manifest fields.
+    match:
+      allOf: ["schema", "id", "description", "inputs", "participants", "steps", "output"]
+  manifest_step_types:
+    statement: Says steps are call or format steps.
+    match:
+      allOf: ["call", "format"]
+      anyOf: ["Step types", "steps"]
+  manifest_static_dag:
+    statement: Says manifests are static DAGs and not dynamic model routing.
+    match:
+      allOf: ["static DAG"]
+      anyOf: ["no dynamic", "model-decided"]
+  permissions:
+    statement: Explains filesystem read_only and write permissions.
+    match:
+      allOf: ["read_only", "write", "permissions.filesystem"]
+  required_checks:
+    statement: Explains chit-executed required checks.
+    match:
+      allOf: ["requiredChecks", "command", "args", "no shell"]
+  cli_support:
+    statement: Shows CLI install/use commands for show, run, and audit.
+    match:
+      allOf: ["bunx @chit-run/cli --help", "chit show", "chit run", "chit audit list"]
+  examples_not_bundled:
+    statement: Says example manifests live in the source repo and are not bundled in the npm package.
+    match:
+      allOf: ["examples/", "not bundled"]
+
+misstatements:
+  wrong_package:
+    statement: Installs the wrong package name.
+    match:
+      anyOf: ["bun install -g chit", "npm install -g chit"]
+  doctor_runs_agents:
+    statement: Claims chit doctor runs agents.
+    match:
+      anyOf: ["doctor runs agents", "chit doctor runs agents"]
+  dynamic_router:
+    statement: Claims chit dynamically lets models decide routing in v1.
+    match:
+      anyOf: ["model decides the next step", "dynamic router", "agent-decided routing"]
+  shell_checks:
+    statement: Treats required checks as shell strings.
+    match:
+      anyOf: ["requiredChecks is a shell string", "runs required checks through a shell"]
+  main_checkout:
+    statement: Recommends autonomous work in the main checkout.
+    match:
+      anyOf: ["run it in your main checkout", "use your main checkout for autonomous work"]
+
+questions:
+  - id: setup_mcp
+    question: How do I install chit and connect it to Claude Code through MCP?
+    agents: [quick]
+    contexts: [given_getting_started, given_mcp_docs]
+    expects: [install_and_doctor, mcp_registration, first_run_worktree]
+    rejects: [wrong_package, doctor_runs_agents, main_checkout]
+    examples:
+      pass:
+        - "Install with `bun install -g @chit-run/cli@latest`, then run `chit doctor`; doctor runs no agents. Register MCP with `claude mcp add chit --scope local -- chit mcp`, which launches the stdio MCP server. Run real work in a git worktree because the implementer edits files."
+      fail:
+        - "Install with `bun install -g chit`; chit doctor runs agents, and you should run it in your main checkout."
+
+  - id: drive_mcp_run
+    question: Once MCP is registered, how should an agent start, advance, and inspect a chit run?
+    agents: [quick]
+    contexts: [given_getting_started, given_mcp_docs]
+    expects: [mcp_run_loop, mcp_inspection, foreground_background]
+    examples:
+      pass:
+        - "Call `chit_start` to get one `run_id`, then advance with `chit_next`. Inspect with `chit_status` and `chit_trace`, and read receipts with `chit_audit_list` and `chit_audit_show`. Foreground runs are supervised; background runs use a detached worker and can survive reconnect."
+      fail:
+        - "Start a new run for every step and inspect it by reading hidden state files."
+
+  - id: author_manifest
+    question: What does a basic chit manifest need?
+    agents: [quick]
+    contexts: [given_manifest_schema, given_examples]
+    expects: [manifest_required_fields, manifest_step_types, manifest_static_dag, permissions]
+    rejects: [dynamic_router]
+    examples:
+      pass:
+        - "A manifest has `schema`, `id`, `description`, `inputs`, `participants`, `steps`, and `output`. Steps are `call` or `format`. It is a static DAG with no dynamic routing, and participants can declare `permissions.filesystem` as `read_only` or `write`."
+      fail:
+        - "A chit can omit steps because the model decides the next step as a dynamic router."
+
+  - id: required_checks
+    question: How do I make chit run verification commands itself after a proceed review?
+    agents: [quick]
+    contexts: [given_manifest_schema, given_mcp_docs]
+    expects: [required_checks]
+    rejects: [shell_checks]
+    examples:
+      pass:
+        - "Declare `requiredChecks` with structured objects like `{ command: \"bun\", args: [\"test\"], name: \"tests\" }`. chit runs them as argv with no shell; the check result is ground truth after a proceed review."
+      fail:
+        - "Put `requiredChecks` as a shell string because chit runs required checks through a shell."
+
+  - id: cli_and_examples
+    question: What can I do from the chit CLI, and where do the example manifests come from?
+    agents: [quick]
+    contexts: [given_cli_readme, given_readme, given_examples]
+    expects: [cli_support, examples_not_bundled]
+    examples:
+      pass:
+        - "Use `bunx @chit-run/cli --help`, or install the binary and run `chit show`, `chit run`, and `chit audit list`. Example manifests live under `examples/` in the source repo and are not bundled with the npm package."
+      fail:
+        - "The npm package bundles the example manifests, so `chit run examples/consult.json` works from any directory."
+
+  - id: batch_mode
+    question: How does chit run several tasks at once?
+    agents: [quick]
+    contexts: [given_mcp_docs, given_readme]
+    expects: [batch_worktrees, foreground_background]
+    examples:
+      pass:
+        - "Use batch mode for several tasks. It runs background tasks with one per git worktree; foreground is supervised one unit at a time, while background uses a detached worker."
+      fail:
+        - "Batch mode runs every task in the same checkout and auto-merges the branches."
+
+builds:
+  - id: create_reviewer_manifest
+    goal: >-
+      Create `review-check.json`, a one-shot chit manifest for a read-only
+      reviewer. It should use schema 1, id `review-check`, string inputs
+      `task` and `diff_summary`, one participant named `reviewer` that uses the
+      `codex` agent with `session: per_scope` and
+      `permissions.filesystem: read_only`, one call step that asks the reviewer
+      to inspect the task and diff summary, one format step that includes the
+      reviewer output, and `output` pointing to the format step. Do not add a
+      loop policy or shell-style required checks.
+    agents: [builder]
+    contexts: [given_manifest_schema, given_examples]
+    trials: 2
+    workspace:
+      path: ./fixtures/pickled/reviewer-manifest
+    verifier:
+      failToPass:
+        - { name: reviewer manifest, run: ./tests/verify-reviewer-manifest.sh }
+      passToPass:
+        - { name: keeps fixture instructions, run: test -f README.md }
+    referenceSolution:
+      patch: ./fixtures/pickled/reviewer-manifest.solution.patch
+
+thresholds:
+  questions: 80
+  builds: 80
