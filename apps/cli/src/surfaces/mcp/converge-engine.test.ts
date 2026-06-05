@@ -10,6 +10,7 @@ import {
 	ConvergeEngineError,
 	cancelConverge,
 	describeConverge,
+	type LoopPhase,
 	runNextIteration,
 	startConvergeSession,
 	traceConverge,
@@ -715,5 +716,131 @@ describe("runNextIteration: lastStopStatus is the completed round's OWN stop", (
 		// the exact state whose status line must not read "... · cancelled".
 		expect(session.lastVerdict).toBe("revise");
 		expect(session.lastStopStatus).toBeUndefined();
+	});
+});
+
+describe("runNextIteration: in-flight activity snapshot", () => {
+	// The session records a live activity snapshot WHILE an iteration runs, fed by the same
+	// onTrace / onChecksStart the heartbeat reads, and CLEARS it on settle -- so a concurrent
+	// chit_status can answer "is it stuck?" from returned data, and a stopped run never
+	// reports a stale phase. These pin the lockstep recording (the view derives the ages).
+	test("opens the snapshot while an iteration runs and clears it on settle", async () => {
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		expect(session.activity).toBeUndefined(); // nothing running yet
+
+		const pending = runNextIteration(session);
+		await gated.onStarted;
+		// In flight: the snapshot names the iteration now running. phase is still unknown in
+		// the spin-up before the first step start reaches onTrace.
+		expect(session.activity?.iteration).toBe(1);
+		expect(typeof session.activity?.lastActivityAtMs).toBe("number");
+
+		gated.release();
+		await pending;
+		expect(session.terminalStatus).toBe("converged");
+		expect(session.activity).toBeUndefined(); // cleared on settle, in lockstep with `active`
+	});
+
+	test("advances the phase as the implement then review steps start", async () => {
+		// The engine marks the phase from each step.started BEFORE forwarding to the caller's
+		// onTrace, so the snapshot already reflects the step when the caller observes its start.
+		const phases: (LoopPhase | undefined)[] = [];
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctx?.onTrace?.({ type: "step.started", stepId: "implement", kind: "call" });
+			ctx?.onTrace?.({ type: "step.started", stepId: "review", kind: "call" });
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [
+					{
+						type: "step.completed",
+						stepId: "review",
+						output: reviewJson("proceed"),
+						durationMs: 1,
+					},
+				],
+			};
+		};
+		const session = start(execute);
+		await runNextIteration(session, {
+			onTrace: (e) => {
+				if (e.type === "step.started") phases.push(session.activity?.phase);
+			},
+		});
+		expect(phases).toEqual(["implementing", "reviewing"]);
+	});
+
+	test("marks 'running required checks' when chit runs the checks", async () => {
+		// onChecksStart fires only on reviewer proceed + declared checks; the engine marks the
+		// phase before forwarding, so the snapshot reads it when the caller is notified.
+		const PASS: RequiredCheck = { command: "true", args: [] };
+		const session = startConvergeSession({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			execute: scriptedExecute([reviewJson("proceed")]),
+			loopId: "L1",
+			loopSteps: { implementStep: "implement", reviewStep: "review", requiredChecks: [PASS] },
+		});
+		let phaseAtChecks: LoopPhase | undefined;
+		await runNextIteration(session, {
+			onChecksStart: () => {
+				phaseAtChecks = session.activity?.phase;
+			},
+		});
+		expect(phaseAtChecks).toBe("running required checks");
+	});
+
+	test("cancelConverge marks the in-flight snapshot 'cancelling', then settle clears it", async () => {
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		const pending = runNextIteration(session);
+		await gated.onStarted;
+		expect(session.activity).toBeDefined();
+
+		expect(cancelConverge(session).state).toBe("cancelling");
+		// Visible in the brief window before the aborted iteration settles -- the value of
+		// recording it: chit_cancel's view (and a concurrent chit_status) sees "cancelling".
+		expect(session.activity?.phase).toBe("cancelling");
+
+		const r = await pending;
+		expect(r.kind).toBe("cancelled");
+		expect(session.activity).toBeUndefined(); // cleared on settle
+	});
+
+	test("an external request-signal abort (Esc) marks 'cancelling' too, not only chit_cancel", async () => {
+		// A foreground chit_next cancelled via the MCP request signal / Esc aborts the
+		// controller directly (cancelConverge is never called), so the shared abort path must
+		// mark "cancelling" -- else chit_status would still report the prior phase.
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		const controller = new AbortController();
+		const pending = runNextIteration(session, { signal: controller.signal });
+		await gated.onStarted;
+		expect(session.activity?.phase).toBeUndefined(); // parked pre-trace: no phase yet
+
+		controller.abort(); // Esc / request abort, NOT chit_cancel
+		expect(session.activity?.phase).toBe("cancelling");
+
+		const r = await pending;
+		expect(r.kind).toBe("cancelled");
+		expect(session.activity).toBeUndefined(); // cleared on settle
+	});
+
+	test("a signal already aborted at call time marks 'cancelling' before the iteration settles", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		const controller = new AbortController();
+		controller.abort();
+		const pending = runNextIteration(session, { signal: controller.signal });
+		// The fold-in ran synchronously (before the first await) and marked the snapshot, so a
+		// concurrent chit_status in this window sees the cancel rather than a spin-up phase.
+		expect(session.activity?.phase).toBe("cancelling");
+
+		const r = await pending;
+		expect(r.kind).toBe("cancelled");
+		expect(session.activity).toBeUndefined();
 	});
 });

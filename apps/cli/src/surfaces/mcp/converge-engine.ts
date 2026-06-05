@@ -27,6 +27,7 @@ import {
 	ConvergeExecuteError,
 	type ConvergeIterationResult,
 	type LoopSteps,
+	phaseOfStepStart,
 	runConvergeIteration,
 	stopReasonFor,
 } from "../../cli/converge.ts";
@@ -34,6 +35,33 @@ import { readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
 import type { TraceEvent } from "../../runtime/types.ts";
 
 export class ConvergeEngineError extends Error {}
+
+// The phase an in-flight iteration is in, derived from the SAME signals that drive
+// the chit_next heartbeat: the implement/review step starting (phaseOfStepStart) and
+// the required-checks starting (onChecksStart), plus "cancelling" when a cancel aborts
+// the iteration. Shares its words with the background JobPhase where the two surfaces
+// overlap (implementing / reviewing / cancelling), kept aligned on purpose.
+export type LoopPhase = "implementing" | "reviewing" | "running required checks" | "cancelling";
+
+// A live snapshot of the in-flight iteration, set while session.active is held and
+// cleared on settle, so chit_status can answer "is it stuck?" from the RETURNED data
+// alone -- the live MCP progress notifications are UI-only best effort and may never
+// reach the calling model's transcript. It carries only raw marks (the view derives the
+// ages from `now`); NOT a new instrumentation channel -- it is fed by the same
+// onTrace / onChecksStart the heartbeat reads.
+export interface LoopActivity {
+	// The iteration now running (session.iteration + 1 when it began).
+	iteration: number;
+	// The current phase, set on each transition; undefined in the brief spin-up before
+	// the implement step's first trace event.
+	phase?: LoopPhase;
+	// Wall-clock ms when the current phase began, set on each phase transition; undefined
+	// until the first phase is known.
+	phaseStartedAtMs?: number;
+	// Wall-clock ms of the latest recorded mark (the iteration's start, then each phase
+	// transition) -- the freshness marker the view turns into lastActivityAgeMs.
+	lastActivityAtMs: number;
+}
 
 // In-memory state for one MCP-driven converge loop. Never the source of truth
 // for iterations or the stop record (those live in the loop log); this holds the
@@ -96,6 +124,11 @@ export interface ConvergeSession {
 	// runNextIteration and cleared on settle. Its presence IS the per-loop running
 	// lock: one iteration at a time, because the loop log is single-writer.
 	active?: AbortController;
+	// The in-flight iteration's live activity, set when `active` is acquired and cleared
+	// on settle (in lockstep with `active`), so a settled run never reports a stale phase.
+	// A concurrent chit_status reads it to narrate what the running iteration is doing;
+	// the view derives elapsed / phaseElapsed / heartbeat-age from it. See LoopActivity.
+	activity?: LoopActivity;
 	startedAtMs: number;
 	// Wall-clock ms when the loop went terminal, set in lockstep with terminalStatus
 	// (set if and only if terminalStatus is set). The durable stop record's
@@ -239,6 +272,20 @@ function stopBlocked(session: ConvergeSession, reason: string): void {
 	}
 }
 
+// Advance the in-flight activity to a new phase, setting the phase clock and the
+// freshness mark together (the lockstep the view reads for phaseElapsedMs /
+// lastActivityAgeMs). A no-op once the iteration settled and cleared the snapshot,
+// so a late trace event can never resurrect a stale phase on a stopped run. `atMs`
+// defaults to now for live trace/abort events; a synchronous caller that already holds
+// an instant (chit_cancel) passes it so its returned view subtracts from the SAME mark.
+function markActivityPhase(session: ConvergeSession, phase: LoopPhase, atMs = Date.now()): void {
+	const a = session.activity;
+	if (a === undefined) return;
+	a.phase = phase;
+	a.phaseStartedAtMs = atMs;
+	a.lastActivityAtMs = atMs;
+}
+
 // Run exactly ONE implement->review iteration for this session, blocking until
 // it settles. `signal`, when provided, is folded into the iteration's abort, so
 // a client cancel (Esc) or chit_converge_cancel kills the in-flight adapter call.
@@ -268,16 +315,30 @@ export async function runNextIteration(
 		throw new ConvergeEngineError("an iteration is already running for this run");
 	}
 
-	// chit owns the controller for this iteration so chit_converge_cancel can stop
-	// it. Fold in the client's own signal: if Esc propagates, it aborts the same
-	// controller. Honor a signal that is already aborted at call time.
+	// chit owns the controller for this iteration so chit_cancel can stop it. Take the
+	// running lock and open the in-flight activity snapshot FIRST, so the abort wiring
+	// below has a snapshot to mark "cancelling".
 	const controller = new AbortController();
-	if (signal !== undefined) {
-		if (signal.aborted) controller.abort();
-		else signal.addEventListener("abort", () => controller.abort(), { once: true });
-	}
 	session.active = controller;
 	const iteration = session.iteration + 1;
+	// Open the in-flight activity snapshot in lockstep with `active`, so a concurrent
+	// chit_status can read what this iteration is doing. phase is unknown until the first
+	// step starts; the onTrace / onChecksStart marks below advance it. The initial
+	// lastActivityAtMs is the iteration's start, so the activity age reads "time since it began"
+	// during the brief spin-up before any phase.
+	session.activity = { iteration, lastActivityAtMs: Date.now() };
+	// Fold in the client's own signal: if Esc or the MCP request abort propagates, it aborts
+	// the same controller AND marks the snapshot "cancelling", so chit_status reports the
+	// cancel even when it arrived through the request signal rather than chit_cancel. Honor a
+	// signal already aborted at call time the same way (it marks before the first await).
+	if (signal !== undefined) {
+		const onAbort = () => {
+			controller.abort();
+			markActivityPhase(session, "cancelling");
+		};
+		if (signal.aborted) onAbort();
+		else signal.addEventListener("abort", onAbort, { once: true });
+	}
 
 	try {
 		let iter: ConvergeIterationResult;
@@ -293,8 +354,20 @@ export async function runNextIteration(
 				reviewStep: session.reviewStep,
 				...(session.requiredChecks && { requiredChecks: session.requiredChecks }),
 				signal: controller.signal,
-				...(opts?.onTrace && { onTrace: opts.onTrace }),
-				...(opts?.onChecksStart && { onChecksStart: opts.onChecksStart }),
+				// Record the in-flight phase on the session (for chit_status) from the SAME
+				// step.started / checks-start signals the caller's heartbeat reads, then
+				// forward. Always wired (not gated on opts) because the activity snapshot
+				// must advance even when the caller passes no heartbeat. phaseOfStepStart
+				// returns undefined for non-phase events, leaving the snapshot untouched.
+				onTrace: (e) => {
+					const phase = phaseOfStepStart(e, session.implementStep, session.reviewStep);
+					if (phase) markActivityPhase(session, phase);
+					opts?.onTrace?.(e);
+				},
+				onChecksStart: () => {
+					markActivityPhase(session, "running required checks");
+					opts?.onChecksStart?.();
+				},
 			});
 		} catch (e) {
 			// Cancellation never lands here: an aborted adapter call settles as a
@@ -375,6 +448,10 @@ export async function runNextIteration(
 		};
 	} finally {
 		session.active = undefined;
+		// Clear the in-flight snapshot in lockstep with `active`: a settled run is in no
+		// phase, so the view must not report a stale one. The terminal receipt (status,
+		// statusLine, elapsedMs, stopReason) carries the settled story instead.
+		session.activity = undefined;
 	}
 }
 
@@ -388,13 +465,20 @@ export type CancelResult =
 // the cancelled stop (best-effort, like chit_run_cancel -- if the call had already
 // produced its verdict, the abort is a no-op and the loop settles on that
 // verdict). If the loop is open but idle (e.g. after a revise round returned),
-// close it cancelled now. A terminal loop is reported back unchanged.
-export function cancelConverge(session: ConvergeSession): CancelResult {
+// close it cancelled now. A terminal loop is reported back unchanged. `nowMs` (the
+// caller's instant, default now) stamps the "cancelling" mark so a chit_cancel view
+// built against the SAME instant never reports a negative activity age.
+export function cancelConverge(session: ConvergeSession, nowMs = Date.now()): CancelResult {
 	if (session.terminalStatus !== undefined) {
 		return { state: "already", status: session.terminalStatus };
 	}
 	if (session.active !== undefined) {
 		session.active.abort();
+		// Surface the cancel in the in-flight snapshot so a concurrent chit_status reads
+		// "cancelling" before the aborted iteration settles; runNextIteration's finally then
+		// clears it. A no-op if the call already produced its verdict (the abort is too late
+		// and the snapshot may be gone). Stamped at nowMs so the returned view's ages agree.
+		markActivityPhase(session, "cancelling", nowMs);
 		return { state: "cancelling" };
 	}
 	stopTerminal(

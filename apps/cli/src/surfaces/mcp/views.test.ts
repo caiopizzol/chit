@@ -8,7 +8,7 @@ import { LockError } from "../../jobs/lock.ts";
 import { JobStoreError } from "../../jobs/store.ts";
 import type { LoopJobRecord } from "../../jobs/types.ts";
 import { LoopStoreError } from "../../loops/log-store.ts";
-import type { ConvergeSession, NextResult } from "./converge-engine.ts";
+import { type ConvergeSession, cancelConverge, type NextResult } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
 import {
 	backgroundRunView,
@@ -567,6 +567,115 @@ describe("loopRunView statusLine: the chit_status mirror of the chit_next line",
 		) as Record<string, unknown>;
 		expect(v.statusLine).toBe("iteration 1 · revise · 1/1 checks passed");
 		expect(v.status).toBe("cancelled"); // the cancellation still shows where it belongs
+	});
+});
+
+describe("loopRunView activity: the in-flight snapshot for chit_status (is it stuck?)", () => {
+	// While an iteration is IN FLIGHT, chit_status -> loopRunView surfaces a compact `activity`
+	// object so the calling agent can judge progress WITHOUT the live MCP heartbeats (UI-only,
+	// never guaranteed to reach the model). `now` is passed in (the handler's instant) so the
+	// derived ages stay deterministic. These pin: activity present + correct while running,
+	// absent once settled, and the 0.30.0 terminal/last-completed receipt unchanged.
+	const passed = (command: string) => ({ command, status: "passed" as const });
+
+	test("an in-flight iteration adds the activity object WITHOUT clobbering the last-completed statusLine", () => {
+		const NOW = 100_000;
+		// Reachable mixed state: round 1 completed as a revise (loop stayed open), then chit_next
+		// started round 2, now mid-implement. A concurrent chit_status sees BOTH lines.
+		const v = loopRunView(
+			loopSession({
+				iteration: 1,
+				lastVerdict: "revise",
+				lastVerificationSource: "reviewer",
+				lastChecks: [passed("the tests")],
+				active: new AbortController(),
+				startedAtMs: NOW - 90_000,
+				activity: {
+					iteration: 2,
+					phase: "implementing",
+					phaseStartedAtMs: NOW - 30_000,
+					lastActivityAtMs: NOW - 5_000,
+				},
+			}),
+			NOW,
+		) as Record<string, unknown>;
+		// The top-level statusLine is still the LAST COMPLETED round (0.30.0 behavior preserved)...
+		expect(v.statusLine).toBe("iteration 1 · revise · 1/1 checks passed");
+		// ...and the new activity object narrates the IN-FLIGHT round, exact shape pinned.
+		expect(v.activity).toEqual({
+			iteration: 2,
+			phase: "implementing",
+			elapsedMs: 90_000, // now - startedAtMs (whole run, aligned with background JobTiming)
+			phaseElapsedMs: 30_000, // now - phaseStartedAtMs
+			lastActivityAgeMs: 5_000, // now - lastActivityAtMs
+			statusLine: "iteration 2 · implementing · 30s",
+		});
+		expect(v.status).toBe("running");
+		expectNoLeakage(v);
+	});
+
+	test("a settled run surfaces no activity (the snapshot was cleared on settle), receipt intact", () => {
+		// A converged run: runNextIteration cleared session.activity in its finally, so the view
+		// reports only the terminal receipt -- never a stale phase.
+		const v = loopRunView(
+			loopSession({
+				iteration: 1,
+				terminalStatus: "converged",
+				startedAtMs: 1_000,
+				endedAtMs: 5_000,
+			}),
+			100_000,
+		) as Record<string, unknown>;
+		expect(v.activity).toBeUndefined();
+		expect(v.status).toBe("converged");
+		expect(v.elapsedMs).toBe(4_000); // terminal receipt unchanged (endedAtMs - startedAtMs)
+	});
+
+	test("the spin-up before the first step shows activity with no phase and a 'starting' line", () => {
+		const NOW = 50_000;
+		const v = loopRunView(
+			loopSession({
+				iteration: 0,
+				active: new AbortController(),
+				startedAtMs: NOW - 2_000,
+				activity: { iteration: 1, lastActivityAtMs: NOW - 2_000 }, // no phase recorded yet
+			}),
+			NOW,
+		) as Record<string, unknown>;
+		const a = v.activity as Record<string, unknown>;
+		expect(a.iteration).toBe(1);
+		expect(a.phase).toBeUndefined(); // omitted until the first step starts
+		expect(a.phaseElapsedMs).toBeUndefined(); // no phase clock yet
+		expect(a.elapsedMs).toBe(2_000);
+		expect(a.lastActivityAgeMs).toBe(2_000);
+		expect(a.statusLine).toBe("iteration 1 · starting · 2s"); // duration falls back to run elapsed
+	});
+
+	test("chit_cancel's flow (cancelConverge then same-now view) surfaces 'cancelling' with non-negative ages", () => {
+		// Mirror the chit_cancel handler exactly: mark the in-flight snapshot "cancelling" at
+		// `now`, THEN build the returned view against the SAME `now`. The earlier bug stamped
+		// the mark at a LATER Date.now() than the view's captured now, so phaseElapsedMs /
+		// lastActivityAgeMs went negative; sharing `now` keeps them non-negative (here 0).
+		const NOW = 20_000;
+		const session = loopSession({
+			iteration: 0,
+			active: new AbortController(),
+			startedAtMs: NOW - 8_000,
+			activity: {
+				iteration: 1,
+				phase: "implementing",
+				phaseStartedAtMs: NOW - 3_000,
+				lastActivityAtMs: NOW - 2_000,
+			},
+		});
+		expect(cancelConverge(session, NOW).state).toBe("cancelling");
+		const v = loopRunView(session, NOW) as Record<string, unknown>;
+		const a = v.activity as Record<string, unknown>;
+		expect(a.phase).toBe("cancelling");
+		expect(a.phaseElapsedMs).toBe(0); // marked at NOW, viewed at NOW -- never negative
+		expect(a.lastActivityAgeMs).toBe(0);
+		expect(a.elapsedMs).toBe(8_000); // whole-run elapsed unchanged
+		expect(a.statusLine).toBe("iteration 1 · cancelling · 0s");
 	});
 });
 

@@ -92,6 +92,7 @@ import { ControllerStore } from "./controller-store.ts";
 import {
 	type ConvergeSession,
 	cancelConverge,
+	type LoopPhase,
 	type NextResult,
 	runNextIteration,
 	startConvergeSession,
@@ -315,9 +316,13 @@ server.registerTool(
 				buildStatus(runController, auditStore, jobStore, recent_limit, Date.now(), server),
 			);
 		}
-		const resolved = runController.resolve(run_id, Date.now());
+		// One `now` for the resolve AND the view, so the in-flight activity's elapsed /
+		// phaseElapsed / heartbeat-age are computed against the same instant the snapshot
+		// was read (this run may be mid-iteration in a concurrent chit_next).
+		const now = Date.now();
+		const resolved = runController.resolve(run_id, now);
 		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
-		return jsonResult(unifiedRunView(resolved));
+		return jsonResult(unifiedRunView(resolved, now));
 	},
 );
 
@@ -951,11 +956,11 @@ function worktreeInspectHint(r: { worktreePath?: string; branch?: string }, runI
 	return ` The run's changes are in its managed worktree (${r.worktreePath}); your checkout was not edited. Retire it with chit_cleanup { run_id: "${runId}" } (dry run), then chit_cleanup { run_id: "${runId}", confirm: true } to remove -- or, if this run is no longer resolvable (a foreground run from a closed session), manually: ${manual}.`;
 }
 
-export function unifiedRunView(resolved: ResolvedRun) {
+export function unifiedRunView(resolved: ResolvedRun, now: number = Date.now()) {
 	if (resolved.mode === "background") return backgroundRunView(resolved.job);
 	return resolved.run.kind === "one-shot"
 		? oneShotRunView(resolved.run.run)
-		: loopRunView(resolved.run.session);
+		: loopRunView(resolved.run.session, now);
 }
 
 export function oneShotRunView(run: Run) {
@@ -976,7 +981,58 @@ export function oneShotRunView(run: Run) {
 	};
 }
 
-export function loopRunView(session: ConvergeSession) {
+// The in-flight activity snapshot for the single-run view: a compact object derived
+// from the session's live activity mark + `now`, so an agent reading chit_status WHILE
+// an iteration runs can answer "is it stuck?" without the live MCP progress
+// notifications (UI-only best effort, never guaranteed to reach the calling model).
+// Empty for a settled or never-run loop (no activity) -- so a stopped run reports its
+// terminal receipt, never a stale phase. Field names mirror the background JobTiming
+// (elapsedMs / phaseElapsedMs / phase) so the two surfaces read alike -- EXCEPT the
+// freshness field, deliberately lastActivityAgeMs and NOT lastHeartbeatAgeMs: a
+// foreground run has no periodic worker heartbeat (background beats every ~10s), the
+// mark advances only on iteration start / phase transitions / cancel, so minutes-old
+// is HEALTHY mid-phase here while it means stale on the background surface.
+// statusLine reuses the heartbeat vocabulary ("iteration N · <phase> · <dur>").
+function loopActivityView(
+	session: ConvergeSession,
+	now: number,
+): {
+	activity?: {
+		iteration: number;
+		phase?: LoopPhase;
+		elapsedMs: number;
+		phaseElapsedMs?: number;
+		lastActivityAgeMs: number;
+		statusLine: string;
+	};
+} {
+	const a = session.activity;
+	if (a === undefined) return {};
+	// elapsedMs is the whole RUN's wall time so far (started->now), matching the
+	// background JobTiming.elapsedMs; phaseElapsedMs is the finer "stuck in this phase"
+	// signal, present once a phase is known.
+	const elapsedMs = now - session.startedAtMs;
+	const phaseElapsedMs = a.phaseStartedAtMs !== undefined ? now - a.phaseStartedAtMs : undefined;
+	const lastActivityAgeMs = now - a.lastActivityAtMs;
+	// "starting" until the first phase is known, matching the chit_next heartbeat's first
+	// line; the line's duration is the current phase's when known, else the whole run's.
+	const phaseWord = a.phase ?? "starting";
+	const statusLine = `iteration ${a.iteration} · ${phaseWord} · ${formatDuration(
+		phaseElapsedMs ?? elapsedMs,
+	)}`;
+	return {
+		activity: {
+			iteration: a.iteration,
+			...(a.phase !== undefined && { phase: a.phase }),
+			elapsedMs,
+			...(phaseElapsedMs !== undefined && { phaseElapsedMs }),
+			lastActivityAgeMs,
+			statusLine,
+		},
+	};
+}
+
+export function loopRunView(session: ConvergeSession, now: number = Date.now()) {
 	const status = session.terminalStatus ?? (session.active ? "running" : "open");
 	const stopped = session.terminalStatus !== undefined;
 	// The compact summary of the last completed iteration -- the same line chit_next
@@ -1000,6 +1056,11 @@ export function loopRunView(session: ConvergeSession) {
 		execution: "loop" as const,
 		status,
 		...(statusLine !== undefined && { statusLine }),
+		// The in-flight iteration's live activity (present only while an iteration runs):
+		// what it is doing now + how long, so a concurrent chit_status can judge progress
+		// without the UI-only heartbeats. Its own nested statusLine is the in-flight line;
+		// the top-level statusLine above stays the LAST COMPLETED round's summary.
+		...loopActivityView(session, now),
 		...workspaceView(session),
 		iterationsCompleted: session.iteration,
 		cancellable: !stopped,
@@ -1944,7 +2005,8 @@ server.registerTool(
 		},
 	},
 	async ({ run_id }) => {
-		const resolved = runController.resolve(run_id, Date.now());
+		const now = Date.now();
+		const resolved = runController.resolve(run_id, now);
 		if (!resolved) return errorResult(`unknown run_id ${run_id}`);
 		if (resolved.mode === "background") {
 			let r: ReturnType<typeof requestJobCancel>;
@@ -1968,11 +2030,15 @@ server.registerTool(
 			// LoopStoreError carrying the loop-log path; sanitize rather than leak it.
 			let cancel: ReturnType<typeof cancelConverge>;
 			try {
-				cancel = cancelConverge(resolved.run.session);
+				// One `now` for the cancelling mark AND the returned view: cancelConverge stamps
+				// the in-flight snapshot at `now` and loopRunView subtracts from the same `now`,
+				// so the surfaced activity ages can never be negative (the abort itself settles
+				// in the OTHER chit_next request; the snapshot is still set here).
+				cancel = cancelConverge(resolved.run.session, now);
 			} catch (e) {
 				return errorResult(safeMcpError(e));
 			}
-			return jsonResult({ run_id, cancel, run: loopRunView(resolved.run.session) });
+			return jsonResult({ run_id, cancel, run: loopRunView(resolved.run.session, now) });
 		}
 		// one-shot: abort every currently-running step (a wave may have several).
 		const run = resolved.run.run;
