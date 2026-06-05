@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { realGit } from "../../batches/worktree.ts";
+import { applyRunWorkspace, realGit } from "../../batches/worktree.ts";
 import { startLoop, stopLoop } from "../../loops/log-store.ts";
 import type { ResolvedRun } from "./controller.ts";
 import {
+	type ArchivedForegroundLoop,
 	loopMayWriteFiles,
+	planArchivedApply,
 	planManagedWorkspace,
 	resolveArchivedForegroundLoop,
 	resolveManifestPathAbsolute,
@@ -209,6 +211,7 @@ describe("resolveArchivedForegroundLoop (#100): recover a closed foreground run 
 			branch: ws.branch,
 			baseSha: ws.baseSha,
 			mainRepo: ws.mainRepo,
+			callerCheckout: ws.callerCheckout, // surfaced so chit_apply can default its target to it
 		});
 		stopLoop(cwd, "A1", { status: "converged", reason: "done" });
 		expect(resolveArchivedForegroundLoop("A1")?.stopped).toBe(true);
@@ -276,6 +279,172 @@ describe("resolveArchivedForegroundLoop (#100): recover a closed foreground run 
 			const r = resolveArchivedForegroundLoop("A4");
 			expect(r).toBeDefined();
 			expect(r?.workspace).toBeUndefined(); // refused: not THIS run's managed branch
+		} finally {
+			try {
+				realGit(["worktree", "remove", "--force", wtPath], main);
+			} catch {}
+			rmSync(main, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+// planArchivedApply is the testable core of chit_apply's closed-session fallback (the handler is a
+// server-internal closure). It decides terminal/workspace/baseSha/target; the actual diff apply is
+// applyRunWorkspace (tested in worktree.test.ts), which the archived path reuses unchanged.
+describe("planArchivedApply: chit_apply's closed-session decision", () => {
+	const stubFound = {} as ArchivedForegroundLoop["found"];
+	function archived(
+		over: Partial<Pick<ArchivedForegroundLoop, "stopped" | "workspace">>,
+	): ArchivedForegroundLoop {
+		return {
+			found: stubFound,
+			stopped: over.stopped ?? true,
+			...("workspace" in over && { workspace: over.workspace }),
+		};
+	}
+	const fullWs = {
+		worktreePath: "/wt/R1/owner",
+		branch: "chit-run/R1/owner",
+		baseSha: "basesha",
+		mainRepo: "/main",
+		callerCheckout: "/launch",
+	};
+
+	test("a non-terminal archived run refuses (its diff is not final)", () => {
+		const p = planArchivedApply(archived({ stopped: false, workspace: fullWs }), "R1", undefined);
+		expect(p.kind).toBe("refuse");
+		if (p.kind === "refuse") expect(p.error).toContain("never recorded a terminal stop");
+	});
+
+	test("no recoverable workspace -> no-op (in_place / worktree gone)", () => {
+		const p = planArchivedApply(archived({ workspace: undefined }), "R1", undefined);
+		expect(p.kind).toBe("noop");
+		if (p.kind === "noop") expect(p.note).toContain("nothing to apply");
+	});
+
+	test("a workspace without baseSha refuses (pre-0.23, diff not reconstructable)", () => {
+		const { baseSha, ...noBase } = fullWs;
+		void baseSha;
+		const p = planArchivedApply(archived({ workspace: noBase }), "R1", undefined);
+		expect(p.kind).toBe("refuse");
+		if (p.kind === "refuse") expect(p.error).toContain("pre-0.23");
+	});
+
+	test("no callerCheckout and no target_cwd refuses, asking for target_cwd", () => {
+		const { callerCheckout, ...noCaller } = fullWs;
+		void callerCheckout;
+		const p = planArchivedApply(archived({ workspace: noCaller }), "R1", undefined);
+		expect(p.kind).toBe("refuse");
+		if (p.kind === "refuse") expect(p.error).toContain("pass target_cwd");
+	});
+
+	test("no callerCheckout but explicit target_cwd -> apply into target_cwd", () => {
+		const { callerCheckout, ...noCaller } = fullWs;
+		void callerCheckout;
+		const p = planArchivedApply(archived({ workspace: noCaller }), "R1", "/elsewhere");
+		expect(p.kind).toBe("apply");
+		if (p.kind === "apply") {
+			expect(p.target).toBe("/elsewhere");
+			expect(p.baseSha).toBe("basesha");
+			expect(p.worktreePath).toBe("/wt/R1/owner");
+		}
+	});
+
+	test("default target is the recorded launching checkout (callerCheckout)", () => {
+		const p = planArchivedApply(archived({ workspace: fullWs }), "R1", undefined);
+		expect(p.kind).toBe("apply");
+		if (p.kind === "apply") expect(p.target).toBe("/launch");
+	});
+
+	test("an explicit target_cwd overrides the recorded callerCheckout", () => {
+		const p = planArchivedApply(archived({ workspace: fullWs }), "R1", "/override");
+		expect(p.kind).toBe("apply");
+		if (p.kind === "apply") expect(p.target).toBe("/override");
+	});
+});
+
+// The dogfood as a deterministic test: a foreground run finished in a managed worktree, the session
+// closed (so only the durable 0.23 log remains), and chit_apply recovers it and lands the diff in the
+// launching checkout. Exercises resolveArchivedForegroundLoop -> planArchivedApply -> applyRunWorkspace
+// end to end against real git, which a flaky live closed-session run cannot do reproducibly.
+describe("archived apply end-to-end (#100 + slice 3)", () => {
+	let savedXdg: string | undefined;
+	let stateDir: string;
+	beforeEach(() => {
+		stateDir = mkdtempSync(join(tmpdir(), "chit-aa-state-"));
+		savedXdg = process.env.XDG_STATE_HOME;
+		process.env.XDG_STATE_HOME = stateDir;
+	});
+	afterEach(() => {
+		if (savedXdg === undefined) delete process.env.XDG_STATE_HOME;
+		else process.env.XDG_STATE_HOME = savedXdg;
+		rmSync(stateDir, { recursive: true, force: true });
+	});
+
+	test("recovers a closed run and applies its worktree diff into the launching checkout", () => {
+		const main = mkdtempSync(join(tmpdir(), "chit-aa-main-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-aa-root-"));
+		const wtPath = join(root, "wt");
+		try {
+			// The launching checkout = the main repo, with one committed base file.
+			realGit(["init", "-q"], main);
+			realGit(["config", "user.email", "t@chit.test"], main);
+			realGit(["config", "user.name", "t"], main);
+			writeFileSync(join(main, "f.ts"), "base\n");
+			realGit(["add", "."], main);
+			realGit(["commit", "-qm", "base"], main);
+			const baseSha = realGit(["rev-parse", "HEAD"], main).stdout.trim();
+			// The run was isolated in a managed worktree cut off baseSha; it edited f.ts there.
+			realGit(["worktree", "add", "-q", "-b", "chit-run/AP1/owner", wtPath], main);
+			writeFileSync(join(wtPath, "f.ts"), "base\nthe run added this line\n");
+			// The durable 0.23 header is all that survives the closed session.
+			startLoop(wtPath, {
+				scope: "owner",
+				task: "t",
+				maxIterations: 3,
+				loopId: "AP1",
+				workspace: {
+					worktreePath: realGit(["rev-parse", "--show-toplevel"], wtPath).stdout.trim(),
+					branch: "chit-run/AP1/owner",
+					baseSha,
+					mainRepo: main,
+					callerCheckout: main,
+				},
+			});
+			stopLoop(wtPath, "AP1", { status: "converged", reason: "done" });
+
+			// Recover from the log alone, then plan: target defaults to the launching checkout.
+			const recovered = resolveArchivedForegroundLoop("AP1");
+			expect(recovered?.stopped).toBe(true);
+			expect(recovered?.workspace?.callerCheckout).toBe(main);
+			if (!recovered) throw new Error("expected the run to be recoverable");
+			const plan = planArchivedApply(recovered, "AP1", undefined);
+			if (plan.kind !== "apply") throw new Error(`expected apply, got ${plan.kind}`);
+			expect(plan.target).toBe(main);
+
+			// Dry run: reports the tracked change applies cleanly, but mutates nothing.
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: plan.worktreePath,
+				baseSha: plan.baseSha,
+				target: plan.target,
+				confirm: false,
+				includeUntracked: [],
+			});
+			expect(dry.trackedFiles).toContain("f.ts");
+			expect(dry.appliesClean).toBe(true);
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toBe("base\n"); // unchanged by the dry run
+
+			// Confirm: the run's edit lands (staged) in the launching checkout.
+			const res = applyRunWorkspace(realGit, {
+				worktreePath: plan.worktreePath,
+				baseSha: plan.baseSha,
+				target: plan.target,
+				confirm: true,
+				includeUntracked: [],
+			});
+			expect(res.applied).toBe(true);
+			expect(readFileSync(join(main, "f.ts"), "utf8")).toContain("the run added this line");
 		} finally {
 			try {
 				realGit(["worktree", "remove", "--force", wtPath], main);

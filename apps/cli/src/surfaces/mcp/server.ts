@@ -1612,7 +1612,15 @@ export function publicLoopRecords(records: LoopRecord[]): unknown[] {
 export interface ArchivedForegroundLoop {
 	found: FoundLoop;
 	stopped: boolean;
-	workspace?: { worktreePath: string; branch: string; baseSha?: string; mainRepo: string };
+	// callerCheckout = the checkout the run was LAUNCHED from, recorded only in 0.23+ headers.
+	// chit_apply defaults its target to it; chit_cleanup ignores it (it anchors on mainRepo).
+	workspace?: {
+		worktreePath: string;
+		branch: string;
+		baseSha?: string;
+		mainRepo: string;
+		callerCheckout?: string;
+	};
 }
 
 export function resolveArchivedForegroundLoop(runId: string): ArchivedForegroundLoop | undefined {
@@ -1630,6 +1638,9 @@ export function resolveArchivedForegroundLoop(runId: string): ArchivedForeground
 				branch: h.branch,
 				...(h.baseSha && { baseSha: h.baseSha }),
 				mainRepo: h.mainRepo,
+				// Surfaced so chit_apply can default its target to the launching checkout. Older
+				// (git-derived) logs below have no callerCheckout; apply then needs an explicit target_cwd.
+				...(h.callerCheckout && { callerCheckout: h.callerCheckout }),
 			},
 		};
 	}
@@ -1653,6 +1664,54 @@ export function resolveArchivedForegroundLoop(runId: string): ArchivedForeground
 		return { found, stopped };
 	}
 	return { found, stopped, workspace: { worktreePath, branch, mainRepo } };
+}
+
+// How a closed-session (archived) foreground run applies. Extracted as a pure decision so the
+// terminal/workspace/baseSha/target rules are unit-testable -- the chit_apply handler is a
+// server-internal closure that tests cannot invoke. Mirrors chit_cleanup's archived branch, but
+// apply needs the base sha (to reconstruct the diff) and the target checkout (where to land it):
+//   - not stopped        -> refuse: an interrupted run's diff is not final, so applying it is unsafe.
+//   - no workspace       -> no-op: it ran in_place, or its worktree is gone; nothing to apply.
+//   - no baseSha         -> refuse: a pre-0.23 log can't reconstruct the run's diff for apply.
+//   - no target          -> refuse: no recorded callerCheckout and no target_cwd; ask for target_cwd.
+// resolvedTargetCwd is the already-resolved absolute target_cwd (or undefined) so this stays fs-free.
+export type ArchivedApplyPlan =
+	| { kind: "apply"; worktreePath: string; baseSha: string; target: string }
+	| { kind: "noop"; note: string }
+	| { kind: "refuse"; error: string };
+
+export function planArchivedApply(
+	archived: ArchivedForegroundLoop,
+	runId: string,
+	resolvedTargetCwd: string | undefined,
+): ArchivedApplyPlan {
+	if (!archived.stopped) {
+		return {
+			kind: "refuse",
+			error: `run ${JSON.stringify(runId)} is an archived run that never recorded a terminal stop; not safe to apply (it may have been interrupted). Inspect it with chit_trace.`,
+		};
+	}
+	if (!archived.workspace) {
+		return {
+			kind: "noop",
+			note: "this archived run has no recoverable managed worktree (it ran in_place, or its worktree dir is already gone); nothing to apply.",
+		};
+	}
+	const { worktreePath, baseSha, callerCheckout } = archived.workspace;
+	if (!baseSha) {
+		return {
+			kind: "refuse",
+			error: `run ${JSON.stringify(runId)} predates base-sha tracking in its loop log (pre-0.23); its diff cannot be reconstructed for apply. Apply the worktree diff at ${JSON.stringify(worktreePath)} manually.`,
+		};
+	}
+	const target = resolvedTargetCwd ?? callerCheckout;
+	if (!target) {
+		return {
+			kind: "refuse",
+			error: `run ${JSON.stringify(runId)} did not record the checkout it was launched from; pass target_cwd to say where to apply.`,
+		};
+	}
+	return { kind: "apply", worktreePath, baseSha, target };
 }
 
 // The history of any run: a one-shot's step transcript, or a loop/background
@@ -1927,7 +1986,7 @@ server.registerTool(
 	"chit_apply",
 	{
 		description:
-			"Apply a FINISHED run's changes from its chit-managed worktree back into a working checkout, by run_id. DRY RUN by default: reports the tracked files, whether they apply cleanly, and the untracked candidates -- applies NOTHING. Pass confirm=true to apply. Tracked changes apply via git's own 3-way check and are REFUSED (nothing applied) if they conflict with the target's current state -- never an overwrite of your edits. Untracked files (new files the run created) are applied ONLY when named in include_untracked, and a name that would overwrite a different existing target file is refused too. Refuses while the run is still active. Does NOT clean up the worktree (run chit_cleanup separately when done) and never deletes receipts. Applied tracked changes land STAGED (git apply --3way), copied untracked files land unstaged. Target defaults to the checkout you LAUNCHED the run from; pass target_cwd to apply elsewhere. A one-shot / in_place run has no managed worktree to apply.",
+			"Apply a FINISHED run's changes from its chit-managed worktree back into a working checkout, by run_id. DRY RUN by default: reports the tracked files, whether they apply cleanly, and the untracked candidates -- applies NOTHING. Pass confirm=true to apply. Tracked changes apply via git's own 3-way check and are REFUSED (nothing applied) if they conflict with the target's current state -- never an overwrite of your edits. Untracked files (new files the run created) are applied ONLY when named in include_untracked, and a name that would overwrite a different existing target file is refused too. Refuses while the run is still active. Does NOT clean up the worktree (run chit_cleanup separately when done) and never deletes receipts. Applied tracked changes land STAGED (git apply --3way), copied untracked files land unstaged. Target defaults to the checkout you LAUNCHED the run from; pass target_cwd to apply elsewhere. Recovers a FOREGROUND run from a CLOSED session via its durable loop log (it must have reached a terminal stop and recorded its worktree base; a 0.23+ log also records the launching checkout, otherwise pass target_cwd). A one-shot / in_place run has no managed worktree to apply.",
 		inputSchema: {
 			run_id: z.string().describe("A run id (from chit_start)"),
 			confirm: z
@@ -1953,9 +2012,49 @@ server.registerTool(
 	async ({ run_id, confirm, include_untracked, target_cwd }) => {
 		const resolved = runController.resolve(run_id, Date.now());
 		if (!resolved) {
-			return errorResult(
-				`run_id ${JSON.stringify(run_id)} is not resolvable by this server -- it was likely a foreground run from a closed session (foreground runs are in-memory only; background runs survive reconnect). Re-run, or apply that run's worktree diff manually.`,
+			// Not in memory / not a durable job: a foreground run from a CLOSED session may still be
+			// applicable from its durable loop log (#100), exactly like chit_trace / chit_cleanup. Recover
+			// it, then run the SAME apply machinery -- planArchivedApply enforces terminal + base-sha +
+			// target, defaulting the target to the recorded launching checkout.
+			let archived: ArchivedForegroundLoop | undefined;
+			try {
+				archived = resolveArchivedForegroundLoop(run_id);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
+			if (!archived) {
+				return errorResult(
+					`run_id ${JSON.stringify(run_id)} is not resolvable by this server and has no recoverable loop log. If it was a foreground run from a closed session whose log was pruned, apply its worktree diff manually.`,
+				);
+			}
+			const plan = planArchivedApply(
+				archived,
+				run_id,
+				target_cwd ? resolve(target_cwd) : undefined,
 			);
+			if (plan.kind === "refuse") return errorResult(plan.error);
+			if (plan.kind === "noop") {
+				return jsonResult({ run_id, confirmed: confirm, applied: false, note: plan.note });
+			}
+			const result = applyRunWorkspace(realGit, {
+				worktreePath: plan.worktreePath,
+				baseSha: plan.baseSha,
+				target: plan.target,
+				confirm,
+				includeUntracked: include_untracked,
+			});
+			// Same staged/unstaged disclosure as the live path (the two kinds land differently).
+			const applied = result.applied === true;
+			return jsonResult({
+				run_id,
+				recovered: "archived_foreground" as const,
+				...result,
+				...(applied && {
+					trackedState: result.trackedFiles.length > 0 ? "staged" : "none",
+					untrackedState: (result.appliedUntracked?.length ?? 0) > 0 ? "unstaged" : "none",
+					reviewWith: `cd ${plan.target} && git status${result.trackedFiles.length > 0 ? " && git diff --cached" : ""}${(result.appliedUntracked?.length ?? 0) > 0 ? " && git diff" : ""}`,
+				}),
+			});
 		}
 		// The run's managed worktree + base + caller checkout + liveness, per kind -- resolved by the
 		// shared helper. apply works from the worktree + baseSha; it defaults its target to the
