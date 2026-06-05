@@ -25,6 +25,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
+	type LoopCheck,
 	type LoopRecord,
 	type ManifestSpec,
 	parseManifest,
@@ -91,6 +92,7 @@ import { ControllerStore } from "./controller-store.ts";
 import {
 	type ConvergeSession,
 	cancelConverge,
+	type NextResult,
 	runNextIteration,
 	startConvergeSession,
 	traceConverge,
@@ -1004,9 +1006,55 @@ export function loopRunView(session: ConvergeSession) {
 		...(session.lastDecision !== undefined && { lastDecision: session.lastDecision }),
 		...(session.failure !== undefined && { failure: session.failure }),
 		...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
+		// Terminal receipt: elapsed (endedAtMs - startedAtMs, the same derivation
+		// summarizeLoopForStatus uses) and WHY it stopped, both straight from the in-memory
+		// mirror set in lockstep with terminalStatus -- present only once the loop has
+		// stopped, so this single-run view reports a terminal run's timing + stop reason
+		// without a loop-log read.
+		...(session.endedAtMs !== undefined && { elapsedMs: session.endedAtMs - session.startedAtMs }),
+		...(session.stopReason !== undefined && { stopReason: session.stopReason }),
 		auditRefs: session.auditRefs,
 		nextAction,
 	};
+}
+
+// A concise check rollup for the status line: "N/M required checks passed" for
+// chit-executed checks (ground truth), "N/M checks passed" for the reviewer's
+// self-reported ones (advisory) -- the same distinction status.ts draws. Undefined
+// when no checks ran (the verdict + stop status already carry the round).
+function checkSummary(
+	checks: LoopCheck[],
+	source: ConvergeSession["lastVerificationSource"],
+): string | undefined {
+	if (checks.length === 0) return undefined;
+	const passed = checks.filter((c) => c.status === "passed").length;
+	const noun = source === "chit" ? "required checks" : "checks";
+	return `${passed}/${checks.length} ${noun} passed`;
+}
+
+// One compact, human-readable line summarizing the iteration that just ran, added to
+// every chit_next loop response. The live heartbeats (notifications/progress,
+// sendLoggingMessage) are UI-only best effort and may never reach the calling model,
+// so an agent auditing the call later must be able to read what happened from the
+// RETURNED data alone -- this is that line. Its vocabulary mirrors the heartbeat lines
+// (iteration · outcome · checks · stop) so the live and returned narration read the
+// same. Derived only from data the handler already holds; no new instrumentation.
+export function loopStatusLine(result: NextResult, session: ConvergeSession): string {
+	const parts = [`iteration ${result.iteration}`];
+	// The outcome word: the verdict for a completed round, else the round's fate.
+	const outcome = result.kind === "iteration" ? result.verdict : result.kind;
+	parts.push(outcome);
+	// A completed round carries its structured check rollup -- the WHY behind a
+	// verification gate stop (e.g. proceed but checks failed -> needs-decision).
+	if (result.kind === "iteration") {
+		const checks = checkSummary(result.checks, session.lastVerificationSource);
+		if (checks) parts.push(checks);
+	}
+	// The terminal stop status when this round took the loop terminal, unless the
+	// outcome word already states it (a cancelled round stops "cancelled").
+	const stop = session.terminalStatus;
+	if (stop && stop !== outcome) parts.push(stop);
+	return parts.join(" · ");
 }
 
 // A failed/blocked run can leave real edits UNCOMMITTED in its worktree that no completed-iteration
@@ -1564,6 +1612,10 @@ server.registerTool(
 				if (result.kind === "cancelled") {
 					heartbeat(`${run_id} · iteration ${result.iteration} · cancelled`);
 					return jsonResult({
+						// A compact summary of the unit that just ran, so an agent auditing this
+						// call can read the outcome from the RETURNED data even if no live
+						// heartbeat ever reached it. See loopStatusLine.
+						statusLine: loopStatusLine(result, session),
 						cancelled: true,
 						iteration: result.iteration,
 						...loopRunView(session),
@@ -1572,6 +1624,7 @@ server.registerTool(
 				if (result.kind === "failed") {
 					heartbeat(`${run_id} · iteration ${result.iteration} · failed`);
 					return jsonResult({
+						statusLine: loopStatusLine(result, session),
 						failed: true,
 						iteration: result.iteration,
 						failure: result.failure,
@@ -1584,6 +1637,7 @@ server.registerTool(
 					}`,
 				);
 				return jsonResult({
+					statusLine: loopStatusLine(result, session),
 					iteration: result.iteration,
 					verdict: result.verdict,
 					decision: result.decision,

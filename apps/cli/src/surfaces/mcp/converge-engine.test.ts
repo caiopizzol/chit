@@ -585,3 +585,52 @@ describe("runNextIteration: endedAtMs mirrors terminalStatus", () => {
 		expect(session.endedAtMs).toBeUndefined();
 	});
 });
+
+describe("runNextIteration: stopReason mirrors terminalStatus", () => {
+	// The in-memory stopReason is the mirror of the durable stop record's reason, set
+	// in lockstep with terminalStatus -- so a terminal run's view can report WHY it
+	// stopped without re-reading the loop log. Each case asserts the mirror equals the
+	// reason actually written to the log.
+	test("set on converged, matching the durable stop record", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("converged");
+		expect(session.stopReason).toBe("reviewer returned proceed and verification passed");
+		expect(session.stopReason).toBe(stopRecord("L1")?.reason);
+	});
+
+	test("set on a blocked verdict, matching the durable stop record", async () => {
+		const session = start(scriptedExecute([reviewJson("block")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("blocked");
+		expect(session.stopReason).toBe("reviewer returned block");
+		expect(session.stopReason).toBe(stopRecord("L1")?.reason);
+	});
+
+	test("set on max-iterations, matching the durable stop record", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("revise")]), 2);
+		await runNextIteration(session);
+		expect(session.stopReason).toBeUndefined(); // still open after the first revise
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBe("max-iterations");
+		expect(session.stopReason).toBe("reached max iterations (2) without converging");
+		expect(session.stopReason).toBe(stopRecord("L1")?.reason);
+	});
+
+	test("set on cancelled, matching the durable stop record", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		const controller = new AbortController();
+		controller.abort();
+		await runNextIteration(session, { signal: controller.signal });
+		expect(session.terminalStatus).toBe("cancelled");
+		expect(session.stopReason).toBe("cancelled via MCP (client abort or chit_cancel)");
+		expect(session.stopReason).toBe(stopRecord("L1")?.reason);
+	});
+
+	test("absent while the loop is still open", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session);
+		expect(session.terminalStatus).toBeUndefined();
+		expect(session.stopReason).toBeUndefined();
+	});
+});

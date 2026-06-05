@@ -8,11 +8,12 @@ import { LockError } from "../../jobs/lock.ts";
 import { JobStoreError } from "../../jobs/store.ts";
 import type { LoopJobRecord } from "../../jobs/types.ts";
 import { LoopStoreError } from "../../loops/log-store.ts";
-import type { ConvergeSession } from "./converge-engine.ts";
+import type { ConvergeSession, NextResult } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
 import {
 	backgroundRunView,
 	loopRunView,
+	loopStatusLine,
 	oneShotRunView,
 	publicLoopRecords,
 	safeMcpError,
@@ -254,6 +255,30 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(v.nextAction).toContain("required checks failed");
 	});
 
+	test("a terminal loop view carries the terminal receipt: elapsedMs + stopReason", () => {
+		// endedAtMs + stopReason are set in lockstep with terminalStatus (the in-memory
+		// mirror of the durable stop record), so a single-run view reports a stopped run's
+		// timing and WHY it stopped straight from memory: elapsedMs = endedAtMs - startedAtMs.
+		const v = loopRunView(
+			loopSession({
+				terminalStatus: "max-iterations",
+				startedAtMs: 1_000,
+				endedAtMs: 91_000,
+				stopReason: "reached max iterations (3) without converging",
+			}),
+		) as Record<string, unknown>;
+		expect(v.elapsedMs).toBe(90_000); // endedAtMs - startedAtMs, from the mirror
+		expect(v.stopReason).toBe("reached max iterations (3) without converging");
+	});
+
+	test("an open loop view has no terminal receipt (elapsedMs/stopReason absent)", () => {
+		// While the loop is open the mirror is unset, so the receipt fields must not appear
+		// (no premature elapsed/stop reason).
+		const v = loopRunView(loopSession({ startedAtMs: 1_000 })) as Record<string, unknown>;
+		expect(v.elapsedMs).toBeUndefined();
+		expect(v.stopReason).toBeUndefined();
+	});
+
 	test("a background view surfaces the latest verification + its source", () => {
 		// backgroundRunView returns a loop|one-shot union; this is a loop job, so read the
 		// loop-only fields through a cast.
@@ -350,6 +375,95 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(safeMcpError(new Error("step implement failed: bad input"))).toBe(
 			"step implement failed: bad input",
 		);
+	});
+});
+
+describe("loopStatusLine: a compact RETURNED summary an agent can audit without the live heartbeats", () => {
+	// Minimal NextResult fixtures (casts), matching this file's fixture style. The
+	// iteration line reads only kind/iteration/verdict/checks, so the rest is elided.
+	function iterResult(over: Partial<Extract<NextResult, { kind: "iteration" }>> = {}): NextResult {
+		return {
+			kind: "iteration",
+			iteration: 1,
+			verdict: "proceed",
+			checks: [],
+			...over,
+		} as NextResult;
+	}
+	const passed = (command: string) => ({ command, status: "passed" as const });
+	const failed = (command: string) => ({ command, status: "failed" as const });
+
+	test("a converged round: iteration, verdict, chit-run required-check rollup, then the stop", () => {
+		const line = loopStatusLine(
+			iterResult({
+				iteration: 3,
+				verdict: "proceed",
+				checks: [passed("bun test"), passed("tsc"), passed("biome")],
+			}),
+			loopSession({ iteration: 3, terminalStatus: "converged", lastVerificationSource: "chit" }),
+		);
+		expect(line).toBe("iteration 3 · proceed · 3/3 required checks passed · converged");
+	});
+
+	test("a needs-decision round names how many required checks passed (the WHY behind the gate)", () => {
+		const line = loopStatusLine(
+			iterResult({
+				iteration: 1,
+				verdict: "proceed",
+				checks: [passed("bun test"), passed("tsc"), failed("biome")],
+			}),
+			loopSession({
+				iteration: 1,
+				terminalStatus: "needs-decision",
+				lastVerificationSource: "chit",
+			}),
+		);
+		expect(line).toBe("iteration 1 · proceed · 2/3 required checks passed · needs-decision");
+	});
+
+	test("reviewer-reported checks are 'checks', not 'required checks'; an open round shows no stop", () => {
+		const line = loopStatusLine(
+			iterResult({ iteration: 2, verdict: "revise", checks: [passed("the tests")] }),
+			// terminalStatus undefined -> the loop is still open (a revise continues).
+			loopSession({ iteration: 2, lastVerificationSource: "reviewer" }),
+		);
+		expect(line).toBe("iteration 2 · revise · 1/1 checks passed");
+	});
+
+	test("no checks ran: the line omits the check clause (verdict + stop carry the round)", () => {
+		const line = loopStatusLine(
+			iterResult({ iteration: 1, verdict: "proceed", checks: [] }),
+			loopSession({ iteration: 1, terminalStatus: "needs-decision" }),
+		);
+		expect(line).toBe("iteration 1 · proceed · needs-decision");
+	});
+
+	test("a cancelled round states the stop once (no 'cancelled · cancelled' duplicate)", () => {
+		const line = loopStatusLine(
+			{ kind: "cancelled", iteration: 2 } as NextResult,
+			loopSession({ terminalStatus: "cancelled" }),
+		);
+		expect(line).toBe("iteration 2 · cancelled");
+	});
+
+	test("a failed round surfaces the actual terminal status (blocked) after 'failed'", () => {
+		const line = loopStatusLine(
+			{ kind: "failed", iteration: 1, failure: "manifest run failed" } as NextResult,
+			loopSession({ terminalStatus: "blocked" }),
+		);
+		expect(line).toBe("iteration 1 · failed · blocked");
+	});
+
+	test("vocabulary matches the heartbeat lines (iteration · verdict · stop) so the two narrations read alike", () => {
+		// The iterated heartbeat is `<run_id> · iteration N · <verdict>[ · <stopStatus>]`; the
+		// statusLine reuses the same words + ` · ` separator (adding the check rollup the
+		// heartbeat lacks), so an operator reading either sees the same shape.
+		const line = loopStatusLine(
+			iterResult({ iteration: 5, verdict: "proceed", checks: [] }),
+			loopSession({ iteration: 5, terminalStatus: "converged" }),
+		);
+		expect(line.startsWith("iteration 5 · proceed")).toBe(true);
+		expect(line.endsWith("· converged")).toBe(true);
 	});
 });
 

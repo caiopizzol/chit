@@ -93,6 +93,12 @@ export interface ConvergeSession {
 	// is the in-memory mirror so status views can report a terminal run's elapsed
 	// without re-reading the log.
 	endedAtMs?: number;
+	// The terminal stop reason (the human "why it stopped" string written to the
+	// durable stop record), mirrored in memory in lockstep with terminalStatus -- like
+	// endedAtMs, set if and only if terminalStatus is set. The stop record stays the
+	// source of truth; this lets a terminal run's view report WHY it stopped without
+	// re-reading the log.
+	stopReason?: string;
 }
 
 export interface StartConvergeOptions {
@@ -200,10 +206,11 @@ export type NextResult =
 function stopTerminal(session: ConvergeSession, status: LoopStopStatus, reason: string): void {
 	stopLoop(session.cwd, session.loopId, { status, reason });
 	session.terminalStatus = status;
-	// Mirror the terminal time in memory in lockstep with terminalStatus. stopLoop
-	// runs first, so if it throws (stopBlocked's swallow path) neither is set and the
-	// two stay consistent with the still-open log.
+	// Mirror the terminal time AND reason in memory in lockstep with terminalStatus.
+	// stopLoop runs first, so if it throws (stopBlocked's swallow path) none are set and
+	// all three stay consistent with the still-open log.
 	session.endedAtMs = Date.now();
+	session.stopReason = reason;
 }
 
 // Close blocked on an error path. Best-effort: a failure to write the stop must
