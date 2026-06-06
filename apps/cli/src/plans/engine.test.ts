@@ -917,6 +917,11 @@ describe("cleanupPlan (real git)", () => {
 		expect(dry.targets.map((t) => t.id).sort()).toEqual(["a", "integration"]);
 		expect(dry.appliedCommits).toBe(1); // the note warns the integration branch carries it
 
+		// The receipt may report the plan root path (useful preview), but must NOT claim it was removed:
+		// a dry run removes nothing.
+		expect(dry.planRootPath).toBe(dirname(integration));
+		expect(dry.planRootRemoved).not.toBe(true);
+
 		// Nothing removed; no cleanedAt stamped.
 		expect(existsSync(integration)).toBe(true);
 		expect(existsSync(stepWt)).toBe(true);
@@ -949,6 +954,10 @@ describe("cleanupPlan (real git)", () => {
 		// The now-empty plan parent directory (~/worktrees/chit/<planId>) is removed too, so a cleaned
 		// plan leaves no empty litter (the dogfood wart this fixes). dirname(integration) is that root.
 		expect(existsSync(dirname(integration))).toBe(false);
+		// The receipt reports the parent cleanup outcome, so an operator can audit it without a shell
+		// `test ! -e <root>`.
+		expect(res.planRootPath).toBe(dirname(integration));
+		expect(res.planRootRemoved).toBe(true);
 
 		// The durable plan record survives, now stamped with cleanedAt.
 		const stored = present(h.store.get("p"), "stored plan");
@@ -1026,6 +1035,9 @@ describe("cleanupPlan (real git)", () => {
 		expect(existsSync(planParent)).toBe(true);
 		expect(existsSync(sentinel)).toBe(true);
 		expect(readFileSync(sentinel, "utf-8")).toBe("do not delete\n");
+		// The receipt reports the same plan root path but planRootRemoved false: the stray file kept it.
+		expect(res.planRootPath).toBe(planParent);
+		expect(res.planRootRemoved).toBe(false);
 		// Leaving the parent is best-effort litter cleanup, not a failure: the cleanup still completed.
 		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeDefined();
 	});

@@ -133,8 +133,8 @@ export interface PlanEngineDeps {
 	// every child worktree under it is retired (real: removeEmptyDir). The plan layout nests the
 	// integration worktree beside a steps/ dir, so no single removeWorktree call can drop the root --
 	// cleanup removes it explicitly once empty. Empty-only: never removes a non-empty directory or
-	// anything outside the plan's own root.
-	removeEmptyDir: (dir: string) => void;
+	// anything outside the plan's own root. Returns whether the directory was actually removed.
+	removeEmptyDir: (dir: string) => boolean;
 	now: () => number; // epoch ms
 }
 
@@ -511,6 +511,13 @@ export interface PlanCleanupResult {
 	targets: PlanCleanupTargetResult[]; // the integration + step worktrees this would/did retire
 	receiptsKept: true; // cleanup NEVER deletes plan/job/loop/audit records
 	cleanedAt?: string; // set on a confirmed cleanup
+	// The plan's worktree ROOT (~/worktrees/chit/<planId>) and whether cleanup actually removed it, so
+	// an operator can audit the empty-parent cleanup from the receipt alone. planRootPath is reported
+	// whenever it can be derived (dry run included). planRootRemoved is set ONLY on a confirmed run
+	// that reached the empty-only removal: true if the now-empty root was dropped, false if a stray
+	// file kept it (it is never true on a dry run, which removes nothing).
+	planRootPath?: string;
+	planRootRemoved?: boolean;
 	note: string;
 }
 
@@ -548,6 +555,16 @@ export function cleanupPlan(
 		}));
 	const planned = [...(integration ? [integration] : []), ...stepTargets];
 
+	// The plan's worktree ROOT (~/worktrees/chit/<planId>). Derived from the RECORDED integration path
+	// (authoritative; the integration worktree sits directly under the root), falling back to a step
+	// path (steps/<id> -> two levels up). Surfaced on the receipt so the parent cleanup is auditable.
+	const planRoot =
+		existing.integrationWorktree !== undefined
+			? dirname(existing.integrationWorktree)
+			: stepTargets.length > 0
+				? dirname(dirname(stepTargets[0].worktreePath))
+				: undefined;
+
 	const blocker = planCleanupBlocker(existing, deps);
 	if (blocker !== undefined) {
 		// Refuse: report what WOULD be removed (transparency) but remove nothing, even on confirm.
@@ -584,6 +601,7 @@ export function cleanupPlan(
 				branch: t.branch,
 			})),
 			receiptsKept: true,
+			...(planRoot !== undefined && { planRootPath: planRoot }),
 			note: `dry run: would remove ${planned.length} plan-managed worktree(s) + branch(es) (integration + ${stepTargets.length} step worktree(s)).${integrationWarn} Plan/job/loop/audit records are kept. Pass confirm=true to remove.`,
 		};
 	}
@@ -609,6 +627,7 @@ export function cleanupPlan(
 	// record itself (and all receipts) is KEPT either way. Mirrors batch cleanup (batches/engine.ts).
 	const failures = targets.filter((t) => t.error !== undefined);
 	let cleanedAt: string | undefined;
+	let planRootRemoved: boolean | undefined;
 	if (failures.length === 0) {
 		const stamp = iso(deps.now());
 		cleanedAt = stamp;
@@ -620,16 +639,9 @@ export function cleanupPlan(
 		// Every child worktree is gone: drop the now-empty plan worktree ROOT (~/worktrees/chit/<planId>)
 		// so a cleaned plan leaves no empty litter. The nested layout (the integration worktree beside a
 		// steps/ dir) means removeWorktree's own per-worktree parent cleanup never reaches this root, so
-		// remove it explicitly. Derived from the RECORDED integration path (authoritative; the integration
-		// worktree sits directly under the root), falling back to a step path (steps/<id> -> two levels
-		// up). Best-effort + empty-only, so an operator's stray file under the root leaves it intact.
-		const planRoot =
-			existing.integrationWorktree !== undefined
-				? dirname(existing.integrationWorktree)
-				: stepTargets.length > 0
-					? dirname(dirname(stepTargets[0].worktreePath))
-					: undefined;
-		if (planRoot !== undefined) deps.removeEmptyDir(planRoot);
+		// remove it explicitly. Best-effort + empty-only, so an operator's stray file under the root
+		// leaves it intact -- planRootRemoved records which of those two outcomes happened.
+		if (planRoot !== undefined) planRootRemoved = deps.removeEmptyDir(planRoot);
 	}
 	return {
 		planId,
@@ -639,6 +651,8 @@ export function cleanupPlan(
 		targets,
 		receiptsKept: true,
 		...(cleanedAt !== undefined && { cleanedAt }),
+		...(planRoot !== undefined && { planRootPath: planRoot }),
+		...(planRootRemoved !== undefined && { planRootRemoved }),
 		note: failures.length
 			? `removed ${targets.length - failures.length} of ${targets.length}; ${failures.length} failed (${failures.map((f) => f.id).join(", ")}) -- the plan is NOT marked cleaned, inspect and re-run to retire the rest. Plan/job/loop/audit records are kept.`
 			: `removed ${targets.length} plan-managed worktree(s) + branch(es). Plan/job/loop/audit records are kept.`,
