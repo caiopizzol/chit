@@ -26,6 +26,7 @@ import {
 import {
 	describePartialWork,
 	type GitRunner,
+	mainRepoOfWorktree,
 	type PartialWork,
 	repoToplevel,
 	resolveBaseSha,
@@ -50,10 +51,10 @@ export interface LaunchJobParams {
 	// The task's chit-managed worktree, recorded on the JOB RECORD (not just the batch task
 	// state) so chit_apply / chit_cleanup resolve a batch task's diff exactly like a single
 	// background run -- the parity the single-run background path already has. Every task
-	// worktree is cut from the batch's baseSha; repo (the main repo cleanup retires from)
-	// and callerCheckout (apply's default target) are both the batch's caller repo, the
-	// checkout chit_batch_start launched from. Always set: launchWave creates the worktree
-	// before it launches the job.
+	// worktree is cut from the batch's baseSha; `repo` is the durable main repo cleanup retires
+	// from (owns the shared .git), `callerCheckout` is chit_apply's default target (the checkout
+	// chit_batch_start launched from) -- DISTINCT when launched from a linked worktree, equal for
+	// a main-repo launch. Always set: launchWave creates the worktree before it launches the job.
 	worktree: {
 		worktreePath: string;
 		branch: string;
@@ -134,9 +135,17 @@ export function startBatch(
 	opts: StartBatchOptions,
 ): Batch {
 	const tasks = planTasks(opts.tasks); // throws PlanError on a bad graph
-	const repo = repoToplevel(deps.git, opts.cwd);
+	// Split the durable cleanup anchor from the launching checkout, mirroring the single-run
+	// prepareRunWorkspace. `repo` is the main repo that owns the shared .git (survives the
+	// launching linked worktree being removed before cleanup); `callerCheckout` is the checkout
+	// the batch was launched from (chit_apply's default target).
+	const repo = mainRepoOfWorktree(deps.git, opts.cwd);
+	const callerCheckout = repoToplevel(deps.git, opts.cwd);
 	const baseBranch = opts.baseBranch ?? "HEAD";
-	const baseSha = resolveBaseSha(deps.git, repo, baseBranch);
+	// baseSha resolves against the LAUNCHING checkout, never the main repo: the default HEAD must
+	// be the launcher's HEAD, so a feature-branch launch from a linked worktree branches off that
+	// feature's tip -- not the main repo's HEAD (which would silently batch off the wrong base).
+	const baseSha = resolveBaseSha(deps.git, callerCheckout, baseBranch);
 	const maxParallel = Math.max(1, Math.min(opts.maxParallel, MAX_PARALLEL_CAP));
 	const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
@@ -145,6 +154,7 @@ export function startBatch(
 		schema: 1,
 		id: opts.id,
 		repo,
+		callerCheckout,
 		repoKey: repoKey(opts.cwd), // informational; the store keys its path by this too
 		baseBranch,
 		baseSha,
@@ -456,13 +466,16 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 				// Record the managed worktree on the job record so chit_apply can reconstruct and
 				// land this task's diff (baseSha -> worktree), and default its target to where the
 				// batch was launched. baseSha/repo/callerCheckout come off the batch: every task
-				// worktree is cut from c.baseSha at c.repo, and c.repo is the launching checkout.
+				// worktree is cut from c.baseSha; c.repo is the durable main repo cleanup retires
+				// from, c.callerCheckout the launching checkout chit_apply defaults its target to.
 				worktree: {
 					worktreePath,
 					branch,
 					baseSha: c.baseSha,
 					repo: c.repo,
-					callerCheckout: c.repo,
+					// ?? c.repo: a pre-split batch record (no callerCheckout) resumed/advanced after
+					// upgrade carries only repo; fall back to it rather than forward undefined.
+					callerCheckout: c.callerCheckout ?? c.repo,
 				},
 				...(resolveManifestPath(t, c.manifestPath) !== undefined && {
 					manifestPath: resolveManifestPath(t, c.manifestPath),

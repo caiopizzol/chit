@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RequiredCheck } from "@chit-run/core";
@@ -96,12 +96,22 @@ const fakeGit: GitRunner = (args) => {
 	if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
 		return { code: 0, stdout: `${cwd}\n`, stderr: "" };
 	}
+	// A plain main-repo checkout: the shared git common dir is <toplevel>/.git, so
+	// mainRepoOfWorktree resolves back to cwd -- repo === callerCheckout for a non-linked
+	// launch. cwd is realpath'd in beforeEach so realpathSync inside the helper is a no-op
+	// and this stays stable across platforms (macOS /var -> /private/var).
+	if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+		return { code: 0, stdout: `${cwd}/.git\n`, stderr: "" };
+	}
 	if (args[0] === "rev-parse") return { code: 0, stdout: "basesha\n", stderr: "" };
 	return { code: 0, stdout: "", stderr: "" };
 };
 
 beforeEach(() => {
-	cwd = mkdtempSync(join(tmpdir(), "chit-eng-cwd-"));
+	// realpath so the fake's --git-common-dir derivation (which runs realpathSync) matches
+	// repoToplevel's raw cwd exactly -- otherwise macOS's /var -> /private/var symlink makes
+	// repo and callerCheckout differ for a plain main-repo launch.
+	cwd = realpathSync(mkdtempSync(join(tmpdir(), "chit-eng-cwd-")));
 	stateDir = mkdtempSync(join(tmpdir(), "chit-eng-state-"));
 	savedXdg = process.env.XDG_STATE_HOME;
 	process.env.XDG_STATE_HOME = stateDir;
@@ -221,6 +231,143 @@ describe("startBatch", () => {
 		expect(c.tasks.find((t) => t.id === "a")?.status).toBe("running");
 		expect(c.tasks.find((t) => t.id === "b")?.status).toBe("pending");
 		expect(jobs.launched).toHaveLength(1);
+	});
+});
+
+// Scenario 5 (docs/investigation-batch-recovery-0.32.md): a batch must anchor its durable
+// cleanup on the MAIN repo that owns the shared .git, NOT the launching checkout, so task
+// worktrees are never stranded when a linked-worktree launcher is removed before cleanup.
+// startBatch splits `repo` (main repo, via mainRepoOfWorktree) from `callerCheckout`
+// (launching checkout, via repoToplevel), mirroring the single-run prepareRunWorkspace.
+describe("durable cleanup anchor: repo (main repo) vs callerCheckout (launching checkout)", () => {
+	// A scripted GitRunner for a launch from a linked worktree: --show-toplevel is the launching
+	// checkout, --git-common-dir resolves to the main repo's shared .git (<main>/.git -> <main>).
+	// Fake absolute paths so realpathSync inside mainRepoOfWorktree throws and falls back to the
+	// joined value (deterministic, no real fs). Optionally records the cwd each `rev-parse <ref>`
+	// ran in, to pin where baseSha is resolved.
+	function scriptedGit(opts: {
+		toplevel: string;
+		commonDir: string;
+		revParseCwds?: string[];
+	}): GitRunner {
+		return (args, gitCwd) => {
+			if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+				return { code: 0, stdout: `${opts.toplevel}\n`, stderr: "" };
+			}
+			if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+				return { code: 0, stdout: `${opts.commonDir}\n`, stderr: "" };
+			}
+			if (args[0] === "rev-parse") {
+				opts.revParseCwds?.push(gitCwd);
+				return { code: 0, stdout: "basesha\n", stderr: "" };
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		};
+	}
+
+	test("a linked-worktree launch anchors repo on the main repo, callerCheckout on the launcher (distinct)", () => {
+		// Launch from /wt/feature (a linked worktree) whose shared .git lives at /main/.git. repo
+		// must resolve to the durable main repo (/main), callerCheckout to the launching checkout
+		// (/wt/feature). Against today's code BOTH come back /wt/feature and this fails.
+		const git = scriptedGit({ toplevel: "/wt/feature", commonDir: "/main/.git" });
+		const c = startBatch(
+			store,
+			{ ...deps, git },
+			{
+				id: "c1",
+				cwd,
+				tasks: [task("a")],
+				maxParallel: 1,
+			},
+		);
+		// The batch record stores BOTH, distinct.
+		expect(c.repo).toBe("/main");
+		expect(c.callerCheckout).toBe("/wt/feature");
+		// And both reach launchJob distinctly: cleanup will anchor on /main, apply targets /wt/feature.
+		const launched = present(jobs.launched.at(-1), "launched a");
+		expect(launched.worktree.repo).toBe("/main");
+		expect(launched.worktree.callerCheckout).toBe("/wt/feature");
+	});
+
+	test("a main-repo launch keeps repo === callerCheckout (the fix is a no-op for the common path)", () => {
+		// Launched from the main repo itself: --show-toplevel and the common-dir parent are both /main.
+		const git = scriptedGit({ toplevel: "/main", commonDir: "/main/.git" });
+		const c = startBatch(
+			store,
+			{ ...deps, git },
+			{
+				id: "c1",
+				cwd,
+				tasks: [task("a")],
+				maxParallel: 1,
+			},
+		);
+		expect(c.repo).toBe("/main");
+		expect(c.callerCheckout).toBe("/main");
+		const launched = present(jobs.launched.at(-1), "launched a");
+		expect(launched.worktree.repo).toBe("/main");
+		expect(launched.worktree.callerCheckout).toBe("/main");
+	});
+
+	test("baseSha resolves against the launching checkout, never the main repo", () => {
+		// HARD invariant: splitting repo (main) from callerCheckout (launcher) must NOT move the
+		// base. The default HEAD still comes from the launcher's HEAD -- resolving HEAD in the main
+		// repo would silently batch a feature-branch launch off the wrong base.
+		const revParseCwds: string[] = [];
+		const git = scriptedGit({ toplevel: "/wt/feature", commonDir: "/main/.git", revParseCwds });
+		startBatch(
+			store,
+			{ ...deps, git },
+			{
+				id: "c1",
+				cwd,
+				tasks: [task("a")],
+				maxParallel: 1,
+			},
+		);
+		// The base ref was resolved from the launching checkout, not the main repo.
+		expect(revParseCwds).toContain("/wt/feature");
+		expect(revParseCwds).not.toContain("/main");
+	});
+
+	test("a pre-split batch record (no callerCheckout) falls back to repo when a later wave launches", () => {
+		// A batch created before this fix has `repo` but no `callerCheckout`. When a dependent
+		// launches on a later advance (resume after upgrade), launchWave must fall back to repo
+		// (the ?? path), never forward an undefined callerCheckout onto the job.
+		startBatch(store, deps, {
+			id: "c1",
+			cwd,
+			tasks: [task("a"), task("b", { dependencies: ["a"] })],
+			maxParallel: 1,
+		});
+		// Strip callerCheckout off the stored batch to simulate a pre-fix record.
+		store.update("c1", (b) => {
+			const pre: Batch = { ...b };
+			delete pre.callerCheckout;
+			return pre;
+		});
+		expect(present(store.get("c1"), "batch c1").callerCheckout).toBeUndefined();
+		// a converges so the dependent b launches in the next wave.
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		const c = advanceBatch(store, deps, "c1");
+		expect(taskOf(c, "b").status).toBe("running");
+		const launchedB = present(jobs.launched.at(-1), "launched b");
+		expect(launchedB.worktree.callerCheckout).toBe(c.repo); // fell back to repo, not undefined
+	});
+
+	test("cleanup anchors removal on the durable main repo, not the launching (linked) checkout", () => {
+		// End to end: a batch launched from a linked worktree cleans up from the main repo, so even
+		// if the launching checkout were removed first, `git worktree remove` runs from /main (which
+		// owns the shared .git) and no worktree is stranded. Against today's code existing.repo would
+		// be /wt/feature and removal would target the (possibly deleted) launcher.
+		const git = scriptedGit({ toplevel: "/wt/feature", commonDir: "/main/.git" });
+		const linkedDeps = { ...deps, git };
+		startBatch(store, linkedDeps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, linkedDeps, "c1"); // a -> review_ready, batch ready_for_review
+		cleanupBatch(store, linkedDeps, "c1", { confirm: true });
+		expect(removedWorktrees).toHaveLength(1);
+		expect(present(removedWorktrees[0], "removed entry").repo).toBe("/main");
 	});
 });
 

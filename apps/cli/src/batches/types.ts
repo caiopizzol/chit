@@ -126,7 +126,20 @@ export interface BatchTask {
 export interface Batch {
 	schema: 1;
 	id: string;
-	repo: string; // absolute path to the repo root (git top-level) the batch runs against
+	// The DURABLE main repo that owns the shared .git (resolved via mainRepoOfWorktree), NOT the
+	// launching checkout. When chit_batch_start runs from a linked worktree, repoToplevel would be
+	// that linked checkout -- which the user may remove (e.g. /worktree-cleanup once the feature
+	// merges) BEFORE cleaning the batch. cleanupBatch runs `git worktree remove` from here, so it
+	// must anchor on the main repo or git cannot even start in the deleted checkout and every task
+	// worktree is stranded. Mirrors the single-run prepareRunWorkspace split.
+	repo: string;
+	// The launching checkout chit_batch_start ran from (repoToplevel): a linked worktree, or the
+	// main repo itself. DISTINCT from `repo` for a linked-worktree launch (there it is the worktree
+	// while repo is the durable main repo); EQUAL to repo for a main-repo launch. Kept apart so
+	// chit_apply defaults its target where the user is working while cleanup still anchors on
+	// `repo`. Optional: pre-split batch records (created before this field existed, then
+	// resumed/advanced after upgrade) carry only `repo` -- launchWave falls back to it.
+	callerCheckout?: string;
 	repoKey: string; // hash of repo, the state-dir namespace
 	baseBranch: string; // the ref task branches/worktrees are created from
 	baseSha: string; // resolved at start, so every task worktree shares one base
