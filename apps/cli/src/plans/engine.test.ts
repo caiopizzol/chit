@@ -9,7 +9,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { NormalizedPlan, PlanStep } from "@chit-run/core";
 import {
 	applyRunWorkspace,
@@ -17,6 +17,7 @@ import {
 	createWorktree,
 	type GitRunner,
 	realGit,
+	removeEmptyDir,
 	removeTaskWorktree,
 } from "../batches/worktree.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
@@ -159,6 +160,9 @@ beforeEach(() => {
 		},
 		removeWorktree: () => {
 			throw new Error("removeWorktree is not wired in the fake-git scheduling harness");
+		},
+		removeEmptyDir: () => {
+			throw new Error("removeEmptyDir is not wired in the fake-git scheduling harness");
 		},
 		now: () => 1000,
 	};
@@ -625,6 +629,7 @@ function realHarness(): RealHarness {
 		applyWorkspace: (p) => applyRunWorkspace(realGit, p),
 		commit: (w, m) => commitWorktree(realGit, w, m),
 		removeWorktree: (r, w, b) => removeTaskWorktree(realGit, r, w, b),
+		removeEmptyDir: (dir) => removeEmptyDir(dir),
 		now: () => 1000,
 	};
 	return {
@@ -941,12 +946,88 @@ describe("cleanupPlan (real git)", () => {
 			realGit(["rev-parse", "--verify", "--quiet", "refs/heads/chit-plan/p/steps/a"], h.repo).code,
 		).not.toBe(0);
 
+		// The now-empty plan parent directory (~/worktrees/chit/<planId>) is removed too, so a cleaned
+		// plan leaves no empty litter (the dogfood wart this fixes). dirname(integration) is that root.
+		expect(existsSync(dirname(integration))).toBe(false);
+
 		// The durable plan record survives, now stamped with cleanedAt.
 		const stored = present(h.store.get("p"), "stored plan");
 		expect(stored.cleanedAt).toBeDefined();
 		expect(describePlan(stored, h.deps).cleanedAt).toBe(stored.cleanedAt);
 		expect(stored.steps).toHaveLength(1);
 		expect(stepOf(stored, "a").status).toBe("applied");
+	});
+
+	test("confirm removes the integration + every step worktree, branches, and the now-empty plan parent", () => {
+		const h = realHarness();
+		// A two-step chain (a -> b) so steps/ holds MORE than one step worktree: the nested layout that
+		// left an empty plan parent behind before this fix. Drive both steps to applied -> plan completes.
+		const started = startPlan(h.store, h.deps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: chainPlan(),
+		});
+		h.finish(stepOf(started, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(h.store, h.deps, "p"); // a -> review_ready
+		applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		const c2 = advancePlan(h.store, h.deps, "p"); // launches b
+		h.finish(stepOf(c2, "b").runId ?? "", { stopStatus: "converged" });
+		advancePlan(h.store, h.deps, "p"); // b -> review_ready
+		applyPlanStep(h.store, h.deps, { planId: "p", stepId: "b", confirm: true });
+		const plan = present(h.store.get("p"), "stored plan");
+		expect(plan.status).toBe("completed");
+
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const aWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+		const bWt = present(stepOf(plan, "b").worktreePath, "step b worktree");
+		const planParent = dirname(integration); // ~/worktrees/chit/<planId>
+		const stepsDir = dirname(aWt); // ~/worktrees/chit/<planId>/steps
+
+		const res = cleanupPlan(h.store, h.deps, "p", true);
+		expect(res.targets.map((t) => t.id).sort()).toEqual(["a", "b", "integration"]);
+		expect(res.targets.every((t) => t.removed === true)).toBe(true);
+
+		// Every managed worktree is gone, the steps/ dir is gone, AND the now-empty plan parent is gone.
+		expect(existsSync(integration)).toBe(false);
+		expect(existsSync(aWt)).toBe(false);
+		expect(existsSync(bWt)).toBe(false);
+		expect(existsSync(stepsDir)).toBe(false);
+		expect(existsSync(planParent)).toBe(false);
+		// Branches removed.
+		for (const ref of [
+			"refs/heads/chit-plan/p/integration",
+			"refs/heads/chit-plan/p/steps/a",
+			"refs/heads/chit-plan/p/steps/b",
+		]) {
+			expect(realGit(["rev-parse", "--verify", "--quiet", ref], h.repo).code).not.toBe(0);
+		}
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeDefined();
+	});
+
+	test("keeps a non-empty plan parent directory (an unrelated sibling survives cleanup)", () => {
+		const h = realHarness();
+		const plan = completedSingle(h);
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+		const planParent = dirname(integration); // ~/worktrees/chit/<planId>
+		// An unrelated file an operator dropped in the plan's worktree root: cleanup must not delete it,
+		// and must not remove the now-non-empty root (only an EMPTY plan parent is litter to retire).
+		const sentinel = join(planParent, "operator-note.txt");
+		writeFileSync(sentinel, "do not delete\n");
+
+		const res = cleanupPlan(h.store, h.deps, "p", true);
+		expect(res.confirmed).toBe(true);
+		expect(res.targets.every((t) => t.removed === true)).toBe(true);
+
+		// The managed worktrees/branches are still removed...
+		expect(existsSync(integration)).toBe(false);
+		expect(existsSync(stepWt)).toBe(false);
+		// ...but the non-empty parent and its unrelated file survive (empty-only removal).
+		expect(existsSync(planParent)).toBe(true);
+		expect(existsSync(sentinel)).toBe(true);
+		expect(readFileSync(sentinel, "utf-8")).toBe("do not delete\n");
+		// Leaving the parent is best-effort litter cleanup, not a failure: the cleanup still completed.
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeDefined();
 	});
 
 	test("refuses (removes nothing) when a step is review_ready, even on confirm", () => {

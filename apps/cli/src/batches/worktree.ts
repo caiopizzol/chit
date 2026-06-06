@@ -261,6 +261,21 @@ export function prepareRunWorkspace(
 	};
 }
 
+// Best-effort removal of a now-empty directory -- a retired worktree's parent (chit/<batchId>,
+// chit/<runId>) or a plan's worktree root (chit/<planId>) -- so cleanup leaves no empty litter.
+// rmdir removes ONLY an empty directory: it fails (returns false, never throws) on a non-empty one
+// or a missing path, so this can neither delete real contents nor escape the directory it is given.
+// Returns whether the directory was actually removed.
+export function removeEmptyDir(dir: string): boolean {
+	try {
+		rmdirSync(dir);
+		return true;
+	} catch {
+		// non-empty (siblings remain) or already gone -- leave it
+		return false;
+	}
+}
+
 // The result of removeTaskWorktree, named so the engine deps that wrap it can be typed without
 // re-spelling the union.
 export type RemoveWorktreeResult =
@@ -333,12 +348,8 @@ export function removeTaskWorktree(
 		removedBranch = true;
 	}
 	// Best-effort: drop the now-empty <id> parent (chit/<batchId> or chit/<runId>) so a removed
-	// worktree leaves no litter. rmdir fails (ignored) if siblings remain or it is already gone.
-	try {
-		rmdirSync(dirname(worktreePath));
-	} catch {
-		// non-empty (sibling worktrees still present) or already removed -- leave it
-	}
+	// worktree leaves no litter. Empty-only: a parent that still holds sibling worktrees is left.
+	removeEmptyDir(dirname(worktreePath));
 	return { ok: true, removedWorktree, removedBranch };
 }
 

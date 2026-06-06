@@ -15,6 +15,7 @@
 // here a dependent launches only once its dependency is recorded as APPLIED (the strict
 // chain blocks on the apply gate by construction).
 
+import { dirname } from "node:path";
 import type { NormalizedPlan, PlanApplyPolicy, RequiredCheck } from "@chit-run/core";
 import {
 	type GitRunner,
@@ -128,6 +129,12 @@ export interface PlanEngineDeps {
 	};
 	// Retire one plan-managed worktree + branch for cleanup (real: removeTaskWorktree(realGit, ...)).
 	removeWorktree: (repo: string, worktreePath: string, branch: string) => RemoveWorktreeResult;
+	// Best-effort removal of the plan's now-empty worktree ROOT (~/worktrees/chit/<planId>) after
+	// every child worktree under it is retired (real: removeEmptyDir). The plan layout nests the
+	// integration worktree beside a steps/ dir, so no single removeWorktree call can drop the root --
+	// cleanup removes it explicitly once empty. Empty-only: never removes a non-empty directory or
+	// anything outside the plan's own root.
+	removeEmptyDir: (dir: string) => void;
 	now: () => number; // epoch ms
 }
 
@@ -610,6 +617,19 @@ export function cleanupPlan(
 			c.updatedAt = stamp;
 			return c;
 		});
+		// Every child worktree is gone: drop the now-empty plan worktree ROOT (~/worktrees/chit/<planId>)
+		// so a cleaned plan leaves no empty litter. The nested layout (the integration worktree beside a
+		// steps/ dir) means removeWorktree's own per-worktree parent cleanup never reaches this root, so
+		// remove it explicitly. Derived from the RECORDED integration path (authoritative; the integration
+		// worktree sits directly under the root), falling back to a step path (steps/<id> -> two levels
+		// up). Best-effort + empty-only, so an operator's stray file under the root leaves it intact.
+		const planRoot =
+			existing.integrationWorktree !== undefined
+				? dirname(existing.integrationWorktree)
+				: stepTargets.length > 0
+					? dirname(dirname(stepTargets[0].worktreePath))
+					: undefined;
+		if (planRoot !== undefined) deps.removeEmptyDir(planRoot);
 	}
 	return {
 		planId,

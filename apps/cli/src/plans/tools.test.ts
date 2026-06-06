@@ -157,6 +157,9 @@ function makeHarness() {
 		removeWorktree: () => {
 			throw new Error("removeWorktree is not wired in the start harness");
 		},
+		removeEmptyDir: () => {
+			throw new Error("removeEmptyDir is not wired in the start harness");
+		},
 		now: () => 1000,
 	};
 	return { cwd, deps, store: new PlanStore(cwd), jobs, launched };

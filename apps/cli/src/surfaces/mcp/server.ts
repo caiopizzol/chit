@@ -64,6 +64,7 @@ import {
 	type PartialWorkView,
 	prepareRunWorkspace,
 	realGit,
+	removeEmptyDir,
 	removeTaskWorktree,
 	WorktreeError,
 } from "../../batches/worktree.ts";
@@ -2696,6 +2697,7 @@ const planDeps: PlanEngineDeps = {
 	commit: (worktreePath, message) => commitWorktree(realGit, worktreePath, message),
 	removeWorktree: (repo, worktreePath, branch) =>
 		removeTaskWorktree(realGit, repo, worktreePath, branch),
+	removeEmptyDir: (dir) => removeEmptyDir(dir),
 	now: () => Date.now(),
 };
 
