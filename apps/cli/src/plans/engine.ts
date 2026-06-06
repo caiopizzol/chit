@@ -932,18 +932,31 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 // literally). The forward flow always passes through the operator gate: a review_ready step waits
 // for the gated apply (chit_plan_advance with an apply payload), never advancing on its own. The
 // cleanup suggestion is appended ONLY when cleanup is actually available (planCleanupBlocker -- the
-// state rule AND no live worker), so this publicly-surfaced text never points at an operation that
-// would be refused (e.g. a just-cancelled plan whose worker has not yet settled).
+// state rule AND no live worker) AND the plan was not ALREADY cleaned (cleanedAt unset), so this
+// publicly-surfaced text never points at an operation that would be refused (e.g. a just-cancelled
+// plan whose worker has not yet settled) or already happened (re-running cleanup on a cleaned plan).
 function planNextAction(c: Plan, deps: PlanEngineDeps): string {
+	// A cleaned plan already retired its managed worktrees, so report that terminal state instead of
+	// suggesting cleanup again; an uncleaned terminal plan still gets the cleanup suggestion when no
+	// blocker stands. The two clauses are mutually exclusive by construction (cleanedAt vs not).
+	const cleaned = c.cleanedAt !== undefined;
+	const cleanedClause = cleaned
+		? `The plan-managed worktrees and branches were already retired (cleaned ${c.cleanedAt}); plan/job/loop/audit receipts remain available.`
+		: "";
 	const cleanupClause =
-		planCleanupBlocker(c, deps) === undefined
+		!cleaned && planCleanupBlocker(c, deps) === undefined
 			? " When you no longer need the worktrees, retire them with chit_plan_cleanup (dry run first, then confirm=true)."
 			: "";
 	if (c.status === "completed") {
-		return `every step is applied and committed to the integration branch (${c.integrationBranch}); review it, then merge/apply it through your usual flow.${cleanupClause}`;
+		return cleaned
+			? `plan completed: every step was applied. ${cleanedClause}`
+			: `every step is applied and committed to the integration branch (${c.integrationBranch}); review it, then merge/apply it through your usual flow.${cleanupClause}`;
 	}
 	if (c.status === "cancelled") {
-		return `plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).${cleanupClause}`;
+		// A cleaned cancelled plan no longer has step worktrees to inspect, so do not point at them.
+		return cleaned
+			? `plan cancelled. ${cleanedClause}`
+			: `plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).${cleanupClause}`;
 	}
 	if (c.status === "failed") {
 		return "a step failed during execution (a dead worker, a worktree error, or a thrown run -- see the step's status/error); inspect its worktree (changedFiles may be empty if it broke mid-review) and receipt, then fix and rerun the step or abort the plan.";

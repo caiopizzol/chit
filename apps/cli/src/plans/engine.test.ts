@@ -512,6 +512,61 @@ describe("describePlan (read-only join)", () => {
 		expect(view.status).toBe("cancelled");
 		expect(view.nextAction).toContain("chit_plan_cleanup");
 	});
+
+	// Drive a single-step plan to completed (applied), so cleanup is available and the guidance
+	// reflects whether the plan was already cleaned.
+	function completedSinglePlan(): Plan {
+		const c0 = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({ steps: [step("a")] }),
+		});
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(store, deps, "p1"); // a -> review_ready
+		applyStep("p1", "a", "appliedsha"); // simulate the gated apply marking a applied
+		return advancePlan(store, deps, "p1"); // re-derives status -> completed
+	}
+
+	test("a completed plan without cleanedAt still suggests chit_plan_cleanup", () => {
+		const view = describePlan(completedSinglePlan(), deps);
+		expect(view.status).toBe("completed");
+		expect(view.cleanedAt).toBeUndefined();
+		expect(view.nextAction).toContain("chit_plan_cleanup");
+	});
+
+	test("a completed plan with cleanedAt does NOT suggest chit_plan_cleanup and reports the retired state", () => {
+		completedSinglePlan();
+		store.update("p1", (c) => {
+			c.cleanedAt = "2026-06-06T00:00:00.000Z";
+			return c;
+		});
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		expect(view.status).toBe("completed");
+		expect(view.nextAction).not.toContain("chit_plan_cleanup");
+		// It still mentions the useful terminal state: worktrees already retired, receipts kept.
+		expect(view.nextAction).toContain("already retired");
+		expect(view.nextAction).toContain("2026-06-06T00:00:00.000Z");
+		expect(view.nextAction).toContain("receipts remain available");
+		// Cleanup already removed the integration branch, so do not point the operator at it.
+		expect(view.nextAction).not.toContain("integration branch");
+		expect(view.nextAction).not.toContain("merge/apply");
+	});
+
+	test("a cancelled plan with cleanedAt does NOT suggest chit_plan_cleanup and reports the retired state", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		const aRun = stepOf(c0, "a").runId ?? "";
+		cancelPlan(store, deps, "p1");
+		jobs.patch(aRun, { state: "cancelled" }); // worker settled
+		store.update("p1", (c) => {
+			c.cleanedAt = "2026-06-06T00:00:00.000Z";
+			return c;
+		});
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		expect(view.status).toBe("cancelled");
+		expect(view.nextAction).not.toContain("chit_plan_cleanup");
+		expect(view.nextAction).toContain("already retired");
+		expect(view.nextAction).toContain("receipts remain available");
+	});
 });
 
 describe("listPlans", () => {
