@@ -1,4 +1,12 @@
-import type { PlanApplyPolicy, PlanCleanupPolicy, RequiredCheck } from "@chit-run/core";
+import type {
+	LoopStopStatus,
+	LoopVerdict,
+	PlanApplyPolicy,
+	PlanCleanupPolicy,
+	RequiredCheck,
+	Verification,
+	VerificationSource,
+} from "@chit-run/core";
 
 // Plan model: the durable record a sequential plan-runner drives (see
 // docs/sequential-plan-runner-design.md). A plan is the missing layer between a single
@@ -102,8 +110,18 @@ export interface PlanStepRecord {
 	appliedCommitSha?: string; // the integration commit the gated apply produced (advances the tip)
 	worktreePath?: string; // absolute, recorded so nothing recomputes it
 	branch?: string;
+	// Run outcome summarized from the loop log + job record (the plan points, never
+	// recomputes), recorded when the step settles so a status receipt and closed-session
+	// recovery resolve it from the plan record alone. Mirrors the batch TaskResult fields.
 	changedFiles?: string[];
+	workspaceWarnings?: string[];
 	auditRefs?: string[];
+	stopStatus?: LoopStopStatus;
+	lastVerdict?: LoopVerdict;
+	// The latest iteration's verification + source (chit-executed vs reviewer), mirrored from
+	// the job. Authoritative over lastVerdict when source is "chit".
+	lastVerification?: Verification;
+	lastVerificationSource?: VerificationSource;
 	error?: string; // set when status === "failed"
 }
 
