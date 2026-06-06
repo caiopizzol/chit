@@ -128,6 +128,55 @@ export function createTaskWorktree(
 	return createWorktree(git, repo, worktreePath, branch, baseSha);
 }
 
+// Where a plan's integration worktree + branch live: the plan's accumulating result,
+// cut from the plan base and advanced one commit per applied step. A sibling of the
+// step worktrees (under steps/) so a step id of "integration" can never collide:
+//   ~/worktrees/chit/<planId>/integration
+//   branch: chit-plan/<planId>/integration
+export function planIntegrationWorktree(planId: string): { worktreePath: string; branch: string } {
+	return {
+		worktreePath: join(homedir(), "worktrees", "chit", planId, "integration"),
+		branch: `chit-plan/${planId}/integration`,
+	};
+}
+
+// Where one plan step's worktree + branch live, cut from the integration tip. Nested
+// under steps/ so the branch namespace is disjoint from the integration branch:
+//   ~/worktrees/chit/<planId>/steps/<stepId>
+//   branch: chit-plan/<planId>/steps/<stepId>
+export function planStepWorktree(
+	planId: string,
+	stepId: string,
+): { worktreePath: string; branch: string } {
+	return {
+		worktreePath: join(homedir(), "worktrees", "chit", planId, "steps", stepId),
+		branch: `chit-plan/${planId}/steps/${stepId}`,
+	};
+}
+
+// Plan wrappers: create the integration / a step worktree at the plan layout, off the
+// given base SHA. Behavior-identical to createWorktree at the plan paths/branches.
+export function createPlanIntegrationWorktree(
+	git: GitRunner,
+	repo: string,
+	planId: string,
+	baseSha: string,
+): { worktreePath: string; branch: string } {
+	const { worktreePath, branch } = planIntegrationWorktree(planId);
+	return createWorktree(git, repo, worktreePath, branch, baseSha);
+}
+
+export function createPlanStepWorktree(
+	git: GitRunner,
+	repo: string,
+	planId: string,
+	stepId: string,
+	baseSha: string,
+): { worktreePath: string; branch: string } {
+	const { worktreePath, branch } = planStepWorktree(planId, stepId);
+	return createWorktree(git, repo, worktreePath, branch, baseSha);
+}
+
 // Make a scope safe as a git branch component and a path leaf: lowercase, runs of
 // non-alphanumerics collapse to a single hyphen, trimmed; empty falls back to "run".
 function slugify(scope: string): string {

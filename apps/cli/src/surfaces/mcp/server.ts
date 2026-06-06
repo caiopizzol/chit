@@ -28,6 +28,7 @@ import {
 	composeLoopStatusLine,
 	type LoopRecord,
 	type ManifestSpec,
+	PlanError as PlanParseError,
 	parseManifest,
 	type RequiredCheck,
 	type ResolvedManifest,
@@ -53,6 +54,8 @@ import { BatchStore, BatchStoreError } from "../../batches/store.ts";
 import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
+	createPlanIntegrationWorktree,
+	createPlanStepWorktree,
 	createTaskWorktree,
 	describePartialWork,
 	inspectPartialWork,
@@ -85,6 +88,16 @@ import {
 	stopLoop,
 } from "../../loops/log-store.ts";
 import { pickRequiredChecks, resolveRunRequiredChecks } from "../../loops/required-checks.ts";
+import {
+	advancePlan,
+	cancelPlan,
+	describePlan,
+	listPlans,
+	type PlanEngineDeps,
+	PlanEngineError,
+} from "../../plans/engine.ts";
+import { PlanStore, PlanStoreError } from "../../plans/store.ts";
+import { PLAN_APPLY_UNAVAILABLE, runPlanStart } from "../../plans/tools.ts";
 import { validateOneShotAuth } from "../../runs/run-once.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import { type ResolvedRun, RunController } from "./controller.ts";
@@ -144,7 +157,13 @@ function getConfig(): ReturnType<typeof loadConfig> {
 	return configCache;
 }
 
-const server = new McpServer({ name: "chit", version: "0.0.0" }, { capabilities: { logging: {} } });
+// Exported so a test can connect a client over an in-memory transport and assert the
+// registered tool surface (e.g. the plan tools are present). Importing the module still
+// starts nothing; only startMcpServer / a test's explicit connect attaches a transport.
+export const server = new McpServer(
+	{ name: "chit", version: "0.0.0" },
+	{ capabilities: { logging: {} } },
+);
 
 function jsonResult(obj: unknown) {
 	return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -2597,6 +2616,273 @@ server.registerTool(
 			return jsonResult(cleanupBatch(store, batchDeps, batch_id, { confirm }));
 		} catch (e) {
 			return batchError(e);
+		}
+	},
+);
+
+// --- plan tools (sequential plan-runner) ----------------------------------
+//
+// chit_plan_start / list / status / advance / cancel drive an operator-authored,
+// reviewed chain of steps where each step's worktree is cut from a base that already
+// contains the prior step's APPLIED diff (see docs/sequential-plan-runner-design.md).
+// They COMPOSE the existing run/worktree/job machinery via the engine, never replacing
+// the batch or single-run tools. This slice runs the public chain WITHOUT the gated
+// apply-then-commit and without cleanup (both the next slice): chit_plan_advance only
+// reconciles a finished step and launches the next runnable one, and rejects any apply
+// payload loudly. No daemon: progress happens only at these explicit calls.
+
+// Engine deps wired to the real worktree/job/loop machinery, modelled one-for-one on
+// batchDeps. allowUnenforced is false for the same reason: the built-in adapters enforce
+// their declared permission, and a manifest with an unenforceable one fails that step
+// loudly via launchConvergeJob.
+const planDeps: PlanEngineDeps = {
+	git: realGit,
+	createIntegrationWorktree: (repo, planId, baseSha) =>
+		createPlanIntegrationWorktree(realGit, repo, planId, baseSha),
+	createStepWorktree: (repo, planId, stepId, baseSha) =>
+		createPlanStepWorktree(realGit, repo, planId, stepId, baseSha),
+	launchJob: (p) => {
+		const r = launchConvergeJob({
+			task: p.task,
+			scope: p.scope,
+			cwd: p.cwd,
+			// Forward the step's managed worktree so the job record carries worktreePath/branch/
+			// baseSha/repo/callerCheckout -- the same fields chit_apply reads to resolve a step run.
+			worktree: p.worktree,
+			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
+			maxIterations: p.maxIterations,
+			...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
+			...(p.callTimeoutMs !== undefined && { callTimeoutMs: p.callTimeoutMs }),
+			loopId: p.loopId,
+			allowUnenforced: false,
+		});
+		if (!r.ok) throw new Error(r.error);
+		return { jobId: r.jobId, loopId: r.loopId };
+	},
+	getJob: (id) => jobStore.get(id),
+	cancelJob: (id) => {
+		requestJobCancel(id);
+	},
+	isStale: (job) => isStale(job, Date.now()),
+	loopDetail: (worktreePath, loopId) => {
+		const partialWork = inspectPartialWork(realGit, worktreePath);
+		try {
+			const iters = readLoop(worktreePath, loopId).filter((r) => r.type === "iteration");
+			const last = iters.at(-1);
+			if (last && last.type === "iteration") {
+				return {
+					changedFiles: last.changedFiles,
+					workspaceWarnings: last.workspaceWarnings ?? [],
+					partialWork,
+				};
+			}
+		} catch {
+			// loop log not readable (worker still starting, or removed); no detail
+		}
+		return { changedFiles: [], workspaceWarnings: [], partialWork };
+	},
+	now: () => Date.now(),
+};
+
+// A plan record lives under the DURABLE main repo namespace (not the launching
+// checkout), so a plan started from a linked worktree is recoverable after that
+// worktree is removed. Resolve the main repo before constructing the store, exactly as
+// the engine does internally for the plan record's repo/repoKey.
+function planStoreFor(cwd?: string): { store: PlanStore; cwd: string } {
+	const runCwd = resolve(cwd ?? process.cwd());
+	const repo = mainRepoOfWorktree(realGit, runCwd);
+	return { store: new PlanStore(repo), cwd: runCwd };
+}
+
+function planError(e: unknown) {
+	if (
+		e instanceof PlanParseError ||
+		e instanceof PlanEngineError ||
+		e instanceof PlanStoreError ||
+		e instanceof WorktreeError
+	) {
+		return errorResult(e.message);
+	}
+	return errorResult(safeMcpError(e));
+}
+
+server.registerTool(
+	"chit_plan_start",
+	{
+		description:
+			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). Launches the first runnable step and returns the plan_id plus the plan view. Then drive it with chit_plan_status (read-only) and chit_plan_advance. This build runs the chain WITHOUT the gated apply-then-commit gate (the next slice): a step settles review_ready and pauses for that gate, and dependents wait until it is applied.",
+		inputSchema: {
+			plan: z
+				.union([z.string(), z.record(z.string(), z.unknown())])
+				.optional()
+				.describe(
+					"The plan, inline: a JSON object (schema 1, title, steps[]) or a JSON string of one. Provide this OR plan_path, not both.",
+				),
+			plan_path: z
+				.string()
+				.optional()
+				.describe(
+					"Path to a plan JSON file (absolute or relative to cwd). Provide this OR plan, not both.",
+				),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+			base_branch: z
+				.string()
+				.optional()
+				.describe(
+					"Ref the integration branch is cut from. Default: the plan's baseBranch, else HEAD.",
+				),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Per-step iteration budget when a step declares none. Default 3."),
+		},
+	},
+	async ({ plan, plan_path, cwd, base_branch, max_iterations }) => {
+		try {
+			const { store, cwd: runCwd } = planStoreFor(cwd);
+			// runPlanStart owns the parse/id/start/describe glue (unit-tested with fake deps); the
+			// handler only adds the real store + deps and the main-repo resolution. The returned view
+			// leads with plan_id, satisfying "return plan_id plus the plan view".
+			const view = runPlanStart(
+				{
+					...(plan !== undefined && { plan }),
+					...(plan_path !== undefined && { planPath: plan_path }),
+					...(base_branch !== undefined && { baseBranch: base_branch }),
+					...(max_iterations !== undefined && { maxIterations: max_iterations }),
+				},
+				runCwd,
+				store,
+				planDeps,
+				() => crypto.randomUUID(),
+			);
+			return jsonResult(view);
+		} catch (e) {
+			return planError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_plan_list",
+	{
+		description:
+			"List the plans in this repo, newest first: plan_id, title, status, step count, and how many steps are applied / review_ready / needs_human / failed. Use it to recover a plan_id you lost, then chit_plan_status <plan_id> for the full view. Read-only.",
+		inputSchema: {
+			limit: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Return at most this many plans (newest first). Default: all."),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+		},
+	},
+	async ({ limit, cwd }) => {
+		try {
+			const { store } = planStoreFor(cwd);
+			return jsonResult({ plans: listPlans(store, limit) });
+		} catch (e) {
+			return planError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_plan_status",
+	{
+		description:
+			"Read-only plan overview: each step's status, live job state/phase for a running step, branch/worktree, base sha, changed files, audit refs, plus the next action. Inspection is safe: this NEVER launches steps, creates worktrees, or mutates state (use chit_plan_advance to make progress).",
+		inputSchema: {
+			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+		},
+	},
+	async ({ plan_id, cwd }) => {
+		try {
+			const { store } = planStoreFor(cwd);
+			const plan = store.get(plan_id);
+			if (!plan) return errorResult(`unknown plan_id ${plan_id}`);
+			return jsonResult(describePlan(plan, planDeps));
+		} catch (e) {
+			return planError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_plan_advance",
+	{
+		description:
+			"Advance a plan: reconcile the running step's finished job into its state (converged -> review_ready; completed-but-not-converged -> needs_human; a vanished/stale job or a failed run -> failed), then launch the next runnable step. The only progression trigger besides start. Call it when chit_plan_status reports a finished job or a runnable step. In THIS build advance does NOT apply: a review_ready step waits for the gated apply-then-commit gate (next slice), so a dependent does not launch until its dependency is applied. Passing an `apply` payload is rejected, never silently ignored.",
+		inputSchema: {
+			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Per-step iteration budget for a step launched by this advance. Default 3."),
+			apply: z
+				.object({
+					step_id: z.string(),
+					confirm: z.boolean().optional(),
+					include_untracked: z.array(z.string()).optional(),
+				})
+				.optional()
+				.describe(
+					"The gated apply gate (review_ready step -> integration branch). NOT available in this build; passing it is rejected. Reserved so the input contract is stable for the apply slice.",
+				),
+		},
+	},
+	async ({ plan_id, cwd, max_iterations, apply }) => {
+		// Reject an apply payload BEFORE touching the store: the gate is the next slice, and
+		// silently dropping it would let a caller believe their diff was applied.
+		if (apply !== undefined) return errorResult(PLAN_APPLY_UNAVAILABLE);
+		try {
+			const { store } = planStoreFor(cwd);
+			const plan = advancePlan(store, planDeps, plan_id, max_iterations);
+			return jsonResult(describePlan(plan, planDeps));
+		} catch (e) {
+			return planError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_plan_cancel",
+	{
+		description:
+			"Cancel a plan: request cancellation of the active step's job (intent-first, the same safety as chit_cancel) and mark pending steps cancelled. The running job settles cleanly in the background. Worktrees are left in place for inspection (cleanup is a separate, explicit step).",
+		inputSchema: {
+			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+		},
+	},
+	async ({ plan_id, cwd }) => {
+		try {
+			const { store } = planStoreFor(cwd);
+			const plan = cancelPlan(store, planDeps, plan_id);
+			return jsonResult(describePlan(plan, planDeps));
+		} catch (e) {
+			return planError(e);
 		}
 	},
 );

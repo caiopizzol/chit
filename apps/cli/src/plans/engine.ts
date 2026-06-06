@@ -500,13 +500,17 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 
 // The next tool call the operator should make, named explicitly (an agent follows nextAction
 // literally). The forward flow always passes through the operator gate: a review_ready step
-// waits for a gated apply, never advancing on its own.
+// waits for a gated apply, never advancing on its own. The gated apply-then-commit and the
+// cleanup tool are a later slice, so the messages below NEVER instruct the operator to apply
+// via chit_plan_advance or clean with chit_plan_cleanup -- those tools do not exist yet, and
+// this text is surfaced publicly through describePlan. The apply slice restores that guidance
+// when it wires the gate.
 function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 	if (c.status === "completed") {
-		return "every step is applied and committed to the integration branch; review it, then retire the managed worktrees with chit_plan_cleanup when done.";
+		return "every step is applied and committed to the integration branch; review the integration branch.";
 	}
 	if (c.status === "cancelled") {
-		return "plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed, then retire the worktrees with chit_plan_cleanup.";
+		return "plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).";
 	}
 	if (c.status === "failed") {
 		return "a step failed during execution (a dead worker, a worktree error, or a thrown run -- see the step's status/error); inspect its worktree (changedFiles may be empty if it broke mid-review) and receipt, then fix and rerun the step or abort the plan.";
@@ -515,7 +519,7 @@ function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 		return "a step paused for a human decision: its run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect its worktree (changedFiles) and receipt, then fix and rerun, raise the budget and rerun, or abort.";
 	}
 	if (c.status === "ready_for_apply") {
-		return "a step is review_ready: review the uncommitted changes in its worktree (changedFiles lists them; nothing is committed yet), then apply it with chit_plan_advance to flow its diff into the integration branch and unblock the next step.";
+		return "a step is review_ready: its run converged and its diff sits uncommitted in its worktree (changedFiles lists them; nothing is committed yet). Inspect it with chit_plan_status; the gated apply that flows it into the integration branch and unblocks the next step is a later step and is not wired yet.";
 	}
 	// running
 	if (anyReconcilable(c, deps)) {

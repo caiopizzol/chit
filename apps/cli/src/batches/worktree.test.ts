@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
 	mkdirSync,
@@ -14,6 +14,7 @@ import { join } from "node:path";
 import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
+	createPlanStepWorktree,
 	createTaskWorktree,
 	describePartialWork,
 	type GitResult,
@@ -21,6 +22,8 @@ import {
 	inspectPartialWork,
 	mainRepoOfWorktree,
 	partialWorkFailureClause,
+	planIntegrationWorktree,
+	planStepWorktree,
 	prepareRunWorkspace,
 	realGit,
 	resolveBaseSha,
@@ -105,6 +108,54 @@ describe("runWorktree layout", () => {
 		const { worktreePath, branch } = runWorktree("r1", "   ");
 		expect(worktreePath).toBe(join(homedir(), "worktrees", "chit", "r1", "run"));
 		expect(branch).toBe("chit-run/r1/run");
+	});
+});
+
+describe("plan worktree layout", () => {
+	test("integration sits at ~/worktrees/chit/<planId>/integration with a namespaced branch", () => {
+		const { worktreePath, branch } = planIntegrationWorktree("p1");
+		expect(worktreePath).toBe(join(homedir(), "worktrees", "chit", "p1", "integration"));
+		expect(branch).toBe("chit-plan/p1/integration");
+	});
+	test("a step sits under steps/ so a step id of 'integration' cannot collide", () => {
+		const step = planStepWorktree("p1", "schema");
+		expect(step.worktreePath).toBe(join(homedir(), "worktrees", "chit", "p1", "steps", "schema"));
+		expect(step.branch).toBe("chit-plan/p1/steps/schema");
+		// The pathological step id is disjoint from the integration worktree/branch.
+		const collide = planStepWorktree("p1", "integration");
+		expect(collide.worktreePath).not.toBe(planIntegrationWorktree("p1").worktreePath);
+		expect(collide.branch).not.toBe(planIntegrationWorktree("p1").branch);
+	});
+});
+
+describe("createPlanStepWorktree", () => {
+	// The plan layout is rooted at homedir(); point HOME at a temp dir so createWorktree's
+	// mkdirSync(dirname) writes there (and is cleaned up) instead of littering the real home.
+	let home: string;
+	let savedHome: string | undefined;
+	beforeEach(() => {
+		home = mkdtempSync(join(tmpdir(), "chit-plan-home-"));
+		savedHome = process.env.HOME;
+		process.env.HOME = home;
+	});
+	afterEach(() => {
+		if (savedHome === undefined) delete process.env.HOME;
+		else process.env.HOME = savedHome;
+		rmSync(home, { recursive: true, force: true });
+	});
+
+	test("refuses when the branch already exists (never clobbers)", () => {
+		const { git } = scriptedGit([{ match: (a) => a.includes("--verify"), result: ok("sha") }]);
+		expect(() => createPlanStepWorktree(git, "/repo", "p", "s", "base")).toThrow(/already exists/);
+	});
+	test("surfaces a git worktree add failure as WorktreeError", () => {
+		const { git } = scriptedGit([
+			{ match: (a) => a.includes("--verify"), result: fail("not a valid ref") },
+			{ match: (a) => a[0] === "worktree" && a[1] === "add", result: fail("fatal: bad ref") },
+		]);
+		expect(() => createPlanStepWorktree(git, "/repo", "p", "s", "base")).toThrow(
+			/git worktree add failed.*bad ref/,
+		);
 	});
 });
 

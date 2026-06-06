@@ -441,6 +441,30 @@ describe("describePlan (read-only join)", () => {
 		// And it reports as reconcilable work, so advancing would settle it.
 		expect(view.nextAction).toContain("chit_plan_advance");
 	});
+
+	// nextAction is surfaced publicly through describePlan, so in this slice it must never
+	// instruct the operator to apply via chit_plan_advance or clean with chit_plan_cleanup --
+	// neither the gated apply nor the cleanup tool is wired yet.
+	test("a review_ready (ready_for_apply) plan never instructs apply-via-advance or cleanup", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		const c1 = advancePlan(store, deps, "p1"); // a -> review_ready
+		const view = describePlan(c1, deps);
+		expect(view.status).toBe("ready_for_apply");
+		// The only forward move (apply) is not wired, so advance must not be suggested here, and
+		// cleanup does not exist yet.
+		expect(view.nextAction).not.toContain("chit_plan_advance");
+		expect(view.nextAction).not.toContain("chit_plan_cleanup");
+		// It still points at the read-only path that DOES exist.
+		expect(view.nextAction).toContain("chit_plan_status");
+	});
+
+	test("a cancelled plan never instructs chit_plan_cleanup", () => {
+		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		const view = describePlan(cancelPlan(store, deps, "p1"), deps);
+		expect(view.status).toBe("cancelled");
+		expect(view.nextAction).not.toContain("chit_plan_cleanup");
+	});
 });
 
 describe("listPlans", () => {
