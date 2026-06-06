@@ -51,6 +51,29 @@ a loop, and never read chit's state files: they are private.
 `timeout_ms` defaults to 900000 (15 minutes). On `waitResult: "timeout"` the run
 is still going, so just call `chit_wait` again. Esc stops the wait, not the run.
 
+### Codex: raise the host tool timeout
+
+`chit_wait.timeout_ms` is chit's internal wait deadline. It controls how long the
+`chit_wait` call itself blocks before returning a `timeout` result, and it is
+correct as is. But Codex layers its own per-MCP-tool call deadline on top of it,
+and that host deadline is short by default. A `chit_wait` that runs past it gets
+cut by Codex before chit's `timeout_ms` ever returns.
+
+Raise the Codex tool timeout for the chit server in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.chit]
+command = "/Users/cpolive/.bun/bin/chit"
+args = ["mcp"]
+tool_timeout_sec = 1800
+```
+
+Reconnect or restart Codex after editing the file so it picks up the new timeout.
+
+If you cannot raise the host timeout, keep each `chit_wait` below the host limit,
+for example pass `timeout_ms: 90000` (90 seconds), and call `chit_wait` again on a
+`timeout` result. The run keeps going between calls.
+
 ## Inspect while it runs
 
 `chit_status({ run_id })` is read-only and side-effect-free: a poll never keeps a

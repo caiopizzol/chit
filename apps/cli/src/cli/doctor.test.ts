@@ -45,6 +45,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 		auditDir,
 		loadReg: () => CONFIG,
 		bunVersion: "1.3.12",
+		readCodexConfig: () => undefined,
 		...over,
 	};
 }
@@ -135,6 +136,60 @@ describe("runChecks", () => {
 	test("mcp check is skipped (warn) when claude is absent", () => {
 		const checks = runChecks(deps({ probe: probeWith(["which chit", "git rev-parse", "codex"]) }));
 		expect(byName(checks, "mcp register").detail).toContain("skipped");
+	});
+});
+
+describe("codex tool timeout check", () => {
+	const CHIT_SECTION = `[mcp_servers.chit]
+command = "/Users/me/.bun/bin/chit"
+args = ["mcp"]
+`;
+
+	function find(checks: Check[]): Check | undefined {
+		return checks.find((c) => c.name === "codex tool timeout");
+	}
+
+	test("no row when the Codex config file is absent", () => {
+		const checks = runChecks(deps({ readCodexConfig: () => undefined }));
+		expect(find(checks)).toBeUndefined();
+	});
+
+	test("no row when chit is not configured for Codex", () => {
+		const toml = `[mcp_servers.other]
+command = "other"
+tool_timeout_sec = 30
+`;
+		expect(find(runChecks(deps({ readCodexConfig: () => toml })))).toBeUndefined();
+	});
+
+	test("warns when chit is configured but tool_timeout_sec is missing", () => {
+		const c = find(runChecks(deps({ readCodexConfig: () => CHIT_SECTION })));
+		expect(c?.status).toBe("warn");
+		expect(c?.detail).toContain("not set");
+		expect(c?.hint).toContain("1800");
+	});
+
+	test("warns when tool_timeout_sec is below the floor", () => {
+		const toml = `${CHIT_SECTION}tool_timeout_sec = 120
+`;
+		const c = find(runChecks(deps({ readCodexConfig: () => toml })));
+		expect(c?.status).toBe("warn");
+		expect(c?.detail).toContain("120s");
+		expect(c?.detail).toContain("below 900s");
+	});
+
+	test("passes when tool_timeout_sec is sufficient", () => {
+		const toml = `${CHIT_SECTION}tool_timeout_sec = 1800
+`;
+		const c = find(runChecks(deps({ readCodexConfig: () => toml })));
+		expect(c?.status).toBe("pass");
+		expect(c?.detail).toContain("1800s");
+	});
+
+	test("a comment after the value does not break parsing", () => {
+		const toml = `${CHIT_SECTION}tool_timeout_sec = 1800  # raised for long chit_wait
+`;
+		expect(find(runChecks(deps({ readCodexConfig: () => toml })))?.status).toBe("pass");
 	});
 });
 

@@ -15,7 +15,8 @@
 // (diamond). A failure is a hard blocker (exit 1); a warning is advisory (exit 0).
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, type NormalizedConfig, RegistryError } from "@chit-run/core";
 import { defaultAuditDir } from "../audit/store.ts";
@@ -80,6 +81,22 @@ export interface DoctorDeps {
 	// config parser; the path lives on the config).
 	loadReg: () => NormalizedConfig;
 	bunVersion: string | undefined;
+	// Read the Codex config.toml as text, or undefined when the file is absent.
+	// Injected so the Codex tool-timeout check is testable without touching $HOME.
+	readCodexConfig: () => string | undefined;
+}
+
+// Codex's host-side deadline for a single MCP tool call. Below this, a long
+// chit_wait can be cut by Codex before chit's own timeout_ms returns.
+const CODEX_MIN_TOOL_TIMEOUT_SEC = 900;
+const CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC = 1800;
+
+function defaultReadCodexConfig(): string | undefined {
+	try {
+		return readFileSync(join(homedir(), ".codex", "config.toml"), "utf8");
+	} catch {
+		return undefined;
+	}
 }
 
 function defaultDeps(): DoctorDeps {
@@ -89,6 +106,7 @@ function defaultDeps(): DoctorDeps {
 		auditDir: defaultAuditDir(),
 		loadReg: () => loadConfig(),
 		bunVersion: process.versions.bun,
+		readCodexConfig: defaultReadCodexConfig,
 	};
 }
 
@@ -210,8 +228,66 @@ function checkMcpRegistration(deps: DoctorDeps): Check {
 	};
 }
 
+// Pull the [mcp_servers.chit] table's tool_timeout_sec out of a Codex config.toml.
+// Deliberately a small, targeted reader rather than a full TOML parser: doctor only
+// needs to know whether chit is registered with Codex and what its tool timeout is.
+// Tracks the active table by header line and reads the first tool_timeout_sec under
+// [mcp_servers.chit]. `configured` is true once that header appears.
+function parseCodexChitTimeout(toml: string): { configured: boolean; timeoutSec?: number } {
+	let inSection = false;
+	let configured = false;
+	let timeoutSec: number | undefined;
+	for (const raw of toml.split(/\r?\n/)) {
+		const line = raw.replace(/#.*$/, "").trim();
+		if (line === "") continue;
+		const header = line.match(/^\[(.+)\]$/);
+		if (header) {
+			inSection = header[1].trim() === "mcp_servers.chit";
+			if (inSection) configured = true;
+			continue;
+		}
+		if (inSection && timeoutSec === undefined) {
+			const m = line.match(/^tool_timeout_sec\s*=\s*(\d+)/);
+			if (m) timeoutSec = Number(m[1]);
+		}
+	}
+	return { configured, timeoutSec };
+}
+
+// Codex applies its own per-tool call deadline on top of chit_wait.timeout_ms, so a
+// long chit_wait can be cut by the host before chit returns. This is advisory only
+// (warn, never fail): we skip the row entirely when Codex has no config or chit is
+// not registered there, since neither case is the user's problem to fix.
+function checkCodexToolTimeout(deps: DoctorDeps): Check | null {
+	const toml = deps.readCodexConfig();
+	if (toml === undefined) return null;
+	const { configured, timeoutSec } = parseCodexChitTimeout(toml);
+	if (!configured) return null;
+	if (timeoutSec === undefined) {
+		return {
+			name: "codex tool timeout",
+			status: "warn",
+			detail: "chit is configured for Codex but tool_timeout_sec is not set",
+			hint: `long chit_wait calls may be interrupted by Codex; set tool_timeout_sec = ${CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC} under [mcp_servers.chit] and reconnect Codex`,
+		};
+	}
+	if (timeoutSec < CODEX_MIN_TOOL_TIMEOUT_SEC) {
+		return {
+			name: "codex tool timeout",
+			status: "warn",
+			detail: `chit tool_timeout_sec is ${timeoutSec}s, below ${CODEX_MIN_TOOL_TIMEOUT_SEC}s`,
+			hint: `long chit_wait calls may be interrupted by Codex; raise tool_timeout_sec to ${CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC} under [mcp_servers.chit] and reconnect Codex`,
+		};
+	}
+	return {
+		name: "codex tool timeout",
+		status: "pass",
+		detail: `chit tool_timeout_sec is ${timeoutSec}s`,
+	};
+}
+
 export function runChecks(deps: DoctorDeps): Check[] {
-	return [
+	const checks: Check[] = [
 		checkBun(deps),
 		checkChitOnPath(deps),
 		checkAgentCli(deps, "codex"),
@@ -221,6 +297,9 @@ export function runChecks(deps: DoctorDeps): Check[] {
 		checkAuditDir(deps),
 		checkGitRepo(deps),
 	];
+	const codex = checkCodexToolTimeout(deps);
+	if (codex) checks.push(codex);
+	return checks;
 }
 
 const SHAPE: Record<CheckStatus, string> = { pass: "●", warn: "○", fail: "◆" };
@@ -245,8 +324,9 @@ Preflight check for first-time setup. Runs no agents and changes nothing (it onl
 writes and removes a probe file in the audit dir to confirm it is writable).
 
 Checks: Bun, the chit binary on PATH, the codex and claude CLIs, the agent
-registry, MCP registration, the audit dir, and whether the cwd is a git repo.
-Agent authentication is not checked here; it is confirmed on the first real run.
+registry, MCP registration, the audit dir, whether the cwd is a git repo, and the
+Codex per-tool call timeout when chit is registered with Codex. Agent
+authentication is not checked here; it is confirmed on the first real run.
 `;
 
 export function runDoctor(
