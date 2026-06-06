@@ -13,6 +13,8 @@
 		"./audit/events": "./src/audit/events.ts",
 		"./graph-model": "./src/graph-model.ts",
 		"./install-marker": "./src/install-marker.ts",
+		"./plan": "./src/plan/parse.ts",
+		"./plan/types": "./src/plan/types.ts",
 		"./loops/log": "./src/loops/log.ts",
 		"./loops/status-line": "./src/loops/status-line.ts",
 		"./shared": "./src/shared.ts",

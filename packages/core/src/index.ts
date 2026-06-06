@@ -13,6 +13,8 @@ export * from "./loops/log.ts";
 export * from "./loops/status-line.ts";
 export * from "./manifest/parse.ts";
 export * from "./manifest/types.ts";
+export * from "./plan/parse.ts";
+export * from "./plan/types.ts";
 export * from "./resolve/resolve.ts";
 export * from "./resolve/types.ts";
 export * from "./shared.ts";
