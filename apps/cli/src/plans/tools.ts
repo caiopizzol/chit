@@ -7,7 +7,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { type NormalizedPlan, PlanError, parsePlan } from "@chit-run/core";
-import { describePlan, type PlanEngineDeps, type PlanView, startPlan } from "./engine.ts";
+import {
+	applyPlanStep,
+	cleanupPlan,
+	describePlan,
+	type PlanApplyOutcome,
+	type PlanCleanupResult,
+	type PlanEngineDeps,
+	type PlanView,
+	startPlan,
+} from "./engine.ts";
 import type { PlanStore } from "./store.ts";
 
 // Resolve a chit_plan_start input into a normalized plan. Exactly one of `plan` (an
@@ -91,9 +100,48 @@ export function runPlanStart(
 	return describePlan(started, deps);
 }
 
-// This slice runs the public chain (start / list / status / advance / cancel) WITHOUT
-// the gated apply-then-commit, which is the next slice. chit_plan_advance must never
-// silently ignore an apply payload: it rejects it loudly with this message so a caller
-// learns the gate is not wired yet rather than assuming their diff was applied.
-export const PLAN_APPLY_UNAVAILABLE =
-	"gated apply/commit is not available in this build: chit_plan_advance only reconciles a finished step and launches the next runnable one. The apply gate (review a review_ready step's diff, flow it into the integration branch, commit, advance the tip) lands in the next slice. Remove the `apply` payload to advance the chain.";
+// The chit_plan_advance apply-payload glue: run the gated apply (review_ready step -> integration
+// branch) and return the apply detail WITH the refreshed plan view. The apply gate is its own
+// progression trigger: it does NOT also reconcile/launch (a subsequent plain advance launches the
+// next step from the advanced tip), so the operator gate stays explicit. The view leads the
+// response so an agent following nextAction sees the new state.
+export interface PlanApplyResponse extends Omit<PlanApplyOutcome, "plan"> {
+	plan: PlanView;
+}
+
+export function runPlanApply(
+	input: { planId: string; stepId: string; confirm?: boolean; includeUntracked?: string[] },
+	store: PlanStore,
+	deps: PlanEngineDeps,
+): PlanApplyResponse {
+	const outcome = applyPlanStep(store, deps, {
+		planId: input.planId,
+		stepId: input.stepId,
+		confirm: input.confirm ?? false,
+		...(input.includeUntracked !== undefined && { includeUntracked: input.includeUntracked }),
+	});
+	const { plan, ...rest } = outcome;
+	return { ...rest, plan: describePlan(plan, deps) };
+}
+
+// The chit_plan_cleanup glue: retire the plan's managed worktrees + branches (dry-run by default)
+// and return the cleanup result WITH the refreshed plan view (which now carries cleanedAt on a
+// confirmed run). Durable records are always kept; the engine enforces the terminal-plan rule.
+export interface PlanCleanupResponse extends PlanCleanupResult {
+	plan: PlanView;
+}
+
+export function runPlanCleanup(
+	input: { planId: string; confirm?: boolean },
+	store: PlanStore,
+	deps: PlanEngineDeps,
+): PlanCleanupResponse {
+	const result = cleanupPlan(store, deps, input.planId, input.confirm ?? false);
+	// Re-read so the view reflects cleanedAt (cleanupPlan persisted it on a confirmed run).
+	const plan = store.get(input.planId);
+	return { ...result, plan: describePlan(plan ?? throwMissing(input.planId), deps) };
+}
+
+function throwMissing(planId: string): never {
+	throw new PlanError("plan_id", `plan ${JSON.stringify(planId)} vanished during cleanup`);
+}

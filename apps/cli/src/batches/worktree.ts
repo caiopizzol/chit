@@ -261,6 +261,47 @@ export function prepareRunWorkspace(
 	};
 }
 
+// The result of removeTaskWorktree, named so the engine deps that wrap it can be typed without
+// re-spelling the union.
+export type RemoveWorktreeResult =
+	| { ok: true; removedWorktree: boolean; removedBranch: boolean }
+	| { ok: false; error: string };
+
+export interface CommitResult {
+	committed: boolean; // false when there was nothing to commit (no diff); not an error
+	sha?: string; // the worktree's HEAD after the call (the new commit, or the unchanged tip on a no-op)
+	error?: string; // set when add/commit/HEAD resolution failed
+}
+
+// Stage everything in a worktree and commit it with `message`, returning the resulting HEAD sha.
+// Used by the plan apply gate to turn an applied step diff into a step-scoped commit on the
+// integration branch. `git add -A` stages BOTH the tracked patch (already staged by git apply
+// --3way) and the copied untracked files, so the commit includes the whole applied result.
+// Deliberately does NOT create an empty commit: when nothing is staged (the step produced no
+// diff), it returns committed=false with the unchanged HEAD, so the caller can record a coherent
+// no-op (the tip does not move) instead of an empty commit. Pure over the GitRunner (testable
+// against a real or fake git).
+export function commitWorktree(
+	git: GitRunner,
+	worktreePath: string,
+	message: string,
+): CommitResult {
+	const add = git(["add", "-A"], worktreePath);
+	if (add.code !== 0) return { committed: false, error: `git add -A failed: ${gitErr(add)}` };
+	// `git diff --cached --quiet` exits 0 when nothing is staged, 1 when there are staged changes.
+	const staged = git(["diff", "--cached", "--quiet"], worktreePath);
+	const head = (): CommitResult => {
+		const h = git(["rev-parse", "HEAD"], worktreePath);
+		if (h.code !== 0) return { committed: false, error: `git rev-parse HEAD failed: ${gitErr(h)}` };
+		return { committed: false, sha: h.stdout.trim() };
+	};
+	if (staged.code === 0) return head(); // nothing to commit: no-op, report the unchanged tip
+	const commit = git(["commit", "-m", message], worktreePath);
+	if (commit.code !== 0) return { committed: false, error: `git commit failed: ${gitErr(commit)}` };
+	const h = head();
+	return h.error ? h : { committed: true, sha: h.sha };
+}
+
 // Retire a task's worktree + branch. Used by chit_batch_cleanup AFTER the
 // human is done reviewing: the converged diff lives uncommitted in the worktree,
 // so removal is destructive of that diff -- the caller gates this behind an
@@ -273,7 +314,7 @@ export function removeTaskWorktree(
 	repo: string,
 	worktreePath: string,
 	branch: string,
-): { ok: true; removedWorktree: boolean; removedBranch: boolean } | { ok: false; error: string } {
+): RemoveWorktreeResult {
 	// Report WHAT was actually removed (vs already gone), so callers can give an honest
 	// idempotent response instead of claiming a removal that did nothing.
 	let removedWorktree = false;

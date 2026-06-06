@@ -20,6 +20,8 @@ import {
 	type GitRunner,
 	mainRepoOfWorktree,
 	type PartialWork,
+	type RemoveWorktreeResult,
+	type RunApplyResult,
 	repoToplevel,
 	resolveBaseSha,
 	WorktreeError,
@@ -102,6 +104,30 @@ export interface PlanEngineDeps {
 		workspaceWarnings: string[];
 		partialWork?: PartialWork;
 	};
+	// Apply a step's worktree diff into the plan integration worktree (the gated apply), wrapping
+	// the shared applyRunWorkspace primitive (real: applyRunWorkspace(realGit, ...)). Dry-run vs
+	// confirm and ALL conflict/overwrite safety live in that primitive; the engine never invents
+	// patch logic. Injected so tests fake or real-git verify it.
+	applyWorkspace: (p: {
+		worktreePath: string;
+		baseSha: string;
+		target: string;
+		confirm: boolean;
+		includeUntracked?: string[];
+	}) => RunApplyResult;
+	// Stage + commit the integration worktree after a clean apply, returning the new HEAD (real:
+	// commitWorktree(realGit, ...)). committed=false with a sha is a coherent no-op (no diff to
+	// commit); an error means the commit failed and the step must NOT be marked applied.
+	commit: (
+		worktreePath: string,
+		message: string,
+	) => {
+		committed: boolean;
+		sha?: string;
+		error?: string;
+	};
+	// Retire one plan-managed worktree + branch for cleanup (real: removeTaskWorktree(realGit, ...)).
+	removeWorktree: (repo: string, worktreePath: string, branch: string) => RemoveWorktreeResult;
 	now: () => number; // epoch ms
 }
 
@@ -229,6 +255,374 @@ export function cancelPlan(store: PlanStore, deps: PlanEngineDeps, planId: strin
 		c.updatedAt = iso(deps.now());
 		return c;
 	});
+}
+
+// --- gated apply: flow a review_ready step into the integration branch -----
+
+// The deterministic, concise commit message a step's apply produces on the integration branch.
+// One commit per applied step; the step id + title make the integration history readable.
+export function planStepCommitMessage(step: PlanStepRecord): string {
+	return `plan step ${step.id}: ${step.title}`;
+}
+
+export interface PlanApplyOutcome {
+	planId: string;
+	stepId: string;
+	confirmed: boolean; // false = dry run (nothing applied, nothing committed, plan untouched)
+	// The underlying apply result (tracked files, whether it applies clean, conflict, untracked
+	// candidates) from the shared primitive -- the operator's review surface.
+	apply: RunApplyResult;
+	// Set ONLY on a confirmed, clean apply that committed (or coherently no-op'd): the integration
+	// commit the step produced (the advanced tip), or the unchanged tip when the step had no diff.
+	appliedCommitSha?: string;
+	integrationTipSha?: string;
+	stepApplied: boolean; // the step was marked applied (commit succeeded or a coherent no-op)
+	commitError?: string; // set when the apply was clean but the commit failed (step NOT applied)
+	note: string;
+	plan: Plan; // the plan AFTER the operation (unchanged on a dry run / refusal / commit failure)
+}
+
+// The gated apply: flow a review_ready step's worktree diff into the plan integration worktree,
+// then commit it there as a step-scoped commit that advances the tip. Dry-run by default (nothing
+// mutates); confirm required to apply + commit. Mirrors chit_apply's safety exactly (the conflict
+// and untracked-overwrite gates live in applyWorkspace): a conflict refuses the WHOLE apply, no
+// silent overwrite, no cleanup coupling. The step is marked applied ONLY after the commit succeeds;
+// if the apply conflicts or the commit fails, the step stays review_ready and no dependent launches.
+export function applyPlanStep(
+	store: PlanStore,
+	deps: PlanEngineDeps,
+	opts: { planId: string; stepId: string; confirm: boolean; includeUntracked?: string[] },
+): PlanApplyOutcome {
+	const existing = store.get(opts.planId);
+	if (!existing) throw new PlanEngineError(`no plan ${JSON.stringify(opts.planId)}`);
+	const step = existing.steps.find((s) => s.id === opts.stepId);
+	if (!step) {
+		throw new PlanEngineError(
+			`no step ${JSON.stringify(opts.stepId)} in plan ${JSON.stringify(opts.planId)}`,
+		);
+	}
+	// Only a review_ready step can be applied: a pending/running step has no converged diff, and an
+	// already-applied one must not be re-applied (its diff is in the integration commit).
+	if (step.status !== "review_ready") {
+		throw new PlanEngineError(
+			`step ${JSON.stringify(opts.stepId)} is ${step.status}, not review_ready; only a review_ready step can be applied`,
+		);
+	}
+	if (!existing.integrationWorktree) {
+		throw new PlanEngineError(
+			`plan ${JSON.stringify(opts.planId)} has no integration worktree to apply into`,
+		);
+	}
+	if (!step.worktreePath || step.baseSha === undefined) {
+		throw new PlanEngineError(
+			`step ${JSON.stringify(opts.stepId)} has no recorded worktree/base to apply`,
+		);
+	}
+	assertCleanIntegrationWorktree(deps, existing.integrationWorktree);
+
+	const apply = deps.applyWorkspace({
+		worktreePath: step.worktreePath,
+		baseSha: step.baseSha,
+		target: existing.integrationWorktree,
+		confirm: opts.confirm,
+		...(opts.includeUntracked !== undefined && { includeUntracked: opts.includeUntracked }),
+	});
+
+	const base = (): Omit<PlanApplyOutcome, "stepApplied" | "note" | "plan"> => ({
+		planId: opts.planId,
+		stepId: opts.stepId,
+		confirmed: opts.confirm,
+		apply,
+	});
+
+	// Dry run, OR a confirmed apply the primitive refused (conflict / untracked overwrite): never
+	// touch plan state. The step stays review_ready; the operator resolves and retries.
+	if (!opts.confirm || apply.applied !== true) {
+		return {
+			...base(),
+			stepApplied: false,
+			plan: existing,
+			note: opts.confirm
+				? `apply refused, nothing changed: ${apply.note} The step stays review_ready.`
+				: apply.note,
+		};
+	}
+
+	// Guard the no-op apply BEFORE committing. applyRunWorkspace reports applied=true for an empty
+	// tracked patch, and it copies ONLY explicitly-named untracked files -- so a step with no tracked
+	// diff and untracked candidates that were not included lands NOTHING in the integration worktree.
+	// Committing that as a no-op and marking the step applied would misrepresent it (it contributed
+	// nothing) AND unlock dependents while reviewable work still sits only in the step worktree.
+	// Refuse: tell the operator to include the file(s) to land them, or accept their loss. A truly
+	// empty step (no tracked diff AND no untracked candidates) falls through to the coherent no-op.
+	const landedTracked = apply.trackedFiles.length > 0;
+	const landedUntracked = (apply.appliedUntracked?.length ?? 0) > 0;
+	const strandedUntracked = apply.untracked.filter(
+		(f) => !(apply.appliedUntracked ?? []).includes(f),
+	);
+	if (!landedTracked && !landedUntracked && strandedUntracked.length > 0) {
+		return {
+			...base(),
+			stepApplied: false,
+			plan: existing,
+			note: `nothing landed in the integration worktree, but the step has untracked file(s) not included (${strandedUntracked.join(", ")}); marking it applied would strand that reviewable work and falsely unlock dependents. Re-apply with include_untracked naming the file(s) to land them, or accept their loss. The step stays review_ready.`,
+		};
+	}
+
+	// Clean apply landed in the integration worktree: commit it as the step's commit. The commit
+	// turns the staged patch + copied untracked files into one integration commit.
+	const commit = deps.commit(existing.integrationWorktree, planStepCommitMessage(step));
+	if (commit.error !== undefined || commit.sha === undefined) {
+		// The diff is applied to the integration worktree but the commit FAILED: do NOT mark applied
+		// and do NOT advance the tip, so no dependent launches against an uncommitted tip. The
+		// integration worktree holds the applied-but-uncommitted diff for the operator to resolve.
+		return {
+			...base(),
+			stepApplied: false,
+			commitError: commit.error ?? "git produced no commit sha",
+			plan: existing,
+			note: `applied to the integration worktree but the commit FAILED (${commit.error ?? "no sha"}); the step is NOT marked applied and the tip did not advance. Resolve the integration worktree (${existing.integrationWorktree}) and retry.`,
+		};
+	}
+
+	// Commit succeeded (or a coherent no-op committed nothing but resolved the unchanged tip): mark
+	// the step applied, record the commit, and advance the tip to it -- the only state that lets a
+	// dependent launch, cut from this commit. Persist atomically and re-derive the plan status.
+	const sha = commit.sha;
+	const plan = store.update(opts.planId, (c) => {
+		const s = c.steps.find((x) => x.id === opts.stepId);
+		if (s) {
+			s.status = "applied";
+			s.appliedCommitSha = sha;
+		}
+		c.integrationTipSha = sha;
+		c.status = derivePlanStatus(c);
+		c.updatedAt = iso(deps.now());
+		return c;
+	});
+	return {
+		...base(),
+		appliedCommitSha: sha,
+		integrationTipSha: sha,
+		stepApplied: true,
+		plan,
+		note: commit.committed
+			? `applied + committed step ${opts.stepId} to the integration branch (${sha}); the tip advanced. A subsequent chit_plan_advance launches the next runnable step from it.`
+			: `step ${opts.stepId} produced no diff at all (no tracked changes, no untracked files); marked applied at the unchanged tip (${sha}). A subsequent chit_plan_advance launches the next runnable step.`,
+	};
+}
+
+function assertCleanIntegrationWorktree(deps: PlanEngineDeps, integrationWorktree: string): void {
+	const status = deps.git(["status", "--porcelain"], integrationWorktree);
+	if (status.code !== 0) {
+		throw new PlanEngineError(
+			`could not inspect integration worktree ${JSON.stringify(integrationWorktree)}: ${status.stderr || status.stdout}`,
+		);
+	}
+	if (status.stdout.trim() !== "") {
+		throw new PlanEngineError(
+			`integration worktree ${JSON.stringify(integrationWorktree)} has uncommitted changes; resolve or clean it before applying a plan step so the step commit cannot mix unrelated work`,
+		);
+	}
+}
+
+// --- cleanup: retire the plan's managed worktrees + branches ---------------
+
+// Whether cleanup may run for the plan's current state. v1 rule (the simplest safe one): cleanup
+// requires a TERMINAL plan -- completed (every step applied to the integration branch) or cancelled
+// (the operator abandoned it) -- and refuses while ANY step is review_ready (its converged diff is
+// not yet in the integration commit, so removing its worktree would silently discard reviewable
+// work). running / ready_for_apply / needs_human / failed are all withheld: the operator may still
+// apply, fix, rerun, or inspect, and their step worktrees hold work cleanup would destroy.
+export function planCleanupReadiness(plan: Plan): { ok: true } | { ok: false; reason: string } {
+	// review_ready first: it is the most actionable refusal (apply it, don't discard it), and it
+	// can hide behind a terminal status (e.g. a cancelled plan with a still-review_ready step).
+	if (plan.steps.some((s) => s.status === "review_ready")) {
+		return {
+			ok: false,
+			reason:
+				"a step is review_ready: its converged diff is NOT yet applied to the integration branch. Apply it (chit_plan_advance with an apply payload) or accept its loss before cleanup -- cleanup would otherwise silently discard that reviewable work.",
+		};
+	}
+	if (plan.status !== "completed" && plan.status !== "cancelled") {
+		return {
+			ok: false,
+			reason: `plan is ${plan.status}; cleanup requires a terminal plan (completed, or cancelled). Apply the remaining steps, or cancel the plan, before cleaning up -- the step worktrees still hold work to inspect or apply.`,
+		};
+	}
+	return { ok: true };
+}
+
+// The steps whose background worker is still alive: a runId whose job exists and is NOT settleable
+// (not terminal, not stale). cancelPlan marks a running step "cancelled" the instant it best-effort
+// cancels the job, but the worker keeps running in its worktree until it actually exits -- so a
+// cancelled plan's status alone does NOT prove its workers are gone. Mirrors batch cleanup's live
+// check (batches/engine.ts).
+function planLiveSteps(plan: Plan, deps: PlanEngineDeps): PlanStepRecord[] {
+	return plan.steps.filter((s) => {
+		if (!s.runId) return false;
+		const job = deps.getJob(s.runId);
+		return job !== undefined && !jobIsSettleable(job, deps);
+	});
+}
+
+// Why cleanup is not safe to run right now, or undefined when it is. Combines the state rule
+// (planCleanupReadiness) with a LIVE-WORKER check: removing a worktree from under a still-running
+// worker corrupts the run, so even a terminal-status plan is withheld until its workers settle.
+// Shared by cleanupPlan (the refusal) and planNextAction (the suggestion) so status and action agree.
+export function planCleanupBlocker(plan: Plan, deps: PlanEngineDeps): string | undefined {
+	const readiness = planCleanupReadiness(plan);
+	if (!readiness.ok) return readiness.reason;
+	const live = planLiveSteps(plan, deps);
+	if (live.length > 0) {
+		return `step(s) ${live
+			.map((s) => s.id)
+			.join(
+				", ",
+			)} still have a live worker (a cancelled step's worker settles in the background, it does not stop instantly); wait for them to settle before cleaning up -- removing a worktree from under a live worker corrupts the run.`;
+	}
+	return undefined;
+}
+
+export interface PlanCleanupTargetResult {
+	id: string; // "integration" or a step id
+	worktreePath?: string;
+	branch?: string;
+	removed?: boolean; // set on confirm: did THIS call retire the worktree/branch
+	alreadyRemoved?: boolean; // set on confirm: nothing to do (idempotent re-run)
+	error?: string;
+}
+
+export interface PlanCleanupResult {
+	planId: string;
+	confirmed: boolean; // false = dry run (nothing removed)
+	available: boolean; // is cleanup allowed for this plan's current state?
+	refusal?: string; // set when !available (nothing removed, even on confirm)
+	// The integration branch's committed step count, surfaced so the dry run can WARN that removing
+	// the integration worktree also deletes the branch carrying these applied commits.
+	appliedCommits: number;
+	targets: PlanCleanupTargetResult[]; // the integration + step worktrees this would/did retire
+	receiptsKept: true; // cleanup NEVER deletes plan/job/loop/audit records
+	cleanedAt?: string; // set on a confirmed cleanup
+	note: string;
+}
+
+// Retire a plan's chit-managed worktrees + branches (integration + every recorded step worktree).
+// Dry-run by default (reports what it would remove, removes nothing); confirm required to remove.
+// NEVER deletes durable records -- the plan record, job records, loop logs, and audit receipts all
+// survive (only cleanedAt is stamped). Refuses (removes nothing, even on confirm) unless the plan is
+// terminal and no step is review_ready (see planCleanupReadiness). Idempotent: a re-run reports
+// already-removed targets rather than erroring.
+export function cleanupPlan(
+	store: PlanStore,
+	deps: PlanEngineDeps,
+	planId: string,
+	confirm: boolean,
+): PlanCleanupResult {
+	const existing = store.get(planId);
+	if (!existing) throw new PlanEngineError(`no plan ${JSON.stringify(planId)}`);
+	const appliedCommits = existing.steps.filter((s) => s.status === "applied").length;
+	// The managed worktrees cleanup owns: the integration worktree first, then each step that
+	// recorded one (a step that never launched its worktree has nothing to retire).
+	const integration =
+		existing.integrationWorktree !== undefined
+			? {
+					id: "integration",
+					worktreePath: existing.integrationWorktree,
+					branch: existing.integrationBranch,
+				}
+			: undefined;
+	const stepTargets = existing.steps
+		.filter((s) => s.worktreePath !== undefined && s.branch !== undefined)
+		.map((s) => ({
+			id: s.id,
+			worktreePath: s.worktreePath as string,
+			branch: s.branch as string,
+		}));
+	const planned = [...(integration ? [integration] : []), ...stepTargets];
+
+	const blocker = planCleanupBlocker(existing, deps);
+	if (blocker !== undefined) {
+		// Refuse: report what WOULD be removed (transparency) but remove nothing, even on confirm.
+		return {
+			planId,
+			confirmed: confirm,
+			available: false,
+			refusal: blocker,
+			appliedCommits,
+			targets: planned.map((t) => ({
+				id: t.id,
+				worktreePath: t.worktreePath,
+				branch: t.branch,
+			})),
+			receiptsKept: true,
+			note: blocker,
+		};
+	}
+
+	const integrationWarn =
+		appliedCommits > 0
+			? ` Removing the integration worktree also deletes the integration branch (${existing.integrationBranch}) carrying ${appliedCommits} applied commit(s); make sure you have merged or applied it elsewhere first.`
+			: "";
+
+	if (!confirm) {
+		return {
+			planId,
+			confirmed: false,
+			available: true,
+			appliedCommits,
+			targets: planned.map((t) => ({
+				id: t.id,
+				worktreePath: t.worktreePath,
+				branch: t.branch,
+			})),
+			receiptsKept: true,
+			note: `dry run: would remove ${planned.length} plan-managed worktree(s) + branch(es) (integration + ${stepTargets.length} step worktree(s)).${integrationWarn} Plan/job/loop/audit records are kept. Pass confirm=true to remove.`,
+		};
+	}
+
+	const targets: PlanCleanupTargetResult[] = planned.map((t) => {
+		const r = deps.removeWorktree(existing.repo, t.worktreePath, t.branch);
+		if (!r.ok) {
+			return { id: t.id, worktreePath: t.worktreePath, branch: t.branch, error: r.error };
+		}
+		const didRemove = r.removedWorktree || r.removedBranch;
+		return {
+			id: t.id,
+			worktreePath: t.worktreePath,
+			branch: t.branch,
+			removed: didRemove,
+			...(didRemove ? {} : { alreadyRemoved: true }),
+		};
+	});
+
+	// Stamp cleanedAt ONLY when every removal succeeded, so the field's meaning ("the managed
+	// worktrees/branches were retired") stays honest: a partial failure leaves cleanedAt unset, the
+	// per-target errors + note report it, and an idempotent re-run retires the stragglers. The plan
+	// record itself (and all receipts) is KEPT either way. Mirrors batch cleanup (batches/engine.ts).
+	const failures = targets.filter((t) => t.error !== undefined);
+	let cleanedAt: string | undefined;
+	if (failures.length === 0) {
+		const stamp = iso(deps.now());
+		cleanedAt = stamp;
+		store.update(planId, (c) => {
+			c.cleanedAt = stamp;
+			c.updatedAt = stamp;
+			return c;
+		});
+	}
+	return {
+		planId,
+		confirmed: true,
+		available: true,
+		appliedCommits,
+		targets,
+		receiptsKept: true,
+		...(cleanedAt !== undefined && { cleanedAt }),
+		note: failures.length
+			? `removed ${targets.length - failures.length} of ${targets.length}; ${failures.length} failed (${failures.map((f) => f.id).join(", ")}) -- the plan is NOT marked cleaned, inspect and re-run to retire the rest. Plan/job/loop/audit records are kept.`
+			: `removed ${targets.length} plan-managed worktree(s) + branch(es). Plan/job/loop/audit records are kept.`,
+	};
 }
 
 // --- internal: reconcile + launch (pure over the plan + deps) ----------
@@ -412,6 +806,7 @@ export interface PlanView {
 	integrationBranch: string;
 	integrationWorktree?: string;
 	integrationTipSha?: string;
+	cleanedAt?: string;
 	status: PlanStatus;
 	steps: PlanStepView[];
 	nextAction: string;
@@ -490,6 +885,7 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 		integrationBranch: c.integrationBranch,
 		...(c.integrationWorktree !== undefined && { integrationWorktree: c.integrationWorktree }),
 		...(c.integrationTipSha !== undefined && { integrationTipSha: c.integrationTipSha }),
+		...(c.cleanedAt !== undefined && { cleanedAt: c.cleanedAt }),
 		status: c.status,
 		steps,
 		nextAction: planNextAction(c, deps),
@@ -499,18 +895,21 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 }
 
 // The next tool call the operator should make, named explicitly (an agent follows nextAction
-// literally). The forward flow always passes through the operator gate: a review_ready step
-// waits for a gated apply, never advancing on its own. The gated apply-then-commit and the
-// cleanup tool are a later slice, so the messages below NEVER instruct the operator to apply
-// via chit_plan_advance or clean with chit_plan_cleanup -- those tools do not exist yet, and
-// this text is surfaced publicly through describePlan. The apply slice restores that guidance
-// when it wires the gate.
+// literally). The forward flow always passes through the operator gate: a review_ready step waits
+// for the gated apply (chit_plan_advance with an apply payload), never advancing on its own. The
+// cleanup suggestion is appended ONLY when cleanup is actually available (planCleanupBlocker -- the
+// state rule AND no live worker), so this publicly-surfaced text never points at an operation that
+// would be refused (e.g. a just-cancelled plan whose worker has not yet settled).
 function planNextAction(c: Plan, deps: PlanEngineDeps): string {
+	const cleanupClause =
+		planCleanupBlocker(c, deps) === undefined
+			? " When you no longer need the worktrees, retire them with chit_plan_cleanup (dry run first, then confirm=true)."
+			: "";
 	if (c.status === "completed") {
-		return "every step is applied and committed to the integration branch; review the integration branch.";
+		return `every step is applied and committed to the integration branch (${c.integrationBranch}); review it, then merge/apply it through your usual flow.${cleanupClause}`;
 	}
 	if (c.status === "cancelled") {
-		return "plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).";
+		return `plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).${cleanupClause}`;
 	}
 	if (c.status === "failed") {
 		return "a step failed during execution (a dead worker, a worktree error, or a thrown run -- see the step's status/error); inspect its worktree (changedFiles may be empty if it broke mid-review) and receipt, then fix and rerun the step or abort the plan.";
@@ -519,7 +918,9 @@ function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 		return "a step paused for a human decision: its run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect its worktree (changedFiles) and receipt, then fix and rerun, raise the budget and rerun, or abort.";
 	}
 	if (c.status === "ready_for_apply") {
-		return "a step is review_ready: its run converged and its diff sits uncommitted in its worktree (changedFiles lists them; nothing is committed yet). Inspect it with chit_plan_status; the gated apply that flows it into the integration branch and unblocks the next step is a later step and is not wired yet.";
+		const ready = c.steps.find((s) => s.status === "review_ready");
+		const which = ready ? ` (step ${ready.id})` : "";
+		return `a step is review_ready${which}: its run converged and its diff sits uncommitted in its worktree (chit_plan_status lists changedFiles). Review it, then apply it with chit_plan_advance { apply: { step_id, confirm: true } } -- a dry run (no confirm) reports what would land first. The apply commits the diff onto the integration branch, advances the tip, and unblocks the next dependent step.`;
 	}
 	// running
 	if (anyReconcilable(c, deps)) {

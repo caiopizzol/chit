@@ -1,14 +1,31 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { NormalizedPlan, PlanStep } from "@chit-run/core";
-import type { GitRunner } from "../batches/worktree.ts";
+import {
+	applyRunWorkspace,
+	commitWorktree,
+	createWorktree,
+	type GitRunner,
+	realGit,
+	removeTaskWorktree,
+} from "../batches/worktree.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
 import {
 	advancePlan,
+	applyPlanStep,
 	cancelPlan,
+	cleanupPlan,
 	describePlan,
 	type LaunchPlanJobParams,
 	listPlans,
@@ -132,6 +149,17 @@ beforeEach(() => {
 		cancelJob: jobs.cancel,
 		isStale: () => false,
 		loopDetail: () => ({ changedFiles: ["f.ts"], workspaceWarnings: [] }),
+		// The fake-git scheduling tests never apply/commit/remove; the real-git apply + cleanup tests
+		// below build their own deps. Throw loudly if a scheduling test reaches these by accident.
+		applyWorkspace: () => {
+			throw new Error("applyWorkspace is not wired in the fake-git scheduling harness");
+		},
+		commit: () => {
+			throw new Error("commit is not wired in the fake-git scheduling harness");
+		},
+		removeWorktree: () => {
+			throw new Error("removeWorktree is not wired in the fake-git scheduling harness");
+		},
 		now: () => 1000,
 	};
 });
@@ -442,28 +470,43 @@ describe("describePlan (read-only join)", () => {
 		expect(view.nextAction).toContain("chit_plan_advance");
 	});
 
-	// nextAction is surfaced publicly through describePlan, so in this slice it must never
-	// instruct the operator to apply via chit_plan_advance or clean with chit_plan_cleanup --
-	// neither the gated apply nor the cleanup tool is wired yet.
-	test("a review_ready (ready_for_apply) plan never instructs apply-via-advance or cleanup", () => {
+	// nextAction is surfaced publicly through describePlan. A review_ready step's guidance must use
+	// the REAL apply tool shape (chit_plan_advance with an apply payload), and must NOT suggest
+	// cleanup -- cleanup is refused while a step is review_ready.
+	test("a review_ready (ready_for_apply) plan instructs the gated apply via chit_plan_advance, not cleanup", () => {
 		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
 		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
 		const c1 = advancePlan(store, deps, "p1"); // a -> review_ready
 		const view = describePlan(c1, deps);
 		expect(view.status).toBe("ready_for_apply");
-		// The only forward move (apply) is not wired, so advance must not be suggested here, and
-		// cleanup does not exist yet.
-		expect(view.nextAction).not.toContain("chit_plan_advance");
+		// The forward move is the gated apply, named with its real shape.
+		expect(view.nextAction).toContain("chit_plan_advance");
+		expect(view.nextAction).toContain("apply");
+		expect(view.nextAction).toContain("step a");
+		// Cleanup is refused at ready_for_apply (unapplied reviewable work), so it must NOT be suggested.
 		expect(view.nextAction).not.toContain("chit_plan_cleanup");
-		// It still points at the read-only path that DOES exist.
-		expect(view.nextAction).toContain("chit_plan_status");
 	});
 
-	test("a cancelled plan never instructs chit_plan_cleanup", () => {
-		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+	test("a just-cancelled plan whose worker is still live does NOT suggest chit_plan_cleanup", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		// cancelPlan best-effort cancels the job but the worker settles in the background; the job is
+		// still queued/running here (not stale), so its worktree must not be offered for cleanup yet.
+		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running" });
 		const view = describePlan(cancelPlan(store, deps, "p1"), deps);
 		expect(view.status).toBe("cancelled");
 		expect(view.nextAction).not.toContain("chit_plan_cleanup");
+	});
+
+	test("a cancelled plan suggests chit_plan_cleanup once its worker has settled", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		const aRun = stepOf(c0, "a").runId ?? "";
+		cancelPlan(store, deps, "p1");
+		// The background worker actually exits and the job reaches a terminal state -- now no live
+		// worker holds the worktree, so cleanup is available and the guidance points at it.
+		jobs.patch(aRun, { state: "cancelled" });
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		expect(view.status).toBe("cancelled");
+		expect(view.nextAction).toContain("chit_plan_cleanup");
 	});
 });
 
@@ -485,5 +528,483 @@ describe("listPlans", () => {
 		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
 		startPlan(store, deps, { id: "p2", cwd, normalizedPlan: chainPlan() });
 		expect(listPlans(store, 1)).toHaveLength(1);
+	});
+});
+
+// --- gated apply + cleanup, verified against REAL git ----------------------
+//
+// These exercise the apply-then-commit gate and cleanup end to end on a real repository: a real
+// integration worktree, real step worktrees, the real applyRunWorkspace/commitWorktree/
+// removeTaskWorktree primitives. The fake launchJob plays the converge implementer by writing a
+// tracked diff into the step worktree, so a settled step has a genuine diff to apply. realRoots
+// (created per test) are cleaned in the shared afterEach.
+const realRoots: string[] = [];
+afterEach(() => {
+	for (const r of realRoots) rmSync(r, { recursive: true, force: true });
+	realRoots.length = 0;
+});
+
+function run(repo: string, args: string[]): string {
+	const r = realGit(args, repo);
+	if (r.code !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr || r.stdout}`);
+	return r.stdout;
+}
+
+interface RealHarness {
+	repo: string;
+	baseSha: string;
+	store: PlanStore;
+	deps: PlanEngineDeps;
+	jobs: Map<string, LoopJobRecord>;
+	finish: (jobId: string, over: Partial<LoopJobRecord>) => void;
+}
+
+// A real git repo with one committed file (base.txt = "hello\n"), and engine deps wired to real
+// worktree creation + the real apply/commit/cleanup primitives. launchJob simulates the implementer
+// by appending a line to base.txt in the step worktree (a tracked diff vs the step's base).
+function realHarness(): RealHarness {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "chit-plan-real-")));
+	realRoots.push(root);
+	const repo = join(root, "repo");
+	const wtRoot = join(root, "wt");
+	run(root, ["init", "-q", repo]);
+	run(repo, ["config", "user.email", "test@example.com"]);
+	run(repo, ["config", "user.name", "Test"]);
+	writeFileSync(join(repo, "base.txt"), "hello\n");
+	run(repo, ["add", "-A"]);
+	run(repo, ["commit", "-q", "-m", "base"]);
+	const baseSha = run(repo, ["rev-parse", "HEAD"]).trim();
+
+	const jobs = new Map<string, LoopJobRecord>();
+	let seq = 0;
+	const deps: PlanEngineDeps = {
+		git: realGit,
+		createIntegrationWorktree: (r, planId, sha) =>
+			createWorktree(
+				realGit,
+				r,
+				join(wtRoot, planId, "integration"),
+				`chit-plan/${planId}/integration`,
+				sha,
+			),
+		createStepWorktree: (r, planId, stepId, sha) =>
+			createWorktree(
+				realGit,
+				r,
+				join(wtRoot, planId, "steps", stepId),
+				`chit-plan/${planId}/steps/${stepId}`,
+				sha,
+			),
+		launchJob: (p) => {
+			// The implementer's tracked diff: append a step-identifying line to base.txt. The leaf of
+			// the worktree path is the step id (see createStepWorktree above).
+			appendFileSync(join(p.cwd, "base.txt"), `from-${basename(p.cwd)}\n`);
+			const jobId = `job-${++seq}`;
+			jobs.set(jobId, {
+				runId: jobId,
+				policy: "loop",
+				loopId: p.loopId,
+				repoKey: "k",
+				cwd: p.cwd,
+				...p.worktree,
+				scope: p.scope,
+				task: p.task,
+				maxIterations: p.maxIterations,
+				allowUnenforced: false,
+				state: "queued",
+				createdAt: "t",
+				iterationsCompleted: 0,
+				auditRefs: [],
+			});
+			return { jobId, loopId: p.loopId };
+		},
+		getJob: (id) => jobs.get(id),
+		cancelJob: () => {},
+		isStale: () => false,
+		loopDetail: () => ({ changedFiles: ["base.txt"], workspaceWarnings: [] }),
+		applyWorkspace: (p) => applyRunWorkspace(realGit, p),
+		commit: (w, m) => commitWorktree(realGit, w, m),
+		removeWorktree: (r, w, b) => removeTaskWorktree(realGit, r, w, b),
+		now: () => 1000,
+	};
+	return {
+		repo,
+		baseSha,
+		store: new PlanStore(repo),
+		deps,
+		jobs,
+		finish: (jobId, over) => {
+			const j = jobs.get(jobId);
+			if (j) jobs.set(jobId, { ...j, state: "completed", iterationsCompleted: 1, ...over });
+		},
+	};
+}
+
+// Start a single-step plan and settle that step to review_ready (converged), returning the harness
+// and the post-settle plan. The integration worktree exists and the step's diff is uncommitted in
+// its own worktree, ready for the gated apply.
+function reviewReadySingle(h: RealHarness, stepId = "a"): { plan: Plan } {
+	const started = startPlan(h.store, h.deps, {
+		id: "p",
+		cwd: h.repo,
+		normalizedPlan: chainPlan({ steps: [step(stepId)] }),
+	});
+	h.finish(stepOf(started, stepId).runId ?? "", { stopStatus: "converged" });
+	return { plan: advancePlan(h.store, h.deps, "p") };
+}
+
+describe("applyPlanStep (real git)", () => {
+	test("dry run reports what would apply and mutates neither the integration worktree nor plan state", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h);
+		expect(stepOf(plan, "a").status).toBe("review_ready");
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const headBefore = run(integration, ["rev-parse", "HEAD"]).trim();
+		const contentBefore = readFileSync(join(integration, "base.txt"), "utf-8");
+
+		const outcome = applyPlanStep(h.store, h.deps, {
+			planId: "p",
+			stepId: "a",
+			confirm: false,
+		});
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.apply.trackedFiles).toContain("base.txt");
+		expect(outcome.apply.appliesClean).toBe(true);
+		expect(outcome.stepApplied).toBe(false);
+		expect(outcome.appliedCommitSha).toBeUndefined();
+
+		// Nothing mutated: the integration HEAD/content is unchanged and the step is still review_ready.
+		expect(run(integration, ["rev-parse", "HEAD"]).trim()).toBe(headBefore);
+		expect(readFileSync(join(integration, "base.txt"), "utf-8")).toBe(contentBefore);
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stepOf(stored, "a").status).toBe("review_ready");
+		expect(stepOf(stored, "a").appliedCommitSha).toBeUndefined();
+		expect(stored.integrationTipSha).toBe(h.baseSha);
+	});
+
+	test("confirm commits the step diff, records appliedCommitSha, advances the tip, marks applied", () => {
+		const h = realHarness();
+		reviewReadySingle(h);
+		const outcome = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		expect(outcome.stepApplied).toBe(true);
+		expect(outcome.apply.applied).toBe(true);
+		const sha = present(outcome.appliedCommitSha, "applied commit sha");
+
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stepOf(stored, "a").status).toBe("applied");
+		expect(stepOf(stored, "a").appliedCommitSha).toBe(sha);
+		expect(stored.integrationTipSha).toBe(sha);
+		expect(stored.status).toBe("completed"); // the only step is applied
+
+		// The integration branch advanced by exactly one commit, with the deterministic message and the
+		// step's change committed.
+		const integration = present(stored.integrationWorktree, "integration worktree");
+		expect(run(integration, ["rev-parse", "HEAD"]).trim()).toBe(sha);
+		expect(run(integration, ["log", "-1", "--pretty=%s"]).trim()).toBe("plan step a: a");
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("1");
+		expect(readFileSync(join(integration, "base.txt"), "utf-8")).toContain("from-a");
+		// A clean tree: the apply landed as a commit, nothing left staged/unstaged.
+		expect(run(integration, ["status", "--porcelain"]).trim()).toBe("");
+	});
+
+	test("a dependent launches only after the prior step is applied, cut from the commit that includes it", () => {
+		const h = realHarness();
+		// a -> b (b depends on a). Start launches a; settle + apply a, then advance launches b.
+		const started = startPlan(h.store, h.deps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: chainPlan(),
+		});
+		expect(stepOf(started, "b").status).toBe("pending");
+		h.finish(stepOf(started, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(h.store, h.deps, "p"); // a -> review_ready
+		const applied = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		const aSha = present(applied.appliedCommitSha, "a applied sha");
+
+		// b has NOT launched yet (apply does not launch); a separate advance does.
+		expect(stepOf(present(h.store.get("p"), "p"), "b").status).toBe("pending");
+		const c2 = advancePlan(h.store, h.deps, "p");
+		const b = stepOf(c2, "b");
+		expect(b.status).toBe("running");
+		// b was cut from the ADVANCED tip (a's applied commit), so its worktree already contains a's
+		// change -- this is the whole point of the plan-runner.
+		expect(b.baseSha).toBe(aSha);
+		const bWorktree = present(b.worktreePath, "b worktree");
+		expect(readFileSync(join(bWorktree, "base.txt"), "utf-8")).toContain("from-a");
+
+		// Settle + apply b: the integration branch now carries BOTH changes, end to end.
+		h.finish(b.runId ?? "", { stopStatus: "converged" });
+		advancePlan(h.store, h.deps, "p"); // b -> review_ready
+		const appliedB = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "b", confirm: true });
+		expect(appliedB.stepApplied).toBe(true);
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stored.status).toBe("completed");
+		const integration = present(stored.integrationWorktree, "integration worktree");
+		const content = readFileSync(join(integration, "base.txt"), "utf-8");
+		expect(content).toContain("from-a");
+		expect(content).toContain("from-b");
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("2");
+	});
+
+	test("a refused apply is a whole-plan no-op: no commit, no applied, step stays review_ready", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h);
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const headBefore = run(integration, ["rev-parse", "HEAD"]).trim();
+		const conflictDeps: PlanEngineDeps = {
+			...h.deps,
+			applyWorkspace: (p) => ({
+				confirmed: p.confirm,
+				target: p.target,
+				trackedFiles: ["base.txt"],
+				appliesClean: false,
+				applied: false,
+				conflict: "synthetic conflict from applyRunWorkspace",
+				untracked: [],
+				untrackedConflicts: [],
+				receiptsKept: true,
+				note: "synthetic conflict",
+			}),
+			commit: () => {
+				throw new Error("commit must not run after a refused apply");
+			},
+		};
+
+		const outcome = applyPlanStep(h.store, conflictDeps, {
+			planId: "p",
+			stepId: "a",
+			confirm: true,
+		});
+		expect(outcome.apply.appliesClean).toBe(false);
+		expect(outcome.apply.conflict).toBeDefined();
+		expect(outcome.apply.applied).not.toBe(true);
+		expect(outcome.stepApplied).toBe(false);
+		expect(outcome.appliedCommitSha).toBeUndefined();
+
+		// No commit was made, and the step stays review_ready (the operator can resolve + retry).
+		expect(run(integration, ["rev-parse", "HEAD"]).trim()).toBe(headBefore);
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stepOf(stored, "a").status).toBe("review_ready");
+		expect(stored.integrationTipSha).toBe(h.baseSha);
+	});
+
+	test("refuses before apply when the integration worktree has unrelated dirty state", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h);
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		writeFileSync(join(integration, "operator-note.txt"), "unrelated local work\n");
+		const headBefore = run(integration, ["rev-parse", "HEAD"]).trim();
+
+		expect(() =>
+			applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true }),
+		).toThrow(/integration worktree .* has uncommitted changes/);
+
+		expect(run(integration, ["rev-parse", "HEAD"]).trim()).toBe(headBefore);
+		expect(readFileSync(join(integration, "base.txt"), "utf-8")).toBe("hello\n");
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stepOf(stored, "a").status).toBe("review_ready");
+		expect(stored.integrationTipSha).toBe(h.baseSha);
+	});
+
+	test("explicitly included untracked files are committed in the integration worktree", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h);
+		// The implementer also created a brand-new (untracked) file in the step worktree.
+		const stepWorktree = present(stepOf(plan, "a").worktreePath, "step a worktree");
+		writeFileSync(join(stepWorktree, "extra.txt"), "new file\n");
+
+		// The dry run surfaces it as a candidate but never auto-applies it.
+		const dry = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: false });
+		expect(dry.apply.untracked).toContain("extra.txt");
+
+		const outcome = applyPlanStep(h.store, h.deps, {
+			planId: "p",
+			stepId: "a",
+			confirm: true,
+			includeUntracked: ["extra.txt"],
+		});
+		expect(outcome.stepApplied).toBe(true);
+		expect(outcome.apply.appliedUntracked).toContain("extra.txt");
+		const integration = present(
+			present(h.store.get("p"), "stored plan").integrationWorktree,
+			"integration worktree",
+		);
+		// The untracked file is present AND committed (git add -A staged it into the step commit).
+		expect(existsSync(join(integration, "extra.txt"))).toBe(true);
+		expect(run(integration, ["status", "--porcelain"]).trim()).toBe("");
+		expect(run(integration, ["show", "--stat", "HEAD"])).toContain("extra.txt");
+	});
+
+	test("refuses a no-op apply that would strand untracked-only work, instead of marking applied", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h);
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+		// Turn the step into a NO-tracked-diff step that still has reviewable untracked work: restore
+		// the tracked file to its base content, and add a brand-new untracked file.
+		writeFileSync(join(stepWt, "base.txt"), "hello\n");
+		writeFileSync(join(stepWt, "extra.txt"), "untracked work\n");
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const headBefore = run(integration, ["rev-parse", "HEAD"]).trim();
+
+		// Apply WITHOUT including the untracked file: nothing would land in the integration worktree,
+		// so it must be refused (not silently marked applied, which would unlock dependents).
+		const outcome = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		expect(outcome.stepApplied).toBe(false);
+		expect(outcome.appliedCommitSha).toBeUndefined();
+		expect(outcome.note).toContain("extra.txt");
+
+		// The step stays review_ready and the integration tip did not move.
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stepOf(stored, "a").status).toBe("review_ready");
+		expect(stored.integrationTipSha).toBe(h.baseSha);
+		expect(run(integration, ["rev-parse", "HEAD"]).trim()).toBe(headBefore);
+
+		// Including the file DOES land + commit it -- the explicit path to land the work.
+		const ok = applyPlanStep(h.store, h.deps, {
+			planId: "p",
+			stepId: "a",
+			confirm: true,
+			includeUntracked: ["extra.txt"],
+		});
+		expect(ok.stepApplied).toBe(true);
+		expect(existsSync(join(integration, "extra.txt"))).toBe(true);
+	});
+
+	test("a truly empty step (no tracked diff, no untracked files) is a coherent no-op marked applied", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h);
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+		// Restore the tracked file and leave nothing else: the step genuinely produced no diff.
+		writeFileSync(join(stepWt, "base.txt"), "hello\n");
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const headBefore = run(integration, ["rev-parse", "HEAD"]).trim();
+
+		const outcome = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		expect(outcome.stepApplied).toBe(true);
+		// No new commit: the step is applied at the unchanged tip (== base), and the branch did not grow.
+		expect(outcome.appliedCommitSha).toBe(headBefore);
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stepOf(stored, "a").status).toBe("applied");
+		expect(stored.integrationTipSha).toBe(headBefore);
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("0");
+	});
+});
+
+describe("cleanupPlan (real git)", () => {
+	// Reach a completed plan: apply the single step, so every step is applied and the plan is terminal.
+	function completedSingle(h: RealHarness): Plan {
+		reviewReadySingle(h);
+		applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		return present(h.store.get("p"), "stored plan");
+	}
+
+	test("dry run reports the integration + step worktrees and removes nothing", () => {
+		const h = realHarness();
+		const plan = completedSingle(h);
+		expect(plan.status).toBe("completed");
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+
+		const dry = cleanupPlan(h.store, h.deps, "p", false);
+		expect(dry.available).toBe(true);
+		expect(dry.confirmed).toBe(false);
+		expect(dry.receiptsKept).toBe(true);
+		expect(dry.targets.map((t) => t.id).sort()).toEqual(["a", "integration"]);
+		expect(dry.appliedCommits).toBe(1); // the note warns the integration branch carries it
+
+		// Nothing removed; no cleanedAt stamped.
+		expect(existsSync(integration)).toBe(true);
+		expect(existsSync(stepWt)).toBe(true);
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
+	});
+
+	test("confirm removes the plan-managed worktrees + branches but keeps the durable plan record", () => {
+		const h = realHarness();
+		const plan = completedSingle(h);
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+
+		const res = cleanupPlan(h.store, h.deps, "p", true);
+		expect(res.confirmed).toBe(true);
+		expect(res.available).toBe(true);
+		expect(res.receiptsKept).toBe(true);
+		expect(res.targets.every((t) => t.removed === true)).toBe(true);
+
+		// Worktrees and branches are gone.
+		expect(existsSync(integration)).toBe(false);
+		expect(existsSync(stepWt)).toBe(false);
+		expect(
+			realGit(["rev-parse", "--verify", "--quiet", "refs/heads/chit-plan/p/integration"], h.repo)
+				.code,
+		).not.toBe(0);
+		expect(
+			realGit(["rev-parse", "--verify", "--quiet", "refs/heads/chit-plan/p/steps/a"], h.repo).code,
+		).not.toBe(0);
+
+		// The durable plan record survives, now stamped with cleanedAt.
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stored.cleanedAt).toBeDefined();
+		expect(describePlan(stored, h.deps).cleanedAt).toBe(stored.cleanedAt);
+		expect(stored.steps).toHaveLength(1);
+		expect(stepOf(stored, "a").status).toBe("applied");
+	});
+
+	test("refuses (removes nothing) when a step is review_ready, even on confirm", () => {
+		const h = realHarness();
+		const { plan } = reviewReadySingle(h); // a is review_ready, NOT applied
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+
+		const res = cleanupPlan(h.store, h.deps, "p", true);
+		expect(res.available).toBe(false);
+		expect(res.confirmed).toBe(true);
+		expect(present(res.refusal, "refusal").toLowerCase()).toContain("review_ready");
+
+		// Nothing removed; the reviewable work is protected.
+		expect(existsSync(integration)).toBe(true);
+		expect(existsSync(stepWt)).toBe(true);
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
+	});
+
+	test("refuses (removes nothing) while a cancelled step's worker is still live", () => {
+		const h = realHarness();
+		const started = startPlan(h.store, h.deps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: chainPlan({ steps: [step("a")] }),
+		});
+		const integration = present(started.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(started, "a").worktreePath, "step a worktree");
+		// Cancel the plan: the step is marked cancelled, but the job stays queued/running (the worker
+		// has not exited and isStale is false), so it counts as a LIVE worker holding the worktree.
+		const cancelled = cancelPlan(h.store, h.deps, "p");
+		expect(cancelled.status).toBe("cancelled");
+
+		const res = cleanupPlan(h.store, h.deps, "p", true);
+		expect(res.available).toBe(false);
+		expect(present(res.refusal, "refusal")).toContain("live worker");
+
+		// Nothing removed; the in-flight worktree is protected from removal-under-a-live-worker.
+		expect(existsSync(integration)).toBe(true);
+		expect(existsSync(stepWt)).toBe(true);
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
+	});
+
+	test("a removal failure does NOT stamp cleanedAt (an idempotent re-run retires the rest)", () => {
+		const h = realHarness();
+		completedSingle(h);
+		// Force every removal to fail; the plan must NOT be recorded as cleaned.
+		const failingDeps: PlanEngineDeps = {
+			...h.deps,
+			removeWorktree: () => ({ ok: false, error: "git worktree remove failed: boom" }),
+		};
+		const res = cleanupPlan(h.store, failingDeps, "p", true);
+		expect(res.confirmed).toBe(true);
+		expect(res.available).toBe(true);
+		expect(res.targets.every((t) => t.error !== undefined)).toBe(true);
+		expect(res.cleanedAt).toBeUndefined();
+		expect(res.note.toLowerCase()).toContain("not marked cleaned");
+		// The record stays un-stamped, so a re-run is honest about there being work left.
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
 	});
 });

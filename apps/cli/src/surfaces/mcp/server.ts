@@ -54,6 +54,7 @@ import { BatchStore, BatchStoreError } from "../../batches/store.ts";
 import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
+	commitWorktree,
 	createPlanIntegrationWorktree,
 	createPlanStepWorktree,
 	createTaskWorktree,
@@ -97,7 +98,7 @@ import {
 	PlanEngineError,
 } from "../../plans/engine.ts";
 import { PlanStore, PlanStoreError } from "../../plans/store.ts";
-import { PLAN_APPLY_UNAVAILABLE, runPlanStart } from "../../plans/tools.ts";
+import { runPlanApply, runPlanCleanup, runPlanStart } from "../../plans/tools.ts";
 import { validateOneShotAuth } from "../../runs/run-once.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import { type ResolvedRun, RunController } from "./controller.ts";
@@ -2622,14 +2623,14 @@ server.registerTool(
 
 // --- plan tools (sequential plan-runner) ----------------------------------
 //
-// chit_plan_start / list / status / advance / cancel drive an operator-authored,
+// chit_plan_start / list / status / advance / cancel / cleanup drive an operator-authored,
 // reviewed chain of steps where each step's worktree is cut from a base that already
 // contains the prior step's APPLIED diff (see docs/sequential-plan-runner-design.md).
 // They COMPOSE the existing run/worktree/job machinery via the engine, never replacing
-// the batch or single-run tools. This slice runs the public chain WITHOUT the gated
-// apply-then-commit and without cleanup (both the next slice): chit_plan_advance only
-// reconciles a finished step and launches the next runnable one, and rejects any apply
-// payload loudly. No daemon: progress happens only at these explicit calls.
+// the batch or single-run tools. chit_plan_advance both reconciles+launches and (with an
+// apply payload) runs the gated apply-then-commit that flows a review_ready step into the
+// integration branch and advances the tip; chit_plan_cleanup retires the managed worktrees
+// once the plan is terminal. No daemon: progress happens only at these explicit calls.
 
 // Engine deps wired to the real worktree/job/loop machinery, modelled one-for-one on
 // batchDeps. allowUnenforced is false for the same reason: the built-in adapters enforce
@@ -2681,6 +2682,20 @@ const planDeps: PlanEngineDeps = {
 		}
 		return { changedFiles: [], workspaceWarnings: [], partialWork };
 	},
+	// The gated apply + commit + cleanup primitives, wired to real git. applyWorkspace reuses the
+	// exact chit_apply machinery (conflict + untracked-overwrite safety); commit turns the applied
+	// integration diff into one step commit; removeWorktree retires a managed worktree on cleanup.
+	applyWorkspace: (p) =>
+		applyRunWorkspace(realGit, {
+			worktreePath: p.worktreePath,
+			baseSha: p.baseSha,
+			target: p.target,
+			confirm: p.confirm,
+			...(p.includeUntracked !== undefined && { includeUntracked: p.includeUntracked }),
+		}),
+	commit: (worktreePath, message) => commitWorktree(realGit, worktreePath, message),
+	removeWorktree: (repo, worktreePath, branch) =>
+		removeTaskWorktree(realGit, repo, worktreePath, branch),
 	now: () => Date.now(),
 };
 
@@ -2710,7 +2725,7 @@ server.registerTool(
 	"chit_plan_start",
 	{
 		description:
-			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). Launches the first runnable step and returns the plan_id plus the plan view. Then drive it with chit_plan_status (read-only) and chit_plan_advance. This build runs the chain WITHOUT the gated apply-then-commit gate (the next slice): a step settles review_ready and pauses for that gate, and dependents wait until it is applied.",
+			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). Launches the first runnable step and returns the plan_id plus the plan view. Then drive it with chit_plan_status (read-only), chit_plan_advance (reconcile + launch, or apply a review_ready step into the integration branch with an apply payload), and chit_plan_cleanup once the plan is done. A step settles review_ready and pauses for the operator's gated apply; dependents wait until it is applied and committed.",
 		inputSchema: {
 			plan: z
 				.union([z.string(), z.record(z.string(), z.unknown())])
@@ -2824,7 +2839,7 @@ server.registerTool(
 	"chit_plan_advance",
 	{
 		description:
-			"Advance a plan: reconcile the running step's finished job into its state (converged -> review_ready; completed-but-not-converged -> needs_human; a vanished/stale job or a failed run -> failed), then launch the next runnable step. The only progression trigger besides start. Call it when chit_plan_status reports a finished job or a runnable step. In THIS build advance does NOT apply: a review_ready step waits for the gated apply-then-commit gate (next slice), so a dependent does not launch until its dependency is applied. Passing an `apply` payload is rejected, never silently ignored.",
+			"Advance a plan, OR apply a review_ready step. Without an `apply` payload: reconcile the running step's finished job into its state (converged -> review_ready; completed-but-not-converged -> needs_human; a vanished/stale job or a failed run -> failed), then launch the next runnable step. With an `apply` payload: run the gated apply for that review_ready step -- flow its worktree diff into the plan integration branch, commit it as a step commit, advance the tip, and mark the step applied (only then can a dependent launch, cut from the new tip). Apply is DRY-RUN by default (reports what would land, mutates nothing); pass apply.confirm=true to apply + commit. A conflict refuses the whole apply (nothing committed, the step stays review_ready); untracked files are applied only when named in apply.include_untracked. Apply does NOT also launch the next step -- call advance again (no payload) to launch it. This is the only progression trigger besides start.",
 		inputSchema: {
 			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
 			cwd: z
@@ -2839,22 +2854,48 @@ server.registerTool(
 				.describe("Per-step iteration budget for a step launched by this advance. Default 3."),
 			apply: z
 				.object({
-					step_id: z.string(),
-					confirm: z.boolean().optional(),
-					include_untracked: z.array(z.string()).optional(),
+					step_id: z
+						.string()
+						.describe("The review_ready step to apply into the integration branch."),
+					confirm: z
+						.boolean()
+						.optional()
+						.describe(
+							"Apply + commit. Default false = dry run: report what would land, mutate nothing.",
+						),
+					include_untracked: z
+						.array(z.string())
+						.optional()
+						.describe(
+							"Untracked files (from the dry run's untracked list) to also include in the applied commit. A file that would overwrite a different existing integration file is refused (the whole apply is refused).",
+						),
 				})
 				.optional()
 				.describe(
-					"The gated apply gate (review_ready step -> integration branch). NOT available in this build; passing it is rejected. Reserved so the input contract is stable for the apply slice.",
+					"Apply a review_ready step into the plan integration branch. Omit to instead reconcile + launch the next step.",
 				),
 		},
 	},
 	async ({ plan_id, cwd, max_iterations, apply }) => {
-		// Reject an apply payload BEFORE touching the store: the gate is the next slice, and
-		// silently dropping it would let a caller believe their diff was applied.
-		if (apply !== undefined) return errorResult(PLAN_APPLY_UNAVAILABLE);
 		try {
 			const { store } = planStoreFor(cwd);
+			// An apply payload runs the gated apply (and ONLY that -- a subsequent plain advance launches
+			// the next step). Otherwise reconcile the finished step and launch the next runnable one.
+			if (apply !== undefined) {
+				const response = runPlanApply(
+					{
+						planId: plan_id,
+						stepId: apply.step_id,
+						...(apply.confirm !== undefined && { confirm: apply.confirm }),
+						...(apply.include_untracked !== undefined && {
+							includeUntracked: apply.include_untracked,
+						}),
+					},
+					store,
+					planDeps,
+				);
+				return jsonResult(response);
+			}
 			const plan = advancePlan(store, planDeps, plan_id, max_iterations);
 			return jsonResult(describePlan(plan, planDeps));
 		} catch (e) {
@@ -2881,6 +2922,36 @@ server.registerTool(
 			const { store } = planStoreFor(cwd);
 			const plan = cancelPlan(store, planDeps, plan_id);
 			return jsonResult(describePlan(plan, planDeps));
+		} catch (e) {
+			return planError(e);
+		}
+	},
+);
+
+server.registerTool(
+	"chit_plan_cleanup",
+	{
+		description:
+			"Retire a plan's chit-managed worktrees + branches (the integration worktree and every step worktree), by plan_id. DRY RUN by default (reports what it would remove, removes nothing); pass confirm=true to remove. v1 rule: cleanup requires a TERMINAL plan -- completed (every step applied) or cancelled -- and REFUSES while any step is review_ready (its converged diff is not yet in the integration commit, so removing its worktree would silently discard reviewable work). A running / needs_human / failed plan is refused too (you may still apply, fix, rerun, or inspect). NEVER deletes durable records: the plan record, job records, loop logs, and audit receipts all survive (only cleanedAt is stamped). Removing the integration worktree also deletes the integration branch and its applied commits -- merge or apply that branch first; the dry run warns with the commit count. Idempotent.",
+		inputSchema: {
+			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
+			confirm: z
+				.boolean()
+				.default(false)
+				.describe(
+					"Remove the worktrees + branches. Default false = dry run: report what would be removed, remove nothing.",
+				),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+		},
+	},
+	async ({ plan_id, confirm, cwd }) => {
+		try {
+			const { store } = planStoreFor(cwd);
+			if (!store.get(plan_id)) return errorResult(`unknown plan_id ${plan_id}`);
+			return jsonResult(runPlanCleanup({ planId: plan_id, confirm }, store, planDeps));
 		} catch (e) {
 			return planError(e);
 		}

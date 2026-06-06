@@ -52,9 +52,9 @@ describe("packaged chit binary", () => {
 	}, 20000);
 
 	// The release-boundary contract: the packaged binary exposes EXACTLY the 21
-	// unified tools (16 run/batch/audit + 5 plan) and ZERO of the removed
+	// unified tools (16 run/batch/audit + 6 plan) and ZERO of the removed
 	// run/converge/job tool names.
-	test("tools/list is exactly the 21 unified tools, with no removed names", async () => {
+	test("tools/list is exactly the 22 unified tools, with no removed names", async () => {
 		const proc = Bun.spawn(["bun", DIST, "mcp"], { stdin: "pipe", stdout: "pipe" });
 		const init = {
 			jsonrpc: "2.0",
@@ -91,6 +91,7 @@ describe("packaged chit binary", () => {
 			"chit_next",
 			"chit_plan_advance",
 			"chit_plan_cancel",
+			"chit_plan_cleanup",
 			"chit_plan_list",
 			"chit_plan_start",
 			"chit_plan_status",

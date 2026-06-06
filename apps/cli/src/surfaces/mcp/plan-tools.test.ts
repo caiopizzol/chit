@@ -4,14 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { PLAN_APPLY_UNAVAILABLE } from "../../plans/tools.ts";
 import { server } from "./server.ts";
 
 // Drive the registered MCP surface over an in-memory transport (no stdio, no spawned
 // workers): this exercises the real chit_plan_* handlers for the read-only and
-// reject paths. chit_plan_start is deliberately NOT called here -- it spawns a detached
+// error paths. chit_plan_start is deliberately NOT called here -- it spawns a detached
 // converge worker; its input glue is unit-tested in plans/tools.test.ts and its engine
-// behavior in plans/engine.test.ts.
+// behavior (including the gated apply + cleanup, against real git) in plans/engine.test.ts.
 let client: Client;
 let stateDir: string;
 let savedXdg: string | undefined;
@@ -47,6 +46,7 @@ describe("plan tool registration", () => {
 			"chit_plan_status",
 			"chit_plan_advance",
 			"chit_plan_cancel",
+			"chit_plan_cleanup",
 		]) {
 			expect(names.has(name)).toBe(true);
 		}
@@ -56,14 +56,28 @@ describe("plan tool registration", () => {
 	});
 });
 
-describe("chit_plan_advance rejects an apply payload (gate is the next slice)", () => {
-	test("an apply payload is rejected loudly, never silently ignored", async () => {
+describe("chit_plan_advance apply payload (gated apply)", () => {
+	test("applying against an unknown plan reports a clean error, not a phantom apply", async () => {
 		const result = (await client.callTool({
 			name: "chit_plan_advance",
 			arguments: { plan_id: "nope", apply: { step_id: "a", confirm: true } },
 		})) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		// The apply path is wired now: an unknown plan surfaces the engine's not-found error rather
+		// than a placeholder, and never claims a diff was applied.
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toBe(`error: ${PLAN_APPLY_UNAVAILABLE}`);
+		expect(textOf(result)).toContain("no plan");
+		expect(textOf(result)).not.toContain("applied");
+	});
+});
+
+describe("chit_plan_cleanup", () => {
+	test("cleanup on an unknown plan_id reports cleanly without mutating", async () => {
+		const result = (await client.callTool({
+			name: "chit_plan_cleanup",
+			arguments: { plan_id: "does-not-exist", cwd: process.cwd() },
+		})) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("unknown plan_id does-not-exist");
 	});
 });
 

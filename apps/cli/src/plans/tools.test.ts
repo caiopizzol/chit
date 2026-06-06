@@ -147,6 +147,16 @@ function makeHarness() {
 		cancelJob: () => {},
 		isStale: () => false,
 		loopDetail: () => ({ changedFiles: [], workspaceWarnings: [] }),
+		// runPlanStart never applies/commits/cleans; throw if a start test reaches these.
+		applyWorkspace: () => {
+			throw new Error("applyWorkspace is not wired in the start harness");
+		},
+		commit: () => {
+			throw new Error("commit is not wired in the start harness");
+		},
+		removeWorktree: () => {
+			throw new Error("removeWorktree is not wired in the start harness");
+		},
 		now: () => 1000,
 	};
 	return { cwd, deps, store: new PlanStore(cwd), jobs, launched };
