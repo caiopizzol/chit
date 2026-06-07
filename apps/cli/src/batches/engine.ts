@@ -539,6 +539,9 @@ export interface BatchView {
 	nextAction: string;
 	createdAt: string;
 	updatedAt: string;
+	// Set once a confirmed chit_batch_cleanup retired the batch-managed worktrees + branches.
+	// Additive: absent on a batch that was never cleaned. Mirrors BatchSummary.cleanedAt.
+	cleanedAt?: string;
 }
 
 // Does the batch have a running task whose job would settle on the next advance
@@ -640,27 +643,49 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 	const reviewAndRetire =
 		"Review the uncommitted changes in each completed task's worktree (changedFiles lists them; nothing is committed or merged), open a task's receipt with chit_audit_show { audit_ref } (each task lists its auditRefs), and retire the worktrees with chit_batch_cleanup when done.";
 
+	// After a confirmed chit_batch_cleanup the batch-managed worktrees + branches are already retired,
+	// so terminal guidance must NOT suggest chit_batch_cleanup again or point at worktrees that no
+	// longer exist. The receipts survive cleanup and still open by audit_ref, so keep that pointer.
+	// Mirrors plans' planNextAction cleaned handling. cleaned and uncleaned are mutually exclusive.
+	const cleaned = c.cleanedAt !== undefined;
+	const cleanedReceipts = `The batch-managed worktrees and branches were already retired (cleaned ${c.cleanedAt}); the task receipts remain available -- open one with chit_audit_show { audit_ref } (each task lists its auditRefs).`;
+
 	let nextAction: string;
 	if (c.status === "cancelled") {
-		nextAction = `batch cancelled (running jobs settle in the background; worktrees are kept for inspection). ${reviewAndRetire}`;
+		nextAction = cleaned
+			? `batch cancelled. ${cleanedReceipts}`
+			: `batch cancelled (running jobs settle in the background; worktrees are kept for inspection). ${reviewAndRetire}`;
 	} else if (c.status === "ready_for_review") {
-		nextAction = `all tasks terminal. ${reviewAndRetire}`;
+		nextAction = cleaned
+			? `all tasks terminal. ${cleanedReceipts}`
+			: `all tasks terminal. ${reviewAndRetire}`;
 	} else if (c.status === "failed") {
-		nextAction = `batch failed; one or more tasks broke during execution (a dead worker, a worktree error, or a thrown run -- see each task's status/error). ${reviewAndRetire}`;
+		nextAction = cleaned
+			? `batch failed; one or more tasks broke during execution (a dead worker, a worktree error, or a thrown run -- see each task's status/error). ${cleanedReceipts}`
+			: `batch failed; one or more tasks broke during execution (a dead worker, a worktree error, or a thrown run -- see each task's status/error). ${reviewAndRetire}`;
 	} else if (c.status === "needs_human") {
 		// needs_human means a human must decide: a task that finished without converging
 		// clean (needs_attention), a task that failed in execution while a sibling is
 		// review_ready, and/or a pending task blocked by an unfinished dep. Name whichever
-		// applies, and keep clean review_ready siblings reviewable.
+		// applies, and keep clean review_ready siblings reviewable. When the batch is already
+		// cleaned the worktrees are gone, so route inspection to the receipts, not the worktrees.
 		const parts: string[] = [];
-		if (needsAttention > 0)
+		if (needsAttention > 0) {
+			const preamble = `${needsAttention} task(s) need attention: the run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations).`;
 			parts.push(
-				`${needsAttention} task(s) need attention: the run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect each one's worktree (changedFiles) and receipt, then decide: fix and start a fresh batch, rerun with a higher budget, or discard.`,
+				cleaned
+					? `${preamble} Review each one's receipt (changedFiles records what the now-retired worktree held), then decide: fix and start a fresh batch, rerun with a higher budget, or discard.`
+					: `${preamble} Inspect each one's worktree (changedFiles) and receipt, then decide: fix and start a fresh batch, rerun with a higher budget, or discard.`,
 			);
-		if (failed > 0)
+		}
+		if (failed > 0) {
+			const preamble = `${failed} task(s) failed during execution (a dead worker, a worktree error, a reviewer/adapter timeout, or a thrown run -- see each one's status/error);`;
 			parts.push(
-				`${failed} task(s) failed during execution (a dead worker, a worktree error, a reviewer/adapter timeout, or a thrown run -- see each one's status/error); inspect each failed task's worktree directly (its changedFiles may be empty if it broke mid-review, so the work can still be there) and its receipt before deciding to rerun or discard.`,
+				cleaned
+					? `${preamble} review each failed task's receipt (its changedFiles records what the now-retired worktree held) before deciding to rerun or discard.`
+					: `${preamble} inspect each failed task's worktree directly (its changedFiles may be empty if it broke mid-review, so the work can still be there) and its receipt before deciding to rerun or discard.`,
 			);
+		}
 		if (blocked > 0)
 			parts.push(
 				`${blocked} task(s) are blocked by an unfinished dependency (failed/cancelled/needs_attention) and can never run; start a fresh batch for them once the upstream is resolved.`,
@@ -668,7 +693,9 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 		if (parts.length === 0)
 			parts.push("the batch is stuck with no runnable or active work; inspect the tasks.");
 		parts.push("review_ready tasks (if any) can be reviewed independently.");
-		nextAction = `${parts.join(" ")} ${reviewAndRetire}`;
+		nextAction = cleaned
+			? `${parts.join(" ")} ${cleanedReceipts}`
+			: `${parts.join(" ")} ${reviewAndRetire}`;
 	} else if (runnable.length > 0 || reconcilable) {
 		const n = runnable.length;
 		nextAction =
@@ -693,6 +720,7 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 		nextAction,
 		createdAt: c.createdAt,
 		updatedAt: c.updatedAt,
+		...(c.cleanedAt !== undefined && { cleanedAt: c.cleanedAt }),
 	};
 }
 

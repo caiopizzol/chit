@@ -973,3 +973,85 @@ describe("batch terminal nextAction guides to receipts + cleanup (not the batch_
 		expect(v.nextAction).toContain("chit_batch_cleanup");
 	});
 });
+
+// Once chit_batch_cleanup has retired a terminal batch's worktrees + branches (cleanedAt set),
+// nextAction must stop telling the operator to run cleanup again or to inspect worktrees that no
+// longer exist. It still routes to the surviving receipts. This is the batch parity of the 0.36.1
+// plan fix. Tests stamp cleanedAt directly (mirroring the plan engine tests) to isolate describeBatch.
+describe("terminal nextAction after cleanup (cleanedAt) drops stale cleanup/worktree guidance", () => {
+	function stampCleaned(id: string): void {
+		store.update(id, (c) => {
+			c.cleanedAt = "2026-06-06T00:00:00.000Z";
+			return c;
+		});
+	}
+
+	test("ready_for_review WITHOUT cleanedAt still mentions chit_batch_cleanup", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("ready_for_review");
+		expect(v.cleanedAt).toBeUndefined();
+		expect(v.nextAction).toContain("chit_batch_cleanup");
+	});
+
+	test("ready_for_review WITH cleanedAt drops chit_batch_cleanup and reports the retired state + receipts", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "converged" });
+		advanceBatch(store, deps, "c1");
+		stampCleaned("c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("ready_for_review");
+		expect(v.cleanedAt).toBe("2026-06-06T00:00:00.000Z");
+		expect(v.nextAction).not.toContain("chit_batch_cleanup");
+		// still reports the useful terminal state: all tasks terminal, worktrees already retired...
+		expect(v.nextAction).toContain("all tasks terminal");
+		expect(v.nextAction).toContain("already retired");
+		expect(v.nextAction).toContain("2026-06-06T00:00:00.000Z");
+		// ...and keeps the receipts pointer (receipts survive cleanup, open by audit_ref).
+		expect(v.nextAction).toContain("receipts remain available");
+		expect(v.nextAction).toContain("chit_audit_show");
+	});
+
+	test("cancelled WITH cleanedAt drops chit_batch_cleanup and keeps receipts guidance", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		cancelBatch(store, deps, "c1");
+		stampCleaned("c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("cancelled");
+		expect(v.nextAction).not.toContain("chit_batch_cleanup");
+		expect(v.nextAction).toContain("already retired");
+		expect(v.nextAction).toContain("chit_audit_show");
+		// a cleaned cancelled batch no longer has worktrees "kept for inspection"
+		expect(v.nextAction).not.toContain("kept for inspection");
+	});
+
+	test("failed WITH cleanedAt drops chit_batch_cleanup and does not tell the operator to inspect retired worktrees", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { state: "failed", failure: "boom" });
+		advanceBatch(store, deps, "c1");
+		stampCleaned("c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("failed");
+		expect(v.nextAction).not.toContain("chit_batch_cleanup");
+		// no "inspect ... worktree" pointer (the worktrees are gone); receipts guidance stays.
+		expect(v.nextAction).not.toMatch(/inspect[^.]*worktree/i);
+		expect(v.nextAction).toContain("already retired");
+		expect(v.nextAction).toContain("chit_audit_show");
+	});
+
+	test("needs_human WITH cleanedAt drops chit_batch_cleanup and does not tell the operator to inspect retired worktrees", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		jobs.finish(firstJob(), { stopStatus: "needs-decision" });
+		advanceBatch(store, deps, "c1"); // a -> needs_attention, batch -> needs_human
+		stampCleaned("c1");
+		const v = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		expect(v.status).toBe("needs_human");
+		expect(v.nextAction).toContain("need attention");
+		expect(v.nextAction).not.toContain("chit_batch_cleanup");
+		expect(v.nextAction).not.toMatch(/inspect[^.]*worktree/i);
+		expect(v.nextAction).toContain("already retired");
+		expect(v.nextAction).toContain("receipt");
+	});
+});
