@@ -238,11 +238,29 @@ describe("resolveArchivedForegroundLoop (#100): recover a closed foreground run 
 		mainRepo: "/main/repo",
 		callerCheckout: "/launch",
 	};
+	const participants = {
+		impl: {
+			agentId: "claude",
+			adapter: "claude-cli",
+			session: "per_scope" as const,
+			permissions: { filesystem: "write" as const },
+			enforcesReadOnly: false,
+			config: { model: "claude-opus-4" },
+		},
+	};
 
 	test("future log (0.23+): recovers workspace straight from the header; stopped reflects the stop record", () => {
-		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "A1", workspace: ws });
+		startLoop(cwd, {
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			loopId: "A1",
+			workspace: ws,
+			participants,
+		});
 		const open = resolveArchivedForegroundLoop("A1");
 		expect(open?.stopped).toBe(false);
+		expect(open?.found.header.participants).toEqual(participants);
 		expect(open?.workspace).toEqual({
 			worktreePath: ws.worktreePath,
 			branch: ws.branch,

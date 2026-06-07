@@ -1,4 +1,5 @@
 import type {
+	AuditParticipantSnapshot,
 	LoopStopStatus,
 	LoopVerdict,
 	PlanApplyPolicy,
@@ -122,6 +123,10 @@ export interface PlanStepRecord {
 	// the job. Authoritative over lastVerdict when source is "chit".
 	lastVerification?: Verification;
 	lastVerificationSource?: VerificationSource;
+	// Execution provenance, snapshotted from the loop job at settle so a TERMINAL step row keeps
+	// showing which agent/adapter/session/permissions/config ran -- the live job join is gone once
+	// the step leaves running. Redacted shape (envKeys, not env values). Absent on a legacy job.
+	participants?: Record<string, AuditParticipantSnapshot>;
 	error?: string; // set when status === "failed"
 }
 

@@ -14,6 +14,7 @@
 
 import type {
 	AdapterUsage,
+	AuditParticipantSnapshot,
 	LoopCheck,
 	LoopRecord,
 	LoopStopStatus,
@@ -91,6 +92,11 @@ export interface ConvergeSession {
 	// adapters were built with it); this is the value to show the operator, not a knob
 	// the loop re-reads.
 	callTimeoutMs?: number;
+	// Execution provenance: which agent/adapter/session/permissions/config each participant
+	// ran with, resolved at start (prepareConvergeExecute) so status/trace answer "what ran"
+	// from this immutable snapshot rather than re-reading the mutable registry. Redacted shape
+	// (envKeys, not env values). Absent only when a caller did not thread it (legacy/tests).
+	participants?: Record<string, AuditParticipantSnapshot>;
 	// Count of COMPLETED (appended) iterations. The next iteration is this + 1.
 	iteration: number;
 	// The last review text, threaded into the next iteration as prior_review.
@@ -167,6 +173,9 @@ export interface StartConvergeOptions {
 	// The per-call timeout override (ms) the run was launched with, recorded on the
 	// session for status surfacing. Undefined when no override was given.
 	callTimeoutMs?: number;
+	// The resolved participant provenance snapshot (from prepareConvergeExecute), recorded on
+	// the session so status/trace surface what ran. Omitted by callers that don't resolve it.
+	participants?: Record<string, AuditParticipantSnapshot>;
 	// Wall-clock now, injectable for deterministic tests. Defaults to Date.now.
 	now?: () => number;
 }
@@ -181,6 +190,7 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		maxIterations: opts.maxIterations,
 		loopId: opts.loopId,
 		force: opts.force,
+		...(opts.participants !== undefined && { participants: opts.participants }),
 		// Persist the managed-worktree metadata in the loop HEADER so a closed-session run is
 		// recoverable from its durable log (#100). repo here is the worktree's MAIN repo (recorded
 		// as mainRepo, distinct from the header's own `repo` = the worktree toplevel).
@@ -212,6 +222,7 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		reviewStep: opts.loopSteps?.reviewStep ?? "review",
 		...(opts.loopSteps?.requiredChecks && { requiredChecks: opts.loopSteps.requiredChecks }),
 		...(opts.callTimeoutMs !== undefined && { callTimeoutMs: opts.callTimeoutMs }),
+		...(opts.participants !== undefined && { participants: opts.participants }),
 		iteration: 0,
 		priorReview: "",
 		auditRefs: [],
@@ -509,6 +520,9 @@ export interface ConvergeStatus {
 	lastDecision?: LoopVerdict;
 	lastVerification?: Verification;
 	lastVerificationSource?: VerificationSource;
+	// Execution provenance for this loop run: which agent/adapter/session/permissions/config each
+	// participant ran with. Present when the run was launched through prepareConvergeExecute.
+	participants?: Record<string, AuditParticipantSnapshot>;
 	failure?: string;
 	auditRefs: string[];
 	nextAction: string;
@@ -540,6 +554,7 @@ export function describeConverge(session: ConvergeSession): ConvergeStatus {
 		...(session.lastVerificationSource !== undefined && {
 			lastVerificationSource: session.lastVerificationSource,
 		}),
+		...(session.participants !== undefined && { participants: session.participants }),
 		...(session.failure !== undefined && { failure: session.failure }),
 		auditRefs: session.auditRefs,
 		nextAction,
@@ -550,6 +565,9 @@ export interface ConvergeTrace {
 	loopId: string;
 	status: ConvergeRunStatus;
 	active: boolean;
+	// Execution provenance for the run, when available (a session launched through
+	// prepareConvergeExecute). Surfaced so chit_trace answers "what ran" alongside the history.
+	participants?: Record<string, AuditParticipantSnapshot>;
 	auditRefs: string[];
 	records: LoopRecord[]; // the durable loop log: header + iterations + stop
 }
@@ -563,6 +581,7 @@ export function traceConverge(session: ConvergeSession): ConvergeTrace {
 		loopId: session.loopId,
 		status: runStatus(session),
 		active: session.active !== undefined,
+		...(session.participants !== undefined && { participants: session.participants }),
 		auditRefs: session.auditRefs,
 		records,
 	};

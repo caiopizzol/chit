@@ -422,6 +422,9 @@ function settleTask(
 		result.lastVerification = extra.job.lastVerification;
 	if (extra.job?.lastVerificationSource !== undefined)
 		result.lastVerificationSource = extra.job.lastVerificationSource;
+	// Snapshot provenance into the durable result so a terminal task row keeps it after the live
+	// job join is gone (immutable for the run, so the job's value is the value that ran).
+	if (extra.job?.participants !== undefined) result.participants = extra.job.participants;
 	// A failed task can leave real uncommitted work in its worktree that changedFiles (which only
 	// reflects completed iterations) misses. Surface it so the work is findable, not assumed lost.
 	if (status === "failed" && detail?.partialWork && t.worktreePath) {
@@ -524,6 +527,10 @@ export interface BatchTaskView {
 	// The EFFECTIVE per-call timeout (ms) this task runs under (task ?? batch override),
 	// surfaced so the operator can see the active budget. Absent -> agent config / default.
 	callTimeoutMs?: number;
+	// Execution provenance for the task's loop job: which agent/adapter/session/permissions/config
+	// each participant ran with. Joined live from the loop job (persisted at enqueue); absent until
+	// the job exists or on a legacy record.
+	participants?: LoopJobRecord["participants"];
 	error?: string;
 }
 
@@ -605,6 +612,9 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 					if (job.lastVerification !== undefined) view.lastVerification = job.lastVerification;
 					if (job.lastVerificationSource !== undefined)
 						view.lastVerificationSource = job.lastVerificationSource;
+					// Provenance is immutable once the worker has resolved the run, so surface it
+					// straight from the joined loop job without waiting for the task to settle.
+					if (job.participants !== undefined) view.participants = job.participants;
 				}
 			}
 		}
@@ -615,6 +625,9 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 				view.lastVerification = t.result.lastVerification;
 			if (t.result.lastVerificationSource !== undefined)
 				view.lastVerificationSource = t.result.lastVerificationSource;
+			// Terminal provenance from the snapshotted result, so a settled row keeps it (the live
+			// job join only runs while the task is "running").
+			if (t.result.participants !== undefined) view.participants = t.result.participants;
 			view.changedFiles = t.result.changedFiles;
 			view.workspaceWarnings = t.result.workspaceWarnings;
 			view.auditRefs = t.result.auditRefs;

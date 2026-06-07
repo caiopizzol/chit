@@ -125,6 +125,16 @@ describe("startConvergeSession", () => {
 	});
 
 	test("a managed-worktree session records all five workspace fields in the loop header (#100 slice B)", () => {
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4" },
+			},
+		};
 		startConvergeSession({
 			cwd,
 			scope: "s",
@@ -139,6 +149,7 @@ describe("startConvergeSession", () => {
 				repo: "/main/repo",
 				callerCheckout: "/launching/checkout",
 			},
+			participants,
 		});
 		// the durable HEADER carries the metadata, so a closed run is recoverable from the log.
 		const header = readLoop(cwd, "WL1")[0] as unknown as Record<string, unknown>;
@@ -147,6 +158,7 @@ describe("startConvergeSession", () => {
 		expect(header.baseSha).toBe("basesha");
 		expect(header.mainRepo).toBe("/main/repo"); // opts.worktree.repo -> header.mainRepo
 		expect(header.callerCheckout).toBe("/launching/checkout");
+		expect(header.participants).toEqual(participants);
 	});
 });
 
@@ -411,6 +423,44 @@ describe("describeConverge / traceConverge", () => {
 		// The records come straight from the loop log (header + the one iteration).
 		expect(t.records[0]?.type).toBe("loop");
 		expect(t.records.filter((r) => r.type === "iteration").length).toBe(1);
+	});
+
+	test("describeConverge and traceConverge surface the participant provenance when carried", () => {
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", reasoningEffort: "high", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+			rev: {
+				agentId: "codex",
+				adapter: "codex-exec",
+				session: "per_scope" as const,
+				permissions: { filesystem: "read_only" as const },
+				enforcesReadOnly: true,
+				config: { model: "gpt-5-codex" },
+			},
+		};
+		const session = startConvergeSession({
+			cwd,
+			scope: "s",
+			task: "t",
+			maxIterations: 1,
+			execute: scriptedExecute([reviewJson("proceed")]),
+			loopId: "PROV1",
+			participants,
+		});
+		expect(describeConverge(session).participants).toEqual(participants);
+		expect(traceConverge(session).participants).toEqual(participants);
+	});
+
+	test("a session launched without provenance omits participants (no invented field)", () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		expect(describeConverge(session).participants).toBeUndefined();
+		expect(traceConverge(session).participants).toBeUndefined();
 	});
 });
 

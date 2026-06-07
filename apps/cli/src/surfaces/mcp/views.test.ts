@@ -279,6 +279,61 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expect(v.stopReason).toBeUndefined();
 	});
 
+	test("the chit_start foreground loop response surfaces participant provenance", () => {
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", reasoningEffort: "high", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+			rev: {
+				agentId: "codex",
+				adapter: "codex-exec",
+				session: "per_scope" as const,
+				permissions: { filesystem: "read_only" as const },
+				enforcesReadOnly: true,
+				config: { model: "gpt-5-codex" },
+			},
+		};
+		const v = loopRunView(loopSession({ participants })) as Record<string, unknown>;
+		expect(v.participants).toEqual(participants);
+		// Provenance, not transcript: only env KEY names, never values.
+		expect(JSON.stringify(v.participants)).not.toContain("ANTHROPIC_API_KEY=");
+		expectNoLeakage(v);
+	});
+
+	test("a loop view launched without provenance omits participants", () => {
+		const v = loopRunView(loopSession()) as Record<string, unknown>;
+		expect(v.participants).toBeUndefined();
+	});
+
+	test("the background loop run view surfaces the job's persisted participant provenance", () => {
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		const v = backgroundRunView(
+			job({ state: "completed", stopStatus: "converged", participants }),
+		) as Record<string, unknown>;
+		expect(v.participants).toEqual(participants);
+		expect(JSON.stringify(v.participants)).not.toContain("ANTHROPIC_API_KEY=");
+		expectNoLeakage(v);
+	});
+
+	test("a background loop view without persisted provenance omits participants", () => {
+		const v = backgroundRunView(job({ state: "completed" })) as Record<string, unknown>;
+		expect(v.participants).toBeUndefined();
+	});
+
 	test("a background view surfaces the latest verification + its source", () => {
 		// backgroundRunView returns a loop|one-shot union; this is a loop job, so read the
 		// loop-only fields through a cast.

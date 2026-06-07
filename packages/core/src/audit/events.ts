@@ -353,15 +353,14 @@ function parseParticipantConfig(raw: unknown, ctx: string): ParticipantConfig {
 // Parse the optional run.started participant config snapshot. Defensive, like the
 // rest of the schema: each entry's required fields are validated, config
 // included (an empty config object is valid, but a missing one is rejected).
-function optParticipantSnapshots(
-	o: Record<string, unknown>,
+export function parseAuditParticipantSnapshots(
+	raw: unknown,
 	ctx: string,
-): Record<string, AuditParticipantSnapshot> | undefined {
-	if (o.participants === undefined) return undefined;
-	const map = obj(o.participants, `${ctx}.participants`);
+): Record<string, AuditParticipantSnapshot> {
+	const map = obj(raw, ctx);
 	const out: Record<string, AuditParticipantSnapshot> = {};
 	for (const [pid, raw] of Object.entries(map)) {
-		const pctx = `${ctx}.participants.${pid}`;
+		const pctx = `${ctx}.${pid}`;
 		const p = obj(raw, pctx);
 		const perms = obj(p.permissions, `${pctx}.permissions`);
 		out[pid] = {
@@ -383,6 +382,14 @@ function optParticipantSnapshots(
 		};
 	}
 	return out;
+}
+
+function optParticipantSnapshots(
+	o: Record<string, unknown>,
+	ctx: string,
+): Record<string, AuditParticipantSnapshot> | undefined {
+	if (o.participants === undefined) return undefined;
+	return parseAuditParticipantSnapshots(o.participants, `${ctx}.participants`);
 }
 
 // Validate a single parsed event. Defensive: the writer should emit valid

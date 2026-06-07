@@ -442,6 +442,75 @@ describe("describePlan (read-only join)", () => {
 		expect(view.nextAction).toContain("in flight");
 	});
 
+	test("surfaces the joined loop job's participant provenance for a running step", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running", participants });
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(aView.participants).toEqual(participants);
+		// Only env key names surface; no env values.
+		expect(JSON.stringify(aView.participants)).not.toContain("ANTHROPIC_API_KEY=");
+	});
+
+	test("a terminal (reconciled) step row keeps the provenance after the live job join is gone", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		// The job converged carrying its provenance; reconcile snapshots it into the durable step.
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged", participants });
+		const c1 = advancePlan(store, deps, "p1");
+		expect(stepOf(c1, "a").status).toBe("review_ready");
+		// Re-describe AFTER reconcile: the step is no longer running, so provenance must come from
+		// the snapshotted step record, not the live job join.
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(aView.status).toBe("review_ready");
+		expect(aView.participants).toEqual(participants);
+		expect(JSON.stringify(aView.participants)).not.toContain("ANTHROPIC_API_KEY=");
+	});
+
+	test("surfaces the effective per-call timeout for a step that carries one", () => {
+		const plan = chainPlan({
+			steps: [step("a", { callTimeoutMs: 900_000 }), step("b", { dependsOn: ["a"] })],
+		});
+		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: plan, maxIterations: 3 });
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		const bView = present(
+			view.steps.find((s) => s.id === "b"),
+			"step b view",
+		);
+		expect(aView.callTimeoutMs).toBe(900_000); // the override shows in the step view
+		expect(bView.callTimeoutMs).toBeUndefined(); // absent when the step set none
+	});
+
 	test("marks a running step stale in the view when the worker is gone", () => {
 		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
 		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running" });

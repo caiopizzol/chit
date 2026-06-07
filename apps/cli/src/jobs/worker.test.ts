@@ -126,6 +126,68 @@ describe("background converge worker", () => {
 		expect(recs.at(-1)).toMatchObject({ type: "stop", status: "converged" });
 	});
 
+	test("re-persists the worker-resolved provenance over the enqueue snapshot", async () => {
+		// The detached worker rebuilds the run from the CURRENT config, so what it resolves -- not the
+		// enqueue snapshot -- is what actually runs and gets audited. The job record must reflect that,
+		// so chit_status / chit_trace never report a stale enqueue snapshot after a config edit.
+		const enqueueSnapshot = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-sonnet-OLD" },
+			},
+		};
+		const resolvedSnapshot = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-NEW", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		seedJob({ participants: enqueueSnapshot });
+		await runJobWorker("j1", {
+			jobStore: store,
+			resolveExecute: () => ({
+				ok: true as const,
+				execute: fakeExecute([{ verdict: "proceed" }]),
+				loopSteps: { implementStep: "implement", reviewStep: "review" },
+				participants: resolvedSnapshot,
+			}),
+			installSignalHandlers: false,
+			heartbeatMs: 1_000_000,
+			now: () => 1000,
+		});
+		const job = store.get("j1") as LoopJobRecord | undefined;
+		// The job now carries what the worker resolved, not the enqueue placeholder.
+		expect(job?.participants).toEqual(resolvedSnapshot);
+		// Redaction holds across the re-persist: only env key names, never values.
+		expect(JSON.stringify(job?.participants)).not.toContain("ANTHROPIC_API_KEY=");
+	});
+
+	test("a resolver that omits provenance leaves the enqueue snapshot intact", async () => {
+		// An injected fake (or a legacy path) may not carry participants; the job then keeps the
+		// enqueue snapshot rather than losing provenance.
+		const enqueueSnapshot = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus" },
+			},
+		};
+		seedJob({ participants: enqueueSnapshot });
+		await runJobWorker("j1", runDeps(fakeExecute([{ verdict: "proceed" }])));
+		expect((store.get("j1") as LoopJobRecord | undefined)?.participants).toEqual(enqueueSnapshot);
+	});
+
 	test("revise then proceed -> completed after two iterations", async () => {
 		seedJob();
 		await runJobWorker("j1", runDeps(fakeExecute([{ verdict: "revise" }, { verdict: "proceed" }])));
@@ -299,6 +361,7 @@ describe("background converge worker", () => {
 			ok: true,
 			execute: fakeExecute([{ verdict: "proceed" }]),
 			loopSteps: { implementStep: "implement", reviewStep: "review" },
+			participants: {},
 			warnings: [],
 		});
 		try {

@@ -20,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
 	type AdapterUsage,
+	type AuditParticipantSnapshot,
 	findEnforcementGaps,
 	findUnknownAgents,
 	formatEnforcementGaps,
@@ -824,7 +825,18 @@ export function buildExecute(
 }
 
 export type PrepareConvergeResult =
-	| { ok: true; execute: ConvergeExecute; loopSteps: LoopSteps; warnings: string[] }
+	| {
+			ok: true;
+			execute: ConvergeExecute;
+			loopSteps: LoopSteps;
+			// The resolved per-participant provenance snapshot (which agent/adapter/session/
+			// permissions/config each participant ran with), captured here at the single converge
+			// chokepoint so every caller can persist or surface it WITHOUT re-deriving it from the
+			// mutable registry. Same redacted shape the audit run.started uses (envKeys, not env
+			// values); reuses resolveParticipantSnapshots so the two can never drift.
+			participants: Record<string, AuditParticipantSnapshot>;
+			warnings: string[];
+	  }
 	| { ok: false; error: string };
 
 // The run-level `call_timeout_ms` override budgets the loop's implement/review adapter
@@ -909,6 +921,11 @@ export function prepareConvergeExecute(
 		ok: true,
 		execute: buildExecute(manifest, registry, scope, cwd, callTimeoutMs),
 		loopSteps: resolveLoopPolicy(manifest),
+		// Resolved once here from the SAME manifest + registry the execute was built from, so a
+		// foreground session can carry it and a background job can persist it durably. The per-run
+		// call-timeout override is surfaced separately (callTimeoutMs) and never mutates this snapshot,
+		// mirroring how buildExecute keeps the agent record's configured callTimeoutMs untouched.
+		participants: resolveParticipantSnapshots(manifest, registry),
 		warnings,
 	};
 }

@@ -662,6 +662,9 @@ function launchConvergeJob(p: {
 		// is then reachable only by legacy records that predate this field.
 		requiredChecks: effectiveChecks ?? [],
 		...(p.callTimeoutMs !== undefined && { callTimeoutMs: p.callTimeoutMs }),
+		// Persist the enqueue-time provenance so queued jobs are inspectable immediately. The
+		// detached worker overwrites it with the snapshot it actually resolves before running.
+		participants: prep.participants,
 		allowUnenforced: p.allowUnenforced,
 		state: "queued",
 		createdAt: new Date().toISOString(),
@@ -883,6 +886,9 @@ function describeJob(job: JobRecord) {
 			}),
 			...(job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 			...(job.callTimeoutMs !== undefined && { callTimeoutMs: job.callTimeoutMs }),
+			// Provenance persisted on the job record (omitted on legacy records), not re-derived from
+			// the current config, so a detached run reports the agents it actually launched.
+			...(job.participants !== undefined && { participants: job.participants }),
 			...(latest !== undefined && { latest }),
 			nextAction,
 		};
@@ -1095,6 +1101,9 @@ export function loopRunView(session: ConvergeSession, now: number = Date.now()) 
 		...(session.lastDecision !== undefined && { lastDecision: session.lastDecision }),
 		...(session.failure !== undefined && { failure: session.failure }),
 		...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
+		// Execution provenance: which participants ran and with what agent/model/adapter/session/
+		// permissions/config. Present when the run was launched through prepareConvergeExecute.
+		...(session.participants !== undefined && { participants: session.participants }),
 		// Terminal receipt: elapsed (endedAtMs - startedAtMs, the same derivation
 		// summarizeLoopForStatus uses) and WHY it stopped, both straight from the in-memory
 		// mirror set in lockstep with terminalStatus -- present only once the loop has
@@ -1533,6 +1542,8 @@ server.registerTool(
 					// Run-level required_checks replace the manifest's for this run.
 					loopSteps: { ...prep.loopSteps, ...(requiredChecks && { requiredChecks }) },
 					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
+					// Provenance resolved at the chokepoint, carried on the session for status/trace.
+					participants: prep.participants,
 				});
 			} catch (e) {
 				ws.cleanup?.(); // the loop never opened: retire the empty worktree
@@ -1910,6 +1921,9 @@ server.registerTool(
 				execution: "loop" as const,
 				active: false,
 				...(archived.workspace && workspaceView(archived.workspace)),
+				...(archived.found.header.participants !== undefined && {
+					participants: archived.found.header.participants,
+				}),
 				records: publicLoopRecords(archived.found.records),
 			});
 		}
@@ -1927,6 +1941,8 @@ server.registerTool(
 					execution: "job",
 					policy: "loop",
 					...workspaceView(job),
+					// Provenance persisted on the job record (omitted on legacy records).
+					...(job.participants !== undefined && { participants: job.participants }),
 					records,
 				});
 			}
@@ -1953,6 +1969,8 @@ server.registerTool(
 					status: t.status,
 					active: t.active,
 					...workspaceView(session),
+					// Provenance for the run, when the session carries it (launched via prepareConvergeExecute).
+					...(t.participants !== undefined && { participants: t.participants }),
 					auditRefs: t.auditRefs,
 					records: publicLoopRecords(t.records),
 				});

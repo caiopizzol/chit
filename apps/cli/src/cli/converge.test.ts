@@ -30,6 +30,7 @@ import {
 	convergeLoop,
 	makeAuditedExecute,
 	phaseOfStepStart,
+	prepareConvergeExecute,
 	rejectCallTimeoutForOneShot,
 	resolveLoopPolicy,
 	runConverge,
@@ -1731,5 +1732,104 @@ describe("call_timeout_ms override (slice 2: per-run adapter budget)", () => {
 		test("a one-shot run with NO override is allowed (null)", () => {
 			expect(rejectCallTimeoutForOneShot(undefined, "one-shot")).toBeNull();
 		});
+	});
+});
+
+describe("prepareConvergeExecute: execution provenance (participants snapshot)", () => {
+	// A raw (unresolved) converge manifest naming two registry agents. prepareConvergeExecute
+	// parses + resolves it internally, so the input is plain JSON, not a ResolvedManifest.
+	const rawManifest = {
+		schema: 1,
+		id: "c",
+		description: "converge-shaped",
+		inputs: { task: { type: "string" }, prior_review: { type: "string", optional: true } },
+		participants: {
+			impl: { agent: "claude", instructions: "implement", session: "per_scope" },
+			rev: { agent: "codex", instructions: "review", session: "per_scope" },
+		},
+		steps: {
+			implement: { call: "impl", prompt: "{{ inputs.task }}" },
+			review: { call: "rev", prompt: "{{ steps.implement.output }}" },
+			out: { format: "{{ steps.review.output }}" },
+		},
+		output: "out",
+		policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+	};
+
+	// claude carries model + reasoning + env (with secret values); codex carries only a model.
+	// The env values are the redaction tripwire: only their KEY NAMES may surface.
+	function registryWithProvenance(): NormalizedRegistry {
+		return {
+			agents: {
+				claude: {
+					id: "claude",
+					adapter: "claude-cli",
+					model: "claude-opus-4",
+					reasoningEffort: "high",
+					passModelOnResume: false,
+					builtIn: true,
+					env: { ANTHROPIC_API_KEY: "sk-secret-value", FOO: "bar-secret" },
+				},
+				codex: {
+					id: "codex",
+					adapter: "codex-exec",
+					model: "gpt-5-codex",
+					passModelOnResume: false,
+					builtIn: true,
+				},
+			},
+		} as unknown as NormalizedRegistry;
+	}
+
+	test("returns a per-participant snapshot with adapter/model/reasoning/session/permissions", () => {
+		const prep = prepareConvergeExecute(rawManifest, registryWithProvenance(), "s", cwd, true, {});
+		if (!prep.ok) throw new Error(`expected ok, got: ${prep.error}`);
+
+		expect(Object.keys(prep.participants).sort()).toEqual(["impl", "rev"]);
+
+		const impl = prep.participants.impl;
+		expect(impl?.agentId).toBe("claude");
+		expect(impl?.adapter).toBe("claude-cli");
+		expect(impl?.session).toBe("per_scope");
+		expect(impl?.permissions.filesystem).toBeDefined();
+		expect(impl?.config.model).toBe("claude-opus-4");
+		expect(impl?.config.reasoningEffort).toBe("high");
+
+		const rev = prep.participants.rev;
+		expect(rev?.agentId).toBe("codex");
+		expect(rev?.adapter).toBe("codex-exec");
+		expect(rev?.config.model).toBe("gpt-5-codex");
+	});
+
+	test("redaction guard: only env KEY names surface, never env values", () => {
+		const prep = prepareConvergeExecute(rawManifest, registryWithProvenance(), "s", cwd, true, {});
+		if (!prep.ok) throw new Error(`expected ok, got: ${prep.error}`);
+
+		// envKeys are the sorted key names; the config carries no `env` (values) field at all.
+		expect(prep.participants.impl?.config.envKeys).toEqual(["ANTHROPIC_API_KEY", "FOO"]);
+		expect("env" in (prep.participants.impl?.config ?? {})).toBe(false);
+
+		// The secret values appear nowhere in the serialized snapshot.
+		const serialized = JSON.stringify(prep.participants);
+		expect(serialized).not.toContain("sk-secret-value");
+		expect(serialized).not.toContain("bar-secret");
+	});
+
+	test("the per-run call_timeout_ms override does NOT mutate participant config", () => {
+		// callTimeoutMs is surfaced as its own run-level field, not folded into the snapshot:
+		// an agent with no configured callTimeoutMs keeps config.callTimeoutMs absent even when a
+		// run override is passed, mirroring buildExecute's per-run, non-mutating treatment.
+		const prep = prepareConvergeExecute(
+			rawManifest,
+			registryWithProvenance(),
+			"s",
+			cwd,
+			true,
+			{},
+			120_000,
+		);
+		if (!prep.ok) throw new Error(`expected ok, got: ${prep.error}`);
+		expect(prep.participants.impl?.config.callTimeoutMs).toBeUndefined();
+		expect(prep.participants.rev?.config.callTimeoutMs).toBeUndefined();
 	});
 });

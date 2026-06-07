@@ -195,6 +195,87 @@ describe("buildStatus", () => {
 		expect(byId.noCt?.callTimeoutMs).toBeUndefined(); // absent when no override was set
 	});
 
+	test("a background loop job's persisted participant provenance is surfaced (read from the record, not re-derived)", () => {
+		const jobStore = emptyJobStore();
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", reasoningEffort: "high", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		const base: Omit<LoopJobRecord, "runId" | "loopId" | "state" | "createdAt"> = {
+			policy: "loop",
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 0,
+			auditRefs: [],
+		};
+		jobStore.create({
+			...base,
+			runId: "withProv",
+			loopId: "withProv",
+			state: "completed",
+			createdAt: "2026-06-01T10:01:00.000Z",
+			participants,
+		});
+		jobStore.create({
+			...base,
+			runId: "noProv",
+			loopId: "noProv",
+			state: "completed",
+			createdAt: "2026-06-01T10:00:00.000Z",
+		});
+		const status = buildStatus(emptyController(), emptyAuditStore(), jobStore, 5, NOW, TEST_SERVER);
+		const byId = Object.fromEntries(status.jobs.map((j) => [j.run_id, j]));
+		// Surfaced verbatim from the durable record; no env values leak (only envKeys).
+		expect(byId.withProv?.participants).toEqual(participants);
+		expect(JSON.stringify(byId.withProv)).not.toContain("ANTHROPIC_API_KEY=");
+		// A legacy record without the field omits it (never invented).
+		expect(byId.noProv?.participants).toBeUndefined();
+	});
+
+	test("a foreground loop session's participant provenance is surfaced in the overview", () => {
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4" },
+			},
+			rev: {
+				agentId: "codex",
+				adapter: "codex-exec",
+				session: "per_scope" as const,
+				permissions: { filesystem: "read_only" as const },
+				enforcesReadOnly: true,
+				config: { model: "gpt-5-codex" },
+			},
+		};
+		const session = {
+			...fakeSession("loopProv"),
+			participants,
+		} as unknown as ConvergeSession;
+		const status = buildStatus(
+			controllerOf([], [session]),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+		);
+		expect(status.active.loops[0]?.participants).toEqual(participants);
+	});
+
 	test("running job: timing fields + nextAction names the phase and ages", () => {
 		const jobStore = emptyJobStore();
 		jobStore.create({

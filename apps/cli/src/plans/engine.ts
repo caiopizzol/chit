@@ -746,6 +746,9 @@ function settleStep(
 			step.lastVerification = extra.job.lastVerification;
 		if (extra.job.lastVerificationSource !== undefined)
 			step.lastVerificationSource = extra.job.lastVerificationSource;
+		// Snapshot provenance into the durable step so a terminal row keeps it after the live job
+		// join is gone (immutable for the run, so the job's value is the value that ran).
+		if (extra.job.participants !== undefined) step.participants = extra.job.participants;
 	}
 	if (status === "failed" && extra.failure !== undefined) step.error = extra.failure;
 }
@@ -824,6 +827,13 @@ export interface PlanStepView {
 	lastVerdict?: PlanStepRecord["lastVerdict"];
 	lastVerification?: PlanStepRecord["lastVerification"];
 	lastVerificationSource?: PlanStepRecord["lastVerificationSource"];
+	// Execution provenance for the step's loop job: which agent/adapter/session/permissions/config
+	// each participant ran with. Joined live from the loop job while running; from the snapshotted
+	// step record once terminal. Absent until the job exists or on a legacy record.
+	participants?: LoopJobRecord["participants"];
+	// The effective per-call timeout (ms) this step runs under, surfaced alongside provenance so the
+	// operator can see the active budget (mirrors the batch task view). Absent -> agent config / default.
+	callTimeoutMs?: number;
 	changedFiles?: string[];
 	workspaceWarnings?: string[];
 	auditRefs?: string[];
@@ -873,6 +883,9 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 			...(s.runId !== undefined && { run_id: s.runId }),
 			...(s.baseSha !== undefined && { baseSha: s.baseSha }),
 			...(s.appliedCommitSha !== undefined && { appliedCommitSha: s.appliedCommitSha }),
+			// The effective per-call budget for this step, surfaced like the batch task view does, so
+			// status shows the active value without the caller re-deriving it.
+			...(s.callTimeoutMs !== undefined && { callTimeoutMs: s.callTimeoutMs }),
 		};
 		if (s.status === "running" && s.runId) {
 			const job = deps.getJob(s.runId);
@@ -892,6 +905,9 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 					if (job.lastVerification !== undefined) view.lastVerification = job.lastVerification;
 					if (job.lastVerificationSource !== undefined)
 						view.lastVerificationSource = job.lastVerificationSource;
+					// Provenance is immutable once the worker has resolved the run, so surface it
+					// straight from the joined loop job without waiting for the step to settle.
+					if (job.participants !== undefined) view.participants = job.participants;
 				}
 			}
 		}
@@ -902,6 +918,9 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 		if (s.lastVerification !== undefined) view.lastVerification = s.lastVerification;
 		if (s.lastVerificationSource !== undefined)
 			view.lastVerificationSource = s.lastVerificationSource;
+		// Terminal provenance from the snapshotted step record, so a settled row keeps it (the live
+		// job join only runs while the step is "running").
+		if (s.participants !== undefined) view.participants = s.participants;
 		if (s.changedFiles !== undefined) view.changedFiles = s.changedFiles;
 		if (s.workspaceWarnings !== undefined) view.workspaceWarnings = s.workspaceWarnings;
 		if (s.auditRefs !== undefined) view.auditRefs = s.auditRefs;

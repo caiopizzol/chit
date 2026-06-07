@@ -1,4 +1,5 @@
 import type {
+	AuditParticipantSnapshot,
 	LoopStopStatus,
 	LoopVerdict,
 	RequiredCheck,
@@ -85,6 +86,11 @@ export interface TaskResult {
 	changedFiles: string[];
 	workspaceWarnings: string[];
 	auditRefs: string[];
+	// Execution provenance, snapshotted from the loop job at settle so a TERMINAL task row keeps
+	// showing which agent/adapter/session/permissions/config ran -- the live job join is gone once
+	// the task leaves running, but the receipt should still answer "what ran". Redacted shape
+	// (envKeys, not env values). Absent on a legacy job that predates the field.
+	participants?: Record<string, AuditParticipantSnapshot>;
 	// Set when a task ended NOT-clean (failed / blocked) but real UNCOMMITTED work is in its
 	// worktree that no completed iteration captured (e.g. the implementer timed out before
 	// iteration 1) -- so changedFiles reads empty yet the work is salvageable. Surfaced so the

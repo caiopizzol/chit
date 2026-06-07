@@ -8,7 +8,11 @@
 // append/read (fs) lives in apps/cli. The file is append-only JSONL: a `loop`
 // header line, one `iteration` line per round, then a `stop` line.
 
-import type { AdapterUsage } from "../audit/events.ts";
+import {
+	type AdapterUsage,
+	type AuditParticipantSnapshot,
+	parseAuditParticipantSnapshots,
+} from "../audit/events.ts";
 
 export type LoopVerdict = "proceed" | "revise" | "block";
 export type LoopStopStatus =
@@ -83,6 +87,10 @@ export interface LoopHeaderRecord {
 	baseSha?: string;
 	mainRepo?: string;
 	callerCheckout?: string;
+	// Execution provenance for a loop run, persisted in the header so a CLOSED foreground
+	// run still answers "what ran" from its durable log. Same redacted shape as audit
+	// run.started: envKeys only, never env values. Absent on older logs.
+	participants?: Record<string, AuditParticipantSnapshot>;
 }
 
 export interface LoopIterationRecord {
@@ -291,6 +299,13 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 		if (o.baseSha !== undefined) rec.baseSha = str(o, "baseSha", ctx);
 		if (o.mainRepo !== undefined) rec.mainRepo = str(o, "mainRepo", ctx);
 		if (o.callerCheckout !== undefined) rec.callerCheckout = str(o, "callerCheckout", ctx);
+		if (o.participants !== undefined) {
+			try {
+				rec.participants = parseAuditParticipantSnapshots(o.participants, `${ctx}.participants`);
+			} catch (e) {
+				throw new LoopLogError((e as Error).message);
+			}
+		}
 		return rec;
 	}
 	if (type === "iteration") {

@@ -255,6 +255,16 @@ describe("loop-log store: header workspace metadata + findLoopByRunId (#100)", (
 		mainRepo: "/main/repo",
 		callerCheckout: "/launching/checkout",
 	};
+	const participants = {
+		impl: {
+			agentId: "claude",
+			adapter: "claude-cli",
+			session: "per_scope" as const,
+			permissions: { filesystem: "write" as const },
+			enforcesReadOnly: false,
+			config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+		},
+	};
 
 	test("startLoop records the workspace metadata in the header; it round-trips", () => {
 		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId: "W1", workspace: ws });
@@ -271,6 +281,21 @@ describe("loop-log store: header workspace metadata + findLoopByRunId (#100)", (
 		const header = readLoop(cwd, "W2")[0] as unknown as Record<string, unknown>;
 		expect(header.worktreePath).toBeUndefined();
 		expect(header.mainRepo).toBeUndefined();
+	});
+
+	test("startLoop records participant provenance in the durable header; it round-trips redacted", () => {
+		startLoop(cwd, {
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			loopId: "P1",
+			workspace: ws,
+			participants,
+		});
+		const header = readLoop(cwd, "P1")[0] as unknown as Record<string, unknown>;
+		expect(header.participants).toEqual(participants);
+		expect(JSON.stringify(header.participants)).not.toContain("sk-");
+		expect(JSON.stringify(header.participants)).not.toContain("ANTHROPIC_API_KEY=");
 	});
 
 	test("findLoopByRunId resolves a loop by runId alone, without its repoKey", () => {

@@ -19,6 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import type { AuditParticipantSnapshot } from "@chit-run/core";
 import { parseManifest, type ResolvedManifest, resolveManifest } from "@chit-run/core";
 import {
 	type ConvergeExecute,
@@ -39,7 +40,17 @@ import type { JobStore } from "./store.ts";
 import type { JobPhase, JobRecord, JobState, LoopJobRecord, OneShotJobRecord } from "./types.ts";
 
 type ExecuteResolution =
-	| { ok: true; execute: ConvergeExecute; loopSteps: LoopSteps }
+	| {
+			ok: true;
+			execute: ConvergeExecute;
+			loopSteps: LoopSteps;
+			// The participant provenance the worker resolved from the CURRENT config when it rebuilt
+			// the run in its own process. This is what actually runs and gets audited, so the worker
+			// re-persists it on the job (over the enqueue snapshot) to keep status/trace honest after
+			// a config edit. Optional: an injected fake resolver may omit it (then the job keeps its
+			// enqueue snapshot).
+			participants?: Record<string, AuditParticipantSnapshot>;
+	  }
 	| { ok: false; error: string };
 
 // Run a one-shot job's manifest to completion. Injected in tests to drive the
@@ -112,7 +123,12 @@ function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 		job.callTimeoutMs,
 	);
 	return prep.ok
-		? { ok: true, execute: prep.execute, loopSteps: prep.loopSteps }
+		? {
+				ok: true,
+				execute: prep.execute,
+				loopSteps: prep.loopSteps,
+				participants: prep.participants,
+			}
 		: { ok: false, error: prep.error };
 }
 
@@ -260,6 +276,22 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 			stopLoopSafely(job, "blocked", `could not prepare converge execute: ${resolved.error}`);
 			finish(store, jobId, now, "failed", { failure: resolved.error });
 			return;
+		}
+
+		// The worker rebuilt the run from the CURRENT config, so the snapshot it just resolved -- not
+		// the enqueue-time one -- is what actually runs and what the audit recorder will stamp. Re-persist
+		// it on the job (over the enqueue placeholder) so chit_status / chit_trace report what ran, never
+		// a stale snapshot from before a config edit between enqueue and this detached run. Best-effort:
+		// a lost write leaves the enqueue snapshot, which is still a truthful intended-config record.
+		if (resolved.participants !== undefined) {
+			const resolvedParticipants = resolved.participants;
+			try {
+				store.update(jobId, (c) =>
+					c.policy === "loop" ? { ...c, participants: resolvedParticipants } : c,
+				);
+			} catch {
+				// best effort; the enqueue snapshot stands and status still has provenance to show
+			}
 		}
 
 		// Hold the per-loop lock for the whole run: one advancer per loop.

@@ -709,6 +709,59 @@ describe("live verification surfacing (before reconcile)", () => {
 		expect(t.lastVerification).toBe("passed");
 		expect(t.lastVerificationSource).toBe("chit");
 	});
+
+	test("a running task surfaces the joined loop job's participant provenance", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		const jobId = firstJob();
+		const j = present(jobs.jobs.get(jobId), "launched job");
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		jobs.jobs.set(jobId, { ...j, state: "running", participants });
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		const t = present(
+			view.tasks.find((x) => x.id === "a"),
+			"task a view",
+		);
+		expect(t.participants).toEqual(participants);
+		// Only env key names surface; no env values.
+		expect(JSON.stringify(t.participants)).not.toContain("ANTHROPIC_API_KEY=");
+	});
+
+	test("a terminal (reconciled) task row keeps the provenance after the live job join is gone", () => {
+		startBatch(store, deps, { id: "c1", cwd, tasks: [task("a")], maxParallel: 1 });
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		// The job converged carrying its provenance; reconcile snapshots it into the durable result.
+		jobs.finish(firstJob(), { stopStatus: "converged", lastVerdict: "proceed", participants });
+		const c = advanceBatch(store, deps, "c1");
+		expect(taskOf(c, "a").status).toBe("review_ready");
+		// Re-describe AFTER reconcile: the task is no longer running, so the live job join does not
+		// run -- provenance must come from the snapshotted result.
+		const view = describeBatch(present(store.get("c1"), "batch c1"), deps);
+		const t = present(
+			view.tasks.find((x) => x.id === "a"),
+			"task a view",
+		);
+		expect(t.status).toBe("review_ready");
+		expect(t.participants).toEqual(participants);
+		expect(JSON.stringify(t.participants)).not.toContain("ANTHROPIC_API_KEY=");
+	});
 });
 
 describe("cancelBatch", () => {

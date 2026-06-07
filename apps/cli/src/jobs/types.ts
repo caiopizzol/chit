@@ -1,4 +1,5 @@
 import type {
+	AuditParticipantSnapshot,
 	LoopStopStatus,
 	LoopVerdict,
 	RequiredCheck,
@@ -107,6 +108,12 @@ export interface LoopJobRecord extends BaseJobRecord {
 	// Run despite an unenforceable declared permission (the worker rebuilds the
 	// run in its own process, so it needs the flag the caller validated against).
 	allowUnenforced: boolean;
+	// Execution provenance: which agent/adapter/session/permissions/config each participant ran
+	// with. Enqueue writes the intended snapshot; the detached worker overwrites it with the
+	// snapshot it actually resolved before running, so status views read from the job record instead
+	// of re-deriving from a later config. Same redacted shape the audit run.started uses (envKeys,
+	// not env values). Absent on legacy records that predate this field.
+	participants?: Record<string, AuditParticipantSnapshot>;
 	iteration?: number; // current (running) or last completed iteration number
 	iterationsCompleted: number;
 	lastVerdict?: LoopVerdict;

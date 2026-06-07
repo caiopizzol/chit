@@ -73,6 +73,9 @@ export interface LoopStatusSummary {
 	lastVerificationSource?: ConvergeSession["lastVerificationSource"];
 	// The per-call timeout override (ms) this run was launched with, when set.
 	callTimeoutMs?: ConvergeSession["callTimeoutMs"];
+	// Execution provenance: which participants ran and with what agent/adapter/session/
+	// permissions/config. Present when the run was launched through prepareConvergeExecute.
+	participants?: ConvergeSession["participants"];
 	// Wall-clock ms from start to terminal, mirrored from the in-memory session
 	// (endedAtMs - startedAtMs); present only once the loop has stopped, so a status
 	// poll reports a terminal run's elapsed without re-reading the durable loop log.
@@ -139,6 +142,7 @@ export function summarizeLoopForStatus(session: ConvergeSession): LoopStatusSumm
 			lastVerificationSource: session.lastVerificationSource,
 		}),
 		...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
+		...(session.participants !== undefined && { participants: session.participants }),
 		// Terminal elapsed straight from the in-memory mirror: endedAtMs is set in
 		// lockstep with terminalStatus (see converge-engine), so its presence means the
 		// loop has stopped and the value is ready without a loop-log read.
@@ -228,6 +232,9 @@ export interface JobStatusSummary {
 	// The per-call timeout override (ms) this loop run was launched with, when set, so
 	// the overview list shows the active budget like the single-run detail view does.
 	callTimeoutMs?: LoopJobRecord["callTimeoutMs"];
+	// Execution provenance persisted on the loop job (loop-only; omitted on legacy records).
+	// Surfaced from the job record, never re-derived from the current config.
+	participants?: LoopJobRecord["participants"];
 	auditRefs: string[];
 	createdAt: string;
 	// Programmatic timing (omitted when not derivable; see jobTiming).
@@ -295,6 +302,8 @@ function summarizeJobForStatus(job: JobRecord, nowMs: number): JobStatusSummary 
 		...(job.policy === "loop" && job.stopStatus !== undefined && { stopStatus: job.stopStatus }),
 		...(job.policy === "loop" &&
 			job.callTimeoutMs !== undefined && { callTimeoutMs: job.callTimeoutMs }),
+		...(job.policy === "loop" &&
+			job.participants !== undefined && { participants: job.participants }),
 		auditRefs: job.auditRefs,
 		createdAt: job.createdAt,
 		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),

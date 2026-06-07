@@ -37,6 +37,7 @@ import {
 import { join } from "node:path";
 import {
 	type AdapterUsage,
+	type AuditParticipantSnapshot,
 	type LoopCheck,
 	type LoopHeaderRecord,
 	type LoopIterationRecord,
@@ -155,6 +156,7 @@ export interface StartOptions {
 		mainRepo: string;
 		callerCheckout: string;
 	};
+	participants?: Record<string, AuditParticipantSnapshot>;
 }
 
 export function startLoop(cwd: string, opts: StartOptions): { loopId: string; path: string } {
@@ -183,6 +185,7 @@ export function startLoop(cwd: string, opts: StartOptions): { loopId: string; pa
 			mainRepo: opts.workspace.mainRepo,
 			callerCheckout: opts.workspace.callerCheckout,
 		}),
+		...(opts.participants !== undefined && { participants: opts.participants }),
 	};
 	// Fresh file (truncates on force); serializeLoopRecord validates first.
 	writeFileSync(path, `${serializeLoopRecord(header)}\n`);
