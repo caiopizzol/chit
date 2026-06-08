@@ -10,6 +10,7 @@ import type {
 	ErrorSaveResponse,
 	InstalledSummary,
 	InstallSummary,
+	LiveActivity,
 	LoopSummary,
 	PreviewResponse,
 	SavedSaveResponse,
@@ -185,6 +186,20 @@ export async function fetchLoop(loopId: string): Promise<LoopRecord[]> {
 		throw new StudioApiError(res.status, `GET ${url}: ${res.status} ${await res.text()}`);
 	}
 	return (await res.json()) as LoopRecord[];
+}
+
+// --- Live activity (read-only) ---
+
+// Snapshot of what is alive across Chit right now (foreground iterations +
+// background jobs). The host injects the reader; a standalone Studio with no
+// host returns an empty LiveActivity (not an error), and a throwing reader
+// degrades to empty server-side, so this only throws on transport/auth.
+export async function fetchLive(): Promise<LiveActivity> {
+	const res = await fetch("/api/live", { headers: authHeaders() });
+	if (!res.ok) {
+		throw new StudioApiError(res.status, `GET /api/live: ${res.status} ${await res.text()}`);
+	}
+	return (await res.json()) as LiveActivity;
 }
 
 // --- Audit transcript (read-only) ---

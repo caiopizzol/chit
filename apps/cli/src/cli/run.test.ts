@@ -548,6 +548,50 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 		}
 	});
 
+	test("terminal background jobs are omitted from the live control tower", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const jobStore = new JobStore(jobsDir);
+			const base: LoopJobRecord = {
+				policy: "loop",
+				runId: "done",
+				loopId: "done",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 1,
+				auditRefs: [],
+				state: "completed",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+			};
+			jobStore.create(base);
+			jobStore.create({
+				...base,
+				runId: "failed",
+				loopId: "failed",
+				state: "failed",
+			});
+			jobStore.create({
+				...base,
+				runId: "running",
+				loopId: "running",
+				state: "running",
+			});
+
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			expect(live.background.map((r) => r.runId)).toEqual(["running"]);
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
 	test("a long multi-line background task is bounded to a one-liner, leaking no body text", () => {
 		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
 		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));

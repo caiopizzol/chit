@@ -5,8 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { LoopRecord } from "@chit-run/core";
-import type { LoopSummary } from "../server/types.ts";
-import { fetchLoop, fetchLoops, StudioApiError } from "./api.ts";
+import type { LiveActivity, LoopSummary } from "../server/types.ts";
+import { fetchLive, fetchLoop, fetchLoops, StudioApiError } from "./api.ts";
 import { TOKEN_STORAGE_KEY } from "./boot.ts";
 
 const realFetch = globalThis.fetch;
@@ -105,5 +105,33 @@ describe("fetchLoop", () => {
 	test("throws StudioApiError on 404", async () => {
 		mock(404, "not found");
 		await expect(fetchLoop("nope")).rejects.toBeInstanceOf(StudioApiError);
+	});
+});
+
+describe("fetchLive", () => {
+	test("GETs /api/live with the bearer token and parses the snapshot", async () => {
+		const live: LiveActivity = {
+			foreground: [
+				{
+					source: "foreground",
+					runId: "fg-1",
+					scope: "src",
+					task: "converge the parser",
+					phase: "implementing",
+					statusLine: "iteration 2",
+				},
+			],
+			background: [],
+		};
+		const calls = mock(200, live);
+		const out = await fetchLive();
+		expect(out).toEqual(live);
+		expect(calls[0]?.url).toBe("/api/live");
+		expect(calls[0]?.headers.Authorization).toBe("Bearer tok");
+	});
+
+	test("throws StudioApiError on a non-2xx response", async () => {
+		mock(500, "boom");
+		await expect(fetchLive()).rejects.toBeInstanceOf(StudioApiError);
 	});
 });

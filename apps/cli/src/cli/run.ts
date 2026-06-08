@@ -878,12 +878,6 @@ function buildStudioLifecycle(): import("@chit-run/studio/server").StudioLifecyc
 	};
 }
 
-// How many terminal background jobs the live rail carries. In-flight jobs are
-// never capped (they are the live signal); terminal jobs are the recent tail, so
-// a small cap keeps the rail a glance view. Mirrors the operator status overview's
-// recent-job behavior without exposing the tool's tunable limit.
-const LIVE_RECENT_JOBS = 10;
-
 type StudioLiveSource = import("@chit-run/studio/server").StudioLiveSource;
 type ForegroundLiveRow = import("@chit-run/studio/server").ForegroundLiveRow;
 type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
@@ -948,10 +942,11 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 		});
 }
 
-// Live background rows: every in-flight job (queued/running, including stale) plus
-// the most recent terminal ones (capped). JobStore.list() is newest-first and
-// skips corrupt files; guard the whole read so a jobs I/O failure degrades this
-// slice to [] rather than failing the snapshot.
+// Live background rows: only in-flight jobs (queued/running, including stale).
+// Terminal receipts belong in the Loops/receipt views, not in the live control
+// tower. JobStore.list() is newest-first and skips corrupt files; guard the whole
+// read so a jobs I/O failure degrades this slice to [] rather than failing the
+// snapshot.
 function backgroundLiveRows(jobStore: JobStore, nowMs: number): BackgroundLiveRow[] {
 	let all: JobRecord[];
 	try {
@@ -959,11 +954,9 @@ function backgroundLiveRows(jobStore: JobStore, nowMs: number): BackgroundLiveRo
 	} catch {
 		return [];
 	}
-	const inFlight = all.filter((j) => j.state === "queued" || j.state === "running");
-	const terminal = all
-		.filter((j) => j.state !== "queued" && j.state !== "running")
-		.slice(0, LIVE_RECENT_JOBS);
-	return [...inFlight, ...terminal].map((j) => backgroundRow(j, nowMs));
+	return all
+		.filter((j) => j.state === "queued" || j.state === "running")
+		.map((j) => backgroundRow(j, nowMs));
 }
 
 function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {

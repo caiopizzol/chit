@@ -284,6 +284,7 @@ describe("Bearer auth on /api/*", () => {
 			const html = await res.text();
 			expect(html).toContain("window.__chit");
 			expect(html).toContain(s.token);
+			expect(html).toContain('<link rel="icon" href="data:," />');
 		} finally {
 			teardown(s);
 		}

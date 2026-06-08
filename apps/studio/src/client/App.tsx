@@ -40,6 +40,7 @@ import { type DiffRow, lineDiff } from "./diff.ts";
 import { canonicalize, referenceToken } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
+import { LiveMonitor } from "./LiveMonitor.tsx";
 import { loopStatusLine } from "./loopStatus.ts";
 import type { CallData, FormatData, InputData } from "./nodes.tsx";
 import { nodeTypes } from "./nodes.tsx";
@@ -51,6 +52,7 @@ import type {
 } from "./state.ts";
 import { useDocumentEditor } from "./useDocumentEditor.ts";
 import { useInstalled } from "./useInstalled.ts";
+import { useLive } from "./useLive.ts";
 import { type LoopsState, useLoops } from "./useLoops.ts";
 
 const SURFACES: SurfaceKind[] = ["claude-skill", "cli"];
@@ -475,7 +477,7 @@ function DiffModal({
 // Install-review modal: confirm publishing the current chit into Claude Code.
 // The target is fixed (the Claude Code skill surface, not the validation-
 // surface picker). The modal opens only when install is allowed (clean, saved,
-// conflict-free, parseable) — that gate lives on the header button. Permission
+// conflict-free, parseable) - that gate lives on the header button. Permission
 // consent appears only when the chit has enforcement gaps, tied to the specific
 // warning rather than a vague global toggle. Mirrors --allow-unenforced-permissions.
 function InstallModal({
@@ -555,7 +557,7 @@ function InstallModal({
 }
 
 // Installed registry: what this machine has published, independent of the open
-// chit. A right-side drawer (not a rail panel) — it answers "what has this
+// chit. A right-side drawer (not a rail panel) - it answers "what has this
 // machine published?", a different altitude from the per-chit inspector. Per-
 // row uninstall is a two-step confirm; empty state when nothing is installed.
 function InstalledDrawer({
@@ -635,7 +637,7 @@ function InstalledDrawer({
 }
 
 function fmtElapsed(ms: number | null): string {
-	if (ms === null) return "—";
+	if (ms === null) return "-";
 	const s = Math.round(ms / 1000);
 	if (s < 60) return `${s}s`;
 	return `${Math.floor(s / 60)}m ${s % 60}s`;
@@ -1098,13 +1100,18 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	const [installOpen, setInstallOpen] = useState(false);
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [loopsOpen, setLoopsOpen] = useState(false);
+	const [liveOpen, setLiveOpen] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
 	const [installConflict, setInstallConflict] = useState(false);
+
+	// The live monitor polls only while it is open (gated on liveOpen), so the
+	// editor never pays for a background timer.
+	const live = useLive(liveOpen);
 
 	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
 	// Edges are local state (not the adapted array directly) so React Flow can
-	// apply edge selection — selection is the Delete/Backspace target for
+	// apply edge selection - selection is the Delete/Backspace target for
 	// delete-edge. Re-seeded from the parsed graph whenever it changes; on a
 	// successful disconnect the graph re-derivation removes the edge here.
 	const [edges, setEdges] = useState<Edge[]>([]);
@@ -1134,7 +1141,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	// Whether an edge source -> target already exists, by parsed-graph
 	// semantics (adapted.edges derives from graphModel.edges, the parsed
 	// refs). This catches a hand-written `{{steps.x.output}}` that differs
-	// from the canonical token only in spacing — string inclusion in
+	// from the canonical token only in spacing - string inclusion in
 	// insertReference would not.
 	const edgeExists = useCallback(
 		(source: string, target: string) =>
@@ -1291,7 +1298,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	// onSelectionChange only updates inspector state; the DOM never gets the
 	// CSS hook for the inverted header + outer outline.
 	// deletable: false so a node selected when Delete is pressed never enters
-	// React Flow's element-delete path — only edges are deletable. selected is
+	// React Flow's element-delete path - only edges are deletable. selected is
 	// fed back so the .selected CSS hook applies.
 	const reactFlowNodes = useMemo(
 		() => nodes.map((n) => ({ ...n, selected: n.id === selectedId, deletable: false })),
@@ -1349,6 +1356,13 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 						{loops.list.status === "ready" && loops.list.loops.length > 0
 							? ` (${loops.list.loops.length})`
 							: ""}
+					</button>
+					<button
+						type="button"
+						className="btn-secondary live-btn"
+						onClick={() => setLiveOpen(true)}
+					>
+						Live
 					</button>
 					<span className="header-divider">·</span>
 					<SurfaceSelector
@@ -1442,6 +1456,7 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				/>
 			)}
 			{loopsOpen && <LoopsDrawer loops={loops} onClose={() => setLoopsOpen(false)} />}
+			{liveOpen && <LiveMonitor live={live} onClose={() => setLiveOpen(false)} />}
 		</>
 	);
 }

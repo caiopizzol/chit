@@ -169,7 +169,7 @@ export interface LoopSummary {
 //     cross-process foreground registry (live, ephemeral; a crashed or idle run
 //     drops out).
 //   - background: durable background jobs from the JobStore (cross-session;
-//     queued/running/terminal, with `stale` derived for a dead worker).
+//     queued/running only, with `stale` derived for a dead worker).
 //
 // Every row is a GLANCE summary, safe to hand a browser: ids, a bounded
 // scope/task one-liner, phase/display, ages derived against the reader's clock,
