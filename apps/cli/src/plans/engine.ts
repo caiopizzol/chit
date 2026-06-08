@@ -69,7 +69,9 @@ export interface LaunchPlanJobParams {
 export interface PlanEngineDeps {
 	git: GitRunner; // read-only repo queries (toplevel, base sha resolution)
 	// Create the plan's integration worktree + branch off baseSha (the plan's accumulating
-	// result, living in its own managed worktree, never the operator's checkout). Throws
+	// result, living in its own managed worktree, never the operator's checkout). It links NO
+	// tooling: the integration worktree only applies + commits step diffs, never runs checks, and a
+	// node_modules symlink there would be committed by the step commit's `git add -A`. Throws
 	// WorktreeError on failure.
 	createIntegrationWorktree: (
 		repo: string,
@@ -78,12 +80,15 @@ export interface PlanEngineDeps {
 	) => { worktreePath: string; branch: string };
 	// Create a step's isolated worktree + branch off baseSha (the integration-branch commit
 	// the step is cut from). Injected separately from `git` so the fs-touching step is faked
-	// in tests. Throws WorktreeError on failure.
+	// in tests. `toolingSource` is the checkout the plan was launched from; its node_modules is
+	// linked into the fresh step worktree so the step's checks resolve installed binaries the
+	// worktree lacks. Throws WorktreeError on failure.
 	createStepWorktree: (
 		repo: string,
 		planId: string,
 		stepId: string,
 		baseSha: string,
+		toolingSource: string,
 	) => { worktreePath: string; branch: string };
 	// Launch a background converge job in the step's worktree; returns its ids.
 	launchJob: (p: LaunchPlanJobParams) => { jobId: string; loopId: string };
@@ -773,7 +778,15 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 		// step in a later slice; fall back to baseSha defensively.
 		const base = c.integrationTipSha ?? c.baseSha;
 		try {
-			const { worktreePath, branch } = deps.createStepWorktree(c.repo, c.id, next.id, base);
+			// Link tooling from the checkout the plan was launched from (callerCheckout), so a step's
+			// fresh worktree resolves installed binaries exactly like the launch checkout does.
+			const { worktreePath, branch } = deps.createStepWorktree(
+				c.repo,
+				c.id,
+				next.id,
+				base,
+				c.callerCheckout,
+			);
 			next.worktreePath = worktreePath;
 			next.branch = branch;
 			next.baseSha = base;

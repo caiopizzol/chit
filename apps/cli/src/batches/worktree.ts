@@ -9,6 +9,7 @@
 
 import { execFileSync } from "node:child_process";
 import {
+	appendFileSync,
 	cpSync,
 	existsSync,
 	lstatSync,
@@ -18,6 +19,7 @@ import {
 	realpathSync,
 	rmdirSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -56,6 +58,16 @@ function gitErr(r: GitResult): string {
 	return (r.stderr || r.stdout || `exit ${r.code}`).trim();
 }
 
+// A managed worktree links the launching checkout's node_modules as a SYMLINK (see linkNodeModules).
+// The conventional directory-only `node_modules/` gitignore pattern does NOT match a symlink, so git
+// reports the link as untracked. node_modules is tooling, never applicable work, so it is filtered
+// from a run's apply candidates and partial-work listings -- otherwise the linked symlink would read
+// as an untracked file to apply or as uncommitted work. Matches the top-level tooling link this
+// helper creates, plus any path beneath it.
+function isLinkedToolingPath(p: string): boolean {
+	return p === "node_modules" || p.startsWith("node_modules/");
+}
+
 // Where a task's worktree and branch live. The agreed v1 layout:
 //   ~/worktrees/chit/<batchId>/<taskId>   (absolute, recorded in state)
 //   branch: chit-batch/<batchId>/<taskId>
@@ -89,16 +101,74 @@ export function repoToplevel(git: GitRunner, cwd: string): string {
 	return r.stdout.trim();
 }
 
+// Link an existing node_modules from a source checkout into a freshly created managed worktree.
+// A managed worktree is a FRESH git worktree: it has the committed tree but NOT untracked workspace
+// tooling like node_modules, so a check that shells out to an installed binary (e.g. a `bun --filter
+// ... typecheck` that runs fumadocs-mdx / biome) fails with a mystery "command not found" even though
+// the launching checkout has dependencies installed. Symlink (not copy) the source's node_modules so
+// the worktree shares the SAME installed tooling without duplicating it on disk. We do NOT run an
+// install: the link reuses what the source already has. Conservative:
+//   - no-op when the source has no node_modules (nothing to share), and
+//   - never clobber an existing target node_modules (lstat so a dangling symlink still counts present).
+// A link failure surfaces a WorktreeError so a check fails loudly HERE, not later with a missing-binary
+// mystery. Note: a project's conventional directory-only `node_modules/` ignore does NOT match a
+// symlink, so git reports the link as untracked -- callers that read a worktree's untracked/dirty
+// state filter it via isLinkedToolingPath, and it is never linked into a worktree that is committed.
+export function linkNodeModules(sourceCheckout: string, targetWorktree: string): void {
+	const src = join(sourceCheckout, "node_modules");
+	const dst = join(targetWorktree, "node_modules");
+	if (!existsSync(src)) return; // the source has no installed deps to share
+	// lstat, not existsSync: a dangling symlink at dst must still count as present (never clobber it).
+	let dstPresent = true;
+	try {
+		lstatSync(dst);
+	} catch {
+		dstPresent = false;
+	}
+	if (dstPresent) return; // never overwrite an existing install/link
+	try {
+		// Absolute target so the link resolves regardless of the worktree's own location.
+		symlinkSync(src, dst);
+	} catch (e) {
+		throw new WorktreeError(
+			`could not link node_modules from ${src} into ${dst}: ${(e as Error).message}`,
+		);
+	}
+}
+
+function excludeLinkedNodeModules(git: GitRunner, worktreePath: string): void {
+	const r = git(["rev-parse", "--git-common-dir"], worktreePath);
+	if (r.code !== 0) {
+		throw new WorktreeError(
+			`could not find git common dir for linked node_modules exclude in ${worktreePath}: ${gitErr(r)}`,
+		);
+	}
+	const raw = r.stdout.trim();
+	const gitCommonDir = resolve(worktreePath, raw);
+	const excludePath = join(gitCommonDir, "info", "exclude");
+	mkdirSync(dirname(excludePath), { recursive: true });
+	const current = existsSync(excludePath) ? readFileSync(excludePath, "utf-8") : "";
+	if (current.split(/\r?\n/).includes("/node_modules")) return;
+	appendFileSync(
+		excludePath,
+		`${current.endsWith("\n") || current.length === 0 ? "" : "\n"}/node_modules\n`,
+	);
+}
+
 // Create a worktree + branch off baseSha at an explicit path/branch. Conservative:
 // refuses if the branch or the worktree path already exists (never clobbers prior
 // work). `git worktree add -b` creates the leaf dir but not missing parents, so the
 // parent is created first. The generic core shared by batch tasks and single runs.
+// When `toolingSource` is given, its node_modules is linked into the fresh worktree
+// (see linkNodeModules) so checks can resolve installed binaries the worktree lacks; a
+// link failure rolls back the just-created worktree + branch so nothing is orphaned.
 export function createWorktree(
 	git: GitRunner,
 	repo: string,
 	worktreePath: string,
 	branch: string,
 	baseSha: string,
+	toolingSource?: string,
 ): { worktreePath: string; branch: string } {
 	if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo).code === 0) {
 		throw new WorktreeError(`branch ${JSON.stringify(branch)} already exists`);
@@ -112,6 +182,23 @@ export function createWorktree(
 	if (r.code !== 0) {
 		throw new WorktreeError(`git worktree add failed: ${gitErr(r)}`);
 	}
+	if (toolingSource !== undefined) {
+		try {
+			linkNodeModules(toolingSource, worktreePath);
+			if (existsSync(join(worktreePath, "node_modules"))) {
+				// Keep agent-visible `git status` clean too: a directory-only `node_modules/` ignore
+				// pattern does not ignore this symlink, so add a repo-local exclude.
+				excludeLinkedNodeModules(git, worktreePath);
+			}
+		} catch (e) {
+			// Atomic: the worktree + branch already exist, but callers record worktreePath/branch only
+			// AFTER this returns -- so a post-add setup failure would strand them outside cleanup. Roll
+			// back the just-created worktree + branch (best-effort), then rethrow the original error so
+			// the caller still fails loudly without leaving an orphan.
+			removeTaskWorktree(git, repo, worktreePath, branch);
+			throw e;
+		}
+	}
 	return { worktreePath, branch };
 }
 
@@ -123,9 +210,10 @@ export function createTaskWorktree(
 	batchId: string,
 	taskId: string,
 	baseSha: string,
+	toolingSource?: string,
 ): { worktreePath: string; branch: string } {
 	const { worktreePath, branch } = taskWorktree(batchId, taskId);
-	return createWorktree(git, repo, worktreePath, branch, baseSha);
+	return createWorktree(git, repo, worktreePath, branch, baseSha, toolingSource);
 }
 
 // Where a plan's integration worktree + branch live: the plan's accumulating result,
@@ -156,6 +244,14 @@ export function planStepWorktree(
 
 // Plan wrappers: create the integration / a step worktree at the plan layout, off the
 // given base SHA. Behavior-identical to createWorktree at the plan paths/branches.
+//
+// The integration worktree is DELIBERATELY not given a tooling link: it never runs project
+// checks (it only `git apply`s a step's diff and `git commit`s it), and a node_modules symlink
+// there would be staged by commitWorktree's `git add -A` (the conventional directory-only
+// `node_modules/` ignore does not match a symlink) -- committing tooling into the integration
+// branch and dirtying the clean-worktree apply gate. Only the step worktrees, where checks run,
+// link tooling (see createPlanStepWorktree). The integration commit hook problem is handled by
+// commitWorktree's --no-verify, not by tooling.
 export function createPlanIntegrationWorktree(
 	git: GitRunner,
 	repo: string,
@@ -166,15 +262,21 @@ export function createPlanIntegrationWorktree(
 	return createWorktree(git, repo, worktreePath, branch, baseSha);
 }
 
+// A step worktree DOES link tooling: the converge loop runs the step's checks here (cwd is this
+// worktree), so without the launching checkout's node_modules a check shelling out to an installed
+// binary fails with a missing-binary error. node_modules is filtered from this worktree's apply
+// candidates / partial work (see applyRunWorkspace / inspectPartialWork) so the un-ignored symlink
+// never reads as applicable work.
 export function createPlanStepWorktree(
 	git: GitRunner,
 	repo: string,
 	planId: string,
 	stepId: string,
 	baseSha: string,
+	toolingSource?: string,
 ): { worktreePath: string; branch: string } {
 	const { worktreePath, branch } = planStepWorktree(planId, stepId);
-	return createWorktree(git, repo, worktreePath, branch, baseSha);
+	return createWorktree(git, repo, worktreePath, branch, baseSha, toolingSource);
 }
 
 // Make a scope safe as a git branch component and a path leaf: lowercase, runs of
@@ -243,7 +345,10 @@ export function prepareRunWorkspace(
 	// tree root (so a run launched from a subdir applies at the checkout root).
 	const callerCheckout = repoToplevel(git, callerCwd);
 	const { worktreePath, branch } = runWorktree(opts.runId, opts.scope, opts.worktreesRoot);
-	createWorktree(git, repo, worktreePath, branch, baseSha);
+	// Link the launching checkout's node_modules into the fresh worktree so a write run's checks
+	// resolve installed binaries the worktree itself lacks (see linkNodeModules). A no-op when the
+	// launching checkout has none.
+	createWorktree(git, repo, worktreePath, branch, baseSha, callerCheckout);
 	return {
 		cwd: worktreePath,
 		worktreePath,
@@ -311,7 +416,12 @@ export function commitWorktree(
 		return { committed: false, sha: h.stdout.trim() };
 	};
 	if (staged.code === 0) return head(); // nothing to commit: no-op, report the unchanged tip
-	const commit = git(["commit", "-m", message], worktreePath);
+	// --no-verify: these are INTERNAL plan integration commits in a disposable worktree, not the
+	// operator's final commit. A managed worktree has no project tool PATH, so a project pre-commit
+	// hook (e.g. one that runs biome directly) would fail there on missing tooling. Validation is the
+	// Chit-required checks plus the operator's final commit in their own checkout, so the integration
+	// step commit must not depend on disposable-worktree hook tooling.
+	const commit = git(["commit", "--no-verify", "-m", message], worktreePath);
 	if (commit.code !== 0) return { committed: false, error: `git commit failed: ${gitErr(commit)}` };
 	const h = head();
 	return h.error ? h : { committed: true, sha: h.sha };
@@ -520,10 +630,11 @@ export function applyRunWorkspace(
 	const patch = diff.stdout;
 	const trackedFiles = lines(git(["diff", "--name-only", opts.baseSha], opts.worktreePath).stdout);
 	// Unignored untracked files only (--exclude-standard drops gitignored residue); these are
-	// CANDIDATES, surfaced for explicit inclusion -- never auto-applied.
+	// CANDIDATES, surfaced for explicit inclusion -- never auto-applied. The linked node_modules
+	// symlink is filtered: it is tooling, never an applicable candidate (see isLinkedToolingPath).
 	const untracked = lines(
 		git(["ls-files", "--others", "--exclude-standard"], opts.worktreePath).stdout,
-	);
+	).filter((f) => !isLinkedToolingPath(f));
 
 	// Conflict gate: does the tracked patch apply cleanly to the target? (empty patch is trivially clean)
 	const withPatch = <T>(fn: (patchFile: string) => T): T => {
@@ -720,10 +831,13 @@ export function inspectPartialWork(git: GitRunner, worktreePath: string): Partia
 	const st = git(["status", "--porcelain"], worktreePath);
 	if (st.code !== 0) return empty;
 	// porcelain v1: "XY <path>" (or "XY <old> -> <new>" for a rename); the path starts at col 3.
+	// The linked node_modules symlink is filtered out: it is tooling, not the run's uncommitted work,
+	// so it must not read as partial work (see isLinkedToolingPath).
 	const dirtyFiles = st.stdout
 		.split("\n")
 		.map((l) => l.slice(3).trim())
-		.filter(Boolean);
+		.filter(Boolean)
+		.filter((f) => !isLinkedToolingPath(f));
 	let insertions = 0;
 	let deletions = 0;
 	// vs HEAD (not the index): an implementer that `git add`ed before timing out has STAGED work --

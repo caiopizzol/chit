@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	appendFileSync,
 	existsSync,
+	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
@@ -324,6 +326,25 @@ describe("startPlan", () => {
 		expect(job.worktreePath).toBe(aWorktree);
 		expect(job.baseSha).toBe("basesha");
 		expect(job.callerCheckout).toBe(c.callerCheckout);
+	});
+
+	test("links tooling from the launching checkout into the STEP worktree (not integration)", () => {
+		// The fix for the 0.39 dogfood: a step worktree is a fresh git worktree with no node_modules,
+		// so its checks fail with a missing binary. The step worktree must receive the launching
+		// checkout (callerCheckout) as the tooling source. The integration worktree must NOT -- a
+		// node_modules symlink there would be committed by the step commit's `git add -A`.
+		const stepToolingSources: string[] = [];
+		const capturing: PlanEngineDeps = {
+			...deps,
+			createStepWorktree: (repo, planId, stepId, sha, toolingSource) => {
+				stepToolingSources.push(toolingSource);
+				return deps.createStepWorktree(repo, planId, stepId, sha, toolingSource);
+			},
+		};
+		const c = startPlan(store, capturing, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		// For a plain main-repo launch callerCheckout === cwd; the point is it is threaded, not invented.
+		expect(stepToolingSources).toEqual([c.callerCheckout]); // the first launched step
+		expect(c.callerCheckout).toBe(cwd);
 	});
 
 	test("copies step overrides onto the launched job (maxIterations, checks, manifest, timeout)", () => {
@@ -827,13 +848,14 @@ function realHarness(): RealHarness {
 				`chit-plan/${planId}/integration`,
 				sha,
 			),
-		createStepWorktree: (r, planId, stepId, sha) =>
+		createStepWorktree: (r, planId, stepId, sha, toolingSource) =>
 			createWorktree(
 				realGit,
 				r,
 				join(wtRoot, planId, "steps", stepId),
 				`chit-plan/${planId}/steps/${stepId}`,
 				sha,
+				toolingSource,
 			),
 		launchJob: (p) => {
 			// The implementer's tracked diff: append a step-identifying line to base.txt. The leaf of
@@ -884,6 +906,39 @@ function realHarness(): RealHarness {
 		},
 	};
 }
+
+describe("plan worktree tooling link (real git)", () => {
+	test("the STEP worktree links node_modules from the launching checkout; integration does not", () => {
+		const h = realHarness();
+		// A project that ignores node_modules with the conventional directory-only pattern (which does
+		// NOT match a symlink): the symlink would dirty/commit into the integration worktree if linked.
+		writeFileSync(join(h.repo, ".gitignore"), "node_modules/\n");
+		run(h.repo, ["add", ".gitignore"]);
+		run(h.repo, ["commit", "-q", "-m", "ignore node_modules"]);
+		// The launching checkout (h.repo) has installed tooling; a fresh managed worktree does not.
+		mkdirSync(join(h.repo, "node_modules", ".bin"), { recursive: true });
+		writeFileSync(join(h.repo, "node_modules", "marker.txt"), "tool");
+
+		const c = startPlan(h.store, h.deps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: chainPlan({ steps: [step("a")] }),
+		});
+
+		// The launched step's worktree carries a node_modules symlink resolving to the repo's tooling,
+		// so its checks can find installed binaries.
+		const aWt = present(stepOf(c, "a").worktreePath, "step a worktree");
+		expect(lstatSync(join(aWt, "node_modules")).isSymbolicLink()).toBe(true);
+		expect(readFileSync(join(aWt, "node_modules", "marker.txt"), "utf-8")).toBe("tool");
+
+		// The integration worktree is NOT linked: it never runs checks and a node_modules symlink would
+		// be staged by the step commit's `git add -A`. So it has no node_modules and stays clean for the
+		// apply gate (which a directory-only ignore would NOT keep clean for a symlink).
+		const integration = present(c.integrationWorktree, "integration worktree");
+		expect(existsSync(join(integration, "node_modules"))).toBe(false);
+		expect(run(integration, ["status", "--porcelain"]).trim()).toBe("");
+	});
+});
 
 // Start a single-step plan and settle that step to review_ready (converged), returning the harness
 // and the post-settle plan. The integration worktree exists and the step's diff is uncommitted in

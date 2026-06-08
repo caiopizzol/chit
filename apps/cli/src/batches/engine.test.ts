@@ -208,6 +208,29 @@ describe("startBatch", () => {
 		expect(job.callerCheckout).toBe(c.repo);
 	});
 
+	test("threads the launching checkout as the task worktree tooling source", () => {
+		const toolingSources: string[] = [];
+		const capturing: BatchEngineDeps = {
+			...deps,
+			createWorktree: (repo, cid, tid, sha, toolingSource) => {
+				toolingSources.push(toolingSource);
+				return deps.createWorktree(repo, cid, tid, sha, toolingSource);
+			},
+		};
+		const c = startBatch(store, capturing, {
+			id: "c1",
+			cwd,
+			tasks: [task("a"), task("b")],
+			maxParallel: 2,
+		});
+
+		// Batch task worktrees run checks too, so they need the same launch-checkout tooling link as
+		// single-run and plan-step worktrees. For a main-repo launch, callerCheckout === cwd.
+		const callerCheckout = present(c.callerCheckout, "caller checkout");
+		expect(toolingSources).toEqual([callerCheckout, callerCheckout]);
+		expect(c.callerCheckout).toBe(cwd);
+	});
+
 	test("resolves the per-task manifest override (task > batch > default)", () => {
 		startBatch(store, deps, {
 			id: "c1",

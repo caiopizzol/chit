@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -14,12 +16,15 @@ import { join } from "node:path";
 import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
+	commitWorktree,
 	createPlanStepWorktree,
 	createTaskWorktree,
+	createWorktree,
 	describePartialWork,
 	type GitResult,
 	type GitRunner,
 	inspectPartialWork,
+	linkNodeModules,
 	mainRepoOfWorktree,
 	partialWorkFailureClause,
 	planIntegrationWorktree,
@@ -156,6 +161,191 @@ describe("createPlanStepWorktree", () => {
 		expect(() => createPlanStepWorktree(git, "/repo", "p", "s", "base")).toThrow(
 			/git worktree add failed.*bad ref/,
 		);
+	});
+});
+
+describe("linkNodeModules", () => {
+	let dir: string;
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "chit-nm-"));
+	});
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("links a source node_modules into a fresh worktree (symlink, not copy)", () => {
+		const src = join(dir, "src");
+		const dst = join(dir, "wt");
+		mkdirSync(join(src, "node_modules", ".bin"), { recursive: true });
+		writeFileSync(join(src, "node_modules", "marker.txt"), "tool");
+		mkdirSync(dst);
+
+		linkNodeModules(src, dst);
+
+		const link = join(dst, "node_modules");
+		expect(lstatSync(link).isSymbolicLink()).toBe(true); // a symlink, NOT a copy
+		// The link resolves to the source's installed tooling.
+		expect(readFileSync(join(link, "marker.txt"), "utf8")).toBe("tool");
+	});
+
+	test("no-ops when the source has no node_modules (nothing to share)", () => {
+		const src = join(dir, "src");
+		const dst = join(dir, "wt");
+		mkdirSync(src);
+		mkdirSync(dst);
+
+		linkNodeModules(src, dst);
+
+		expect(existsSync(join(dst, "node_modules"))).toBe(false); // nothing linked
+	});
+
+	test("does not clobber an existing target node_modules", () => {
+		const src = join(dir, "src");
+		const dst = join(dir, "wt");
+		mkdirSync(join(src, "node_modules"), { recursive: true });
+		writeFileSync(join(src, "node_modules", "marker.txt"), "source");
+		// The target ALREADY has a real node_modules (its own install).
+		mkdirSync(join(dst, "node_modules"), { recursive: true });
+		writeFileSync(join(dst, "node_modules", "marker.txt"), "target-own");
+
+		linkNodeModules(src, dst);
+
+		// Untouched: still the target's own dir (a real directory, not a symlink to the source).
+		expect(lstatSync(join(dst, "node_modules")).isSymbolicLink()).toBe(false);
+		expect(readFileSync(join(dst, "node_modules", "marker.txt"), "utf8")).toBe("target-own");
+	});
+
+	test("surfaces a link failure as WorktreeError", () => {
+		const src = join(dir, "src");
+		mkdirSync(join(src, "node_modules"), { recursive: true });
+		// The target's PARENT does not exist, so symlinkSync fails (ENOENT) -- a clear WorktreeError
+		// rather than a later mystery missing-binary failure.
+		const dst = join(dir, "missing-parent", "wt");
+		expect(() => linkNodeModules(src, dst)).toThrow(WorktreeError);
+	});
+});
+
+describe("createWorktree tooling link", () => {
+	test("links the tooling source's node_modules into the new worktree (real git)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-tool-repo-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-tool-wt-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const base = realGit(["rev-parse", "HEAD"], repo).stdout.trim();
+			// The source checkout has installed tooling (node_modules); the fresh worktree does not.
+			mkdirSync(join(repo, "node_modules", ".bin"), { recursive: true });
+			writeFileSync(join(repo, "node_modules", "marker.txt"), "tool");
+
+			const wt = join(root, "wt");
+			createWorktree(realGit, repo, wt, "chit-test/tool", base, repo);
+
+			const link = join(wt, "node_modules");
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+			expect(readFileSync(join(link, "marker.txt"), "utf8")).toBe("tool");
+			expect(realGit(["status", "--porcelain"], wt).stdout.trim()).toBe("");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("rolls back the worktree + branch when the tooling link fails (no orphan left behind)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-rb-repo-"));
+		const root = mkdtempSync(join(tmpdir(), "chit-rb-wt-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const base = realGit(["rev-parse", "HEAD"], repo).stdout.trim();
+			// The source has installed tooling, so createWorktree attempts to link it.
+			mkdirSync(join(repo, "node_modules"), { recursive: true });
+
+			const wt = join(root, "wt");
+			const branch = "chit-test/rollback";
+			// Force the post-add tooling link to fail: a git wrapper that lets the REAL `worktree add`
+			// create the worktree + branch, then removes the worktree dir so linkNodeModules' symlink
+			// throws (ENOENT, its destination parent is gone). createWorktree must then roll back.
+			const git: GitRunner = (args, cwd) => {
+				const res = realGit(args, cwd);
+				if (args[0] === "worktree" && args[1] === "add" && res.code === 0) {
+					rmSync(wt, { recursive: true, force: true });
+				}
+				return res;
+			};
+
+			expect(() => createWorktree(git, repo, wt, branch, base, repo)).toThrow(WorktreeError);
+			// No orphan: the branch was deleted and the worktree is neither registered nor on disk.
+			expect(realGit(["branch", "--list", branch], repo).stdout.trim()).toBe("");
+			expect(realGit(["worktree", "list"], repo).stdout).not.toContain(wt);
+			expect(existsSync(wt)).toBe(false);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("commitWorktree", () => {
+	test("commits the staged diff with --no-verify, bypassing a failing pre-commit hook", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-commit-repo-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			// A pre-commit hook that ALWAYS fails -- standing in for a project hook that shells out to a
+			// tool (biome) the disposable worktree has no PATH for. A normal commit would abort here.
+			const hook = join(repo, ".git", "hooks", "pre-commit");
+			writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+			chmodSync(hook, 0o755);
+			// Sanity: a hook-respecting commit DOES fail, proving the hook is active.
+			writeFileSync(join(repo, "f.ts"), "verify hook fires\n");
+			realGit(["add", "f.ts"], repo);
+			expect(realGit(["commit", "-m", "should be blocked"], repo).code).not.toBe(0);
+
+			// commitWorktree uses --no-verify, so it commits the staged diff despite the failing hook.
+			const r = commitWorktree(realGit, repo, "integration step commit");
+			expect(r.error).toBeUndefined();
+			expect(r.committed).toBe(true);
+			expect(r.sha).toBeTruthy();
+			// The commit landed: HEAD's subject is ours and the staged change is in it.
+			expect(realGit(["log", "-1", "--pretty=%s"], repo).stdout.trim()).toBe(
+				"integration step commit",
+			);
+			expect(realGit(["show", "HEAD:f.ts"], repo).stdout).toBe("verify hook fires\n");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("no diff -> no-op commit (committed=false) at the unchanged tip", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-commit-noop-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "base\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			const tip = realGit(["rev-parse", "HEAD"], repo).stdout.trim();
+
+			const r = commitWorktree(realGit, repo, "nothing to do");
+			expect(r.committed).toBe(false);
+			expect(r.error).toBeUndefined();
+			expect(r.sha).toBe(tip); // the tip did not move
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -637,6 +827,27 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 		}
 	});
 
+	test("filters a linked node_modules symlink out of the untracked candidates (0.39 tooling link)", () => {
+		const { main, wt, base, teardown } = applySetup();
+		const realNm = mkdtempSync(join(tmpdir(), "chit-nm-real-"));
+		try {
+			// Simulate the managed worktree's tooling link: a node_modules SYMLINK. With no (or a
+			// directory-only) ignore it shows as untracked, but it is tooling, never an apply candidate.
+			symlinkSync(realNm, join(wt, "node_modules"));
+			const dry = applyRunWorkspace(realGit, {
+				worktreePath: wt,
+				baseSha: base,
+				target: main,
+				confirm: false,
+			});
+			expect(dry.untracked).toContain("newfile.ts"); // the real candidate is still listed
+			expect(dry.untracked).not.toContain("node_modules"); // the tooling link is filtered out
+		} finally {
+			rmSync(realNm, { recursive: true, force: true });
+			teardown();
+		}
+	});
+
 	test("refuses (does not apply) when the target conflicts with the run's change on the same lines", () => {
 		const { main, wt, base, teardown } = applySetup();
 		try {
@@ -853,6 +1064,33 @@ describe("inspectPartialWork + describePartialWork (partial-work visibility)", (
 			expect(pw.dirtyFiles).toContain("new.ts"); // untracked counts as dirty
 			expect(pw.insertions).toBeGreaterThan(0); // tracked insertions counted
 		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("ignores a linked node_modules symlink: it is tooling, not the run's partial work (0.39)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-pw-nm-"));
+		const realNm = mkdtempSync(join(tmpdir(), "chit-pw-nm-real-"));
+		try {
+			realGit(["init", "-q"], repo);
+			realGit(["config", "user.email", "t@chit.test"], repo);
+			realGit(["config", "user.name", "t"], repo);
+			writeFileSync(join(repo, "f.ts"), "a\n");
+			realGit(["add", "."], repo);
+			realGit(["commit", "-qm", "base"], repo);
+			// The managed worktree's tooling link, with nothing else dirty: NOT partial work.
+			symlinkSync(realNm, join(repo, "node_modules"));
+			const pw = inspectPartialWork(realGit, repo);
+			expect(pw.partialWorkPresent).toBe(false);
+			expect(pw.dirtyFiles).not.toContain("node_modules");
+			// A REAL edit alongside the link IS partial work, but the link is still excluded.
+			writeFileSync(join(repo, "x.ts"), "x\n");
+			const pw2 = inspectPartialWork(realGit, repo);
+			expect(pw2.partialWorkPresent).toBe(true);
+			expect(pw2.dirtyFiles).toContain("x.ts");
+			expect(pw2.dirtyFiles).not.toContain("node_modules");
+		} finally {
+			rmSync(realNm, { recursive: true, force: true });
 			rmSync(repo, { recursive: true, force: true });
 		}
 	});

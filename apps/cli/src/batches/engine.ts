@@ -76,6 +76,7 @@ export interface BatchEngineDeps {
 		batchId: string,
 		taskId: string,
 		baseSha: string,
+		toolingSource: string,
 	) => { worktreePath: string; branch: string };
 	// Launch a background converge job in the task's worktree; returns its ids.
 	launchJob: (p: LaunchJobParams) => { jobId: string; loopId: string };
@@ -444,7 +445,13 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 		const t = c.tasks.find((x) => x.id === task.id);
 		if (!t) continue;
 		try {
-			const { worktreePath, branch } = deps.createWorktree(c.repo, c.id, t.id, c.baseSha);
+			const { worktreePath, branch } = deps.createWorktree(
+				c.repo,
+				c.id,
+				t.id,
+				c.baseSha,
+				c.callerCheckout ?? c.repo,
+			);
 			// Record the worktree+branch IMMEDIATELY, before launching the job. If
 			// launchJob then fails, the task is failed but its worktree is still
 			// recorded, so cleanup can find and remove it (otherwise the worktree is

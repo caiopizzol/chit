@@ -2403,7 +2403,8 @@ server.registerTool(
 // loudly via launchConvergeJob.
 const batchDeps: BatchEngineDeps = {
 	git: realGit,
-	createWorktree: (repo, cid, tid, sha) => createTaskWorktree(realGit, repo, cid, tid, sha),
+	createWorktree: (repo, cid, tid, sha, toolingSource) =>
+		createTaskWorktree(realGit, repo, cid, tid, sha, toolingSource),
 	removeWorktree: (repo, worktreePath, branch) =>
 		removeTaskWorktree(realGit, repo, worktreePath, branch),
 	launchJob: (p) => {
@@ -2737,8 +2738,10 @@ const planDeps: PlanEngineDeps = {
 	git: realGit,
 	createIntegrationWorktree: (repo, planId, baseSha) =>
 		createPlanIntegrationWorktree(realGit, repo, planId, baseSha),
-	createStepWorktree: (repo, planId, stepId, baseSha) =>
-		createPlanStepWorktree(realGit, repo, planId, stepId, baseSha),
+	// The step worktree links the launching checkout's node_modules so the step's checks resolve
+	// installed binaries (the integration worktree deliberately does not -- see createPlanStepWorktree).
+	createStepWorktree: (repo, planId, stepId, baseSha, toolingSource) =>
+		createPlanStepWorktree(realGit, repo, planId, stepId, baseSha, toolingSource),
 	launchJob: (p) => {
 		const r = launchConvergeJob({
 			task: p.task,
