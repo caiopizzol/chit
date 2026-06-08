@@ -39,6 +39,7 @@ import {
 	type LaunchPlanJobParams,
 	listPlans,
 	type PlanEngineDeps,
+	planWaitState,
 	startPlan,
 } from "./engine.ts";
 import { PlanStore } from "./store.ts";
@@ -475,6 +476,74 @@ describe("advancePlan: reconciliation", () => {
 		const c1 = advancePlan(store, deps, "p1"); // job is still queued
 		expect(stepOf(c1, "a").status).toBe("running");
 		expect(c1.status).toBe("running");
+	});
+});
+
+describe("planWaitState (what chit_wait blocks on for a plan)", () => {
+	test("a live running step, nothing reconcilable -> working (keep waiting)", () => {
+		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		// Step a's job is queued and not stale: the next advance would do nothing yet.
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("working");
+	});
+
+	test("a finished active job -> needs_advance (advance would reconcile it)", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged", lastVerdict: "proceed" });
+		// A completed job is settleable, so the next advance would reconcile it. The wait must NOT
+		// advance: the plan stays untouched (step a is still recorded "running").
+		const before = present(store.get("p1"), "p1");
+		expect(planWaitState(before, deps)).toBe("needs_advance");
+		expect(stepOf(present(store.get("p1"), "p1"), "a").status).toBe("running");
+	});
+
+	test("a stale worker -> needs_advance (so a wait never hangs on a dead worker)", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running" });
+		const staleDeps: PlanEngineDeps = { ...deps, isStale: () => true };
+		expect(planWaitState(present(store.get("p1"), "p1"), staleDeps)).toBe("needs_advance");
+	});
+
+	test("a vanished job record -> needs_advance (advance would fail it, not hang)", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.jobs.delete(stepOf(c0, "a").runId ?? "");
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("needs_advance");
+	});
+
+	test("a review_ready step -> ready_for_apply (return at once, do not block)", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(store, deps, "p1"); // a -> review_ready, plan -> ready_for_apply
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("ready_for_apply");
+	});
+
+	test("a completed plan -> terminal", () => {
+		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan({ steps: [step("a")] }) });
+		jobs.finish(stepOf(present(store.get("p1"), "p1"), "a").runId ?? "", {
+			stopStatus: "converged",
+		});
+		advancePlan(store, deps, "p1"); // a -> review_ready
+		applyStep("p1", "a", "appliedsha"); // a -> applied, plan -> completed
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("terminal");
+	});
+
+	test("a cancelled plan -> terminal", () => {
+		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		cancelPlan(store, deps, "p1");
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("terminal");
+	});
+
+	test("a failed plan -> terminal", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running" });
+		advancePlan(store, { ...deps, isStale: () => true }, "p1"); // a -> failed, plan -> failed
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("terminal");
+	});
+
+	test("a needs_human plan -> terminal (paused for a decision, nothing to wait on)", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "max-iterations" });
+		advancePlan(store, deps, "p1"); // a -> needs_human, plan -> needs_human
+		expect(planWaitState(present(store.get("p1"), "p1"), deps)).toBe("terminal");
 	});
 });
 

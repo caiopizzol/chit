@@ -100,3 +100,44 @@ describe("read-only plan tools do not launch", () => {
 		expect(textOf(result)).toContain("unknown plan_id does-not-exist");
 	});
 });
+
+describe("chit_wait accepts plan_id (and rejects missing / multiple ids)", () => {
+	test("chit_wait advertises a plan_id input alongside run_id and batch_id", async () => {
+		const { tools } = await client.listTools();
+		const wait = tools.find((t) => t.name === "chit_wait");
+		expect(wait).toBeDefined();
+		const props = (wait?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
+		expect(props.plan_id).toBeDefined();
+		// The existing ids are untouched.
+		expect(props.run_id).toBeDefined();
+		expect(props.batch_id).toBeDefined();
+	});
+
+	test("no id at all is rejected cleanly", async () => {
+		const result = (await client.callTool({
+			name: "chit_wait",
+			arguments: {},
+		})) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("exactly one of run_id, batch_id, or plan_id");
+	});
+
+	test("more than one id is rejected cleanly", async () => {
+		const result = (await client.callTool({
+			name: "chit_wait",
+			arguments: { run_id: "r1", plan_id: "p1" },
+		})) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("exactly one of run_id, batch_id, or plan_id");
+	});
+
+	test("an unknown plan_id errors immediately and never launches (read-only)", async () => {
+		// Resolves the durable repo, finds no such plan, and returns at once -- no tick, no mutation.
+		const result = (await client.callTool({
+			name: "chit_wait",
+			arguments: { plan_id: "does-not-exist", cwd: process.cwd() },
+		})) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("unknown plan_id does-not-exist");
+	});
+});

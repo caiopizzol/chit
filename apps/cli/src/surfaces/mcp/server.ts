@@ -99,6 +99,7 @@ import {
 	listPlans,
 	type PlanEngineDeps,
 	PlanEngineError,
+	planWaitState,
 } from "../../plans/engine.ts";
 import { PlanStore, PlanStoreError } from "../../plans/store.ts";
 import { runPlanApply, runPlanCleanup, runPlanStart } from "../../plans/tools.ts";
@@ -380,7 +381,7 @@ server.registerTool(
 	"chit_wait",
 	{
 		description:
-			"Block until a background run or batch reaches a meaningful state, then return the same view as chit_status / chit_batch_status plus a waitResult. Use this instead of polling chit_status in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is terminal -- ready_for_review (every task clean), needs_human (a task needs a decision or is blocked), failed, or cancelled (a needs_advance result means call chit_batch_advance now, then wait again). Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | timeout. Inputs: run_id OR batch_id, optional timeout_ms (default 900000), cwd (batch only).",
+			"Block until a background run, batch, or plan reaches a meaningful state, then return the same view as chit_status / chit_batch_status / chit_plan_status plus a waitResult. Use this instead of polling chit_status (or chit_plan_status) in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is terminal -- ready_for_review (every task clean), needs_human (a task needs a decision or is blocked), failed, or cancelled (a needs_advance result means call chit_batch_advance now, then wait again). For a plan (plan_id): waits until the active step's job is no longer live (needs_advance), or the plan is ready_for_apply (a step converged and waits on the gated apply) or terminal (completed / cancelled / failed / needs_human) -- it does NOT advance, reconcile, apply, or launch. The plan loop is: chit_wait -> chit_plan_advance -> chit_plan_status, repeated until the plan settles (a needs_advance result means call chit_plan_advance now, then wait again; a ready_for_apply result means apply the review_ready step with chit_plan_advance and an apply payload). Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch/plan keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | ready_for_apply | timeout. Inputs: exactly one of run_id, batch_id, or plan_id, optional timeout_ms (default 900000), cwd (batch and plan only).",
 		inputSchema: {
 			run_id: z
 				.string()
@@ -390,6 +391,10 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe("A batch id (from chit_batch_start or chit_batch_list)."),
+			plan_id: z
+				.string()
+				.optional()
+				.describe("A plan id (from chit_plan_start or chit_plan_list)."),
 			timeout_ms: z
 				.number()
 				.int()
@@ -401,12 +406,13 @@ server.registerTool(
 			cwd: z
 				.string()
 				.optional()
-				.describe("Batch only: any path in the target repo (defaults to server cwd)."),
+				.describe("Batch and plan only: any path in the target repo (defaults to server cwd)."),
 		},
 	},
-	async ({ run_id, batch_id, timeout_ms, cwd }, extra) => {
-		if ((run_id === undefined) === (batch_id === undefined)) {
-			return errorResult("provide exactly one of run_id or batch_id");
+	async ({ run_id, batch_id, plan_id, timeout_ms, cwd }, extra) => {
+		const ids = [run_id, batch_id, plan_id].filter((v) => v !== undefined);
+		if (ids.length !== 1) {
+			return errorResult("provide exactly one of run_id, batch_id, or plan_id");
 		}
 		const deadline = Date.now() + timeout_ms;
 		let beats = 0;
@@ -451,6 +457,46 @@ server.registerTool(
 				heartbeat(`run ${run_id} still ${current.job.state}; waiting`);
 				if (!(await waitTick(WAIT_POLL_MS, extra.signal))) {
 					return jsonResult({ ...unifiedRunView(current), waitResult: "timeout" as const });
+				}
+			}
+		}
+
+		// --- plan: wait until a step needs an advance, the plan is ready_for_apply, or terminal ---
+		// Read-only, exactly like the batch arm: it watches the durable plan/job state and returns the
+		// same view as chit_plan_status plus a waitResult. It NEVER advances, reconciles, applies, or
+		// launches -- progress still happens through chit_plan_advance.
+		if (plan_id !== undefined) {
+			let planStore: PlanStore;
+			// Validate up front so an unknown plan_id (or an unresolvable repo) errors immediately, not
+			// after a tick. planStoreFor resolves the durable main repo via git, so it can throw.
+			try {
+				planStore = planStoreFor(cwd).store;
+				if (!planStore.get(plan_id)) return errorResult(`unknown plan_id ${plan_id}`);
+			} catch (e) {
+				return planError(e);
+			}
+			while (true) {
+				let plan: ReturnType<PlanStore["get"]>;
+				try {
+					plan = planStore.get(plan_id);
+				} catch (e) {
+					return planError(e);
+				}
+				// The durable record is never deleted mid-wait, but guard anyway: a vanished plan is
+				// terminal rather than an infinite loop.
+				if (!plan) return jsonResult({ plan_id, waitResult: "terminal" as const });
+				const state = planWaitState(plan, planDeps);
+				if (state !== "working") {
+					// planWaitState already returns the public waitResult vocabulary
+					// (terminal | ready_for_apply | needs_advance), so pass it through directly.
+					return jsonResult({ ...describePlan(plan, planDeps), waitResult: state });
+				}
+				if (Date.now() >= deadline) {
+					return jsonResult({ ...describePlan(plan, planDeps), waitResult: "timeout" as const });
+				}
+				heartbeat(`plan ${plan_id} working; waiting`);
+				if (!(await waitTick(WAIT_POLL_MS, extra.signal))) {
+					return jsonResult({ ...describePlan(plan, planDeps), waitResult: "timeout" as const });
 				}
 			}
 		}

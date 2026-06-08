@@ -895,6 +895,33 @@ function anyReconcilable(c: Plan, deps: PlanEngineDeps): boolean {
 	});
 }
 
+// The wait-state of a plan for chit_wait. Mirrors batchWaitState, adapted to the plan's
+// operator-gated forward flow. "terminal": the plan has settled (completed / cancelled / failed /
+// needs_human) -- nothing left to wait on or advance. "ready_for_apply": a step converged and its
+// diff waits on the operator's gated apply; surface it at once rather than blocking (no live job to
+// wait on). "needs_advance": chit_plan_advance would do real work now -- a finished, stale, or
+// vanished step job can reconcile, or the next chain step can launch. "working": a step's job is
+// queued/running and live, so the next advance would do nothing yet -- keep waiting. This is
+// READ-ONLY: it never advances, reconciles, applies, or launches; progress still happens through
+// chit_plan_advance.
+export function planWaitState(
+	c: Plan,
+	deps: PlanEngineDeps,
+): "terminal" | "ready_for_apply" | "needs_advance" | "working" {
+	const status = derivePlanStatus(c);
+	// A review_ready step waits on the operator's gated apply; report it immediately. Checked before
+	// the terminal fold because ready_for_apply is a live, actionable plan, not a settled one.
+	if (status === "ready_for_apply") return "ready_for_apply";
+	// completed / cancelled / failed / needs_human: the plan has settled. needs_human folds in here
+	// (a step paused for a human decision with no live job to wait on); the plan view's nextAction
+	// explains the decision the operator must make.
+	if (status !== "running") return "terminal";
+	// Still running: an advance does real work only when a step's job is reconcilable (finished,
+	// stale, or vanished) or the next chain step can launch. Otherwise a live step is in flight.
+	if (anyReconcilable(c, deps) || selectNextStep(c)) return "needs_advance";
+	return "working";
+}
+
 // Read-only join of plan state + live job state. Joins the running step's live job state/phase
 // without mutating; launches NOTHING. Inspection is safe.
 export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
