@@ -219,6 +219,21 @@ the plan record and the live runs. It surfaces, per plan and per step:
   `runState`/`phase`/`activity` for an in-flight run and the `lastVerdict` /
   `lastVerification` / `lastVerificationSource` once it settles (reuse the batch
   task view fields, `engine.ts:504-528`), `changedFiles`, `auditRefs`.
+- **Step receipt** (settled steps only): once a step is terminal, its
+  `chit_plan_status` row can carry a compact `receipt`, snapshotted from the step's
+  loop log at settle and surfaced straight from the plan record - so the row still
+  answers "what happened?" after the live job join is gone (`engine.ts:743-746`,
+  `types.ts:131-136`). It is the same safe `LoopReceipt` shape the single-run views
+  use (`status-line.ts:73`): compact evidence, not a transcript. When present it
+  carries `status` (the loop's terminal stop status), `iterationsCompleted`,
+  `statusLine` (the latest iteration's compact line), `changedFiles`,
+  `workspaceWarnings`, `latestChecks`, `verification` + `verificationSource`,
+  `usage`, `auditRefs`, `stopReason`, and `elapsedMs`. It holds no participants,
+  env values, prompts, outputs, or blob bodies - that provenance lives in
+  `participants` on the row, not here. The receipt is recorded only at settle from a
+  readable loop log, so a row has none in three cases: a running step (not settled
+  yet), a settled step whose loop log was unreadable or held no records at settle
+  (`server.ts:2765-2792`), and a legacy record predating receipts.
 - **Apply result** per applied step: which tracked files landed (staged) and which
   untracked files landed (unstaged), and any conflict refusal - the exact
   disclosure `chit_apply` already returns (`server.ts:2256-2259`) - plus the
@@ -229,10 +244,17 @@ the plan record and the live runs. It surfaces, per plan and per step:
   true` - the plan/run/audit records survive cleanup, so `chit_trace` and
   `chit_audit_show` keep working (`engine.ts:286-290`).
 
+The three altitudes stay distinct. `chit_plan_list` stays a one-line-per-plan
+summary and never carries receipts. `chit_plan_status` carries the compact step
+receipt for a settled step when its loop log produced one. The raw loop history,
+including every iteration record, still lives in `chit_trace`, keyed by `run_id`.
+The receipt is a companion to that history, not a replacement: it settles "what
+happened?" from the plan view alone, and you open the full trace, or a step's
+transcript with `chit_audit_show { audit_ref }`, when you need more.
+
 The plan record points; it never recomputes execution or duplicates transcripts -
 the same discipline the batch and job records hold (`types.ts:11-15`,
-`jobs/types.ts:10-13`). Open a step's full transcript with `chit_audit_show {
-audit_ref }`.
+`jobs/types.ts:10-13`).
 
 ## 7. Safety and recovery
 
