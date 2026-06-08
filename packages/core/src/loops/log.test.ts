@@ -112,6 +112,81 @@ describe("convergence log: serialize/validate round-trip", () => {
 		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
 	});
 
+	test("chit execution metadata (cwd/elapsedMs/timeoutMs/exitCode) survives the round-trip", () => {
+		const withMeta: LoopIterationRecord = {
+			...iteration,
+			checks: [
+				// A passing check: exit code + timing recorded, no reason/output tail.
+				{
+					command: "bun test",
+					name: "tests",
+					status: "passed",
+					cwd: "/work/tree",
+					elapsedMs: 42,
+					timeoutMs: 120000,
+					exitCode: 0,
+				},
+				// A failing check: exit code + a bounded reason tail.
+				{
+					command: "bun run lint",
+					status: "failed",
+					reason: "3 problems",
+					cwd: "/work/tree",
+					elapsedMs: 7,
+					timeoutMs: 120000,
+					exitCode: 1,
+				},
+				// A timed-out check: timeout metadata kept, no exit code (it never exited).
+				{
+					command: "bun run e2e",
+					status: "blocked",
+					reason: "timed out after 80ms",
+					cwd: "/work/tree",
+					elapsedMs: 80,
+					timeoutMs: 80,
+				},
+			],
+			verification: "failed",
+			verificationSource: "chit",
+		};
+		expect(validateLoopRecord(JSON.parse(serializeLoopRecord(withMeta)))).toEqual(withMeta);
+	});
+
+	test("a reviewer-sparse check (no execution metadata) is still accepted", () => {
+		// A reviewer self-report carries only command/status/reason; chit never invents
+		// process metadata for it. The metadata fields stay absent, not set to undefined.
+		const reviewerChecks: LoopIterationRecord = {
+			...iteration,
+			checks: [{ command: "bun run typecheck", status: "passed" }],
+			verification: "passed",
+			verificationSource: "reviewer",
+		};
+		const rec = validateLoopRecord(
+			JSON.parse(serializeLoopRecord(reviewerChecks)),
+		) as LoopIterationRecord;
+		expect(rec).toEqual(reviewerChecks);
+		const check = rec.checks?.[0] ?? {};
+		expect("cwd" in check).toBe(false);
+		expect("elapsedMs" in check).toBe(false);
+		expect("timeoutMs" in check).toBe(false);
+		expect("exitCode" in check).toBe(false);
+	});
+
+	test("an old iteration record with no checks at all still parses", () => {
+		// Pre-metadata logs never carried the optional fields; the parser must accept a
+		// record that omits checks entirely, exactly as before these fields existed.
+		const rec = validateLoopRecord(JSON.parse(serializeLoopRecord(iteration)));
+		expect(rec).toEqual(iteration);
+	});
+
+	test("a non-integer elapsedMs is rejected", () => {
+		const bad = {
+			...JSON.parse(serializeLoopRecord(iteration)),
+			checks: [{ command: "bun test", status: "passed", elapsedMs: 1.5 }],
+		};
+		expect(() => validateLoopRecord(bad)).toThrow(LoopLogError);
+	});
+
 	test("a check with an empty name is rejected", () => {
 		const bad = {
 			...JSON.parse(serializeLoopRecord(iteration)),

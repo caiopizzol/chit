@@ -21,6 +21,7 @@ function resolved(raw: unknown) {
 import * as adapterFactory from "../adapters/factory.ts";
 import { AuditStore } from "../audit/store.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
+import { DEFAULT_CHECK_TIMEOUT_MS } from "../loops/required-checks.ts";
 import type { AdapterMap, TraceEvent } from "../runtime/types.ts";
 import { FileSessionStore } from "../sessions/store.ts";
 import {
@@ -1562,8 +1563,8 @@ describe("onChecksStart (foreground checks-phase signal) + returned checks", () 
 		if (!r0.ok) throw new Error("expected ok iteration");
 		expect(r0.checks).toEqual([]);
 
-		// chit-executed checks -> the result carries their names/statuses (the same
-		// array recorded on the iteration log).
+		// chit-executed checks -> the result carries their command/status PLUS the execution
+		// metadata (cwd, exit code, applied timeout, elapsed) recorded on the iteration log.
 		const withChecks = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "CS6" });
 		const r1 = await runConvergeIteration({
 			cwd,
@@ -1575,11 +1576,19 @@ describe("onChecksStart (foreground checks-phase signal) + returned checks", () 
 			requiredChecks: [PASS],
 		});
 		if (!r1.ok) throw new Error("expected ok iteration");
-		expect(r1.checks).toEqual([{ command: "true", status: "passed" }]);
-		// Matches the durable iteration record exactly.
-		expect(firstIteration(withChecks.loopId).checks).toEqual([
-			{ command: "true", status: "passed" },
-		]);
+		expect(r1.checks).toHaveLength(1);
+		const passedCheck = r1.checks[0];
+		expect(passedCheck).toMatchObject({
+			command: "true",
+			status: "passed",
+			exitCode: 0,
+			cwd, // the iteration's working directory
+			timeoutMs: DEFAULT_CHECK_TIMEOUT_MS, // no per-check timeout declared -> the default
+		});
+		expect(typeof passedCheck?.elapsedMs).toBe("number");
+		expect("reason" in (passedCheck ?? {})).toBe(false); // a passed check keeps no output tail
+		// The durable iteration record matches the returned checks exactly.
+		expect(firstIteration(withChecks.loopId).checks).toEqual(r1.checks);
 	});
 
 	test("reviewer-reported checks are returned even when chit runs none", async () => {

@@ -37,6 +37,11 @@ export type Verification = "passed" | "failed" | "blocked" | "not_run";
 export type VerificationSource = "reviewer" | "chit";
 // One check behind the checksRun prose. command is the exact command; status is its
 // own result; reason explains a non-pass (a failure summary, or why it was blocked).
+// The execution-metadata fields below make a chit-executed check auditable -- what ran,
+// where, how long, the timeout applied, and how the process exited -- instead of only a
+// passed/failed rollup. They are all optional: a reviewer self-report carries none of
+// them (chit never invents process metadata for a reviewer's claim), and a log written
+// before they existed still parses.
 export interface LoopCheck {
 	// The exact command as a display string -- for a chit-executed check this is the
 	// argv joined ("bun test"), the GROUND TRUTH of what ran; for a reviewer-reported
@@ -46,7 +51,22 @@ export interface LoopCheck {
 	// substitute for `command`, which always carries what actually ran.
 	name?: string;
 	status: "passed" | "failed" | "blocked";
+	// For a chit-executed check this is the bounded output tail of a non-pass (a failing
+	// command's error tail, or why it was blocked); for a reviewer check it is their
+	// self-reported explanation. Absent on a pass.
 	reason?: string;
+	// The directory the check ran in (the run worktree). Set only for chit-executed
+	// checks; the run's repo/worktree path is already public on the loop header.
+	cwd?: string;
+	// Wall-clock the check took, in milliseconds.
+	elapsedMs?: number;
+	// The timeout applied to the check, in milliseconds (the configured value, else the
+	// default). Present even on a pass, so a slow-but-passing check is still auditable
+	// against its budget.
+	timeoutMs?: number;
+	// The process exit code, present only when the process actually ran (passed/failed);
+	// absent when it never started or was killed before exiting (blocked).
+	exitCode?: number;
 }
 
 const VERDICTS: ReadonlySet<string> = new Set(["proceed", "revise", "block"]);
@@ -221,6 +241,28 @@ function checkArray(o: Record<string, unknown>, key: string, ctx: string): LoopC
 		if (r.reason !== undefined) {
 			if (typeof r.reason !== "string") throw new LoopLogError(`${ec}: "reason" must be a string`);
 			check.reason = r.reason;
+		}
+		// Optional chit-execution metadata. Each is validated when present and otherwise
+		// absent, so a reviewer self-report and a pre-existing log both parse unchanged.
+		if (r.cwd !== undefined) {
+			if (typeof r.cwd !== "string" || r.cwd === "")
+				throw new LoopLogError(`${ec}: "cwd" must be a non-empty string`);
+			check.cwd = r.cwd;
+		}
+		if (r.elapsedMs !== undefined) {
+			if (typeof r.elapsedMs !== "number" || !Number.isInteger(r.elapsedMs) || r.elapsedMs < 0)
+				throw new LoopLogError(`${ec}: "elapsedMs" must be an integer >= 0`);
+			check.elapsedMs = r.elapsedMs;
+		}
+		if (r.timeoutMs !== undefined) {
+			if (typeof r.timeoutMs !== "number" || !Number.isInteger(r.timeoutMs) || r.timeoutMs < 0)
+				throw new LoopLogError(`${ec}: "timeoutMs" must be an integer >= 0`);
+			check.timeoutMs = r.timeoutMs;
+		}
+		if (r.exitCode !== undefined) {
+			if (typeof r.exitCode !== "number" || !Number.isInteger(r.exitCode))
+				throw new LoopLogError(`${ec}: "exitCode" must be an integer`);
+			check.exitCode = r.exitCode;
 		}
 		return check;
 	});

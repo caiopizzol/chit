@@ -1044,6 +1044,73 @@ describe("receipt: a compact 'what happened' companion on terminal loop run view
 		expectNoLeakage(resp);
 	});
 
+	// A timed-out chit check carries execution metadata (cwd/elapsedMs/timeoutMs, no exitCode
+	// because it never exited) that must survive verbatim through the durable log into the
+	// status and trace surfaces, not collapse to a bare blocked status.
+	const TIMED_OUT_CHECK = {
+		command: "bun run e2e",
+		status: "blocked" as const,
+		reason: "timed out after 80ms",
+		cwd: "/work/tree",
+		elapsedMs: 80,
+		timeoutMs: 80,
+	};
+
+	// Write a real one-iteration loop whose proceed round could not verify because its single
+	// chit check timed out, so the loop stops needs-decision. Returns its loopId.
+	function writeTimedOutLoop(loopId: string) {
+		startLoop(cwd, { scope: "s", task: "t", maxIterations: 3, loopId });
+		appendIteration(cwd, loopId, {
+			implementSummary: "did the work",
+			changedFiles: ["a.ts"],
+			checksRun: "ran the e2e check",
+			checks: [TIMED_OUT_CHECK],
+			verification: "blocked",
+			verificationSource: "chit",
+			verdict: "proceed",
+			findingCount: 0,
+			decision: "proceed",
+			checkDurationMs: 80,
+			auditRef: "aud-1",
+		});
+		stopLoop(cwd, loopId, { status: "needs-decision", reason: "verification did not pass" });
+	}
+
+	test("a timed-out chit check keeps its timeout metadata visible through status + trace surfaces", () => {
+		writeTimedOutLoop("TIMEOUT-1");
+
+		// Status surface: the terminal background single-run view's receipt carries latestChecks.
+		const statusView = backgroundRunView(
+			job({
+				runId: "bg-timeout",
+				loopId: "TIMEOUT-1",
+				cwd,
+				state: "completed",
+				stopStatus: "needs-decision",
+				iterationsCompleted: 1,
+			}),
+		) as Record<string, unknown>;
+		const statusReceipt = statusView.receipt as Record<string, unknown>;
+		expect(statusReceipt.latestChecks).toEqual([TIMED_OUT_CHECK]);
+		const statusCheck = (statusReceipt.latestChecks as Record<string, unknown>[])[0];
+		expect(statusCheck?.timeoutMs).toBe(80);
+		expect(statusCheck?.elapsedMs).toBe(80);
+		expect("exitCode" in (statusCheck ?? {})).toBe(false); // it never exited
+
+		// Trace surface: the raw records keep the enriched check, and the companion receipt's
+		// latestChecks carries the same metadata.
+		const raw = readLoop(cwd, "TIMEOUT-1");
+		const trace = backgroundLoopTraceResponse(
+			"bg-timeout",
+			job({ runId: "bg-timeout", loopId: "TIMEOUT-1", cwd, state: "completed" }),
+			raw,
+		) as Record<string, unknown>;
+		const iter = (trace.records as Record<string, unknown>[]).find((r) => r.type === "iteration");
+		expect((iter?.checks as unknown[])[0]).toEqual(TIMED_OUT_CHECK);
+		const traceReceipt = trace.receipt as Record<string, unknown>;
+		expect(traceReceipt.latestChecks).toEqual([TIMED_OUT_CHECK]);
+	});
+
 	test("redaction guard: the receipt exposes no provenance, env values, prompts, outputs, or blobs", () => {
 		// The loop header carries participant provenance (with an env KEY); the receipt is built
 		// from iteration + stop records only, so none of it leaks. The env VALUE never exists in a

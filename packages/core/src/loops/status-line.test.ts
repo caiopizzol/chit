@@ -245,6 +245,37 @@ describe("buildLoopReceipt", () => {
 		expect(receipt.status).toBe("needs-decision");
 	});
 
+	test("a timed-out chit check keeps its execution metadata visible in latestChecks", () => {
+		// The receipt's latestChecks is the surface operators read for "what ran"; a blocked
+		// (timed-out) check must carry the timeout metadata, not just a blocked status.
+		const timedOutCheck = {
+			command: "bun run e2e",
+			status: "blocked" as const,
+			reason: "timed out after 80ms",
+			cwd: "/work/tree",
+			elapsedMs: 80,
+			timeoutMs: 80,
+		};
+		const records = [
+			HEADER,
+			iteration(1, {
+				verdict: "proceed",
+				decision: "proceed",
+				verification: "blocked",
+				verificationSource: "chit",
+				checks: [timedOutCheck],
+			}),
+			stop({ status: "needs-decision", reason: "verification did not pass", iterations: 1 }),
+		];
+		const receipt = buildLoopReceipt(records);
+		// The full metadata is preserved through the receipt, byte for byte.
+		expect(receipt.latestChecks).toEqual([timedOutCheck]);
+		const [check] = receipt.latestChecks ?? [];
+		expect(check?.timeoutMs).toBe(80);
+		expect(check?.elapsedMs).toBe(80);
+		expect("exitCode" in (check ?? {})).toBe(false); // it never exited
+	});
+
 	test("does NOT append a cancelled stop to the latest completed iteration's line", () => {
 		// The loop completed iteration 1 (revise), then a later in-flight round was cancelled
 		// and wrote NO record. The cancelled stop is not iteration 1's doing, so it is omitted.

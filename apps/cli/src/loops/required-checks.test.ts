@@ -6,6 +6,7 @@ import type { RequiredCheck } from "@chit-run/core";
 import {
 	type CheckResult,
 	checkResultsToLoopChecks,
+	DEFAULT_CHECK_TIMEOUT_MS,
 	pickRequiredChecks,
 	resolveRunRequiredChecks,
 	runRequiredCheck,
@@ -236,37 +237,127 @@ describe("command vs name + checkResultsToLoopChecks", () => {
 		expect(r.name).toBeUndefined();
 	});
 
-	test("the mapper records command + name, and reason only for non-passed", () => {
+	test("the mapper records command + name + execution metadata, and reason only for non-passed", () => {
 		const checks = checkResultsToLoopChecks([
 			{
 				command: "bun test",
 				name: "tests",
 				status: "passed",
-				durationMs: 1,
+				exitCode: 0,
+				durationMs: 42,
 				timedOut: false,
 				output: "ok",
+				cwd: "/work/tree",
+				timeoutMs: 120_000,
 			},
 			{
 				command: "bun run lint",
 				status: "failed",
 				exitCode: 1,
-				durationMs: 1,
+				durationMs: 7,
 				timedOut: false,
 				output: "3 problems",
+				cwd: "/work/tree",
+				timeoutMs: 120_000,
 			},
 			{
 				command: "bun run e2e",
 				status: "blocked",
-				durationMs: 1,
+				durationMs: 80,
 				timedOut: true,
 				output: "timed out after 80ms",
+				cwd: "/work/tree",
+				timeoutMs: 80,
 			},
 		]);
 		expect(checks).toEqual([
-			{ command: "bun test", name: "tests", status: "passed" }, // passed -> no reason recorded
-			{ command: "bun run lint", status: "failed", reason: "3 problems" },
-			{ command: "bun run e2e", status: "blocked", reason: "timed out after 80ms" },
+			// passed -> exit code + timing recorded, but no reason (no large output tail).
+			{
+				command: "bun test",
+				name: "tests",
+				status: "passed",
+				exitCode: 0,
+				cwd: "/work/tree",
+				elapsedMs: 42,
+				timeoutMs: 120_000,
+			},
+			{
+				command: "bun run lint",
+				status: "failed",
+				exitCode: 1,
+				reason: "3 problems",
+				cwd: "/work/tree",
+				elapsedMs: 7,
+				timeoutMs: 120_000,
+			},
+			// blocked by timeout -> no exit code (never exited), timeout metadata retained.
+			{
+				command: "bun run e2e",
+				status: "blocked",
+				reason: "timed out after 80ms",
+				cwd: "/work/tree",
+				elapsedMs: 80,
+				timeoutMs: 80,
+			},
 		]);
+	});
+
+	test("a passing real check maps to elapsedMs + configured timeoutMs + cwd, with no output tail", async () => {
+		const r = await runRequiredCheck({ command: "true", args: [], timeoutMs: 5_000 }, { cwd: CWD });
+		const [check] = checkResultsToLoopChecks([r]);
+		expect(check?.status).toBe("passed");
+		expect(check?.cwd).toBe(CWD);
+		expect(check?.timeoutMs).toBe(5_000); // the configured value, carried through
+		expect(check?.exitCode).toBe(0);
+		expect(typeof check?.elapsedMs).toBe("number");
+		expect(check?.elapsedMs).toBeGreaterThanOrEqual(0);
+		// A pass keeps no reason/output tail, so the log never balloons for a green check.
+		expect("reason" in (check ?? {})).toBe(false);
+	});
+
+	test("a passing real check with no timeout uses the default timeoutMs", async () => {
+		const r = await runRequiredCheck({ command: "true", args: [] }, { cwd: CWD });
+		const [check] = checkResultsToLoopChecks([r]);
+		expect(check?.timeoutMs).toBe(DEFAULT_CHECK_TIMEOUT_MS);
+	});
+
+	test("a silent failing real check (no output) maps to exitCode + a synthesized reason", async () => {
+		// `false` exits 1 and prints nothing: the empty output must not become an empty
+		// reason, so the exit code is named instead, leaving the operator a failure detail.
+		const r = await runRequiredCheck({ command: "false", args: [] }, { cwd: CWD });
+		expect(r.output).toBe(""); // the process really printed nothing
+		const [check] = checkResultsToLoopChecks([r]);
+		expect(check?.status).toBe("failed");
+		expect(check?.exitCode).toBe(1);
+		expect(check?.timeoutMs).toBe(DEFAULT_CHECK_TIMEOUT_MS);
+		expect(check?.cwd).toBe(CWD);
+		expect(typeof check?.elapsedMs).toBe("number");
+		expect(check?.reason).toBe("exit 1 with no stdout or stderr output");
+	});
+
+	test("a failing real check with output keeps the bounded tail as its reason", async () => {
+		// `sh -c 'echo boom >&2; exit 2'` fails AND prints, so the tail (not a synthesized
+		// note) is the reason -- the synthesized note is only the empty-output fallback.
+		const r = await runRequiredCheck(
+			{ command: "sh", args: ["-c", "echo boom 1>&2; exit 2"] },
+			{ cwd: CWD },
+		);
+		const [check] = checkResultsToLoopChecks([r]);
+		expect(check?.status).toBe("failed");
+		expect(check?.exitCode).toBe(2);
+		expect(check?.reason).toBe("boom");
+	});
+
+	test("a timed-out real check maps to blocked with timeout metadata and no exit code", async () => {
+		const r = await runRequiredCheck(
+			{ command: "sleep", args: ["5"], timeoutMs: 80 },
+			{ cwd: CWD },
+		);
+		const [check] = checkResultsToLoopChecks([r]);
+		expect(check?.status).toBe("blocked");
+		expect(check?.timeoutMs).toBe(80); // the applied timeout stays visible
+		expect(check?.exitCode).toBeUndefined(); // it never exited
+		expect(check?.reason).toContain("timed out after 80ms");
 	});
 });
 

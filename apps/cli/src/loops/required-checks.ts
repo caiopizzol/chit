@@ -28,6 +28,11 @@ export interface CheckResult {
 	durationMs: number;
 	timedOut: boolean;
 	output: string; // bounded tail of combined stdout+stderr, or the start/timeout note
+	// The directory the check ran in (the run worktree) and the timeout applied to it
+	// (the configured value, else the default). Both are known for every result -- even
+	// a could-not-start blocked one -- so the mapped LoopCheck is always auditable.
+	cwd: string;
+	timeoutMs: number;
 }
 
 // The exact argv as a display string -- the ground truth of what ran.
@@ -140,6 +145,9 @@ export async function runRequiredCheck(
 	const now = opts.now ?? Date.now;
 	const base = baseOf(check);
 	const timeoutMs = check.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
+	// The identity + execution context every result of this check carries, so the cwd and
+	// applied timeout are recorded on every outcome path (start failure, timeout, exit).
+	const meta = { ...base, cwd: opts.cwd, timeoutMs };
 	const start = now();
 
 	let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
@@ -157,7 +165,7 @@ export async function runRequiredCheck(
 		});
 	} catch (e) {
 		return {
-			...base,
+			...meta,
 			status: "blocked",
 			durationMs: now() - start,
 			timedOut: false,
@@ -219,7 +227,7 @@ export async function runRequiredCheck(
 
 		if (timedOut) {
 			return {
-				...base,
+				...meta,
 				status: "blocked",
 				durationMs,
 				timedOut: true,
@@ -230,7 +238,7 @@ export async function runRequiredCheck(
 		}
 		if (opts.signal?.aborted) {
 			return {
-				...base,
+				...meta,
 				status: "blocked",
 				durationMs,
 				timedOut: false,
@@ -238,7 +246,7 @@ export async function runRequiredCheck(
 			};
 		}
 		return {
-			...base,
+			...meta,
 			status: exitCode === 0 ? "passed" : "failed",
 			exitCode,
 			durationMs,
@@ -267,6 +275,8 @@ export async function runRequiredChecks(
 		if (opts.signal?.aborted) {
 			results.push({
 				...baseOf(check),
+				cwd: opts.cwd,
+				timeoutMs: check.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
 				status: "blocked",
 				durationMs: 0,
 				timedOut: false,
@@ -279,15 +289,34 @@ export async function runRequiredChecks(
 	return results;
 }
 
+// The reason recorded for a non-passing check: the bounded output tail when the process
+// printed anything, else a synthesized note. A process can fail (or be blocked) while
+// printing NOTHING -- `false` exits 1 with no output -- and an empty reason would leave
+// the operator with no failure detail beyond the exit code, so name the exit code (or the
+// bare status when even that is absent) instead of recording "".
+function nonPassReason(r: CheckResult): string {
+	if (r.output !== "") return r.output;
+	if (r.exitCode !== undefined) return `exit ${r.exitCode} with no stdout or stderr output`;
+	return `${r.status} with no output`;
+}
+
 // Map chit's executed results into the recorded LoopCheck shape: `command` carries the
-// ground-truth argv, `name` the friendly label, and `reason` the bounded output tail
-// for a non-passed check ONLY (a passed check needs no reason -- no output noise in
-// the log; the exit code stays internal to CheckResult rather than buried in prose).
+// ground-truth argv, `name` the friendly label, and the execution metadata (cwd, elapsed,
+// timeout, exit code) makes the run auditable. `reason` carries the bounded output tail
+// for a non-passed check ONLY -- a passed check needs no reason, so the log keeps no large
+// output tail for a check that succeeded.
 export function checkResultsToLoopChecks(results: CheckResult[]): LoopCheck[] {
 	return results.map((r) => {
-		const check: LoopCheck = { command: r.command, status: r.status };
+		const check: LoopCheck = {
+			command: r.command,
+			status: r.status,
+			cwd: r.cwd,
+			elapsedMs: r.durationMs,
+			timeoutMs: r.timeoutMs,
+		};
 		if (r.name !== undefined) check.name = r.name;
-		if (r.status !== "passed") check.reason = r.output;
+		if (r.exitCode !== undefined) check.exitCode = r.exitCode;
+		if (r.status !== "passed") check.reason = nonPassReason(r);
 		return check;
 	});
 }
