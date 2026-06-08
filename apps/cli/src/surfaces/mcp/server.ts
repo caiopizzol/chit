@@ -25,8 +25,10 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
+	buildLoopReceipt,
 	composeLoopStatusLine,
 	type LoopRecord,
+	type LoopRunStatus,
 	type ManifestSpec,
 	PlanError as PlanParseError,
 	parseManifest,
@@ -106,6 +108,7 @@ import { type ResolvedRun, RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
 import {
 	type ConvergeSession,
+	type ConvergeTrace,
 	cancelConverge,
 	type LoopPhase,
 	type NextResult,
@@ -806,6 +809,16 @@ function launchOneShotJob(p: {
 // surfaces its latest iteration's changed files / usage from the loop log; a
 // one-shot run has no loop log (its history is the audit run). Dispatches on
 // policy so loop-only fields appear only for loop runs.
+// The receipt status for a background LOOP job, used only while the loop log has no stop
+// record yet (buildLoopReceipt lets a terminal stop in the records win). "running" once the
+// worker is live, "open" before it starts; a settled job's terminal status comes from its
+// stop record. Kept separate from the job `display` (which derives stale) -- the receipt
+// reports the loop's own state, not the worker's health.
+function loopJobReceiptStatus(job: LoopJobRecord): LoopRunStatus {
+	if (job.stopStatus !== undefined) return job.stopStatus;
+	return job.state === "running" ? "running" : "open";
+}
+
 function describeJob(job: JobRecord) {
 	const now = Date.now();
 	const stale = isStale(job, now);
@@ -850,9 +863,15 @@ function describeJob(job: JobRecord) {
 		let latest:
 			| { iteration: number; changedFiles: string[]; workspaceWarnings: string[]; usage?: unknown }
 			| undefined;
+		// The compact receipt for a SETTLED background loop, built from the SAME loop-log read
+		// below (no extra read). A live (running/queued) run reports its progress through
+		// latest/phase/timing instead, so the receipt stays a terminal-only "what happened".
+		let receipt: ReturnType<typeof buildLoopReceipt> | undefined;
+		const terminal =
+			job.state === "completed" || job.state === "failed" || job.state === "cancelled";
 		try {
-			const iters = readLoop(job.cwd, job.loopId).filter((r) => r.type === "iteration");
-			const last = iters.at(-1);
+			const records = readLoop(job.cwd, job.loopId);
+			const last = records.filter((r) => r.type === "iteration").at(-1);
 			if (last && last.type === "iteration") {
 				latest = {
 					iteration: last.n,
@@ -860,6 +879,9 @@ function describeJob(job: JobRecord) {
 					workspaceWarnings: last.workspaceWarnings ?? [],
 					...(last.usage !== undefined && { usage: last.usage }),
 				};
+			}
+			if (terminal && records.length > 0) {
+				receipt = buildLoopReceipt(records, loopJobReceiptStatus(job));
 			}
 		} catch {
 			// loop log not readable yet (worker still starting) or removed; omit detail
@@ -890,6 +912,7 @@ function describeJob(job: JobRecord) {
 			// the current config, so a detached run reports the agents it actually launched.
 			...(job.participants !== undefined && { participants: job.participants }),
 			...(latest !== undefined && { latest }),
+			...(receipt !== undefined && { receipt }),
 			nextAction,
 		};
 	}
@@ -1068,6 +1091,19 @@ export function loopRunView(session: ConvergeSession, now: number = Date.now()) 
 	// returns, recomposed from the session mirror so chit_status shows it after a long
 	// chit_next. Absent until a round completes (an open never-run loop invents nothing).
 	const statusLine = loopStatusLineFromSession(session);
+	// Terminal foreground loop: attach the SAME compact receipt chit_trace builds, read from
+	// the durable log so the two surfaces match exactly. Only when stopped -- an in-flight or
+	// open run reports its live activity + session mirrors instead and must not pay a log read.
+	// A read failure leaves the receipt off rather than breaking the view (the terminal mirrors
+	// below still carry the outcome).
+	let receipt: ReturnType<typeof buildLoopReceipt> | undefined;
+	if (stopped) {
+		try {
+			receipt = buildLoopReceipt(readLoop(session.cwd, session.loopId), session.terminalStatus);
+		} catch {
+			// loop log unreadable; omit the receipt.
+		}
+	}
 	const nextAction = stopped
 		? session.terminalStatus === "needs-decision"
 			? needsDecisionNextAction(
@@ -1111,6 +1147,9 @@ export function loopRunView(session: ConvergeSession, now: number = Date.now()) 
 		// without a loop-log read.
 		...(session.endedAtMs !== undefined && { elapsedMs: session.endedAtMs - session.startedAtMs }),
 		...(session.stopReason !== undefined && { stopReason: session.stopReason }),
+		// Compact "what happened" companion, present once the loop has stopped (read from the
+		// durable log so it matches chit_trace's receipt exactly).
+		...(receipt !== undefined && { receipt }),
 		auditRefs: session.auditRefs,
 		nextAction,
 	};
@@ -1892,6 +1931,73 @@ export function planArchivedApply(
 	return { kind: "apply", worktreePath, baseSha, target };
 }
 
+// The chit_trace response bodies for the three loop-backed run kinds, extracted as pure
+// builders so the "receipt companion + raw sanitized records" contract is unit-testable
+// without driving the registered MCP tool. The handler does the I/O (recover/read/trace the
+// loop log) and calls these; each returns the object chit_trace serializes. Keeping them pure
+// is what pins the contract: a refactor that dropped the receipt or the raw records would have
+// to change a builder, and its test would catch it.
+
+// Archived foreground loop: a closed-session run recovered from its durable log (#100).
+export function archivedLoopTraceResponse(runId: string, archived: ArchivedForegroundLoop) {
+	return {
+		run_id: runId,
+		mode: "archived_foreground" as const,
+		execution: "loop" as const,
+		active: false,
+		...(archived.workspace && workspaceView(archived.workspace)),
+		...(archived.found.header.participants !== undefined && {
+			participants: archived.found.header.participants,
+		}),
+		// Compact "what happened" companion to the raw records, derived from them alone. An
+		// archived run is from a closed session, so its status comes from the records (the stop
+		// record, or "open" for a log that never recorded a terminal stop).
+		receipt: buildLoopReceipt(archived.found.records),
+		records: publicLoopRecords(archived.found.records),
+	};
+}
+
+// Background loop job: `raw` is the durable loop log (empty when not yet readable).
+export function backgroundLoopTraceResponse(runId: string, job: LoopJobRecord, raw: LoopRecord[]) {
+	return {
+		run_id: runId,
+		execution: "job" as const,
+		policy: "loop" as const,
+		...workspaceView(job),
+		// Provenance persisted on the job record (omitted on legacy records).
+		...(job.participants !== undefined && { participants: job.participants }),
+		// Compact "what happened" companion, built from the SAME read (no extra log read). The
+		// job's live state fills status only while the log has no stop yet (a terminal stop in the
+		// records always wins). Omitted when the log was unreadable, so an empty trace never
+		// invents a receipt.
+		...(raw.length > 0 && { receipt: buildLoopReceipt(raw, loopJobReceiptStatus(job)) }),
+		records: publicLoopRecords(raw),
+	};
+}
+
+// Foreground loop run: `t` is the engine's trace view; `session` carries the worktree fields.
+export function foregroundLoopTraceResponse(
+	runId: string,
+	session: ConvergeSession,
+	t: ConvergeTrace,
+) {
+	return {
+		run_id: runId,
+		execution: "loop" as const,
+		status: t.status,
+		active: t.active,
+		...workspaceView(session),
+		// Provenance for the run, when the session carries it (launched via prepareConvergeExecute).
+		...(t.participants !== undefined && { participants: t.participants }),
+		auditRefs: t.auditRefs,
+		// Compact "what happened" companion, built from the SAME records the trace already read.
+		// The live run status (open/running/terminal) fills the receipt status until the log
+		// records a terminal stop.
+		receipt: buildLoopReceipt(t.records, t.status),
+		records: publicLoopRecords(t.records),
+	};
+}
+
 // The history of any run: a one-shot's step transcript, or a loop/background
 // run's durable loop log. Read-only.
 server.registerTool(
@@ -1915,36 +2021,18 @@ server.registerTool(
 				return errorResult(safeMcpError(e));
 			}
 			if (!archived) return errorResult(`unknown run_id ${run_id}`);
-			return jsonResult({
-				run_id,
-				mode: "archived_foreground" as const,
-				execution: "loop" as const,
-				active: false,
-				...(archived.workspace && workspaceView(archived.workspace)),
-				...(archived.found.header.participants !== undefined && {
-					participants: archived.found.header.participants,
-				}),
-				records: publicLoopRecords(archived.found.records),
-			});
+			return jsonResult(archivedLoopTraceResponse(run_id, archived));
 		}
 		if (resolved.mode === "background") {
 			const job = resolved.job;
 			if (job.policy === "loop") {
-				let records: unknown[] = [];
+				let raw: LoopRecord[] = [];
 				try {
-					records = publicLoopRecords(readLoop(job.cwd, job.loopId));
+					raw = readLoop(job.cwd, job.loopId);
 				} catch {
 					// loop log not readable yet (worker still starting) or removed
 				}
-				return jsonResult({
-					run_id,
-					execution: "job",
-					policy: "loop",
-					...workspaceView(job),
-					// Provenance persisted on the job record (omitted on legacy records).
-					...(job.participants !== undefined && { participants: job.participants }),
-					records,
-				});
+				return jsonResult(backgroundLoopTraceResponse(run_id, job, raw));
 			}
 			// A one-shot background run has no loop log; its history is the audit run.
 			return jsonResult({
@@ -1963,17 +2051,7 @@ server.registerTool(
 				// Re-present the converge trace under run_id, dropping the internal loopId
 				// the engine view carries and sanitizing the loop-log records.
 				const t = traceConverge(session);
-				return jsonResult({
-					run_id,
-					execution: "loop",
-					status: t.status,
-					active: t.active,
-					...workspaceView(session),
-					// Provenance for the run, when the session carries it (launched via prepareConvergeExecute).
-					...(t.participants !== undefined && { participants: t.participants }),
-					auditRefs: t.auditRefs,
-					records: publicLoopRecords(t.records),
-				});
+				return jsonResult(foregroundLoopTraceResponse(run_id, session, t));
 			} catch (e) {
 				return errorResult(safeMcpError(e));
 			}

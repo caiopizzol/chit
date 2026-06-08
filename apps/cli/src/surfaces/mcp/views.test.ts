@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,15 +7,30 @@ import { realGit } from "../../batches/worktree.ts";
 import { LockError } from "../../jobs/lock.ts";
 import { JobStoreError } from "../../jobs/store.ts";
 import type { LoopJobRecord } from "../../jobs/types.ts";
-import { LoopStoreError } from "../../loops/log-store.ts";
-import { type ConvergeSession, cancelConverge, type NextResult } from "./converge-engine.ts";
+import {
+	appendIteration,
+	LoopStoreError,
+	readLoop,
+	startLoop,
+	stopLoop,
+} from "../../loops/log-store.ts";
+import {
+	type ConvergeSession,
+	cancelConverge,
+	type NextResult,
+	traceConverge,
+} from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
 import {
+	archivedLoopTraceResponse,
+	backgroundLoopTraceResponse,
 	backgroundRunView,
+	foregroundLoopTraceResponse,
 	loopRunView,
 	loopStatusLine,
 	oneShotRunView,
 	publicLoopRecords,
+	resolveArchivedForegroundLoop,
 	safeMcpError,
 } from "./server.ts";
 
@@ -812,5 +827,263 @@ describe("backgroundRunView: partial-work visibility on a failed run (partial-wo
 			job({ runId: "bg-live", state: "running", worktreePath: "/wt/does-not-exist" }),
 		) as Record<string, unknown>;
 		expect(v.partialWork).toBeUndefined();
+	});
+});
+
+describe("receipt: a compact 'what happened' companion on terminal loop run views", () => {
+	// The receipt is derived ONLY from the durable loop records (buildLoopReceipt in core),
+	// so these tests write a REAL loop log under a temp state dir and read it back through the
+	// view functions. They pin: a terminal single-run view carries the receipt, a live run does
+	// not (and never pays an unnecessary log read), the archived recovery path produces one, and
+	// the receipt never carries provenance, env values, prompts, outputs, or blob bodies.
+	let stateDir: string;
+	let cwd: string;
+	let savedXdg: string | undefined;
+
+	beforeEach(() => {
+		// Point the loop state dir at a temp dir so the real startLoop/appendIteration/stopLoop
+		// write where readLoop (and the views) look, without touching the developer's state.
+		savedXdg = process.env.XDG_STATE_HOME;
+		stateDir = mkdtempSync(join(tmpdir(), "chit-receipt-state-"));
+		process.env.XDG_STATE_HOME = stateDir;
+		cwd = mkdtempSync(join(tmpdir(), "chit-receipt-cwd-"));
+	});
+	afterEach(() => {
+		if (savedXdg === undefined) delete process.env.XDG_STATE_HOME;
+		else process.env.XDG_STATE_HOME = savedXdg;
+		rmSync(stateDir, { recursive: true, force: true });
+		rmSync(cwd, { recursive: true, force: true });
+	});
+
+	// Write a real two-iteration loop that converged, returning its loopId. The second
+	// iteration is the proceed + all-checks-passed round that converged.
+	function writeConvergedLoop(
+		loopId: string,
+		opts: { participants?: Record<string, unknown> } = {},
+	) {
+		startLoop(cwd, {
+			scope: "s",
+			task: "t",
+			maxIterations: 3,
+			loopId,
+			...(opts.participants !== undefined && {
+				participants: opts.participants as never,
+			}),
+		});
+		appendIteration(cwd, loopId, {
+			implementSummary: "first pass",
+			changedFiles: ["a.ts", "b.ts"],
+			workspaceWarnings: ["untracked: gen.txt"],
+			checksRun: "ran the tests",
+			verdict: "revise",
+			findingCount: 2,
+			decision: "revise",
+			checkDurationMs: 10,
+			auditRef: "aud-1",
+			usage: { inputTokens: 10, outputTokens: 5 },
+		});
+		appendIteration(cwd, loopId, {
+			implementSummary: "fixed",
+			changedFiles: ["b.ts", "c.ts"], // b.ts repeats (deduped), c.ts is new
+			checksRun: "ran the tests",
+			checks: [
+				{ command: "bun test", status: "passed" },
+				{ command: "bun run check", status: "passed" },
+			],
+			verification: "passed",
+			verificationSource: "chit",
+			verdict: "proceed",
+			findingCount: 0,
+			decision: "proceed",
+			checkDurationMs: 20,
+			auditRef: "aud-2",
+			usage: { inputTokens: 20, totalTokens: 7 },
+		});
+		stopLoop(cwd, loopId, { status: "converged", reason: "all required checks passed" });
+	}
+
+	test("a TERMINAL background loop single-run view includes the receipt", () => {
+		writeConvergedLoop("RCPT-BG");
+		const v = backgroundRunView(
+			job({
+				runId: "bg-rcpt",
+				loopId: "RCPT-BG",
+				cwd,
+				state: "completed",
+				stopStatus: "converged",
+				iterationsCompleted: 2,
+			}),
+		) as Record<string, unknown>;
+		const receipt = v.receipt as Record<string, unknown>;
+		expect(receipt).toBeDefined();
+		expect(receipt.status).toBe("converged");
+		expect(receipt.iterationsCompleted).toBe(2);
+		expect(receipt.statusLine).toBe(
+			"iteration 2 · proceed · 2/2 required checks passed · converged",
+		);
+		expect(receipt.changedFiles).toEqual(["a.ts", "b.ts", "c.ts"]);
+		expect(receipt.workspaceWarnings).toEqual(["untracked: gen.txt"]);
+		expect(receipt.auditRefs).toEqual(["aud-1", "aud-2"]);
+		expect(receipt.usage).toEqual({ inputTokens: 30, outputTokens: 5, totalTokens: 7 });
+		expect(receipt.stopReason).toBe("all required checks passed");
+		expectNoLeakage(v);
+	});
+
+	test("a RUNNING background loop view omits the receipt (live state is reported instead)", () => {
+		writeConvergedLoop("RCPT-RUN");
+		const v = backgroundRunView(
+			job({ runId: "bg-live", loopId: "RCPT-RUN", cwd, state: "running" }),
+		) as Record<string, unknown>;
+		// The loop log exists, but a non-terminal job reports its progress through latest/phase,
+		// not a receipt (the receipt is the settled 'what happened').
+		expect(v.receipt).toBeUndefined();
+	});
+
+	test("a TERMINAL foreground loop view includes the receipt; an OPEN/running view does no log read", () => {
+		writeConvergedLoop("RCPT-FG");
+		const terminal = loopRunView(
+			loopSession({
+				loopId: "RCPT-FG",
+				cwd,
+				iteration: 2,
+				terminalStatus: "converged",
+				startedAtMs: 1_000,
+				endedAtMs: 5_000,
+				stopReason: "all required checks passed",
+			}),
+		) as Record<string, unknown>;
+		const receipt = terminal.receipt as Record<string, unknown>;
+		expect(receipt).toBeDefined();
+		expect(receipt.status).toBe("converged");
+		expect(receipt.changedFiles).toEqual(["a.ts", "b.ts", "c.ts"]);
+
+		// An OPEN run must NOT read the log: point it at a loopId with no log on disk. If the view
+		// read it, readLoop would throw; that it returns cleanly (and without a receipt) proves the
+		// open path skips the read entirely.
+		const open = loopRunView(
+			loopSession({ loopId: "NO-SUCH-LOG", cwd, iteration: 1, active: new AbortController() }),
+		) as Record<string, unknown>;
+		expect(open.receipt).toBeUndefined();
+	});
+
+	// Assert a chit_trace loop response keeps the raw records (sanitized: the header drops the
+	// internal loopId/repoKey) alongside the compact receipt -- the contract the task pins.
+	function expectSanitizedRecordsAndReceipt(resp: Record<string, unknown>): void {
+		const records = resp.records as Record<string, unknown>[];
+		expect(records[0]?.type).toBe("loop");
+		expect(records[0]?.loopId).toBeUndefined();
+		expect(records[0]?.repoKey).toBeUndefined();
+		// The raw iteration records survive intact (the receipt is a companion, not a replacement).
+		expect(records.filter((r) => r.type === "iteration").length).toBe(2);
+		const receipt = resp.receipt as Record<string, unknown>;
+		expect(receipt).toBeDefined();
+		expect(receipt.status).toBe("converged");
+		expect(receipt.statusLine).toBe(
+			"iteration 2 · proceed · 2/2 required checks passed · converged",
+		);
+		expect(receipt.changedFiles).toEqual(["a.ts", "b.ts", "c.ts"]);
+		expect(receipt.auditRefs).toEqual(["aud-1", "aud-2"]);
+	}
+
+	test("chit_trace ARCHIVED foreground response carries the receipt and sanitized records", () => {
+		// A closed-session foreground run: its loopId IS the run_id, recovered by glob from the log.
+		writeConvergedLoop("arch-run-1");
+		const archived = resolveArchivedForegroundLoop("arch-run-1");
+		if (archived === undefined) throw new Error("expected to recover the archived loop");
+		const resp = archivedLoopTraceResponse("arch-run-1", archived) as Record<string, unknown>;
+		expect(resp.run_id).toBe("arch-run-1");
+		expect(resp.mode).toBe("archived_foreground");
+		expect(resp.execution).toBe("loop");
+		expectSanitizedRecordsAndReceipt(resp);
+		expectNoLeakage(resp);
+	});
+
+	test("chit_trace BACKGROUND loop response carries the receipt and sanitized records", () => {
+		writeConvergedLoop("TRACE-BG");
+		const raw = readLoop(cwd, "TRACE-BG");
+		const resp = backgroundLoopTraceResponse(
+			"bg-trace",
+			job({
+				runId: "bg-trace",
+				loopId: "TRACE-BG",
+				cwd,
+				state: "completed",
+				stopStatus: "converged",
+			}),
+			raw,
+		) as Record<string, unknown>;
+		expect(resp.run_id).toBe("bg-trace");
+		expect(resp.execution).toBe("job");
+		expect(resp.policy).toBe("loop");
+		expectSanitizedRecordsAndReceipt(resp);
+		expectNoLeakage(resp);
+	});
+
+	test("chit_trace BACKGROUND loop response omits the receipt when the log is unreadable", () => {
+		// An empty raw read (worker still starting / log removed) yields no receipt and empty records,
+		// so an in-progress trace never invents a receipt.
+		const resp = backgroundLoopTraceResponse(
+			"bg-empty",
+			job({ runId: "bg-empty", loopId: "no-log", cwd, state: "running" }),
+			[],
+		) as Record<string, unknown>;
+		expect(resp.receipt).toBeUndefined();
+		expect(resp.records).toEqual([]);
+	});
+
+	test("chit_trace FOREGROUND loop response carries the receipt and sanitized records", () => {
+		writeConvergedLoop("TRACE-FG");
+		const session = loopSession({ loopId: "TRACE-FG", cwd, terminalStatus: "converged" });
+		// Drive the REAL engine trace view, then build the response exactly as the handler does.
+		const t = traceConverge(session);
+		const resp = foregroundLoopTraceResponse("fg-trace", session, t) as Record<string, unknown>;
+		expect(resp.run_id).toBe("fg-trace");
+		expect(resp.execution).toBe("loop");
+		expect(resp.status).toBe("converged");
+		expectSanitizedRecordsAndReceipt(resp);
+		expectNoLeakage(resp);
+	});
+
+	test("redaction guard: the receipt exposes no provenance, env values, prompts, outputs, or blobs", () => {
+		// The loop header carries participant provenance (with an env KEY); the receipt is built
+		// from iteration + stop records only, so none of it leaks. The env VALUE never exists in a
+		// loop record (only envKeys are persisted), and the receipt drops even the keys.
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		writeConvergedLoop("RCPT-REDACT", { participants });
+		const v = backgroundRunView(
+			job({
+				runId: "bg-redact",
+				loopId: "RCPT-REDACT",
+				cwd,
+				state: "completed",
+				stopStatus: "converged",
+				participants: participants as never,
+			}),
+		) as Record<string, unknown>;
+		const receipt = v.receipt as Record<string, unknown>;
+		// participants may appear at the TOP level of the view (that surface is allowed to carry
+		// provenance), but never inside the receipt itself.
+		expect(receipt.participants).toBeUndefined();
+		const receiptJson = JSON.stringify(receipt);
+		for (const banned of [
+			"ANTHROPIC_API_KEY",
+			"claude-opus-4",
+			"envKeys",
+			"agentId",
+			"implementSummary",
+			"first pass",
+			"fixed",
+		]) {
+			expect(receiptJson).not.toContain(banned);
+		}
 	});
 });

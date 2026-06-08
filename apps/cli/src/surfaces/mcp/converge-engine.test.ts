@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LoopIterationRecord, LoopStopRecord, RequiredCheck } from "@chit-run/core";
+import {
+	buildLoopReceipt,
+	type LoopIterationRecord,
+	type LoopStopRecord,
+	type RequiredCheck,
+} from "@chit-run/core";
 import type { ConvergeExecute } from "../../cli/converge.ts";
 import { readLoop } from "../../loops/log-store.ts";
 import type { TraceEvent } from "../../runtime/types.ts";
@@ -461,6 +466,37 @@ describe("describeConverge / traceConverge", () => {
 		const session = start(scriptedExecute([reviewJson("proceed")]));
 		expect(describeConverge(session).participants).toBeUndefined();
 		expect(traceConverge(session).participants).toBeUndefined();
+	});
+
+	// The receipt chit_trace attaches to a foreground loop is buildLoopReceipt over the SAME
+	// records traceConverge returns, with the live run status. These run the REAL engine so the
+	// receipt is validated against real verdict/decision/stop records, not hand-built ones.
+	test("receipt over real engine records: a converged loop attributes the stop to its last round", async () => {
+		const session = start(scriptedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session); // revise -> loop stays open
+		await runNextIteration(session); // proceed + passing checks -> converged
+		const t = traceConverge(session);
+		const receipt = buildLoopReceipt(t.records, t.status);
+		expect(receipt.status).toBe("converged");
+		expect(receipt.iterationsCompleted).toBe(2);
+		// The converged stop is round 2's own doing (decision proceed), so it joins the line.
+		expect(receipt.statusLine).toBe("iteration 2 · proceed · 1/1 checks passed · converged");
+		expect(receipt.verification).toBe("passed");
+		expect(receipt.verificationSource).toBe("reviewer");
+		expect(receipt.stopReason).toBeDefined();
+	});
+
+	test("receipt over real engine records: a cancelled zero-iteration loop has no statusLine", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		cancelConverge(session); // no iteration ran -> a cancelled stop with iterations 0
+		const t = traceConverge(session);
+		const receipt = buildLoopReceipt(t.records, t.status);
+		expect(receipt.status).toBe("cancelled");
+		expect(receipt.iterationsCompleted).toBe(0);
+		expect(receipt.statusLine).toBeUndefined();
+		expect(receipt.changedFiles).toEqual([]);
+		expect(receipt.stopReason).toBeDefined();
+		expect(receipt.elapsedMs).toBeGreaterThanOrEqual(0);
 	});
 });
 
