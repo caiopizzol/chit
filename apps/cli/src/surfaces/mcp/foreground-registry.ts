@@ -32,11 +32,12 @@
 //     trigger. Callers run pruneDead best-effort (e.g. the Studio live read), so a
 //     prune failure never affects the snapshot it returns.
 //
-// Snapshots are intentionally concise and safe: ids, scope/task one-liners, the
+// Snapshots are intentionally concise and safe: ids, scope/task summaries, the
 // repo key, a managed worktree path when present, the current iteration/phase,
 // timestamps to derive elapsed/phase/last-activity, the executing participants
-// (agent + adapter only), and a compact statusLine. They NEVER carry prompts,
-// model outputs, review prose, or audit blobs.
+// (agent + adapter only), and a compact statusLine. The optional taskFull is the
+// user-authored task for Studio's explicit prompt disclosure. Snapshots NEVER
+// carry model outputs, review prose, config/env values, or audit blobs.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -98,10 +99,10 @@ export const FOREGROUND_STALE_AFTER_MS = 60_000;
 // a reader still sees the true "time since last activity" while the run reads live.
 export const FOREGROUND_HEARTBEAT_MS = 10_000;
 
-// Keep the task one-liner compact: it is the user's slice description (not a model
-// output), but the registry is a glance view, so cap it. Exported so other glance
-// surfaces (the Studio live rail's background rows) apply the SAME bound to a raw
-// JobRecord.task, which is otherwise an unbounded multi-line body.
+// Keep the rail task one-liner compact: it is the user's slice description (not
+// a model output), but the registry is a glance view, so cap it. Exported so
+// other glance surfaces (the Studio live rail's background rows) apply the SAME
+// bound to a raw JobRecord.task, which is otherwise an unbounded multi-line body.
 export const MAX_TASK_LEN = 200;
 
 export function compactTask(task: string): string {
@@ -119,8 +120,11 @@ export interface ForegroundSnapshot {
 	pid: number;
 	scope: string;
 	// The slice the loop is converging on (one-liner, capped). The user's own task
-	// text, never a model output or prompt.
+	// text, never a model output.
 	task: string;
+	// The same user-authored task in full, used only by Studio's selected-run
+	// disclosure. It is still separate from model output, review prose, and config.
+	taskFull?: string;
 	// The stable repo namespace key (sha of the git top-level), matching how loop
 	// logs are keyed. Opaque and safe; no raw cwd is exposed.
 	repoKey: string;
@@ -193,6 +197,7 @@ function parseSnapshot(raw: unknown, expectedRunId: string): ForegroundSnapshot 
 		updatedAt: r.updatedAt,
 		statusLine: r.statusLine,
 	};
+	if (typeof r.taskFull === "string") snapshot.taskFull = r.taskFull;
 	if (typeof r.worktreePath === "string") snapshot.worktreePath = r.worktreePath;
 	if (typeof r.phaseStartedAt === "string") snapshot.phaseStartedAt = r.phaseStartedAt;
 	const participants = sanitizeParticipants(r.participants);
@@ -335,6 +340,7 @@ export class ForegroundRegistry {
 			pid: this.pid,
 			scope: session.scope,
 			task: compactTask(session.task),
+			taskFull: session.task,
 			repoKey: repoKeyOf(session.cwd),
 			...(session.worktreePath !== undefined && { worktreePath: session.worktreePath }),
 			iteration: a.iteration,
@@ -392,6 +398,7 @@ export interface ForegroundActivitySummary {
 	pid: number;
 	scope: string;
 	task: string;
+	taskFull?: string;
 	repoKey: string;
 	worktreePath?: string;
 	iteration: number;
@@ -419,6 +426,7 @@ export function summarizeForegroundForStatus(
 		pid: s.pid,
 		scope: s.scope,
 		task: s.task,
+		...(s.taskFull !== undefined && { taskFull: s.taskFull }),
 		repoKey: s.repoKey,
 		...(s.worktreePath !== undefined && { worktreePath: s.worktreePath }),
 		iteration: s.iteration,

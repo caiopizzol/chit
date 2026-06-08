@@ -10,7 +10,7 @@
 
 import { Fragment } from "react";
 import type { LiveActivityRow } from "../server/types.ts";
-import { flattenRows, formatAge, liveBody, phaseLabel, rowKey } from "./live.ts";
+import { concisePhase, flattenRows, formatAge, liveBody, rowKey } from "./live.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
 
 function normalizedPhase(row: LiveActivityRow): string {
@@ -36,24 +36,13 @@ function agentTone(agentId: string): "claude" | "codex" | "neutral" {
 function rowSummary(row: LiveActivityRow): { dot: string; text: string } {
 	const role = activeRole(row);
 	if (row.source === "background" && row.display === "stale") {
-		return { dot: "live-dot--stale", text: "stalled, check worker" };
+		return { dot: "live-dot--stale", text: "stalled" };
 	}
 	if (role === "implementer")
-		return { dot: "live-dot--claude live-dot--pulse", text: "Claude implementing" };
-	if (role === "reviewer")
-		return { dot: "live-dot--codex live-dot--pulse", text: "Codex reviewing" };
-	if (role === "checks") return { dot: "live-dot--check live-dot--pulse", text: "running checks" };
-	return { dot: "live-dot--neutral", text: phaseLabel(row) };
-}
-
-function detailLine(row: LiveActivityRow): string {
-	const summary = rowSummary(row).text;
-	const last =
-		row.source === "foreground"
-			? formatAge(row.lastActivityAgeMs)
-			: formatAge(row.lastHeartbeatAgeMs);
-	if (last === "-") return summary;
-	return `${summary} · heartbeat ${last} ago`;
+		return { dot: "live-dot--claude live-dot--pulse", text: "implementing" };
+	if (role === "reviewer") return { dot: "live-dot--codex live-dot--pulse", text: "reviewing" };
+	if (role === "checks") return { dot: "live-dot--check live-dot--pulse", text: "checking" };
+	return { dot: "live-dot--neutral", text: concisePhase(row) };
 }
 
 // The agent+adapter participants of a run, drawn as connected blocks. The
@@ -80,7 +69,6 @@ function AgentBlocks({ row }: { row: LiveActivityRow }) {
 							role.toLowerCase().includes(active) ? " agent-block--live" : ""
 						}`}
 					>
-						{role.toLowerCase().includes(active) && <span className="agent-running">run</span>}
 						<span className="agent-role">{role}</span>
 						<span className="agent-id">{p.agentId}</span>
 						<span className="agent-adapter">{p.adapter}</span>
@@ -91,8 +79,8 @@ function AgentBlocks({ row }: { row: LiveActivityRow }) {
 	);
 }
 
-// One row in the session rail: phase line, elapsed age, scope, and the compact
-// status line. The whole row is the select target.
+// One row in the session rail: scope, concise phase, and elapsed age. The whole
+// row is the select target.
 function RailRow({
 	row,
 	selected,
@@ -170,6 +158,18 @@ function detailAges(row: LiveActivityRow): Array<[string, number | undefined]> {
 	];
 }
 
+function TaskDisclosure({ task }: { task: string }) {
+	return (
+		<details className="live-detail-task">
+			<summary>
+				<span className="live-task-text">{task}</span>
+				<span className="live-task-action live-task-open">full prompt</span>
+				<span className="live-task-action live-task-close">close</span>
+			</summary>
+		</details>
+	);
+}
+
 function Detail({ row }: { row: LiveActivityRow | null }) {
 	if (!row) {
 		return <p className="live-muted live-detail-empty">Select a live run to inspect it.</p>;
@@ -178,11 +178,10 @@ function Detail({ row }: { row: LiveActivityRow | null }) {
 		<div className="live-detail">
 			<div className="live-detail-head">
 				<span className={`live-source live-source--${row.source}`}>{row.source}</span>
-				<span className="live-detail-phase">{phaseLabel(row)}</span>
+				<span className="live-detail-phase">{concisePhase(row)}</span>
 			</div>
 			<p className="live-detail-scope">{row.scope}</p>
-			{row.task && <p className="live-detail-task">{row.task}</p>}
-			<p className="live-detail-status">{detailLine(row)}</p>
+			{row.task && <TaskDisclosure task={row.taskFull ?? row.task} />}
 			<div className="live-ages">
 				{detailAges(row).map(([label, ms]) => (
 					<div className="live-age-cell" key={label}>
@@ -320,9 +319,7 @@ export function LiveTower() {
 							<Detail row={selected} />
 						</section>
 						<section className="live-console-col">
-							<h3 className="live-col-head live-col-head--console">
-								Console · concise event stream
-							</h3>
+							<h3 className="live-col-head live-col-head--console">Console</h3>
 							<Console log={selectedLog} />
 						</section>
 					</main>

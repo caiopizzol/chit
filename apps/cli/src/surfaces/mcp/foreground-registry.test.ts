@@ -258,6 +258,8 @@ describe("ForegroundRegistry session sync", () => {
 		expect(snap?.iteration).toBe(2);
 		expect(snap?.phase).toBe("reviewing");
 		expect(snap?.scope).toBe("sc");
+		expect(snap?.task).toBe("implement the slice");
+		expect(snap?.taskFull).toBe("implement the slice");
 		expect(snap?.pid).toBe(process.pid);
 		expect(snap?.statusLine).toBe("iteration 2 · reviewing");
 	});
@@ -335,9 +337,9 @@ describe("ForegroundRegistry session sync", () => {
 		expect(json).not.toContain("permissions");
 	});
 
-	test("no prompts, model outputs, or review prose are persisted", () => {
+	test("no model outputs or review prose are persisted", () => {
 		// The session carries the threaded prior review (model/reviewer prose); it must
-		// never appear in the compact snapshot, which has no field for it.
+		// never appear in the live snapshot.
 		const session = fakeSession({
 			priorReview: "SECRET REVIEW PROSE that must not leak",
 		} as Partial<ConvergeSession>);
@@ -354,6 +356,7 @@ describe("ForegroundRegistry session sync", () => {
 		);
 		expect(snap?.task.length).toBeLessThanOrEqual(200);
 		expect(snap?.task.endsWith("...")).toBe(true);
+		expect(snap?.taskFull).toBe(long);
 	});
 
 	test("sync swallows a write failure (best-effort mirror never breaks the loop)", () => {

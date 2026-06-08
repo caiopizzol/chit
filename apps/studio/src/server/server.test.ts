@@ -804,8 +804,8 @@ describe("lifecycle endpoints", () => {
 
 describe("GET /api/live", () => {
 	// A live source carrying one foreground row and one background row, each with
-	// only the safe glance fields. Deliberately includes NO prompt/config/env keys,
-	// so the passthrough test can assert none leak through the route.
+	// only the safe live fields. Deliberately includes NO config/env/provenance
+	// keys, so the passthrough test can assert none leak through the route.
 	function stubLiveSource(): StudioLiveSource {
 		const activity: LiveActivity = {
 			foreground: [
@@ -814,6 +814,7 @@ describe("GET /api/live", () => {
 					runId: "fg-1",
 					scope: "sc-fg",
 					task: "converge the parser",
+					taskFull: "converge the parser with full context",
 					phase: "implementing",
 					statusLine: "iteration 2 · implementing",
 					worktreePath: "/state/chit/worktrees/fg-1",
@@ -829,6 +830,7 @@ describe("GET /api/live", () => {
 					runId: "bg-1",
 					scope: "sc-bg",
 					task: "migrate the routes",
+					taskFull: "migrate the routes with full context",
 					display: "running",
 					phase: "reviewing",
 					statusLine: "running · reviewing",
@@ -852,6 +854,7 @@ describe("GET /api/live", () => {
 			expect(body.background).toHaveLength(1);
 			expect(body.foreground[0]?.source).toBe("foreground");
 			expect(body.foreground[0]?.runId).toBe("fg-1");
+			expect(body.foreground[0]?.taskFull).toBe("converge the parser with full context");
 			expect(body.background[0]?.source).toBe("background");
 			expect(body.background[0]?.runId).toBe("bg-1");
 			expect(body.background[0]?.display).toBe("running");
@@ -905,12 +908,12 @@ describe("GET /api/live", () => {
 		}
 	});
 
-	test("response carries no prompt/config/env fields", async () => {
+	test("response carries no config/env/provenance fields", async () => {
 		const s = setup({ liveSource: stubLiveSource() });
 		try {
 			const res = await req(s.app, "/api/live", { token: s.token });
 			const text = await res.text();
-			for (const banned of ["prompt", "config", "env", "permissions", "instructions"]) {
+			for (const banned of ["config", "env", "permissions"]) {
 				expect(text).not.toContain(banned);
 			}
 		} finally {

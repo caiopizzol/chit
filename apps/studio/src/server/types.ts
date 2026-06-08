@@ -174,9 +174,9 @@ export interface LoopSummary {
 // Every row is a GLANCE summary, safe to hand a browser: ids, a bounded
 // scope/task one-liner, phase/display, ages derived against the reader's clock,
 // agent+adapter participants, a compact statusLine, and a managed worktree path
-// only when already safe to expose. A row NEVER carries prompts, model outputs,
-// review prose, config/env values, audit blobs, or task text beyond the existing
-// bounded one-liner.
+// only when already safe to expose. `taskFull` is the explicit local detail
+// payload for the selected-run prompt disclosure. A row NEVER carries model
+// outputs, review prose, config/env values, or audit blobs.
 
 // The one safe participant pair the rail/detail shows: which agent ran and via
 // which adapter. The full provenance (permissions, config, env keys) is
@@ -194,6 +194,7 @@ export interface ForegroundLiveRow {
 	runId: string;
 	scope: string;
 	task: string;
+	taskFull?: string;
 	phase: string;
 	statusLine: string;
 	// A chit-managed worktree path, present only for an isolated run (already safe
@@ -215,6 +216,9 @@ export interface BackgroundLiveRow {
 	scope: string;
 	// Loop-only one-liner; a one-shot background run has no converge task.
 	task?: string;
+	// Full loop task for the selected-run prompt disclosure. Still local and
+	// token-gated, separate from model output or audit blobs.
+	taskFull?: string;
 	display: string;
 	phase?: string;
 	statusLine: string;

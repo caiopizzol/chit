@@ -42,8 +42,16 @@ export function phaseLabel(row: LiveActivityRow): string {
 	return row.phase ? `${row.display} · ${row.phase}` : row.display;
 }
 
-// Which body the live overlay should render. "grid" is the normal three-column
-// view. When no rows are live we keep the console visible IF it holds entries,
+// The concise phase the operator sees in the rail and detail header. Background
+// records keep `display` and `phase` separate; when a phase exists, it is the
+// useful live signal and `running` is just duplicated lifecycle context.
+export function concisePhase(row: LiveActivityRow): string {
+	if (row.source === "foreground") return row.phase;
+	return row.phase ?? row.display;
+}
+
+// Which body the live overlay should render. "grid" is the normal live view.
+// When no rows are live we keep the console visible IF it holds entries,
 // so the final transition (the "disappeared" line the operator came to see)
 // stays readable until the next reopen clears the session; with no prior
 // activity there is nothing to keep, so the overlay stays calm and minimal.

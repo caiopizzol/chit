@@ -1447,26 +1447,58 @@ header.app .loops-btn {
 }
 .live-detail-task {
 	margin: 6px 0 0;
+	max-width: 740px;
+}
+.live-detail-task summary {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	cursor: pointer;
+	list-style: none;
+}
+.live-detail-task summary::-webkit-details-marker {
+	display: none;
+}
+.live-task-text {
+	flex: 1 1 auto;
 	font-size: 14px;
 	line-height: 1.45;
-	max-width: 740px;
 	color: var(--ink);
 	display: -webkit-box;
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
-.live-detail-status {
-	margin: 12px 0 0;
+.live-detail-task[open] .live-task-text {
+	display: block;
+	overflow: visible;
+	white-space: pre-wrap;
+	-webkit-line-clamp: unset;
+	-webkit-box-orient: initial;
+}
+.live-task-action {
+	flex: 0 0 auto;
+	margin-top: 3px;
 	font-family: "JetBrains Mono", monospace;
-	font-size: 12.5px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
 	color: var(--faded);
+}
+.live-task-close {
+	display: none;
+}
+.live-detail-task[open] .live-task-open {
+	display: none;
+}
+.live-detail-task[open] .live-task-close {
+	display: inline;
 }
 .live-ages {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 24px;
-	margin: 16px 0 20px;
+	margin: 14px 0 18px;
 }
 .live-age-cell {
 	display: flex;
@@ -1515,20 +1547,6 @@ header.app .loops-btn {
 	border-color: var(--codex);
 	background: var(--codex-soft);
 	box-shadow: 0 0 0 3px var(--codex-soft);
-}
-.agent-running {
-	position: absolute;
-	top: -8px;
-	right: 8px;
-	font-family: "JetBrains Mono", monospace;
-	font-size: 8px;
-	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	padding: 1px 6px;
-	border-radius: 9px;
-	background: var(--ink);
-	color: var(--paper);
 }
 .agent-role {
 	font-family: "JetBrains Mono", monospace;

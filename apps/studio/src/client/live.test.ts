@@ -4,7 +4,15 @@
 
 import { describe, expect, test } from "bun:test";
 import type { BackgroundLiveRow, ForegroundLiveRow, LiveActivity } from "../server/types.ts";
-import { diffActivity, flattenRows, formatAge, liveBody, phaseLabel, rowKey } from "./live.ts";
+import {
+	concisePhase,
+	diffActivity,
+	flattenRows,
+	formatAge,
+	liveBody,
+	phaseLabel,
+	rowKey,
+} from "./live.ts";
 
 function fg(over: Partial<ForegroundLiveRow> = {}): ForegroundLiveRow {
 	return {
@@ -71,6 +79,17 @@ describe("phaseLabel", () => {
 	});
 });
 
+describe("concisePhase", () => {
+	test("foreground uses phase", () => {
+		expect(concisePhase(fg({ phase: "reviewing" }))).toBe("reviewing");
+	});
+
+	test("background uses phase when present, otherwise display", () => {
+		expect(concisePhase(bg({ display: "running", phase: "reviewing" }))).toBe("reviewing");
+		expect(concisePhase(bg({ display: "queued", phase: undefined }))).toBe("queued");
+	});
+});
+
 describe("diffActivity", () => {
 	test("a null prev establishes a silent baseline", () => {
 		expect(diffActivity(null, activity({ foreground: [fg()] }))).toEqual([]);
@@ -114,7 +133,7 @@ describe("diffActivity", () => {
 });
 
 describe("liveBody", () => {
-	test("rows present render the three-column grid regardless of log", () => {
+	test("rows present render the live grid regardless of log", () => {
 		expect(liveBody(activity({ foreground: [fg()] }), 0)).toBe("grid");
 		expect(liveBody(activity({ background: [bg()] }), 5)).toBe("grid");
 	});

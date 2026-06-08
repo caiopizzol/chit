@@ -939,6 +939,7 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 				runId: summary.run_id,
 				scope: summary.scope,
 				task: summary.task,
+				...(summary.taskFull !== undefined && { taskFull: summary.taskFull }),
 				phase: summary.phase,
 				statusLine: summary.statusLine,
 				...(summary.worktreePath !== undefined && { worktreePath: summary.worktreePath }),
@@ -985,10 +986,9 @@ function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
 		scope: job.scope ?? "",
 		display,
 		statusLine,
-		// JobRecord.task is the raw, unbounded converge body (multi-line, may embed
-		// prompt/config text). Cap it to the same one-liner bound the foreground rail
-		// uses so the live surface never leaks a full task body.
-		...(job.policy === "loop" && { task: compactTask(job.task) }),
+		// JobRecord.task is the raw converge body. Keep `task` bounded for the rail,
+		// and expose the full value only through Studio's selected-run disclosure.
+		...(job.policy === "loop" && { task: compactTask(job.task), taskFull: job.task }),
 		...(job.phase !== undefined && { phase: job.phase }),
 		...(job.worktreePath !== undefined && { worktreePath: job.worktreePath }),
 		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),

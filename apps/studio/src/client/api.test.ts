@@ -117,6 +117,7 @@ describe("fetchLive", () => {
 					runId: "fg-1",
 					scope: "src",
 					task: "converge the parser",
+					taskFull: "converge the parser with full context",
 					phase: "implementing",
 					statusLine: "iteration 2",
 				},
