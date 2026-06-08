@@ -20,7 +20,12 @@ import {
 	type ForegroundSnapshot,
 	MAX_TASK_LEN,
 } from "../surfaces/mcp/foreground-registry.ts";
-import { buildStudioLiveSource, parseArgs, studioClientDir } from "./run.ts";
+import {
+	buildStudioLiveActions,
+	buildStudioLiveSource,
+	parseArgs,
+	studioClientDir,
+} from "./run.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 const RUN_TS = join(PROJECT_ROOT, "src", "cli", "run.ts");
@@ -691,6 +696,89 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			expect(row?.taskFull).toContain("FULL_TASK_TAIL");
 		} finally {
 			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("buildStudioLiveActions (Studio background cancel injection)", () => {
+	// A background loop job with no live worker (no pid/pgid), so cancel persists
+	// the intent without trying to signal -- the behavior the route exercises in a
+	// test environment.
+	function loopJob(over: Partial<LoopJobRecord> = {}): LoopJobRecord {
+		return {
+			policy: "loop",
+			runId: "bg-1",
+			loopId: "bg-1",
+			repoKey: "k",
+			cwd: "/repo",
+			scope: "sc",
+			task: "migrate the routes",
+			maxIterations: 3,
+			allowUnenforced: false,
+			iterationsCompleted: 0,
+			auditRefs: [],
+			state: "running",
+			createdAt: new Date().toISOString(),
+			...over,
+		};
+	}
+
+	test("a running job persists cancelRequestedAt and sets phase cancelling (intent-first)", () => {
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-cancel-jobs-"));
+		try {
+			const store = new JobStore(jobsDir);
+			store.create(loopJob({ state: "running" }));
+			const result = buildStudioLiveActions({ jobsDir }).cancelBackground("bg-1");
+			expect(result.status).toBe("requested");
+			if (result.status === "requested") {
+				expect(result.state).toBe("running");
+				expect(result.signaled).toBe(false); // no pgid/pid, so no worker was signaled
+			}
+			const after = store.get("bg-1");
+			expect(after?.cancelRequestedAt).toBeDefined();
+			expect(after?.phase).toBe("cancelling");
+		} finally {
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("a queued job persists the intent but does not get a cancelling phase (no worker yet)", () => {
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-cancel-jobs-"));
+		try {
+			const store = new JobStore(jobsDir);
+			store.create(loopJob({ state: "queued" }));
+			const result = buildStudioLiveActions({ jobsDir }).cancelBackground("bg-1");
+			expect(result.status).toBe("requested");
+			if (result.status === "requested") expect(result.state).toBe("queued");
+			const after = store.get("bg-1");
+			expect(after?.cancelRequestedAt).toBeDefined();
+			expect(after?.phase).toBeUndefined();
+		} finally {
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("a terminal job is reported already-finished and gets no cancel fields", () => {
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-cancel-jobs-"));
+		try {
+			const store = new JobStore(jobsDir);
+			store.create(loopJob({ state: "completed", endedAt: new Date().toISOString() }));
+			const result = buildStudioLiveActions({ jobsDir }).cancelBackground("bg-1");
+			expect(result).toEqual({ status: "already-finished", state: "completed" });
+			// No cancel intent was written onto a finished run.
+			expect(store.get("bg-1")?.cancelRequestedAt).toBeUndefined();
+		} finally {
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("an unknown run id is not-found", () => {
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-cancel-jobs-"));
+		try {
+			const result = buildStudioLiveActions({ jobsDir }).cancelBackground("ghost");
+			expect(result).toEqual({ status: "not-found" });
+		} finally {
 			rmSync(jobsDir, { recursive: true, force: true });
 		}
 	});

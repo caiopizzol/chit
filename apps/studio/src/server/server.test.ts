@@ -9,7 +9,12 @@ import { parseRegistry } from "@chit-run/core";
 import { buildBootstrap, DocStore, hashRaw } from "./docs.ts";
 import { buildApp } from "./index.ts";
 import { generateToken } from "./token.ts";
-import type { LiveActivity, StudioLifecycle, StudioLiveSource } from "./types.ts";
+import type {
+	LiveActivity,
+	StudioLifecycle,
+	StudioLiveActions,
+	StudioLiveSource,
+} from "./types.ts";
 
 const REGISTRY = parseRegistry(undefined);
 const PORT = 4040;
@@ -41,7 +46,12 @@ interface Setup {
 }
 
 function setup(
-	opts: { clientDistDir?: string; lifecycle?: StudioLifecycle; liveSource?: StudioLiveSource } = {},
+	opts: {
+		clientDistDir?: string;
+		lifecycle?: StudioLifecycle;
+		liveSource?: StudioLiveSource;
+		liveActions?: StudioLiveActions;
+	} = {},
 ): Setup {
 	const cwd = tempCwd();
 	const path = join(cwd, "consult.json");
@@ -61,6 +71,7 @@ function setup(
 		clientDistDir: opts.clientDistDir ?? "/this/path/does/not/exist",
 		lifecycle: opts.lifecycle,
 		liveSource: opts.liveSource,
+		liveActions: opts.liveActions,
 	});
 	return { cwd, path, token, app };
 }
@@ -916,6 +927,148 @@ describe("GET /api/live", () => {
 			for (const banned of ["config", "env", "permissions"]) {
 				expect(text).not.toContain(banned);
 			}
+		} finally {
+			teardown(s);
+		}
+	});
+});
+
+describe("POST /api/live/cancel", () => {
+	async function post(
+		app: ReturnType<typeof buildApp>,
+		token: string | undefined,
+		body: unknown,
+	): Promise<Response> {
+		const headers: Record<string, string> = { host: HOST, "content-type": "application/json" };
+		if (token !== undefined) headers.authorization = `Bearer ${token}`;
+		return app.fetch(
+			new Request(`http://${HOST}/api/live/cancel`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			}),
+		);
+	}
+
+	// A stub action handler that records the runId it was asked to cancel and
+	// returns a scripted result, so the route's wiring (validation, status mapping)
+	// is tested without a real JobStore.
+	interface StubActions extends StudioLiveActions {
+		calls: string[];
+	}
+	function stubActions(
+		result: import("./types.ts").LiveCancelResult | { throw: true },
+	): StubActions {
+		const calls: string[] = [];
+		return {
+			calls,
+			cancelBackground: (runId) => {
+				calls.push(runId);
+				if ("throw" in result) throw new Error("jobstore unavailable");
+				return result;
+			},
+		};
+	}
+
+	test("requires a token", async () => {
+		const s = setup({ liveActions: stubActions({ status: "not-found" }) });
+		try {
+			const res = await post(s.app, undefined, { runId: "bg-1", source: "background" });
+			expect(res.status).toBe(401);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("cancels a background run and returns the host's result", async () => {
+		const actions = stubActions({ status: "requested", state: "running", signaled: true });
+		const s = setup({ liveActions: actions });
+		try {
+			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { status: string; state: string; signaled: boolean };
+			expect(body).toEqual({ status: "requested", state: "running", signaled: true });
+			expect(actions.calls).toEqual(["bg-1"]);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("a terminal run is reported already-finished, not an error", async () => {
+		const s = setup({
+			liveActions: stubActions({ status: "already-finished", state: "completed" }),
+		});
+		try {
+			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { status: string; state: string };
+			expect(body).toEqual({ status: "already-finished", state: "completed" });
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("an unknown run returns 404", async () => {
+		const s = setup({ liveActions: stubActions({ status: "not-found" }) });
+		try {
+			const res = await post(s.app, s.token, { runId: "ghost", source: "background" });
+			expect(res.status).toBe(404);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("a foreground source is refused with 422 before the handler is called", async () => {
+		const actions = stubActions({ status: "requested", state: "running", signaled: true });
+		const s = setup({ liveActions: actions });
+		try {
+			const res = await post(s.app, s.token, { runId: "fg-1", source: "foreground" });
+			expect(res.status).toBe(422);
+			expect(await res.text()).toContain("only background");
+			expect(actions.calls).toHaveLength(0); // never reached the handler
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("no action handler injected returns 501 (for a valid background request)", async () => {
+		const s = setup(); // no liveActions
+		try {
+			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
+			expect(res.status).toBe(501);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("an unsafe run id is rejected with 400 before the handler is called", async () => {
+		const actions = stubActions({ status: "not-found" });
+		const s = setup({ liveActions: actions });
+		try {
+			const res = await post(s.app, s.token, { runId: "../etc/passwd", source: "background" });
+			expect(res.status).toBe(400);
+			expect(actions.calls).toHaveLength(0);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("a body missing runId/source is a 400", async () => {
+		const s = setup({ liveActions: stubActions({ status: "not-found" }) });
+		try {
+			const res = await post(s.app, s.token, { runId: "bg-1" });
+			expect(res.status).toBe(400);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("a host-side cancel failure surfaces as 422", async () => {
+		const s = setup({ liveActions: stubActions({ throw: true }) });
+		try {
+			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
+			expect(res.status).toBe(422);
+			expect(await res.text()).toBe("cancel failed");
 		} finally {
 			teardown(s);
 		}

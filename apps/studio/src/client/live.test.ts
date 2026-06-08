@@ -4,7 +4,11 @@
 
 import { describe, expect, test } from "bun:test";
 import type { BackgroundLiveRow, ForegroundLiveRow, LiveActivity } from "../server/types.ts";
+import type { LiveCancelOutcome } from "./api.ts";
 import {
+	cancelAvailable,
+	cancelMessage,
+	cancelPending,
 	concisePhase,
 	diffActivity,
 	flattenRows,
@@ -65,6 +69,37 @@ describe("rowKey / flattenRows", () => {
 	test("flatten lists foreground before background", () => {
 		const a = activity({ foreground: [fg()], background: [bg()] });
 		expect(flattenRows(a).map(rowKey)).toEqual(["foreground:fg-1", "background:bg-1"]);
+	});
+});
+
+describe("selected-run action helpers", () => {
+	test("cancelAvailable is true only for background rows", () => {
+		expect(cancelAvailable(bg())).toBe(true);
+		expect(cancelAvailable(fg())).toBe(false);
+	});
+
+	test("cancelPending is true only for a background row already in the cancelling phase", () => {
+		expect(cancelPending(bg({ phase: "cancelling" }))).toBe(true);
+		expect(cancelPending(bg({ phase: "reviewing" }))).toBe(false);
+		expect(cancelPending(bg({ phase: undefined }))).toBe(false);
+		// A foreground row never offers cancel, so it is never pending either.
+		expect(cancelPending(fg({ phase: "cancelling" }))).toBe(false);
+	});
+
+	test("cancelMessage maps each outcome to a calm one-liner", () => {
+		const cases: Array<[LiveCancelOutcome, string]> = [
+			[{ kind: "requested", state: "running", signaled: true }, "cancel requested"],
+			[
+				{ kind: "requested", state: "queued", signaled: false },
+				"cancel requested · no live worker",
+			],
+			[{ kind: "already-finished", state: "completed" }, "already completed"],
+			[{ kind: "not-found" }, "run no longer live"],
+			[{ kind: "error", status: 501, error: "live actions not available" }, "cancel failed · 501"],
+		];
+		for (const [outcome, expected] of cases) {
+			expect(cancelMessage(outcome)).toBe(expected);
+		}
 	});
 });
 

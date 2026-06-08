@@ -44,6 +44,11 @@ export interface LiveState {
 	selectedKey: string | null;
 	selected: LiveActivityRow | null;
 	select: (key: string) => void;
+	// Trigger an immediate re-poll without resetting the read session (so the
+	// selection and console survive). Used after a mutating action -- e.g. a
+	// cancel -- so the rail reflects the new state promptly instead of waiting out
+	// the poll interval. A no-op once the effect has torn down.
+	refresh: () => void;
 }
 
 export function useLive(): LiveState {
@@ -61,6 +66,10 @@ export function useLive(): LiveState {
 	const prevRef = useRef<LiveActivity | null>(null);
 	const seqRef = useRef(0);
 	const succeededRef = useRef(false);
+	// The current session's immediate-repoll trigger, installed by the poll effect
+	// and cleared on teardown. `refresh` calls through this so a manual re-poll
+	// always targets the live session, never a torn-down one.
+	const pokeRef = useRef<(() => void) | null>(null);
 
 	const appendLog = useCallback(
 		(entries: { runId: string; source: "foreground" | "background"; text: string }[]) => {
@@ -95,8 +104,30 @@ export function useLive(): LiveState {
 		setLog([]);
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
+		// Single scheduling authority. `inFlight` prevents overlapping polls (a
+		// manual poke during an in-flight poll never runs a second fetch); a poke
+		// that arrives mid-flight sets `pokeQueued` so the in-flight poll reschedules
+		// immediately on settle instead of waiting out POLL_MS.
+		let inFlight = false;
+		let pokeQueued = false;
+
+		function schedule() {
+			timer = setTimeout(() => void tick(), pokeQueued ? 0 : POLL_MS);
+		}
 
 		async function tick() {
+			if (timer) {
+				clearTimeout(timer);
+				timer = null;
+			}
+			if (inFlight) {
+				// A poll is already running; mark that another read is wanted and let
+				// the running poll's settle path reschedule promptly.
+				pokeQueued = true;
+				return;
+			}
+			inFlight = true;
+			pokeQueued = false; // this read services any pending poke
 			try {
 				const next = await fetchLive();
 				if (cancelled) return;
@@ -112,13 +143,24 @@ export function useLive(): LiveState {
 				setError(errMessage(e));
 				if (!succeededRef.current) setStatus("error");
 			} finally {
-				if (!cancelled) timer = setTimeout(tick, POLL_MS);
+				inFlight = false;
+				if (!cancelled) schedule();
 			}
 		}
+
+		// Expose an immediate re-poll for this session. A poke marks intent and runs
+		// tick(); tick() clears any pending timer and either reads now or (if a read
+		// is in flight) defers to the in-flight poll's prompt reschedule.
+		pokeRef.current = () => {
+			if (cancelled) return;
+			pokeQueued = true;
+			void tick();
+		};
 
 		void tick();
 		return () => {
 			cancelled = true;
+			pokeRef.current = null;
 			if (timer) clearTimeout(timer);
 		};
 	}, [appendLog]);
@@ -143,5 +185,9 @@ export function useLive(): LiveState {
 		setSelectedKey(key);
 	}, []);
 
-	return { activity, status, error, log, selectedKey, selected, select };
+	const refresh = useCallback(() => {
+		pokeRef.current?.();
+	}, []);
+
+	return { activity, status, error, log, selectedKey, selected, select, refresh };
 }

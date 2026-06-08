@@ -8,9 +8,19 @@
 // the page, not an overlay, so it polls while mounted and resets its read
 // session on a reload rather than on an open/close toggle.
 
-import { Fragment } from "react";
+import { Fragment, useCallback, useState } from "react";
 import type { LiveActivityRow } from "../server/types.ts";
-import { concisePhase, flattenRows, formatAge, liveBody, rowKey } from "./live.ts";
+import { cancelLiveRun } from "./api.ts";
+import {
+	cancelAvailable,
+	cancelMessage,
+	cancelPending,
+	concisePhase,
+	flattenRows,
+	formatAge,
+	liveBody,
+	rowKey,
+} from "./live.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
 
 function normalizedPhase(row: LiveActivityRow): string {
@@ -170,7 +180,69 @@ function TaskDisclosure({ task }: { task: string }) {
 	);
 }
 
-function Detail({ row }: { row: LiveActivityRow | null }) {
+// The selected run's action strip: a client-side Copy run id always, plus a real
+// Cancel only for background rows (cancelAvailable). Foreground rows are a
+// cross-process mirror Studio does not control, so they get copy-only -- no fake
+// cancel. Feedback is local and transient; a cancel re-polls the snapshot so the
+// rail reflects the new phase without waiting out the poll interval. The parent
+// remounts this via a row-keyed `key`, so the transient feedback/busy state
+// resets when the selected run changes (no stale "cancel requested" on a new row).
+function ActionStrip({ row, refresh }: { row: LiveActivityRow; refresh: () => void }) {
+	const [msg, setMsg] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+
+	const copy = useCallback(async () => {
+		try {
+			await navigator.clipboard.writeText(row.runId);
+			setMsg("run id copied");
+		} catch {
+			setMsg("copy unavailable");
+		}
+	}, [row.runId]);
+
+	const cancel = useCallback(async () => {
+		setBusy(true);
+		setMsg("cancelling…");
+		try {
+			const outcome = await cancelLiveRun(row.runId, row.source);
+			setMsg(cancelMessage(outcome));
+		} catch {
+			// cancelLiveRun returns the structured 4xx/5xx outcomes; it only throws on
+			// a transport/network failure. Surface a compact note rather than leaving
+			// the button stuck on "cancelling…".
+			setMsg("cancel failed · network");
+		} finally {
+			// Always clear busy and re-read the snapshot, success or failure: the row
+			// shows its new phase (cancelling) or drops out, and a failed attempt
+			// re-syncs against the true state. Selection is keyed by runId, so it
+			// stays put if the row survives.
+			setBusy(false);
+			refresh();
+		}
+	}, [row.runId, row.source, refresh]);
+
+	const pending = cancelPending(row);
+	return (
+		<div className="live-actions">
+			<button type="button" className="live-action" onClick={copy}>
+				copy run id
+			</button>
+			{cancelAvailable(row) && (
+				<button
+					type="button"
+					className="live-action live-action--cancel"
+					disabled={busy || pending}
+					onClick={cancel}
+				>
+					{pending ? "cancelling…" : "cancel run"}
+				</button>
+			)}
+			{msg && <span className="live-action-msg">{msg}</span>}
+		</div>
+	);
+}
+
+function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => void }) {
 	if (!row) {
 		return <p className="live-muted live-detail-empty">Select a live run to inspect it.</p>;
 	}
@@ -180,6 +252,7 @@ function Detail({ row }: { row: LiveActivityRow | null }) {
 				<span className={`live-source live-source--${row.source}`}>{row.source}</span>
 				<span className="live-detail-phase">{concisePhase(row)}</span>
 			</div>
+			<ActionStrip key={rowKey(row)} row={row} refresh={refresh} />
 			<p className="live-detail-scope">{row.scope}</p>
 			{row.task && <TaskDisclosure task={row.taskFull ?? row.task} />}
 			<div className="live-ages">
@@ -233,7 +306,7 @@ function Console({ log }: { log: LiveConsoleEntry[] }) {
 
 export function LiveTower() {
 	const live = useLive();
-	const { activity, status, error, log, selectedKey, selected, select } = live;
+	const { activity, status, error, log, selectedKey, selected, select, refresh } = live;
 	const body = liveBody(activity, log.length);
 	const liveCount = flattenRows(activity).length;
 	const selectedLog = selected
@@ -316,7 +389,7 @@ export function LiveTower() {
 					</aside>
 					<main className="live-panel">
 						<section className="live-center">
-							<Detail row={selected} />
+							<Detail row={selected} refresh={refresh} />
 						</section>
 						<section className="live-console-col">
 							<h3 className="live-col-head live-col-head--console">Console</h3>

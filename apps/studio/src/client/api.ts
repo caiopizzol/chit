@@ -11,6 +11,7 @@ import type {
 	InstalledSummary,
 	InstallSummary,
 	LiveActivity,
+	LiveCancelResult,
 	LoopSummary,
 	PreviewResponse,
 	SavedSaveResponse,
@@ -200,6 +201,40 @@ export async function fetchLive(): Promise<LiveActivity> {
 		throw new StudioApiError(res.status, `GET /api/live: ${res.status} ${await res.text()}`);
 	}
 	return (await res.json()) as LiveActivity;
+}
+
+// Outcome of a cancel attempt. The structured server results (requested /
+// already-finished) and a 404 (the run vanished between snapshots) are expected
+// control flow, surfaced as outcome variants rather than thrown. A 422
+// (non-background source, or a host-side failure) and 501 (no action handler
+// injected) become the `error` variant so the UI can show a calm message; only a
+// transport failure (network) throws.
+export type LiveCancelOutcome =
+	| { kind: "requested"; state: "queued" | "running"; signaled: boolean }
+	| { kind: "already-finished"; state: string }
+	| { kind: "not-found" }
+	| { kind: "error"; status: number; error: string };
+
+// Cancel a live run. runId + source come straight from the selected live row.
+// Only background rows are cancellable; the server refuses any other source with
+// 422 (Studio does not own foreground cancellation), returned here as the `error`
+// outcome rather than thrown.
+export async function cancelLiveRun(runId: string, source: string): Promise<LiveCancelOutcome> {
+	const res = await fetch("/api/live/cancel", {
+		method: "POST",
+		headers: { ...authHeaders(), "Content-Type": "application/json" },
+		body: JSON.stringify({ runId, source }),
+	});
+	if (res.status === 404) return { kind: "not-found" };
+	if (!res.ok) return { kind: "error", status: res.status, error: await res.text() };
+	const body = (await res.json()) as LiveCancelResult;
+	if (body.status === "requested") {
+		return { kind: "requested", state: body.state, signaled: body.signaled };
+	}
+	if (body.status === "already-finished") {
+		return { kind: "already-finished", state: body.state };
+	}
+	return { kind: "not-found" };
 }
 
 // --- Audit transcript (read-only) ---

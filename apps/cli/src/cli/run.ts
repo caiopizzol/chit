@@ -20,6 +20,7 @@ import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
 import { loadConfig } from "../config/load.ts";
+import { requestJobCancel } from "../jobs/cancel.ts";
 import { isStale, jobTiming } from "../jobs/health.ts";
 import { JobStore } from "../jobs/store.ts";
 import type { JobRecord } from "../jobs/types.ts";
@@ -879,6 +880,8 @@ function buildStudioLifecycle(): import("@chit-run/studio/server").StudioLifecyc
 }
 
 type StudioLiveSource = import("@chit-run/studio/server").StudioLiveSource;
+type StudioLiveActions = import("@chit-run/studio/server").StudioLiveActions;
+type LiveCancelResult = import("@chit-run/studio/server").LiveCancelResult;
 type ForegroundLiveRow = import("@chit-run/studio/server").ForegroundLiveRow;
 type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
 type LiveParticipant = import("@chit-run/studio/server").LiveParticipant;
@@ -904,6 +907,39 @@ export function buildStudioLiveSource(
 				foreground: foregroundLiveRows(registry, now),
 				background: backgroundLiveRows(jobStore, now),
 			};
+		},
+	};
+}
+
+// Live actions injected into Studio so POST /api/live/cancel can cancel a
+// BACKGROUND job, without @chit-run/studio importing CLI internals (the CLI owns
+// JobStore and the worker signaling, like buildStudioLiveSource /
+// buildStudioLifecycle). Background ONLY: the foreground registry is a
+// cross-process MIRROR -- Studio reads it but the MCP server, not the CLI host,
+// owns the foreground run controller -- so this surface never claims to cancel a
+// foreground run (the server rejects that with 422 before reaching here).
+//
+// The cancel itself runs through the shared requestJobCancel helper that
+// chit_cancel and the batch engine also use, so all three honor the same
+// intent-first, lock-protected semantics (cancelRequestedAt persisted BEFORE
+// signaling; a RUNNING job also gets phase `cancelling`; a TERMINAL job is
+// reported already-finished and never re-signaled, decided against the locked
+// record). Here we only map the CLI-internal result onto Studio's wire shape.
+// State dir defaults to the real XDG location; tests pass a temp dir. Exported for
+// the CLI host test.
+export function buildStudioLiveActions(opts: { jobsDir?: string } = {}): StudioLiveActions {
+	const jobStore = new JobStore(opts.jobsDir);
+	return {
+		cancelBackground: (runId): LiveCancelResult => {
+			const result = requestJobCancel(jobStore, runId);
+			switch (result.status) {
+				case "missing":
+					return { status: "not-found" };
+				case "terminal":
+					return { status: "already-finished", state: result.state };
+				case "requested":
+					return { status: "requested", state: result.state, signaled: result.signaled };
+			}
 		},
 	};
 }
@@ -1048,6 +1084,11 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			// registry and the durable background jobs. Defaults to the real XDG state
 			// dirs, the same locations the MCP server and workers write.
 			liveSource: buildStudioLiveSource(),
+			// Cancel a background job through JobStore + the worker signaling, the
+			// same intent-first path chit_cancel uses. Background only -- the CLI host
+			// does not own the MCP foreground controller, so it never claims to cancel
+			// a foreground run.
+			liveActions: buildStudioLiveActions(),
 			// In a published install the client bundle ships beside chit.js, not at
 			// the Studio server's default path. Undefined in a source checkout, where
 			// the server default already resolves correctly.

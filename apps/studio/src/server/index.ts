@@ -14,7 +14,20 @@ import { buildBootstrap, DocStore } from "./docs.ts";
 import { listLoops, readLoop } from "./loops.ts";
 import { renderShell } from "./shell.ts";
 import { generateToken } from "./token.ts";
-import type { LiveActivity, StudioLifecycle, StudioLiveSource } from "./types.ts";
+import type {
+	LiveActivity,
+	LiveCancelResult,
+	StudioLifecycle,
+	StudioLiveActions,
+	StudioLiveSource,
+} from "./types.ts";
+
+// Safe run-id slug for the live action routes, the same shape the loop/audit
+// readers enforce: a leading alphanumeric, then word/dash characters only. The id
+// becomes a JobStore filesystem key on the host side, so anything else (path
+// separators, traversal, dotfiles) is rejected at the route before it leaves
+// Studio.
+const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 // Client bundle output, relative to this file. Resolved against import.meta
 // so the path is correct regardless of the caller's cwd. Built by
@@ -32,10 +45,13 @@ export type {
 	InstallSummary,
 	LiveActivity,
 	LiveActivityRow,
+	LiveCancelRequest,
+	LiveCancelResult,
 	LiveParticipant,
 	StudioDocument,
 	StudioInstallParams,
 	StudioLifecycle,
+	StudioLiveActions,
 	StudioLiveSource,
 	UninstallSummary,
 } from "./types.ts";
@@ -69,6 +85,10 @@ export interface StartStudioOptions {
 	// state (the foreground registry + background jobs). Absent means GET /api/live
 	// returns an empty LiveActivity (a standalone Studio with no host).
 	liveSource?: StudioLiveSource;
+	// Live actions (cancel a background job), injected by the host (the CLI), which
+	// owns JobStore and the worker signaling. Absent means POST /api/live/cancel
+	// returns 501 (a read-only / standalone Studio).
+	liveActions?: StudioLiveActions;
 }
 
 export interface StudioHandle {
@@ -118,6 +138,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 		lifecycle: opts.lifecycle,
 		loopsDir: opts.loopsDir,
 		liveSource: opts.liveSource,
+		liveActions: opts.liveActions,
 	});
 
 	const server = Bun.serve({
@@ -163,6 +184,9 @@ interface BuildAppOptions {
 	// Live-activity source injected by the host (see StartStudioOptions). GET
 	// /api/live reads this; absent means a coherent empty LiveActivity.
 	liveSource?: StudioLiveSource;
+	// Live actions injected by the host (see StartStudioOptions). POST
+	// /api/live/cancel calls this; absent means 501.
+	liveActions?: StudioLiveActions;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -305,6 +329,50 @@ export function buildApp(opts: BuildAppOptions) {
 		} catch {
 			return c.json(empty);
 		}
+	});
+
+	// Live action: cancel a live run. The mutating counterpart to GET /api/live,
+	// injected as StudioLiveActions by the host (the CLI owns JobStore + the worker
+	// signaling). Order matters: a malformed body or unsafe run id is a 400; a
+	// non-background source is a 422 BEFORE the handler check, so a foreground
+	// request is always refused honestly (Studio mirrors foreground snapshots
+	// cross-process but does not own the MCP foreground controller, so it cannot
+	// cancel one); an absent handler is a 501 (read-only Studio). Only then is the
+	// host asked to cancel the background job.
+	app.post("/api/live/cancel", async (c) => {
+		let body: unknown;
+		try {
+			body = await c.req.json();
+		} catch {
+			return new Response("invalid JSON body", { status: 400 });
+		}
+		if (typeof body !== "object" || body === null || !("runId" in body) || !("source" in body)) {
+			return new Response("body must be { runId, source }", { status: 400 });
+		}
+		const { runId, source } = body as { runId: unknown; source: unknown };
+		if (typeof runId !== "string" || !SAFE_RUN_ID.test(runId)) {
+			return new Response("runId must be a safe run-id slug", { status: 400 });
+		}
+		if (source !== "background") {
+			return new Response(
+				`cannot cancel source "${String(source)}": only background runs are cancellable from Studio`,
+				{ status: 422 },
+			);
+		}
+		if (!opts.liveActions) {
+			return new Response("live actions not available", { status: 501 });
+		}
+		let result: LiveCancelResult;
+		try {
+			result = opts.liveActions.cancelBackground(runId);
+		} catch {
+			return new Response("cancel failed", { status: 422 });
+		}
+		if (result.status === "not-found") return c.text("not found", 404);
+		// requested / already-finished are both expected outcomes, not errors: the
+		// client renders the status. (The already-finished body lets the rail show
+		// "already cancelled/completed" instead of a misleading success.)
+		return c.json(result);
 	});
 
 	// Audit transcript for one run. A loop iteration's

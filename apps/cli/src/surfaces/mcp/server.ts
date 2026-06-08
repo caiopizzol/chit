@@ -77,6 +77,7 @@ import {
 } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
 import { loadConfig } from "../../config/load.ts";
+import { requestJobCancel } from "../../jobs/cancel.ts";
 import { formatDuration, isStale, jobTiming, pidAlive, runWaitState } from "../../jobs/health.ts";
 import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore, JobStoreError } from "../../jobs/store.ts";
@@ -987,37 +988,6 @@ function describeJob(job: JobRecord) {
 		...(job.scope !== undefined && { scope: job.scope }),
 		nextAction,
 	};
-}
-
-// Request cancellation of one job: persist the intent FIRST (survives a worker
-// restart / stale detection), then signal the worker's process group, but never a
-// stale job's possibly-reused pid. Shared by chit_cancel and the batch
-// engine's cancelJob so both cancel identically.
-type CancelResult =
-	| { status: "missing" }
-	| { status: "terminal"; state: JobRecord["state"] }
-	| { status: "requested"; state: JobRecord["state"]; signaled: boolean };
-function requestJobCancel(jobId: string): CancelResult {
-	const job = jobStore.get(jobId);
-	if (!job) return { status: "missing" };
-	if (job.state !== "queued" && job.state !== "running") {
-		return { status: "terminal", state: job.state };
-	}
-	const updated = jobStore.update(jobId, (c) => ({
-		...c,
-		cancelRequestedAt: new Date().toISOString(),
-		...(c.state === "running" && { phase: "cancelling" as const }),
-	}));
-	let signaled = false;
-	if (!isStale(updated, Date.now()) && updated.pgid !== undefined && pidAlive(updated.pid)) {
-		try {
-			process.kill(-updated.pgid, "SIGTERM");
-			signaled = true;
-		} catch {
-			// ESRCH: the worker already exited. The persisted intent still stands.
-		}
-	}
-	return { status: "requested", state: updated.state, signaled };
 }
 
 // --- unified run surface (run_id) -----------------------------------------
@@ -2164,7 +2134,7 @@ server.registerTool(
 		if (resolved.mode === "background") {
 			let r: ReturnType<typeof requestJobCancel>;
 			try {
-				r = requestJobCancel(run_id);
+				r = requestJobCancel(jobStore, run_id);
 			} catch (e) {
 				return errorResult(safeMcpError(e));
 			}
@@ -2500,7 +2470,7 @@ const batchDeps: BatchEngineDeps = {
 	},
 	getJob: (id) => jobStore.get(id),
 	cancelJob: (id) => {
-		requestJobCancel(id);
+		requestJobCancel(jobStore, id);
 	},
 	isStale: (job) => isStale(job, Date.now()),
 	loopDetail: (worktreePath, loopId) => {
@@ -2834,7 +2804,7 @@ const planDeps: PlanEngineDeps = {
 	},
 	getJob: (id) => jobStore.get(id),
 	cancelJob: (id) => {
-		requestJobCancel(id);
+		requestJobCancel(jobStore, id);
 	},
 	isStale: (job) => isStale(job, Date.now()),
 	loopDetail: (worktreePath, loopId) => {

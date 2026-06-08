@@ -1438,6 +1438,43 @@ header.app .loops-btn {
 	font-size: 16px;
 	font-weight: 600;
 }
+/* Selected-run action strip. Paper-and-ink, square corners, mono caps -- the same
+   restrained outline idiom as the shared secondary button, scaled down to sit
+   quietly under the detail head. No accent color (per brand). */
+.live-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 12px;
+}
+.live-action {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	background: var(--paper);
+	color: var(--ink);
+	border: 1px solid var(--hairline);
+	padding: 4px 10px;
+	cursor: pointer;
+}
+.live-action:hover:not(:disabled) {
+	border-color: var(--ink);
+	background: var(--sheet);
+}
+.live-action:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.live-action--cancel {
+	border-color: var(--ink);
+}
+.live-action-msg {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--faded);
+}
 .live-detail-scope {
 	margin: 0;
 	font-family: "JetBrains Mono", monospace;

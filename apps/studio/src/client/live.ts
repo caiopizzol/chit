@@ -5,6 +5,7 @@
 // module only transforms data it is handed.
 
 import type { LiveActivity, LiveActivityRow } from "../server/types.ts";
+import type { LiveCancelOutcome } from "./api.ts";
 
 // Stable identity for a live row across polls. The source tag is part of the
 // key because a foreground iteration and a background job can carry the same
@@ -60,6 +61,40 @@ export type LiveBody = "empty" | "empty-with-console" | "grid";
 export function liveBody(activity: LiveActivity, logCount: number): LiveBody {
 	if (flattenRows(activity).length > 0) return "grid";
 	return logCount > 0 ? "empty-with-console" : "empty";
+}
+
+// --- Selected-run actions (pure helpers) ---
+
+// Whether the selected run offers a real Cancel action. Only background jobs do:
+// the CLI host owns JobStore and can signal a background worker. A foreground row
+// is a cross-process mirror Studio does not control, so it gets the copy-only
+// strip and no cancel button (the server would refuse a foreground cancel anyway).
+export function cancelAvailable(row: LiveActivityRow): boolean {
+	return row.source === "background";
+}
+
+// A background cancel intent that is already in flight: the worker is winding down
+// (phase `cancelling`). The action is shown disabled rather than re-fired, so the
+// operator sees the intent landed without spamming duplicate requests.
+export function cancelPending(row: LiveActivityRow): boolean {
+	return row.source === "background" && row.phase === "cancelling";
+}
+
+// The compact, calm feedback line for a cancel outcome. No stack traces or raw
+// bodies in the rail: a requested cancel that signaled a live worker vs. one that
+// only persisted intent (no live worker) read differently, a finished run reports
+// its state, and failures collapse to a short status note.
+export function cancelMessage(outcome: LiveCancelOutcome): string {
+	switch (outcome.kind) {
+		case "requested":
+			return outcome.signaled ? "cancel requested" : "cancel requested · no live worker";
+		case "already-finished":
+			return `already ${outcome.state}`;
+		case "not-found":
+			return "run no longer live";
+		case "error":
+			return `cancel failed · ${outcome.status}`;
+	}
 }
 
 // One console line derived from a transition between snapshots, before the hook

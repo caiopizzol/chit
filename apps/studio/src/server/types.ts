@@ -240,6 +240,43 @@ export interface StudioLiveSource {
 	live(): LiveActivity;
 }
 
+// POST /api/live/cancel request body. Cancels a live run through the
+// host-injected action handler. `source` is required and validated: only
+// "background" is accepted. A foreground request is refused (422) -- Studio
+// mirrors the cross-process foreground snapshots but does NOT own the MCP
+// foreground controller, so it cannot honestly cancel a foreground run; offering
+// a real cancel there would be a lie. `runId` is validated as a safe slug before
+// it reaches the host (it becomes a JobStore filesystem key).
+export interface LiveCancelRequest {
+	runId: string;
+	source: string;
+}
+
+// The host's cancel outcome, intent-first (matching chit_cancel): a
+// queued/running job gets `cancelRequestedAt` persisted -- and a running job also
+// gets phase `cancelling` -- BEFORE any worker signal, so the intent survives a
+// worker restart or stale detection. `signaled` reports whether a live worker was
+// actually signaled (a stale/already-exited worker is not). A terminal job is
+// reported already-finished, never re-signaled; an unknown id is not-found.
+export type LiveCancelResult =
+	| { status: "requested"; state: "queued" | "running"; signaled: boolean }
+	| { status: "already-finished"; state: JobStateName }
+	| { status: "not-found" };
+
+// The terminal+live job states the cancel result reports. Kept as a local string
+// union (not an import of the CLI's JobState) so @chit-run/studio stays free of
+// CLI internals; the host maps its JobState onto this.
+export type JobStateName = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+// Mutating counterpart to StudioLiveSource, injected by the host (the CLI), which
+// owns JobStore and the worker signaling. The only action in this slice is
+// cancelling a BACKGROUND job. Absent means POST /api/live/cancel returns 501 (a
+// read-only / standalone Studio). The handler is never asked to cancel a
+// foreground run -- the route rejects that with 422 first.
+export interface StudioLiveActions {
+	cancelBackground(runId: string): LiveCancelResult;
+}
+
 export type Bootstrap =
 	| {
 			mode: "open";
