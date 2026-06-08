@@ -22,6 +22,15 @@
 //     signal (it catches a dead process at once); the updatedAt window is the
 //     secondary guard against PID reuse (a reused pid belongs to an unrelated
 //     process that never refreshes THIS snapshot).
+//   - list() is side-effect-free: it never unlinks, so status assembly stays a pure
+//     read. The one cleanup is an explicit, opportunistic dead-pid prune (pruneDead):
+//     a foreground run id is a UUID, so a server killed mid-iteration leaves a
+//     dead-pid file that no later run ever overwrites; list() would filter it forever
+//     but never remove it. pruneDead unlinks ONLY snapshots whose writer pid is gone
+//     (unambiguously safe -- the writer is dead). Stale-but-pid-alive files are left
+//     to read-time filtering: the stale window is the PID-reuse guard, not a delete
+//     trigger. Callers run pruneDead best-effort (e.g. the Studio live read), so a
+//     prune failure never affects the snapshot it returns.
 //
 // Snapshots are intentionally concise and safe: ids, scope/task one-liners, the
 // repo key, a managed worktree path when present, the current iteration/phase,
@@ -250,9 +259,10 @@ export class ForegroundRegistry {
 	// All LIVE foreground snapshots: every well-formed file whose writer is still
 	// alive and whose snapshot is fresh (see isStaleSnapshot). A corrupt, mid-write,
 	// dead, or stale file is skipped, so one bad or abandoned file never breaks the
-	// overview and a dead process never lingers as "healthy". Read-only: it does NOT
-	// delete stale files (status assembly stays side-effect-free); a stale file is
-	// simply filtered out and overwritten when its run id is reused.
+	// overview and a dead process never lingers as "healthy". Read-only: it never
+	// deletes (status assembly stays side-effect-free); a dead/stale file is simply
+	// filtered out. Dead-pid files are reclaimed separately by pruneDead, which a
+	// caller may run opportunistically alongside (but outside) this read.
 	list(nowMs: number, staleAfterMs: number = FOREGROUND_STALE_AFTER_MS): ForegroundSnapshot[] {
 		if (!existsSync(this.baseDir)) return [];
 		const live: ForegroundSnapshot[] = [];
@@ -270,6 +280,40 @@ export class ForegroundRegistry {
 			}
 		}
 		return live;
+	}
+
+	// Unlink only the snapshot files whose writer pid is gone, returning the run ids
+	// reclaimed (for callers/tests to assert what was pruned). This is the explicit,
+	// side-effecting counterpart to list(): a foreground run id is a UUID, so a server
+	// killed mid-iteration leaves a dead-pid file no later run overwrites, and list()
+	// would filter it forever without ever removing it. Deleting a dead-pid file is
+	// unambiguously safe -- the writer process is gone, so nothing will refresh it.
+	//
+	// Deliberately narrow. It does NOT delete:
+	//   - stale-but-pid-alive files: the stale window is the PID-reuse guard, a read-time
+	//     filter only; a live pid may still be the real writer mid-write, so we keep it.
+	//   - corrupt / mismatched files: parseSnapshot can't recover a trustworthy pid from
+	//     them, so we leave them to list-filtering rather than guess they are abandoned.
+	// An unreadable file is left in place for the same reason. Best-effort by intent:
+	// callers wrap this so a prune failure never fails the read it accompanies.
+	pruneDead(): string[] {
+		if (!existsSync(this.baseDir)) return [];
+		const pruned: string[] = [];
+		for (const name of readdirSync(this.baseDir)) {
+			if (!name.endsWith(".json")) continue;
+			const id = name.slice(0, -".json".length);
+			try {
+				const raw: unknown = JSON.parse(readFileSync(join(this.baseDir, name), "utf-8"));
+				const snapshot = parseSnapshot(raw, id);
+				if (snapshot === undefined) continue; // corrupt/mismatched: leave for list-filtering
+				if (pidAlive(snapshot.pid)) continue; // alive (incl. stale-but-alive): keep
+				rmSync(join(this.baseDir, name), { force: true });
+				pruned.push(id);
+			} catch {
+				// unreadable file: leave it, do not delete what we cannot parse
+			}
+		}
+		return pruned;
 	}
 
 	// The pid this registry stamps onto snapshots it writes (for tests that assert

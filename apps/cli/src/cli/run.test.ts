@@ -449,6 +449,62 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 		}
 	});
 
+	// Above any real pid on the platforms chit runs on, so pidAlive is false.
+	const DEAD_PID = 2_147_483_647;
+
+	test("live() prunes a dead-pid foreground file best-effort while a live snapshot still surfaces", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const reg = new ForegroundRegistry(fgDir);
+			reg.write(liveSnapshot({ runId: "fg-live" })); // this process's pid: alive
+			reg.write(liveSnapshot({ runId: "fg-dead", pid: DEAD_PID })); // writer gone
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			// The dead row never surfaces (filtered) and its lingering file is now reclaimed.
+			expect(live.foreground.map((r) => r.runId)).toEqual(["fg-live"]);
+			expect(readdirSync(fgDir)).toEqual(["fg-live.json"]);
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("an unreadable foreground dir degrades to empty foreground without breaking the live read", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			new ForegroundRegistry(fgDir).write(liveSnapshot({ runId: "fg-live" }));
+			// A background job still resolves, proving only the foreground slice degraded.
+			new JobStore(jobsDir).create({
+				policy: "loop",
+				runId: "bg-1",
+				loopId: "bg-1",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+			} as LoopJobRecord);
+			// Strip all perms so both pruneDead and list throw EACCES; both are guarded,
+			// so the read returns an empty foreground rather than failing the snapshot.
+			chmodSync(fgDir, 0o000);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			expect(live.foreground).toEqual([]);
+			expect(live.background.map((r) => r.runId)).toEqual(["bg-1"]);
+		} finally {
+			chmodSync(fgDir, 0o700); // restore so the dir can be removed
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
 	test("maps a background job and reduces participants to agent+adapter (no config/env leak)", () => {
 		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
 		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));

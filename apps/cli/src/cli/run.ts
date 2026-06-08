@@ -914,6 +914,16 @@ export function buildStudioLiveSource(
 // read boundary), then remap its snake_case handle to Studio's camelCase wire
 // shape.
 function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): ForegroundLiveRow[] {
+	// Opportunistically reclaim dead-pid snapshot files before reading. list() is
+	// side-effect-free, so a server killed mid-iteration leaves a dead-pid file it
+	// filters forever but never removes; this poll (GET /api/live, every few seconds
+	// while Studio is open) is the natural place to sweep them. Best-effort: a prune
+	// failure must never fail the live read, so it is swallowed and the read proceeds.
+	try {
+		registry.pruneDead();
+	} catch {
+		// best-effort cleanup; never fail the live read
+	}
 	let snapshots: ReturnType<ForegroundRegistry["list"]>;
 	try {
 		snapshots = registry.list(nowMs);

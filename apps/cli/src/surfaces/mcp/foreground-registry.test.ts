@@ -177,6 +177,44 @@ describe("ForegroundRegistry store", () => {
 		expect(live[0]?.lastActivityAt).toBe(new Date(activityAt).toISOString()); // real mark held
 	});
 
+	test("pruneDead removes a dead-pid snapshot file and reports it; list stays empty", () => {
+		const reg = new ForegroundRegistry(dir);
+		reg.write(snapshot("dead", { pid: DEAD_PID }));
+		expect(reg.list(NOW)).toEqual([]); // already filtered out at read time...
+		expect(readdirSync(dir)).toEqual(["dead.json"]); // ...but the file lingered
+		expect(reg.pruneDead()).toEqual(["dead"]); // the explicit sweep reclaims it
+		expect(readdirSync(dir)).toEqual([]); // file is gone
+		expect(reg.list(NOW)).toEqual([]);
+	});
+
+	test("pruneDead keeps a stale-but-pid-alive snapshot (stale window is a read filter, not a delete trigger)", () => {
+		const reg = new ForegroundRegistry(dir);
+		// pid is alive (this process) but updatedAt is past the stale window: list filters it,
+		// yet pruneDead must NOT delete it -- a live pid may still be the real writer.
+		reg.write(
+			snapshot("stale", {
+				updatedAt: new Date(NOW - FOREGROUND_STALE_AFTER_MS - 1).toISOString(),
+			}),
+		);
+		expect(reg.list(NOW)).toEqual([]); // filtered out as stale
+		expect(reg.pruneDead()).toEqual([]); // but not pruned: pid is alive
+		expect(readdirSync(dir)).toEqual(["stale.json"]); // file remains
+	});
+
+	test("pruneDead leaves corrupt and pid-alive files, reclaims only the dead ones", () => {
+		const reg = new ForegroundRegistry(dir);
+		reg.write(snapshot("alive")); // this process's pid
+		reg.write(snapshot("dead", { pid: DEAD_PID }));
+		writeFileSync(join(dir, "partial.json"), '{"runId":"partial","pid":'); // truncated JSON
+		expect(reg.pruneDead()).toEqual(["dead"]);
+		expect(readdirSync(dir).sort()).toEqual(["alive.json", "partial.json"]);
+	});
+
+	test("pruneDead on an absent base dir is a no-op", () => {
+		const reg = new ForegroundRegistry(join(dir, "does-not-exist-yet"));
+		expect(reg.pruneDead()).toEqual([]);
+	});
+
 	test("write replaces the prior snapshot atomically (no stray .tmp left behind)", () => {
 		const reg = new ForegroundRegistry(dir);
 		reg.write(snapshot("run-a", { phase: "implementing" }));
