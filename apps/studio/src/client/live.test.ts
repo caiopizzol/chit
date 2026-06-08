@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { BackgroundLiveRow, ForegroundLiveRow, LiveActivity } from "../server/types.ts";
-import { diffActivity, flattenRows, formatAge, phaseLabel, rowKey } from "./live.ts";
+import { diffActivity, flattenRows, formatAge, liveBody, phaseLabel, rowKey } from "./live.ts";
 
 function fg(over: Partial<ForegroundLiveRow> = {}): ForegroundLiveRow {
 	return {
@@ -110,5 +110,41 @@ describe("diffActivity", () => {
 			activity({ foreground: [fg({ lastActivityAgeMs: 3000 })] }),
 		);
 		expect(out).toEqual([]);
+	});
+});
+
+describe("liveBody", () => {
+	test("rows present render the three-column grid regardless of log", () => {
+		expect(liveBody(activity({ foreground: [fg()] }), 0)).toBe("grid");
+		expect(liveBody(activity({ background: [bg()] }), 5)).toBe("grid");
+	});
+
+	test("no rows and no log stays calm and minimal", () => {
+		expect(liveBody(activity(), 0)).toBe("empty");
+	});
+
+	test("no rows but a populated console keeps the console visible", () => {
+		expect(liveBody(activity(), 1)).toBe("empty-with-console");
+	});
+
+	test("same open after disappearance: the row clears but its console survives", () => {
+		// Mirror the live flow within one open session. A row was alive, then
+		// disappears. The diff records the "disappeared" line, and once that line is
+		// in the retained console the empty overlay must still show it rather than
+		// collapsing to the calm state. (useLive keeps the log across polls while
+		// the monitor stays open, so logCount stays > 0 here.)
+		const before = activity({ foreground: [fg()] });
+		const after = activity();
+		const transitions = diffActivity(before, after);
+		expect(transitions).toEqual([{ runId: "fg-1", source: "foreground", text: "disappeared" }]);
+		expect(liveBody(after, transitions.length)).toBe("empty-with-console");
+	});
+
+	test("close then reopen with no live rows starts calm and minimal", () => {
+		// The other path the dogfood polish must honor: a fresh open resets the
+		// read session, including the console (useLive clears `log`), so a reopen
+		// with nothing live renders the minimal empty state, never the previous
+		// session's lingering transition tail. With the log cleared, logCount is 0.
+		expect(liveBody(activity(), 0)).toBe("empty");
 	});
 });

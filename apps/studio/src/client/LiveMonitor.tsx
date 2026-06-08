@@ -9,7 +9,7 @@
 
 import { Fragment, useEffect } from "react";
 import type { LiveActivityRow, LiveParticipant } from "../server/types.ts";
-import { formatAge, phaseLabel, rowKey } from "./live.ts";
+import { formatAge, liveBody, phaseLabel, rowKey } from "./live.ts";
 import type { LiveConsoleEntry, LiveState } from "./useLive.ts";
 
 // The agent+adapter participants of a run, drawn as connected blocks -- the
@@ -178,7 +178,7 @@ export function LiveMonitor({ live, onClose }: { live: LiveState; onClose: () =>
 	}, [onClose]);
 
 	const { activity, status, error, log, selectedKey, selected, select } = live;
-	const empty = activity.foreground.length === 0 && activity.background.length === 0;
+	const body = liveBody(activity, log.length);
 
 	return (
 		<div className="live-overlay">
@@ -201,13 +201,29 @@ export function LiveMonitor({ live, onClose }: { live: LiveState; onClose: () =>
 				<div className="live-body">
 					<p className="live-muted">Loading live activity…</p>
 				</div>
-			) : empty ? (
+			) : body === "empty" ? (
 				<div className="live-body">
 					<div className="live-empty">
 						<p className="live-empty-head">Nothing is live right now.</p>
 						<p className="live-empty-sub">
 							Foreground loops and background jobs appear here while they run.
 						</p>
+					</div>
+				</div>
+			) : body === "empty-with-console" ? (
+				// The rail has cleared but the console still holds the run's last
+				// transitions. Keep them visible below a calm header so the final
+				// "disappeared" line is not hidden the instant the row exits.
+				<div className="live-body live-body--cleared">
+					<div className="live-cleared">
+						<p className="live-empty-head">No live runs right now.</p>
+						<p className="live-empty-sub">
+							The last run has ended. Recent activity stays below until you reopen Live.
+						</p>
+						<section className="live-cleared-console">
+							<h3 className="live-col-head">Console</h3>
+							<Console log={log} />
+						</section>
 					</div>
 				</div>
 			) : (

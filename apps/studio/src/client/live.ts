@@ -42,6 +42,18 @@ export function phaseLabel(row: LiveActivityRow): string {
 	return row.phase ? `${row.display} · ${row.phase}` : row.display;
 }
 
+// Which body the live overlay should render. "grid" is the normal three-column
+// view. When no rows are live we keep the console visible IF it holds entries,
+// so the final transition (the "disappeared" line the operator came to see)
+// stays readable until the next reopen clears the session; with no prior
+// activity there is nothing to keep, so the overlay stays calm and minimal.
+export type LiveBody = "empty" | "empty-with-console" | "grid";
+
+export function liveBody(activity: LiveActivity, logCount: number): LiveBody {
+	if (flattenRows(activity).length > 0) return "grid";
+	return logCount > 0 ? "empty-with-console" : "empty";
+}
+
 // One console line derived from a transition between snapshots, before the hook
 // stamps it with a time and a key.
 export interface LiveTransition {

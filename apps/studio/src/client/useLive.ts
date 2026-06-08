@@ -91,6 +91,12 @@ export function useLive(active: boolean): LiveState {
 		setStatus("loading");
 		setError(null);
 		setSelectedKey(null);
+		// The console is part of the read session too: a fresh open must start
+		// blank so a new session with no live rows shows the calm empty state, not
+		// last session's lingering transition tail. Within an open session the log
+		// persists (that is what keeps the final "disappeared" line visible after
+		// the row clears); only a reopen wipes it.
+		setLog([]);
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 

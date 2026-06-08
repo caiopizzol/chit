@@ -1219,6 +1219,28 @@ header.app .live-btn {
 	font-size: 13px;
 }
 
+/* After the last row clears we keep the console visible so the final
+   transition stays readable. A calm single column, not the dense three-column
+   grid: header, then the recent console below it. Align to the top so a longer
+   console reads top-down and can scroll. */
+.live-body--cleared {
+	align-items: flex-start;
+	overflow-y: auto;
+}
+.live-cleared {
+	width: 100%;
+	max-width: 440px;
+	text-align: center;
+}
+.live-cleared .live-empty-sub {
+	margin-bottom: 22px;
+}
+.live-cleared-console {
+	text-align: left;
+	border-top: 1px solid var(--hairline);
+	padding-top: 16px;
+}
+
 /* The three-column body. Rail and console are fixed; detail flexes. */
 .live-grid {
 	flex: 1 1 auto;
