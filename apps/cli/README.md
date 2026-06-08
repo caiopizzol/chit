@@ -31,16 +31,13 @@ Manifests are small JSON files you write. Example manifests live in the source r
 
 ## Studio
 
-`chit studio`, the local visual editor, needs the Studio client assets. Those ship in a source checkout, not in this npm package. From a published install the `studio` command is not functional in this version.
-
-To use Studio:
+`chit studio` opens the local visual editor in your browser. It ships with this package, so it works from a published install:
 
 ```sh
-git clone https://github.com/caiopizzol/chit
-cd chit
-bun install
-bun run studio:preview
+chit studio path/to/your-manifest.json
 ```
+
+Run it with no path to discover a manifest in the current directory. Press Ctrl-C to stop.
 
 ## Docs
 

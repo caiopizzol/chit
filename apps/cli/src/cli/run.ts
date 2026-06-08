@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { NormalizedConfig } from "@chit-run/core";
@@ -120,7 +120,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function parseStudioArgs(argv: string[]): ParsedArgs {
-	// `chit studio [path]` — path is optional. If present, it is the explicit
+	// `chit studio [path]` - path is optional. If present, it is the explicit
 	// manifest path (one positional, no flags in sub-unit 1.0). Unknown flags
 	// and extra positionals throw, following the same pattern as the other
 	// parseXxxArgs in this file. `--help` / `-h` yield the top-level help so
@@ -871,6 +871,20 @@ function buildStudioLifecycle(): import("@chit-run/studio/server").StudioLifecyc
 	};
 }
 
+// Where the Studio client bundle lives in a published install: next to the
+// packaged chit.js (dist/client/), copied there by build.ts. The Studio server's
+// own default path is correct for a source checkout but resolves wrong once the
+// server module is inlined into chit.js, so the CLI passes the packaged path
+// explicitly when it exists. moduleDir is import.meta.dir of the running module:
+// apps/cli/dist in the published bundle, apps/cli/src/cli in a source checkout.
+// In a source checkout dist/client/ does not sit beside this module, so we
+// return undefined and let the Studio server fall back to its source-checkout
+// default (apps/studio/dist/client). Exported for tests.
+export function studioClientDir(moduleDir: string): string | undefined {
+	const packaged = join(moduleDir, "client");
+	return existsSync(join(packaged, "index.js")) ? packaged : undefined;
+}
+
 async function runStudio(args: ParsedArgs): Promise<number> {
 	const { PathError, startStudio } = await import("@chit-run/studio/server");
 	let handle: { url: string; stop(): void };
@@ -888,6 +902,10 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			// The CLI owns the loop-log location scheme; inject the resolved dir so
 			// Studio reads the same place chit writes.
 			loopsDir: loopLogDir(process.cwd()),
+			// In a published install the client bundle ships beside chit.js, not at
+			// the Studio server's default path. Undefined in a source checkout, where
+			// the server default already resolves correctly.
+			clientDistDir: studioClientDir(import.meta.dir),
 		});
 	} catch (e) {
 		if (e instanceof PathError) {

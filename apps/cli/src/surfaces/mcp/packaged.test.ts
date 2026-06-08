@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Packaged-distribution smoke: build the CLI exactly as `prepack` does, then run
@@ -16,6 +18,79 @@ const build = Bun.spawnSync(["bun", "build.ts"], { cwd: APPS_CLI });
 if (!build.success) {
 	throw new Error(`build failed: ${build.stderr.toString()}`);
 }
+
+// Read the child's stdout until `pattern` matches, then return the full text
+// seen so far. Rejects if the process exits or the timeout elapses first, so a
+// boot failure surfaces as a test error rather than a hang.
+async function readUntil(
+	proc: ReturnType<typeof Bun.spawn>,
+	pattern: RegExp,
+	timeoutMs: number,
+): Promise<string> {
+	const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+	const decoder = new TextDecoder();
+	let buf = "";
+	const deadline = Bun.sleep(timeoutMs).then(() => {
+		throw new Error(`timed out waiting for ${pattern}; saw: ${buf}`);
+	});
+	const pump = (async () => {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) throw new Error(`process exited before ${pattern}; saw: ${buf}`);
+			buf += decoder.decode(value, { stream: true });
+			if (pattern.test(buf)) return buf;
+		}
+	})();
+	try {
+		return await Promise.race([pump, deadline]);
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+describe("packaged chit studio", () => {
+	test("serves the client bundle from the packaged location (no 503)", async () => {
+		// The build copies the Studio client beside chit.js; assert it landed.
+		expect(existsSync(join(APPS_CLI, "dist", "client", "index.js"))).toBe(true);
+		expect(existsSync(join(APPS_CLI, "dist", "client", "index.css"))).toBe(true);
+
+		const cwd = mkdtempSync(join(tmpdir(), "chit-studio-pkg-"));
+		const manifest = join(cwd, "consult.json");
+		writeFileSync(
+			manifest,
+			JSON.stringify({
+				schema: 1,
+				id: "consult",
+				description: "packaged studio smoke",
+				inputs: { q: { type: "string" } },
+				requires: {},
+				participants: { a: { agent: "claude", instructions: "r", session: "stateless" } },
+				steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
+				output: "s",
+			}),
+		);
+		const proc = Bun.spawn(["bun", DIST, "studio", manifest], {
+			cwd,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			const out = await readUntil(proc, /chit studio: (http:\/\/\S+)/, 15000);
+			const url = out.match(/chit studio: (http:\/\/\S+)/)?.[1] as string;
+			// The 503 path the published package used to hit lives behind /client/.
+			const js = await fetch(new URL("/client/index.js", url));
+			expect(js.status).toBe(200);
+			expect((await js.text()).length).toBeGreaterThan(0);
+			const css = await fetch(new URL("/client/index.css", url));
+			expect(css.status).toBe(200);
+		} finally {
+			proc.kill("SIGINT");
+			await proc.exited;
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}, 30000);
+});
 
 describe("packaged chit binary", () => {
 	test("chit --help returns without hanging on the bundled MCP server", async () => {

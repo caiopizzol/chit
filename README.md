@@ -66,7 +66,7 @@ chit run <manifest.json> [options]      # execute a chit
 chit show <manifest.json>               # inspect without running
 chit converge --task <text> --scope <id>
 chit audit list                         # read recorded run transcripts
-chit studio [path]                      # local editor (source checkout only in this version)
+chit studio [path]                      # local visual editor in the browser
 chit install <manifest.json> --as claude-skill
 ```
 

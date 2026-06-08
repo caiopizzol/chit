@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditStore } from "../audit/store.ts";
-import { parseArgs } from "./run.ts";
+import { parseArgs, studioClientDir } from "./run.ts";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 const RUN_TS = join(PROJECT_ROOT, "src", "cli", "run.ts");
@@ -343,6 +343,29 @@ describe("parseArgs", () => {
 
 	test("studio --help yields help", () => {
 		expect(parseArgs(["studio", "--help"]).command).toBe("help");
+	});
+
+	test("studioClientDir returns the packaged dir when client/index.js sits beside the module", () => {
+		// Mirrors a published install: chit.js and client/ live in the same dir.
+		const dir = mkdtempSync(join(tmpdir(), "chit-studio-client-"));
+		try {
+			mkdirSync(join(dir, "client"));
+			writeFileSync(join(dir, "client", "index.js"), 'console.log("hi");');
+			expect(studioClientDir(dir)).toBe(join(dir, "client"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("studioClientDir returns undefined in a source checkout (no client/ beside the module)", () => {
+		// The Studio server's own default path handles the source-checkout case, so
+		// the CLI must pass undefined rather than a wrong packaged path.
+		const dir = mkdtempSync(join(tmpdir(), "chit-studio-client-"));
+		try {
+			expect(studioClientDir(dir)).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("mcp parses as the mcp command (launches the stdio server)", () => {
