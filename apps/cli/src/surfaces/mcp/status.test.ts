@@ -10,6 +10,11 @@ import { ControllerStore } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import type { Run } from "./engine.ts";
 import {
+	FOREGROUND_STALE_AFTER_MS,
+	ForegroundRegistry,
+	type ForegroundSnapshot,
+} from "./foreground-registry.ts";
+import {
 	buildStatus,
 	needsDecisionNextAction,
 	publicRunSummary,
@@ -499,6 +504,163 @@ describe("buildStatus", () => {
 		expect((out[0] as Record<string, unknown>).manifestId).toBe("m"); // metadata survives
 		expect((out[0] as Record<string, unknown>).type).toBe("run.started"); // discriminant survives
 		expect((out[1] as Record<string, unknown>).stepId).toBe("implement"); // step id is fine
+	});
+});
+
+// A foreground registry seeded with raw snapshots under a temp dir (never the real
+// state dir). pid defaults to this process so a snapshot reads as alive.
+function registryWith(snapshots: ForegroundSnapshot[]): ForegroundRegistry {
+	const reg = new ForegroundRegistry(mkdtempSync(join(tmpdir(), "chit-status-fg-")));
+	for (const s of snapshots) reg.write(s);
+	return reg;
+}
+
+function fgSnapshot(runId: string, over: Partial<ForegroundSnapshot> = {}): ForegroundSnapshot {
+	return {
+		runId,
+		pid: process.pid,
+		scope: "sc",
+		task: "t",
+		repoKey: "k",
+		iteration: 1,
+		phase: "implementing",
+		startedAt: new Date(NOW - 60_000).toISOString(),
+		phaseStartedAt: new Date(NOW - 10_000).toISOString(),
+		lastActivityAt: new Date(NOW - 10_000).toISOString(),
+		updatedAt: new Date(NOW - 10_000).toISOString(),
+		statusLine: "iteration 1 · implementing",
+		...over,
+	};
+}
+
+describe("buildStatus foregroundElsewhere (cross-session live foreground runs)", () => {
+	test("no registry wired -> the section is empty", () => {
+		const status = buildStatus(emptyController(), emptyAuditStore(), emptyJobStore(), 5, NOW, {
+			version: "1",
+		});
+		expect(status.foregroundElsewhere).toEqual([]);
+	});
+
+	test("surfaces a live foreground run from another session, with derived ages", () => {
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{ foregroundRegistry: registryWith([fgSnapshot("other-1")]) },
+		);
+		expect(status.foregroundElsewhere.map((f) => f.run_id)).toEqual(["other-1"]);
+		const f = status.foregroundElsewhere[0];
+		expect(f?.phase).toBe("implementing");
+		expect(f?.elapsedMs).toBe(60_000); // now - startedAt
+		expect(f?.phaseElapsedMs).toBe(10_000); // now - phaseStartedAt
+	});
+
+	test("excludes THIS session's own foreground run (already in active.loops), no double count", () => {
+		// The current session writes its own foreground loop to the registry too, so the
+		// same run id appears in both active.loops and the registry. It must show once.
+		const status = buildStatus(
+			controllerOf([], [fakeSession("mine")]),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{ foregroundRegistry: registryWith([fgSnapshot("mine"), fgSnapshot("other")]) },
+		);
+		expect(status.active.loops.map((l) => l.run_id)).toContain("mine");
+		// "mine" is filtered out of the cross-session view; only the other session shows.
+		expect(status.foregroundElsewhere.map((f) => f.run_id)).toEqual(["other"]);
+	});
+
+	test("a one-shot run id supervised here is also excluded from the cross-session view", () => {
+		const status = buildStatus(
+			controllerOf([fakeRun("os")], []),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{ foregroundRegistry: registryWith([fgSnapshot("os")]) },
+		);
+		expect(status.foregroundElsewhere).toEqual([]);
+	});
+
+	test("dead and stale snapshots are not surfaced as live", () => {
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{
+				foregroundRegistry: registryWith([
+					fgSnapshot("alive"),
+					fgSnapshot("dead", { pid: 2_147_483_647 }), // pid not alive
+					fgSnapshot("stale", {
+						updatedAt: new Date(NOW - FOREGROUND_STALE_AFTER_MS - 1).toISOString(),
+					}),
+				]),
+			},
+		);
+		expect(status.foregroundElsewhere.map((f) => f.run_id)).toEqual(["alive"]);
+	});
+
+	test("sorts cross-session runs newest-started first", () => {
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{
+				foregroundRegistry: registryWith([
+					fgSnapshot("old", { startedAt: new Date(NOW - 90_000).toISOString() }),
+					fgSnapshot("new", { startedAt: new Date(NOW - 10_000).toISOString() }),
+				]),
+			},
+		);
+		expect(status.foregroundElsewhere.map((f) => f.run_id)).toEqual(["new", "old"]);
+	});
+
+	test("no prompt/output leakage: a snapshot carries only safe, compact fields", () => {
+		const status = buildStatus(
+			emptyController(),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{ foregroundRegistry: registryWith([fgSnapshot("other-1")]) },
+		);
+		const json = JSON.stringify(status.foregroundElsewhere);
+		// The compact view never carries review prose / prompts / config / env keys.
+		expect(json).not.toContain("priorReview");
+		expect(json).not.toContain("envKeys");
+		expect(json).not.toContain("permissions");
+	});
+
+	test("a registry read failure degrades the section to [] without masking the overview", () => {
+		const throwing = {
+			list() {
+				throw new Error("registry dir unavailable");
+			},
+		} as unknown as ForegroundRegistry;
+		const status = buildStatus(
+			controllerOf([fakeRun("r1", { startedAtMs: 0 })]),
+			emptyAuditStore(),
+			emptyJobStore(),
+			5,
+			NOW,
+			TEST_SERVER,
+			{ foregroundRegistry: throwing },
+		);
+		expect(status.foregroundElsewhere).toEqual([]);
+		expect(status.active.runs.map((r) => r.run_id)).toEqual(["r1"]); // rest of the overview intact
 	});
 });
 

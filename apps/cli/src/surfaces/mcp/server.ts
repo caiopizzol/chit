@@ -127,6 +127,7 @@ import {
 	type StepControllers,
 	startRun,
 } from "./engine.ts";
+import { FOREGROUND_HEARTBEAT_MS, ForegroundRegistry } from "./foreground-registry.ts";
 import { describeServerVersion, RUNNING_VERSION, resolveOwnVersion } from "./server-version.ts";
 import {
 	buildStatus,
@@ -151,6 +152,12 @@ const jobStore = new JobStore();
 // resolution into the durable JobStore for background runs (run_id == jobId). The
 // stepwise/converge tools register and look up through it; see controller.ts.
 const runController = new RunController(new ControllerStore(), jobStore);
+// The local foreground live-activity registry (~/.local/state/chit/foreground). A
+// foreground loop's in-flight activity otherwise lives only in this process's
+// memory; the registry mirrors it to disk so ANOTHER live Chit server (or Studio)
+// can see what an in-chat run is doing. Written while an iteration is in flight,
+// removed when it settles; reads filter dead/stale snapshots. See foreground-registry.ts.
+const foregroundRegistry = new ForegroundRegistry();
 // The config (agents + roles) is loaded lazily on first use, not at import. The CLI
 // binary imports this module to expose `chit mcp`, so importing it must not read
 // ~/.config/chit/config.json (that read belongs to a running server, not to every
@@ -338,7 +345,9 @@ server.registerTool(
 			// running server (a reconnect is needed to pick it up).
 			const server = describeServerVersion(RUNNING_VERSION, resolveOwnVersion());
 			return jsonResult(
-				buildStatus(runController, auditStore, jobStore, recent_limit, Date.now(), server),
+				buildStatus(runController, auditStore, jobStore, recent_limit, Date.now(), server, {
+					foregroundRegistry,
+				}),
 			);
 		}
 		// One `now` for the resolve AND the view, so the in-flight activity's elapsed /
@@ -1634,6 +1643,11 @@ server.registerTool(
 				ws.cleanup?.(); // the loop never opened: retire the empty worktree
 				return errorResult(safeMcpError(e));
 			}
+			// Mirror this foreground loop's in-flight activity to the cross-process registry:
+			// the engine fires onActivityChange on iteration start, each phase transition, and
+			// on settle; the registry writes/removes the snapshot accordingly. Best-effort (the
+			// registry swallows its own I/O errors), so a mirror failure never perturbs the loop.
+			session.onActivityChange = (s) => foregroundRegistry.sync(s);
 			runController.registerLoop(session, Date.now());
 			return jsonResult({
 				...loopRunView(session),
@@ -1784,6 +1798,17 @@ server.registerTool(
 			}
 			const n = session.iteration + 1;
 			heartbeat(`${run_id} · iteration ${n} · starting`);
+			// Keep this foreground run's registry snapshot fresh for OTHER sessions while the
+			// iteration runs: phase-change syncs alone can leave updatedAt stale through a long
+			// single adapter phase (call_timeout_ms can exceed the stale window). The beat
+			// re-syncs the same snapshot, advancing updatedAt but not lastActivityAt (the real
+			// activity mark), so a long-but-healthy run stays live without faking activity.
+			// runNextIteration's settle clears `activity`, so a beat after settle removes the
+			// file; the finally stops the timer regardless. unref so it never holds the process up.
+			const registryBeat = setInterval(() => {
+				foregroundRegistry.sync(session);
+			}, FOREGROUND_HEARTBEAT_MS);
+			(registryBeat as { unref?: () => void }).unref?.();
 			try {
 				const result = await runNextIteration(session, {
 					signal: extra.signal,
@@ -1843,6 +1868,7 @@ server.registerTool(
 			} catch (e) {
 				return errorResult(safeMcpError(e));
 			} finally {
+				clearInterval(registryBeat);
 				releaseLock(loopLock);
 				runController.touchLoop(run_id, now);
 			}

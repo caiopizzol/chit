@@ -930,3 +930,64 @@ describe("runNextIteration: in-flight activity snapshot", () => {
 		expect(session.activity).toBeUndefined();
 	});
 });
+
+describe("runNextIteration: onActivityChange observer (registry mirror hook)", () => {
+	// The engine fires onActivityChange whenever `activity` changes, so the server can
+	// mirror live foreground activity to the cross-process registry without the engine
+	// owning any persistence. It must fire on iteration start, each phase transition, and
+	// on settle (when activity is cleared), and a throwing observer must never break the loop.
+	test("fires on start, each phase transition, and on settle (cleared)", async () => {
+		const observed: (LoopPhase | "starting" | "settled")[] = [];
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctx?.onTrace?.({ type: "step.started", stepId: "implement", kind: "call" });
+			ctx?.onTrace?.({ type: "step.started", stepId: "review", kind: "call" });
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [
+					{
+						type: "step.completed",
+						stepId: "review",
+						output: reviewJson("proceed"),
+						durationMs: 1,
+					},
+				],
+			};
+		};
+		const session = start(execute);
+		session.onActivityChange = (s) =>
+			observed.push(s.activity ? (s.activity.phase ?? "starting") : "settled");
+		await runNextIteration(session);
+		// start (no phase yet -> "starting"), implementing, reviewing, then settle clears it.
+		expect(observed[0]).toBe("starting");
+		expect(observed).toContain("implementing");
+		expect(observed).toContain("reviewing");
+		expect(observed.at(-1)).toBe("settled"); // the final fire is the settle (activity cleared)
+	});
+
+	test("fires 'cancelling' then 'settled' when an in-flight iteration is cancelled", async () => {
+		const observed: (LoopPhase | "starting" | "settled")[] = [];
+		const gated = gatedExecute(reviewJson("proceed"));
+		const session = start(gated.execute);
+		session.onActivityChange = (s) =>
+			observed.push(s.activity ? (s.activity.phase ?? "starting") : "settled");
+		const pending = runNextIteration(session);
+		await gated.onStarted;
+		cancelConverge(session);
+		const r = await pending;
+		expect(r.kind).toBe("cancelled");
+		expect(observed).toContain("cancelling");
+		expect(observed.at(-1)).toBe("settled");
+	});
+
+	test("a throwing observer never breaks the iteration", async () => {
+		const session = start(scriptedExecute([reviewJson("proceed")]));
+		session.onActivityChange = () => {
+			throw new Error("registry write blew up");
+		};
+		const r = await runNextIteration(session);
+		expect(r.kind).toBe("iteration"); // the loop converged despite the observer throwing
+		expect(session.terminalStatus).toBe("converged");
+	});
+});

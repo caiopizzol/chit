@@ -15,9 +15,13 @@
 // Pure and side-effect-free BY DESIGN: it does NOT sweep or touch the in-memory
 // stores. Touching on a status poll would keep runs alive forever (defeating
 // idle eviction); sweeping would make a read destructive. Eviction stays tied to
-// chit_start, where it belongs. The active sections read
-// only in-memory state (no disk), so they never throw; only `recent` touches
-// disk, via listAudit, which is already robust to a corrupt or mid-write log.
+// chit_start, where it belongs. The active sections read only in-memory state (no
+// disk), so they never throw; the disk-backed slices -- `recent` (the audit store),
+// `jobs` (the JobStore), and `foregroundElsewhere` (the foreground registry) -- are
+// each read defensively (a failure degrades that slice to [], never the whole
+// overview) and each underlying reader is robust to a corrupt or mid-write file.
+// None of them WRITE: a status poll never deletes a stale foreground snapshot, so
+// the read stays non-destructive (a stale snapshot is filtered out, not cleaned up).
 
 import { listAudit, type RunSummary } from "../../audit/reader.ts";
 import type { AuditStore } from "../../audit/store.ts";
@@ -25,9 +29,14 @@ import { formatDuration, isStale, jobTiming } from "../../jobs/health.ts";
 import type { JobStore } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord } from "../../jobs/types.ts";
 import type { RunController } from "./controller.ts";
-import type { ControlledRun } from "./controller-store.ts";
+import { type ControlledRun, runIdOf } from "./controller-store.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import { isComplete, type Run, readySteps } from "./engine.ts";
+import {
+	type ForegroundActivitySummary,
+	type ForegroundRegistry,
+	summarizeForegroundForStatus,
+} from "./foreground-registry.ts";
 import type { ServerVersionInfo } from "./server-version.ts";
 
 // A compact per-run line for the overview. Deliberately omits the (possibly
@@ -327,6 +336,11 @@ export interface ChitStatus {
 	// Durable background jobs (cross-session): every in-flight job (queued/running,
 	// including stale) plus the most recent terminal ones (capped by recentLimit).
 	jobs: JobStatusSummary[];
+	// FOREGROUND loop runs live in OTHER Chit sessions/processes right now, read from
+	// the local foreground registry (dead/stale snapshots filtered out). THIS session's
+	// own foreground runs are already in `active.loops`, so they are excluded here to
+	// avoid double-counting. Empty when no registry is wired (e.g. the pure-assembly tests).
+	foregroundElsewhere: ForegroundActivitySummary[];
 	recent: PublicRunSummary[];
 }
 
@@ -368,6 +382,9 @@ export function buildStatus(
 	recentLimit: number,
 	nowMs: number,
 	server: ServerVersionInfo,
+	// The foreground live-activity registry, when wired (the running server passes it;
+	// the pure-assembly tests omit it). Read-only here; see foregroundElsewhere below.
+	opts: { foregroundRegistry?: ForegroundRegistry } = {},
 ): ChitStatus {
 	// One foreground store now holds both kinds (run_id-keyed); split by kind to
 	// keep the same two-section overview. byNewest sorts each by startedAtMs, so
@@ -377,6 +394,10 @@ export function buildStatus(
 		(c): c is Extract<ControlledRun, { kind: "one-shot" }> => c.kind === "one-shot",
 	);
 	const loops = fg.filter((c): c is Extract<ControlledRun, { kind: "loop" }> => c.kind === "loop");
+	// Run ids supervised by THIS session (any kind). They are already in `active`, and
+	// this session also writes its own foreground loops to the registry, so exclude
+	// them from foregroundElsewhere to avoid double-counting the current session.
+	const ownIds = new Set(fg.map((c) => runIdOf(c)));
 	return {
 		server,
 		active: {
@@ -384,8 +405,31 @@ export function buildStatus(
 			loops: byNewest(loops.map((c) => c.session)).map(summarizeLoopForStatus),
 		},
 		jobs: jobsForStatus(jobStore, recentLimit, nowMs),
+		foregroundElsewhere: foregroundElsewhere(opts.foregroundRegistry, ownIds, nowMs),
 		recent: recentRuns(auditStore, recentLimit).map(publicRunSummary),
 	};
+}
+
+// Live foreground runs in OTHER sessions: every fresh registry snapshot whose run
+// id is NOT one this session supervises. Guarded like recent/jobs so a registry I/O
+// failure degrades this slice to [] rather than masking the rest of the overview;
+// the registry already filters dead/stale snapshots and skips corrupt files.
+function foregroundElsewhere(
+	registry: ForegroundRegistry | undefined,
+	ownIds: ReadonlySet<string>,
+	nowMs: number,
+): ForegroundActivitySummary[] {
+	if (registry === undefined) return [];
+	let snapshots: ReturnType<ForegroundRegistry["list"]>;
+	try {
+		snapshots = registry.list(nowMs);
+	} catch {
+		return [];
+	}
+	return snapshots
+		.filter((s) => !ownIds.has(s.runId))
+		.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt)) // newest-started first
+		.map((s) => summarizeForegroundForStatus(s, nowMs));
 }
 
 // Durable jobs for the overview: never hide in-flight work (all queued/running,

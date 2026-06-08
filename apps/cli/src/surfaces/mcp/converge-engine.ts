@@ -135,6 +135,14 @@ export interface ConvergeSession {
 	// A concurrent chit_status reads it to narrate what the running iteration is doing;
 	// the view derives elapsed / phaseElapsed / heartbeat-age from it. See LoopActivity.
 	activity?: LoopActivity;
+	// Best-effort observer, invoked whenever `activity` changes (iteration start, each
+	// phase transition including "cancelling", and on settle when it is cleared). The
+	// server wires this to mirror the live activity into the cross-process foreground
+	// registry, so a second Chit/Studio process can see this in-chat run. The engine
+	// owns NO persistence itself: it only calls back; the callback decides what to
+	// write. Errors thrown by the callback are swallowed (see notifyActivity), so a
+	// mirror failure can never break an iteration.
+	onActivityChange?: (session: ConvergeSession) => void;
 	startedAtMs: number;
 	// Wall-clock ms when the loop went terminal, set in lockstep with terminalStatus
 	// (set if and only if terminalStatus is set). The durable stop record's
@@ -283,6 +291,17 @@ function stopBlocked(session: ConvergeSession, reason: string): void {
 	}
 }
 
+// Fire the activity observer, swallowing any error: the observer is a best-effort
+// cross-process mirror, never the source of truth, so its failure must not break
+// (or even perturb) the iteration. Called after every change to `activity`.
+function notifyActivity(session: ConvergeSession): void {
+	try {
+		session.onActivityChange?.(session);
+	} catch {
+		// best-effort mirror; the loop is unaffected
+	}
+}
+
 // Advance the in-flight activity to a new phase, setting the phase clock and the
 // freshness mark together (the lockstep the view reads for phaseElapsedMs /
 // lastActivityAgeMs). A no-op once the iteration settled and cleared the snapshot,
@@ -295,6 +314,7 @@ function markActivityPhase(session: ConvergeSession, phase: LoopPhase, atMs = Da
 	a.phase = phase;
 	a.phaseStartedAtMs = atMs;
 	a.lastActivityAtMs = atMs;
+	notifyActivity(session);
 }
 
 // Run exactly ONE implement->review iteration for this session, blocking until
@@ -338,6 +358,9 @@ export async function runNextIteration(
 	// lastActivityAtMs is the iteration's start, so the activity age reads "time since it began"
 	// during the brief spin-up before any phase.
 	session.activity = { iteration, lastActivityAtMs: Date.now() };
+	// Mirror the freshly-opened snapshot (phase still unknown -> "starting") to the
+	// cross-process registry, in lockstep with setting `activity`.
+	notifyActivity(session);
 	// Fold in the client's own signal: if Esc or the MCP request abort propagates, it aborts
 	// the same controller AND marks the snapshot "cancelling", so chit_status reports the
 	// cancel even when it arrived through the request signal rather than chit_cancel. Honor a
@@ -463,6 +486,9 @@ export async function runNextIteration(
 		// phase, so the view must not report a stale one. The terminal receipt (status,
 		// statusLine, elapsedMs, stopReason) carries the settled story instead.
 		session.activity = undefined;
+		// Mirror the settle (activity now cleared) so the registry removes this run's
+		// snapshot: a settled foreground run must not linger as live for other processes.
+		notifyActivity(session);
 	}
 }
 
