@@ -9,7 +9,7 @@ import { parseRegistry } from "@chit-run/core";
 import { buildBootstrap, DocStore, hashRaw } from "./docs.ts";
 import { buildApp } from "./index.ts";
 import { generateToken } from "./token.ts";
-import type { StudioLifecycle } from "./types.ts";
+import type { LiveActivity, StudioLifecycle, StudioLiveSource } from "./types.ts";
 
 const REGISTRY = parseRegistry(undefined);
 const PORT = 4040;
@@ -40,7 +40,9 @@ interface Setup {
 	app: ReturnType<typeof buildApp>;
 }
 
-function setup(opts: { clientDistDir?: string; lifecycle?: StudioLifecycle } = {}): Setup {
+function setup(
+	opts: { clientDistDir?: string; lifecycle?: StudioLifecycle; liveSource?: StudioLiveSource } = {},
+): Setup {
 	const cwd = tempCwd();
 	const path = join(cwd, "consult.json");
 	writeFileSync(path, chit("consult"));
@@ -58,6 +60,7 @@ function setup(opts: { clientDistDir?: string; lifecycle?: StudioLifecycle } = {
 		allowedHosts: ALLOWED,
 		clientDistDir: opts.clientDistDir ?? "/this/path/does/not/exist",
 		lifecycle: opts.lifecycle,
+		liveSource: opts.liveSource,
 	});
 	return { cwd, path, token, app };
 }
@@ -792,6 +795,123 @@ describe("lifecycle endpoints", () => {
 		try {
 			const res = await send(s.app, "DELETE", "/api/installed/ghost", s.token);
 			expect(res.status).toBe(422);
+		} finally {
+			teardown(s);
+		}
+	});
+});
+
+describe("GET /api/live", () => {
+	// A live source carrying one foreground row and one background row, each with
+	// only the safe glance fields. Deliberately includes NO prompt/config/env keys,
+	// so the passthrough test can assert none leak through the route.
+	function stubLiveSource(): StudioLiveSource {
+		const activity: LiveActivity = {
+			foreground: [
+				{
+					source: "foreground",
+					runId: "fg-1",
+					scope: "sc-fg",
+					task: "converge the parser",
+					phase: "implementing",
+					statusLine: "iteration 2 · implementing",
+					worktreePath: "/state/chit/worktrees/fg-1",
+					elapsedMs: 12_000,
+					phaseElapsedMs: 4_000,
+					lastActivityAgeMs: 500,
+					participants: { impl: { agentId: "claude", adapter: "claude-cli" } },
+				},
+			],
+			background: [
+				{
+					source: "background",
+					runId: "bg-1",
+					scope: "sc-bg",
+					task: "migrate the routes",
+					display: "running",
+					phase: "reviewing",
+					statusLine: "running · reviewing",
+					elapsedMs: 60_000,
+					phaseElapsedMs: 10_000,
+					lastHeartbeatAgeMs: 2_000,
+					participants: { rev: { agentId: "codex", adapter: "codex-exec" } },
+				},
+			],
+		};
+		return { live: () => activity };
+	}
+
+	test("returns the injected live source's data, foreground and background distinct", async () => {
+		const s = setup({ liveSource: stubLiveSource() });
+		try {
+			const res = await req(s.app, "/api/live", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as LiveActivity;
+			expect(body.foreground).toHaveLength(1);
+			expect(body.background).toHaveLength(1);
+			expect(body.foreground[0]?.source).toBe("foreground");
+			expect(body.foreground[0]?.runId).toBe("fg-1");
+			expect(body.background[0]?.source).toBe("background");
+			expect(body.background[0]?.runId).toBe("bg-1");
+			expect(body.background[0]?.display).toBe("running");
+			// Participants are the agent+adapter pair only.
+			expect(body.foreground[0]?.participants).toEqual({
+				impl: { agentId: "claude", adapter: "claude-cli" },
+			});
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("requires a token", async () => {
+		const s = setup({ liveSource: stubLiveSource() });
+		try {
+			const res = await s.app.fetch(
+				new Request(`http://${HOST}/api/live`, { headers: { host: HOST } }),
+			);
+			expect(res.status).toBe(401);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("no live source injected returns a coherent empty LiveActivity, not an error", async () => {
+		const s = setup(); // no liveSource
+		try {
+			const res = await req(s.app, "/api/live", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as LiveActivity;
+			expect(body).toEqual({ foreground: [], background: [] });
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("a throwing live source degrades to an empty LiveActivity", async () => {
+		const liveSource: StudioLiveSource = {
+			live() {
+				throw new Error("state dir unavailable");
+			},
+		};
+		const s = setup({ liveSource });
+		try {
+			const res = await req(s.app, "/api/live", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as LiveActivity;
+			expect(body).toEqual({ foreground: [], background: [] });
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("response carries no prompt/config/env fields", async () => {
+		const s = setup({ liveSource: stubLiveSource() });
+		try {
+			const res = await req(s.app, "/api/live", { token: s.token });
+			const text = await res.text();
+			for (const banned of ["prompt", "config", "env", "permissions", "instructions"]) {
+				expect(text).not.toContain(banned);
+			}
 		} finally {
 			teardown(s);
 		}

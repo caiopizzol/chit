@@ -20,7 +20,9 @@ import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
 import { loadConfig } from "../config/load.ts";
+import { isStale, jobTiming } from "../jobs/health.ts";
 import { JobStore } from "../jobs/store.ts";
+import type { JobRecord } from "../jobs/types.ts";
 import { runJobWorker } from "../jobs/worker.ts";
 import { loopLogDir } from "../loops/location.ts";
 import { executeManifest } from "../runtime/execute.ts";
@@ -35,6 +37,11 @@ import {
 	listInstalled,
 	uninstall,
 } from "../surfaces/lifecycle.ts";
+import {
+	compactTask,
+	ForegroundRegistry,
+	summarizeForegroundForStatus,
+} from "../surfaces/mcp/foreground-registry.ts";
 import { startMcpServer } from "../surfaces/mcp/server.ts";
 import { runAudit } from "./audit.ts";
 import { runConverge } from "./converge.ts";
@@ -871,6 +878,138 @@ function buildStudioLifecycle(): import("@chit-run/studio/server").StudioLifecyc
 	};
 }
 
+// How many terminal background jobs the live rail carries. In-flight jobs are
+// never capped (they are the live signal); terminal jobs are the recent tail, so
+// a small cap keeps the rail a glance view. Mirrors the operator status overview's
+// recent-job behavior without exposing the tool's tunable limit.
+const LIVE_RECENT_JOBS = 10;
+
+type StudioLiveSource = import("@chit-run/studio/server").StudioLiveSource;
+type ForegroundLiveRow = import("@chit-run/studio/server").ForegroundLiveRow;
+type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
+type LiveParticipant = import("@chit-run/studio/server").LiveParticipant;
+
+// Live-activity source injected into Studio so GET /api/live reflects current Chit
+// state without @chit-run/studio importing CLI internals (the CLI owns the state
+// readers and injects this small interface, like buildStudioLifecycle). Two
+// sources, kept visibly distinct in the response: the cross-process FOREGROUND
+// registry (in-flight foreground loop iterations) and the durable JobStore
+// (BACKGROUND jobs). Reads are best-effort: a registry/jobs I/O failure degrades
+// that slice to [] rather than failing the whole snapshot, mirroring the operator
+// status assembly. State dirs default to the real XDG-aware locations; tests pass
+// temp dirs. Exported for the CLI injection-shape test.
+export function buildStudioLiveSource(
+	opts: { foregroundDir?: string; jobsDir?: string } = {},
+): StudioLiveSource {
+	const registry = new ForegroundRegistry(opts.foregroundDir);
+	const jobStore = new JobStore(opts.jobsDir);
+	return {
+		live: () => {
+			const now = Date.now();
+			return {
+				foreground: foregroundLiveRows(registry, now),
+				background: backgroundLiveRows(jobStore, now),
+			};
+		},
+	};
+}
+
+// Live foreground rows, newest-started first. The registry already filters
+// dead/stale snapshots and skips corrupt files; reuse the operator status
+// summarizer (it derives ages and reduces participants to agent+adapter at the
+// read boundary), then remap its snake_case handle to Studio's camelCase wire
+// shape.
+function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): ForegroundLiveRow[] {
+	let snapshots: ReturnType<ForegroundRegistry["list"]>;
+	try {
+		snapshots = registry.list(nowMs);
+	} catch {
+		return [];
+	}
+	return snapshots
+		.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+		.map((s): ForegroundLiveRow => {
+			const summary = summarizeForegroundForStatus(s, nowMs);
+			return {
+				source: "foreground",
+				runId: summary.run_id,
+				scope: summary.scope,
+				task: summary.task,
+				phase: summary.phase,
+				statusLine: summary.statusLine,
+				...(summary.worktreePath !== undefined && { worktreePath: summary.worktreePath }),
+				...(summary.elapsedMs !== undefined && { elapsedMs: summary.elapsedMs }),
+				...(summary.phaseElapsedMs !== undefined && { phaseElapsedMs: summary.phaseElapsedMs }),
+				...(summary.lastActivityAgeMs !== undefined && {
+					lastActivityAgeMs: summary.lastActivityAgeMs,
+				}),
+				...(summary.participants !== undefined && { participants: summary.participants }),
+			};
+		});
+}
+
+// Live background rows: every in-flight job (queued/running, including stale) plus
+// the most recent terminal ones (capped). JobStore.list() is newest-first and
+// skips corrupt files; guard the whole read so a jobs I/O failure degrades this
+// slice to [] rather than failing the snapshot.
+function backgroundLiveRows(jobStore: JobStore, nowMs: number): BackgroundLiveRow[] {
+	let all: JobRecord[];
+	try {
+		all = jobStore.list();
+	} catch {
+		return [];
+	}
+	const inFlight = all.filter((j) => j.state === "queued" || j.state === "running");
+	const terminal = all
+		.filter((j) => j.state !== "queued" && j.state !== "running")
+		.slice(0, LIVE_RECENT_JOBS);
+	return [...inFlight, ...terminal].map((j) => backgroundRow(j, nowMs));
+}
+
+function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
+	// `stale` is derived (a running job whose worker is gone or its heartbeat is
+	// old), the same legible signal chit_status surfaces; the stored state is never
+	// rewritten.
+	const display = isStale(job, nowMs) ? "stale" : job.state;
+	const timing = jobTiming(job, nowMs);
+	// A compact glance line, mirroring the foreground statusLine style (no live
+	// duration baked in -- the reader composes that from the derived ages).
+	const statusLine = job.phase ? `${display} · ${job.phase}` : display;
+	const participants = liveParticipants(job);
+	return {
+		source: "background",
+		runId: job.runId,
+		scope: job.scope ?? "",
+		display,
+		statusLine,
+		// JobRecord.task is the raw, unbounded converge body (multi-line, may embed
+		// prompt/config text). Cap it to the same one-liner bound the foreground rail
+		// uses so the live surface never leaks a full task body.
+		...(job.policy === "loop" && { task: compactTask(job.task) }),
+		...(job.phase !== undefined && { phase: job.phase }),
+		...(job.worktreePath !== undefined && { worktreePath: job.worktreePath }),
+		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),
+		...(timing.phaseElapsedMs !== undefined && { phaseElapsedMs: timing.phaseElapsedMs }),
+		...(timing.lastHeartbeatAgeMs !== undefined && {
+			lastHeartbeatAgeMs: timing.lastHeartbeatAgeMs,
+		}),
+		...(participants !== undefined && { participants }),
+	};
+}
+
+// Reduce a loop job's persisted participant provenance to the agent+adapter pair
+// the rail shows. The stored snapshot carries permissions/config/envKeys; those
+// are model/config detail and MUST NOT cross this surface, so only the two safe
+// ids are copied through. A one-shot job has no participant provenance.
+function liveParticipants(job: JobRecord): Record<string, LiveParticipant> | undefined {
+	if (job.policy !== "loop" || job.participants === undefined) return undefined;
+	const out: Record<string, LiveParticipant> = {};
+	for (const [id, p] of Object.entries(job.participants)) {
+		out[id] = { agentId: p.agentId, adapter: p.adapter };
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
 // Where the Studio client bundle lives in a published install: next to the
 // packaged chit.js (dist/client/), copied there by build.ts. The Studio server's
 // own default path is correct for a source checkout but resolves wrong once the
@@ -902,6 +1041,10 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			// The CLI owns the loop-log location scheme; inject the resolved dir so
 			// Studio reads the same place chit writes.
 			loopsDir: loopLogDir(process.cwd()),
+			// Live activity backed by current Chit state: the cross-process foreground
+			// registry and the durable background jobs. Defaults to the real XDG state
+			// dirs, the same locations the MCP server and workers write.
+			liveSource: buildStudioLiveSource(),
 			// In a published install the client bundle ships beside chit.js, not at
 			// the Studio server's default path. Undefined in a source checkout, where
 			// the server default already resolves correctly.

@@ -90,10 +90,12 @@ export const FOREGROUND_STALE_AFTER_MS = 60_000;
 export const FOREGROUND_HEARTBEAT_MS = 10_000;
 
 // Keep the task one-liner compact: it is the user's slice description (not a model
-// output), but the registry is a glance view, so cap it.
-const MAX_TASK_LEN = 200;
+// output), but the registry is a glance view, so cap it. Exported so other glance
+// surfaces (the Studio live rail's background rows) apply the SAME bound to a raw
+// JobRecord.task, which is otherwise an unbounded multi-line body.
+export const MAX_TASK_LEN = 200;
 
-function compactTask(task: string): string {
+export function compactTask(task: string): string {
 	const t = task.replace(/\s+/g, " ").trim();
 	return t.length > MAX_TASK_LEN ? `${t.slice(0, MAX_TASK_LEN - 3)}...` : t;
 }

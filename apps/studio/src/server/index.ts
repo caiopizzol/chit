@@ -14,7 +14,7 @@ import { buildBootstrap, DocStore } from "./docs.ts";
 import { listLoops, readLoop } from "./loops.ts";
 import { renderShell } from "./shell.ts";
 import { generateToken } from "./token.ts";
-import type { StudioLifecycle } from "./types.ts";
+import type { LiveActivity, StudioLifecycle, StudioLiveSource } from "./types.ts";
 
 // Client bundle output, relative to this file. Resolved against import.meta
 // so the path is correct regardless of the caller's cwd. Built by
@@ -24,13 +24,19 @@ const CLIENT_ASSETS = new Set(["index.js", "index.css"]);
 
 export { PathError } from "./paths.ts";
 export type {
+	BackgroundLiveRow,
 	Bootstrap,
 	DocumentDetail,
+	ForegroundLiveRow,
 	InstalledSummary,
 	InstallSummary,
+	LiveActivity,
+	LiveActivityRow,
+	LiveParticipant,
 	StudioDocument,
 	StudioInstallParams,
 	StudioLifecycle,
+	StudioLiveSource,
 	UninstallSummary,
 } from "./types.ts";
 
@@ -59,6 +65,10 @@ export interface StartStudioOptions {
 	// state-dir location scheme. Absent means no loops are listed (a standalone
 	// Studio with no host).
 	loopsDir?: string;
+	// Live-activity source, injected by the host (the CLI), backed by current Chit
+	// state (the foreground registry + background jobs). Absent means GET /api/live
+	// returns an empty LiveActivity (a standalone Studio with no host).
+	liveSource?: StudioLiveSource;
 }
 
 export interface StudioHandle {
@@ -107,6 +117,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 		clientDistDir,
 		lifecycle: opts.lifecycle,
 		loopsDir: opts.loopsDir,
+		liveSource: opts.liveSource,
 	});
 
 	const server = Bun.serve({
@@ -149,6 +160,9 @@ interface BuildAppOptions {
 	// Loop-log directory injected by the host (see StartStudioOptions). The
 	// read-only loop routes read this; absent means no loops are listed.
 	loopsDir?: string;
+	// Live-activity source injected by the host (see StartStudioOptions). GET
+	// /api/live reads this; absent means a coherent empty LiveActivity.
+	liveSource?: StudioLiveSource;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -274,6 +288,23 @@ export function buildApp(opts: BuildAppOptions) {
 			return new Response(`invalid loop log: ${result.message}`, { status: 422 });
 		}
 		return c.json(result.records);
+	});
+
+	// Read-only live-activity snapshot for the future control tower. The host
+	// (CLI) injects a StudioLiveSource backed by current Chit state (the foreground
+	// registry + background jobs). An absent source (standalone Studio with no
+	// host) returns a coherent empty LiveActivity, never an error -- the client
+	// renders an empty rail rather than handling a failure.
+	app.get("/api/live", (c) => {
+		const empty: LiveActivity = { foreground: [], background: [] };
+		if (!opts.liveSource) {
+			return c.json(empty);
+		}
+		try {
+			return c.json(opts.liveSource.live());
+		} catch {
+			return c.json(empty);
+		}
 	});
 
 	// Audit transcript for one run. A loop iteration's

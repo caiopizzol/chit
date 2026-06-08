@@ -155,6 +155,87 @@ export interface LoopSummary {
 	startedAt: string;
 }
 
+// GET /api/live. A compact, read-only snapshot of what is live across Chit right
+// now, for the future visual control tower (a session rail plus a selected run's
+// detail). The data is produced by the HOST (the CLI), which owns the Chit state
+// readers, and injected as a StudioLiveSource -- the same host-injection pattern
+// used for lifecycle and loopsDir, so @chit-run/studio never imports CLI
+// internals. A standalone Studio with no host returns an empty LiveActivity, not
+// an error.
+//
+// Two sources, kept visibly distinct -- separate arrays AND a `source` tag on
+// every row:
+//   - foreground: in-flight foreground loop iterations mirrored from the
+//     cross-process foreground registry (live, ephemeral; a crashed or idle run
+//     drops out).
+//   - background: durable background jobs from the JobStore (cross-session;
+//     queued/running/terminal, with `stale` derived for a dead worker).
+//
+// Every row is a GLANCE summary, safe to hand a browser: ids, a bounded
+// scope/task one-liner, phase/display, ages derived against the reader's clock,
+// agent+adapter participants, a compact statusLine, and a managed worktree path
+// only when already safe to expose. A row NEVER carries prompts, model outputs,
+// review prose, config/env values, audit blobs, or task text beyond the existing
+// bounded one-liner.
+
+// The one safe participant pair the rail/detail shows: which agent ran and via
+// which adapter. The full provenance (permissions, config, env keys) is
+// deliberately omitted -- it lives in the audit run and the richer status views.
+export interface LiveParticipant {
+	agentId: string;
+	adapter: string;
+}
+
+// One in-flight foreground loop iteration mirrored from the cross-process
+// registry. `source` is the literal "foreground" so a flattened list stays
+// self-describing alongside background rows.
+export interface ForegroundLiveRow {
+	source: "foreground";
+	runId: string;
+	scope: string;
+	task: string;
+	phase: string;
+	statusLine: string;
+	// A chit-managed worktree path, present only for an isolated run (already safe
+	// to expose -- the same path the loop/run views surface).
+	worktreePath?: string;
+	// Ages derived against the reader's clock (omitted when not derivable).
+	elapsedMs?: number;
+	phaseElapsedMs?: number;
+	lastActivityAgeMs?: number;
+	participants?: Record<string, LiveParticipant>;
+}
+
+// One durable background job. `display` is the lifecycle state with `stale`
+// derived (a running job whose worker is gone or silent), the same legible signal
+// the operator status surfaces.
+export interface BackgroundLiveRow {
+	source: "background";
+	runId: string;
+	scope: string;
+	// Loop-only one-liner; a one-shot background run has no converge task.
+	task?: string;
+	display: string;
+	phase?: string;
+	statusLine: string;
+	worktreePath?: string;
+	elapsedMs?: number;
+	phaseElapsedMs?: number;
+	lastHeartbeatAgeMs?: number;
+	participants?: Record<string, LiveParticipant>;
+}
+
+export type LiveActivityRow = ForegroundLiveRow | BackgroundLiveRow;
+
+export interface LiveActivity {
+	foreground: ForegroundLiveRow[];
+	background: BackgroundLiveRow[];
+}
+
+export interface StudioLiveSource {
+	live(): LiveActivity;
+}
+
 export type Bootstrap =
 	| {
 			mode: "open";
