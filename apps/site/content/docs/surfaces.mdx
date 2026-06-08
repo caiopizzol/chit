@@ -35,7 +35,7 @@ chit loop-log   # read a convergence log
 chit install    # install a chit as a skill
 chit list       # list installed chits
 chit uninstall  # remove an installed chit
-chit studio     # open the local editor (source checkout)
+chit studio     # open the live control tower
 chit mcp        # run the stdio MCP server
 ```
 
@@ -43,10 +43,10 @@ chit mcp        # run the stdio MCP server
 
 Install a chit as a slash-invocable skill inside Claude Code. The skill surface declares its capabilities; install fails if the chit needs one the surface lacks. Generated skills currently run the CLI from a source checkout, so this surface is secondary to MCP for v0.
 
-## Studio (secondary, source checkout)
+## Studio (secondary)
 
-Studio is a local web editor: a graph view, an inspector, and a read-only Loops drawer that renders convergence-log runs and opens a run's audit transcript. Launch it from a source checkout with `bun run studio:preview`; the published CLI package does not include the Studio client bundle in this version. See [the Studio reference](/docs/studio).
+Studio opens as a control tower: a read-only view of what is live across Chit right now, with a session rail of foreground loops and background jobs, the selected run's detail, and a small console of recent transitions. It reads `GET /api/live` and needs no chit in the directory. Launch it with `chit studio`; the client bundle ships with the CLI package, so it works from a published install. See [the Studio reference](/docs/studio).
 
 ## Audit
 
-An audited run records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. Read it over MCP with `chit_audit_list` / `chit_audit_show`, or from the terminal with `chit audit list` / `chit audit show <runId>`, or open it from a loop in Studio. See [the audit log reference](/docs/audit-log).
+An audited run records a full transcript (rendered prompts, outputs, and token usage as content-addressed blobs) under the local state dir. Read it over MCP with `chit_audit_list` / `chit_audit_show`, or from the terminal with `chit audit list` / `chit audit show <runId>`. See [the audit log reference](/docs/audit-log).

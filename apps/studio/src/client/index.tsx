@@ -1,22 +1,19 @@
-// React client entry. Reads the SSR boot payload, derives the initial
-// ClientState, and mounts <App> under <ReactFlowProvider> so React Flow
-// hooks work in nested components.
+// React client entry. Studio opens as the Live Tower: a visual control tower for
+// Chit activity across sessions. The boot payload is consumed for its launch
+// token (stored in sessionStorage for authenticated /api/* calls); the bootstrap
+// document/mode is not used to shape this screen, because the tower reads GET
+// /api/live and never depends on a chit manifest in the cwd.
 
-import "@xyflow/react/dist/style.css";
 import "./styles.css";
 
-import { ReactFlowProvider } from "@xyflow/react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.tsx";
 import { consumeBoot } from "./boot.ts";
-import { initClientState } from "./state.ts";
+import { LiveTower } from "./LiveTower.tsx";
 
-const bootstrap = consumeBoot();
-const initialState = initClientState(bootstrap);
+// Stores the launch token in sessionStorage and clears it from the SSR payload.
+// The returned bootstrap is intentionally unused: the Live Tower is the page for
+// every boot mode, including an empty directory with no chit manifest.
+consumeBoot();
 
 const root = createRoot(document.getElementById("root") as HTMLElement);
-root.render(
-	<ReactFlowProvider>
-		<App state={initialState} />
-	</ReactFlowProvider>,
-);
+root.render(<LiveTower />);

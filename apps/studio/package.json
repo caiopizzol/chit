@@ -2,7 +2,7 @@
 	"name": "@chit-run/studio",
 	"version": "0.0.0",
 	"private": true,
-	"description": "chit Studio. Local visual editor for chits. Bun+Hono server (src/server/) plus React+React Flow+ELK client (src/client/), launched by `chit studio`.",
+	"description": "chit Studio. Local visual control tower for live Chit activity, launched by `chit studio`. Bun+Hono server (src/server/) plus a React client (src/client/) that reads GET /api/live.",
 	"type": "module",
 	"exports": {
 		"./server": "./src/server/index.ts"

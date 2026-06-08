@@ -40,7 +40,6 @@ import { type DiffRow, lineDiff } from "./diff.ts";
 import { canonicalize, referenceToken } from "./editor.ts";
 import { layoutNodes } from "./elk.ts";
 import { adaptGraphModel } from "./graphAdapter.ts";
-import { LiveMonitor } from "./LiveMonitor.tsx";
 import { loopStatusLine } from "./loopStatus.ts";
 import type { CallData, FormatData, InputData } from "./nodes.tsx";
 import { nodeTypes } from "./nodes.tsx";
@@ -52,7 +51,6 @@ import type {
 } from "./state.ts";
 import { useDocumentEditor } from "./useDocumentEditor.ts";
 import { useInstalled } from "./useInstalled.ts";
-import { useLive } from "./useLive.ts";
 import { type LoopsState, useLoops } from "./useLoops.ts";
 
 const SURFACES: SurfaceKind[] = ["claude-skill", "cli"];
@@ -1100,13 +1098,8 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 	const [installOpen, setInstallOpen] = useState(false);
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [loopsOpen, setLoopsOpen] = useState(false);
-	const [liveOpen, setLiveOpen] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
 	const [installConflict, setInstallConflict] = useState(false);
-
-	// The live monitor polls only while it is open (gated on liveOpen), so the
-	// editor never pays for a background timer.
-	const live = useLive(liveOpen);
 
 	const adapted = useMemo(() => adaptGraphModel(editor.graphModel), [editor.graphModel]);
 	const [nodes, setNodes] = useState<Node[]>([]);
@@ -1357,13 +1350,6 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 							? ` (${loops.list.loops.length})`
 							: ""}
 					</button>
-					<button
-						type="button"
-						className="btn-secondary live-btn"
-						onClick={() => setLiveOpen(true)}
-					>
-						Live
-					</button>
 					<span className="header-divider">·</span>
 					<SurfaceSelector
 						value={editor.surface}
@@ -1456,7 +1442,6 @@ function OpenMode({ initial }: { initial: OpenClientState }) {
 				/>
 			)}
 			{loopsOpen && <LoopsDrawer loops={loops} onClose={() => setLoopsOpen(false)} />}
-			{liveOpen && <LiveMonitor live={live} onClose={() => setLiveOpen(false)} />}
 		</>
 	);
 }

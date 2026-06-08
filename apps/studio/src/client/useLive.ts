@@ -1,12 +1,12 @@
-// Live-monitor state: a light poll of GET /api/live while the monitor is open,
-// plus a derived selection and a local console of state transitions. Polling is
-// gated on `active` (the overlay being open) so the editor never pays for a
-// background timer; the effect's cleanup cancels the in-flight loop on unmount
-// or on close. Errors are unobtrusive and recoverable: while the monitor stays
-// open the last good snapshot stays on screen, an error string is surfaced, and
-// the next successful poll clears it. Each reopen starts a fresh read session
-// (no snapshot carries across a closed interval). Mirrors the request-token /
-// explicit-state discipline of useLoops, without a state library.
+// Live-tower state: a light poll of GET /api/live while the Live Tower page is
+// mounted, plus a derived selection and a local console of state transitions.
+// The tower is the page now, not an overlay, so there is no hidden inactive
+// state: polling runs for the lifetime of the mount and the effect's cleanup
+// cancels the in-flight loop on unmount. Errors are unobtrusive and recoverable:
+// the last good snapshot stays on screen, an error string is surfaced, and the
+// next successful poll clears it. A page reload starts a fresh read session (no
+// snapshot carries across reloads). Mirrors the request-token / explicit-state
+// discipline of useLoops, without a state library.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LiveActivity, LiveActivityRow } from "../server/types.ts";
@@ -46,7 +46,7 @@ export interface LiveState {
 	select: (key: string) => void;
 }
 
-export function useLive(active: boolean): LiveState {
+export function useLive(): LiveState {
 	const [activity, setActivity] = useState<LiveActivity>(EMPTY);
 	const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 	const [error, setError] = useState<string | null>(null);
@@ -75,27 +75,23 @@ export function useLive(active: boolean): LiveState {
 	);
 
 	useEffect(() => {
-		if (!active) return;
-		// Each open starts a fresh read session, not a resumption. The rail must
-		// answer "what is alive NOW", so a snapshot captured before the monitor was
-		// last closed cannot carry over: a run may have exited in the gap, and a
-		// slow or failing first fetch on reopen must not let the old rows pose as
-		// live. Reset to a loading state with an empty snapshot and re-arm the
-		// loading -> error gate. The diff baseline resets too, so the first tick
-		// records no transitions and never replays the already-running set as a
-		// burst of "appeared" lines. The last good snapshot is retained only across
-		// transient errors WHILE the monitor stays open (see the catch below).
+		// Mounting the tower starts a fresh read session. The rail must answer
+		// "what is alive NOW", so we begin from a loading state with an empty
+		// snapshot and an armed loading -> error gate. The diff baseline starts
+		// null, so the first tick records no transitions and never replays the
+		// already-running set as a burst of "appeared" lines. The last good
+		// snapshot is retained only across transient errors while the page stays
+		// mounted (see the catch below); a reload starts over.
 		prevRef.current = null;
 		succeededRef.current = false;
 		setActivity(EMPTY);
 		setStatus("loading");
 		setError(null);
 		setSelectedKey(null);
-		// The console is part of the read session too: a fresh open must start
-		// blank so a new session with no live rows shows the calm empty state, not
-		// last session's lingering transition tail. Within an open session the log
-		// persists (that is what keeps the final "disappeared" line visible after
-		// the row clears); only a reopen wipes it.
+		// The console is part of the read session too: it starts blank so a session
+		// with no live rows shows the calm empty state. Within the mounted session
+		// the log persists (that is what keeps the final "disappeared" line visible
+		// after the row clears); only a reload wipes it.
 		setLog([]);
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
@@ -125,7 +121,7 @@ export function useLive(active: boolean): LiveState {
 			cancelled = true;
 			if (timer) clearTimeout(timer);
 		};
-	}, [active, appendLog]);
+	}, [appendLog]);
 
 	// Keep the selection valid: when the selected run disappears (or nothing is
 	// selected yet), fall back to the first available row. When everything is
@@ -143,17 +139,9 @@ export function useLive(active: boolean): LiveState {
 		return flattenRows(activity).find((r) => rowKey(r) === selectedKey) ?? null;
 	}, [activity, selectedKey]);
 
-	// User selection (not the auto-fallback above) logs a console line so the
-	// operator's own focus changes read alongside the run's transitions.
-	const select = useCallback(
-		(key: string) => {
-			setSelectedKey(key);
-			const sep = key.indexOf(":");
-			const source = key.slice(0, sep) as "foreground" | "background";
-			appendLog([{ runId: key.slice(sep + 1), source, text: "selected" }]);
-		},
-		[appendLog],
-	);
+	const select = useCallback((key: string) => {
+		setSelectedKey(key);
+	}, []);
 
 	return { activity, status, error, log, selectedKey, selected, select };
 }

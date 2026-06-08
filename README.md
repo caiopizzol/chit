@@ -66,7 +66,7 @@ chit run <manifest.json> [options]      # execute a chit
 chit show <manifest.json>               # inspect without running
 chit converge --task <text> --scope <id>
 chit audit list                         # read recorded run transcripts
-chit studio [path]                      # local visual editor in the browser
+chit studio                             # live control tower in the browser
 chit install <manifest.json> --as claude-skill
 ```
 
@@ -87,7 +87,7 @@ bun run cli run examples/consult.json --scope demo --input question="What is a m
 ```text
 apps/cli      @chit-run/cli, the CLI and the MCP server
 apps/site     @chit-run/site, the landing page and Fumadocs docs
-apps/studio   @chit-run/studio, the local visual editor
+apps/studio   @chit-run/studio, the local visual control tower
 packages/core @chit-run/core, browser-safe parser/model/graph logic
 examples/     canonical chit manifests
 fixtures/     test fixtures
