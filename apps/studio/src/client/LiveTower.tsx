@@ -1,5 +1,5 @@
 // The Live Tower: Studio's primary screen. A calm control-tower read of what is
-// alive across Chit right now, with three regions per the canonical mock -- a
+// alive across Chit right now, with the canonical mock's four visible parts: a
 // top bar carrying the live identity and an at-a-glance count, a compact session
 // rail (foreground + background groups), the selected run's detail with its
 // agent blocks, and a small console of local activity. It consumes ONLY the GET

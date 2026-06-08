@@ -17,7 +17,7 @@ chit studio
 
 The local server is part of the threat model. A launch token is generated at boot, never appears in the URL, and is required on every `/api/*` request. The server also enforces a Host allowlist (`127.0.0.1`, `localhost`, `[::1]`). When the server restarts, old tabs get a 401 and must refresh to reconnect.
 
-## The three regions
+## The four parts
 
 - **Top bar.** The chit live identity and a count of how many runs are live right now.
 - **Session rail.** A compact summary of active sessions, split into two groups. Foreground holds in-flight loop iterations mirrored from the cross-process registry. Background holds durable jobs from the job store, with `stale` derived when a worker has gone silent. The rail is a summary, not a dense table: one row per run with its phase, age, scope, and a short status line. The whole row selects.
