@@ -2765,15 +2765,27 @@ const planDeps: PlanEngineDeps = {
 	loopDetail: (worktreePath, loopId) => {
 		const partialWork = inspectPartialWork(realGit, worktreePath);
 		try {
-			const iters = readLoop(worktreePath, loopId).filter((r) => r.type === "iteration");
-			const last = iters.at(-1);
+			// One loop-log read drives BOTH the latest-iteration changed files / warnings AND the
+			// compact receipt, so the durable step snapshots them from the same records (the v0.38
+			// single-run shape). A settled step's log carries a stop record, so the receipt status is
+			// authoritative from the records -- no live job status to pass here.
+			const records = readLoop(worktreePath, loopId);
+			const receipt = records.length > 0 ? buildLoopReceipt(records) : undefined;
+			const last = records.filter((r) => r.type === "iteration").at(-1);
 			if (last && last.type === "iteration") {
 				return {
 					changedFiles: last.changedFiles,
 					workspaceWarnings: last.workspaceWarnings ?? [],
+					...(receipt !== undefined && { receipt }),
 					partialWork,
 				};
 			}
+			return {
+				changedFiles: [],
+				workspaceWarnings: [],
+				...(receipt !== undefined && { receipt }),
+				partialWork,
+			};
 		} catch {
 			// loop log not readable (worker still starting, or removed); no detail
 		}

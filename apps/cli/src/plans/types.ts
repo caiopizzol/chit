@@ -1,5 +1,6 @@
 import type {
 	AuditParticipantSnapshot,
+	LoopReceipt,
 	LoopStopStatus,
 	LoopVerdict,
 	PlanApplyPolicy,
@@ -127,6 +128,12 @@ export interface PlanStepRecord {
 	// showing which agent/adapter/session/permissions/config ran -- the live job join is gone once
 	// the step leaves running. Redacted shape (envKeys, not env values). Absent on a legacy job.
 	participants?: Record<string, AuditParticipantSnapshot>;
+	// The compact loop receipt (the same safe shape v0.38 surfaces on single-run views),
+	// snapshotted from the step's loop log when it settles so a terminal row answers "what
+	// happened?" from the plan record alone. Carries no participants, env values, prompts,
+	// outputs, or blob bodies -- that provenance lives in participants above, not here. Absent
+	// on a running step (no receipt before it settles) and on a legacy record.
+	receipt?: LoopReceipt;
 	error?: string; // set when status === "failed"
 }
 

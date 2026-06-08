@@ -16,7 +16,7 @@
 // chain blocks on the apply gate by construction).
 
 import { dirname } from "node:path";
-import type { NormalizedPlan, PlanApplyPolicy, RequiredCheck } from "@chit-run/core";
+import type { LoopReceipt, NormalizedPlan, PlanApplyPolicy, RequiredCheck } from "@chit-run/core";
 import {
 	type GitRunner,
 	mainRepoOfWorktree,
@@ -96,13 +96,16 @@ export interface PlanEngineDeps {
 	// The latest loop iteration's changed files / workspace warnings for a step's worktree
 	// (real: read the loop log). Empty when no iteration ran. partialWork (a failed step's
 	// uncommitted state) is optional: this slice does not surface it on the record yet, but
-	// the shape leaves room for a later salvage slice to do so without a dep change.
+	// the shape leaves room for a later salvage slice to do so without a dep change. receipt
+	// is the compact LoopReceipt derived from the SAME loop records (the v0.38 single-run
+	// shape); optional because a log that is unreadable or has no records yields none.
 	loopDetail: (
 		worktreePath: string,
 		loopId: string,
 	) => {
 		changedFiles: string[];
 		workspaceWarnings: string[];
+		receipt?: LoopReceipt;
 		partialWork?: PartialWork;
 	};
 	// Apply a step's worktree diff into the plan integration worktree (the gated apply), wrapping
@@ -737,6 +740,10 @@ function settleStep(
 	if (detail) {
 		step.changedFiles = detail.changedFiles;
 		step.workspaceWarnings = detail.workspaceWarnings;
+		// Snapshot the compact loop receipt into the durable step so a terminal row answers
+		// "what happened?" after the live job join is gone. Same loop records as changedFiles
+		// above, so no extra read; absent when the log had no readable records.
+		if (detail.receipt !== undefined) step.receipt = detail.receipt;
 	}
 	if (extra.job) {
 		step.auditRefs = extra.job.auditRefs;
@@ -837,6 +844,12 @@ export interface PlanStepView {
 	changedFiles?: string[];
 	workspaceWarnings?: string[];
 	auditRefs?: string[];
+	// The compact loop receipt for a SETTLED step (review_ready / applied / needs_human /
+	// failed / cancelled), snapshotted at settle and surfaced straight from the step record.
+	// Absent while running (no receipt before the step settles) and on a legacy record. The
+	// same safe LoopReceipt shape v0.38 single-run views use -- no participants, env values,
+	// prompts, outputs, or blob bodies. Kept out of chit_plan_list summaries.
+	receipt?: LoopReceipt;
 	error?: string;
 }
 
@@ -924,6 +937,11 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 		if (s.changedFiles !== undefined) view.changedFiles = s.changedFiles;
 		if (s.workspaceWarnings !== undefined) view.workspaceWarnings = s.workspaceWarnings;
 		if (s.auditRefs !== undefined) view.auditRefs = s.auditRefs;
+		// The snapshotted loop receipt, surfaced for a settled row only -- it is recorded ONLY
+		// at settle, so a running step (which may carry live verdict/participant joins above)
+		// never has one. A review_ready/applied/needs_human/failed/cancelled row keeps it after
+		// the live job join is gone.
+		if (s.receipt !== undefined) view.receipt = s.receipt;
 		if (s.error !== undefined) view.error = s.error;
 		return view;
 	});

@@ -10,7 +10,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { NormalizedPlan, PlanStep } from "@chit-run/core";
+import {
+	buildLoopReceipt,
+	type LoopReceipt,
+	type LoopRecord,
+	type NormalizedPlan,
+	type PlanStep,
+} from "@chit-run/core";
 import {
 	applyRunWorkspace,
 	commitWorktree,
@@ -101,6 +107,36 @@ class FakeJobs {
 	}
 }
 
+// A minimal but realistic loop log -- one converged iteration plus its stop record -- fed
+// through the REAL buildLoopReceipt, so the receipt the fake loopDetail hands back is the same
+// safe v0.38 shape the MCP wiring produces (no participants, env values, prompts, or blob
+// bodies live in it). settleStep snapshots this onto the durable step.
+const SAMPLE_RECORDS: LoopRecord[] = [
+	{
+		type: "iteration",
+		n: 1,
+		implementSummary: "did the work",
+		changedFiles: ["f.ts"],
+		workspaceWarnings: [],
+		checksRun: "1/1 required checks passed",
+		verdict: "proceed",
+		findingCount: 0,
+		decision: "proceed",
+		checkDurationMs: 10,
+		at: "2026-01-01T00:00:00.000Z",
+		auditRef: "audit-1",
+	},
+	{
+		type: "stop",
+		status: "converged",
+		reason: "reviewer approved",
+		iterations: 1,
+		totalElapsedMs: 100,
+		endedAt: "2026-01-01T00:00:05.000Z",
+	},
+];
+const SAMPLE_RECEIPT: LoopReceipt = buildLoopReceipt(SAMPLE_RECORDS);
+
 let cwd: string;
 let stateDir: string;
 let savedXdg: string | undefined;
@@ -149,7 +185,11 @@ beforeEach(() => {
 		getJob: jobs.get,
 		cancelJob: jobs.cancel,
 		isStale: () => false,
-		loopDetail: () => ({ changedFiles: ["f.ts"], workspaceWarnings: [] }),
+		loopDetail: () => ({
+			changedFiles: ["f.ts"],
+			workspaceWarnings: [],
+			receipt: SAMPLE_RECEIPT,
+		}),
 		// The fake-git scheduling tests never apply/commit/remove; the real-git apply + cleanup tests
 		// below build their own deps. Throw loudly if a scheduling test reaches these by accident.
 		applyWorkspace: () => {
@@ -365,6 +405,20 @@ describe("advancePlan: reconciliation", () => {
 		expect(a.changedFiles).toEqual(["f.ts"]);
 		expect(a.stopStatus).toBe("converged");
 		expect(a.lastVerdict).toBe("proceed");
+		// The compact loop receipt is snapshotted from the same settle-time loop read, so a terminal
+		// step carries the v0.38 receipt shape on its durable record.
+		expect(a.receipt).toEqual(SAMPLE_RECEIPT);
+	});
+
+	test("a still-running step has not invented a receipt before it settles", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		// The worker is mid-run (running, not terminal); reconcile leaves the step running.
+		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running" });
+		const c1 = advancePlan(store, deps, "p1");
+		const a = stepOf(c1, "a");
+		expect(a.status).toBe("running");
+		// No settle happened, so no receipt is recorded (loopDetail is only read at settle).
+		expect(a.receipt).toBeUndefined();
 	});
 
 	test("a completed but not-converged job reconciles to needs_human", () => {
@@ -491,6 +545,64 @@ describe("describePlan (read-only join)", () => {
 		expect(aView.status).toBe("review_ready");
 		expect(aView.participants).toEqual(participants);
 		expect(JSON.stringify(aView.participants)).not.toContain("ANTHROPIC_API_KEY=");
+	});
+
+	test("surfaces the receipt on a reconciled review_ready step and keeps it after the live job join is gone", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		const c1 = advancePlan(store, deps, "p1"); // a -> review_ready (snapshots the receipt)
+		expect(stepOf(c1, "a").status).toBe("review_ready");
+		// Re-describe AFTER reconcile: the step is no longer running, so the receipt must come from
+		// the snapshotted step record, not a live job join.
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(aView.status).toBe("review_ready");
+		expect(aView.receipt).toEqual(SAMPLE_RECEIPT);
+	});
+
+	test("a running step has no receipt until reconcile settles it", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		// A live, mid-run loop job: describe joins live verdict/phase but invents no receipt.
+		jobs.patch(stepOf(c0, "a").runId ?? "", { state: "running", phase: "implementing" });
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(aView.runState).toBe("running");
+		expect(aView.receipt).toBeUndefined();
+	});
+
+	test("the receipt is separate from participants and leaks no env keys or prompts", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		const participants = {
+			impl: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope" as const,
+				permissions: { filesystem: "write" as const },
+				enforcesReadOnly: false,
+				config: { model: "claude-opus-4", envKeys: ["ANTHROPIC_API_KEY"] },
+			},
+		};
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged", participants });
+		advancePlan(store, deps, "p1");
+		const view = describePlan(present(store.get("p1"), "plan p1"), deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		// The receipt is its own field; participant provenance is NOT folded into it.
+		expect(aView.receipt).toEqual(SAMPLE_RECEIPT);
+		expect(aView.participants).toEqual(participants);
+		expect(aView.receipt).not.toHaveProperty("participants");
+		// The safe v0.38 shape carries no env values, prompts, outputs, or blob bodies.
+		const receiptJson = JSON.stringify(aView.receipt);
+		expect(receiptJson).not.toContain("ANTHROPIC_API_KEY");
+		expect(receiptJson).not.toContain("do a"); // the step body / prompt never leaks in
 	});
 
 	test("surfaces the effective per-call timeout for a step that carries one", () => {
@@ -749,7 +861,11 @@ function realHarness(): RealHarness {
 		getJob: (id) => jobs.get(id),
 		cancelJob: () => {},
 		isStale: () => false,
-		loopDetail: () => ({ changedFiles: ["base.txt"], workspaceWarnings: [] }),
+		loopDetail: () => ({
+			changedFiles: ["base.txt"],
+			workspaceWarnings: [],
+			receipt: SAMPLE_RECEIPT,
+		}),
 		applyWorkspace: (p) => applyRunWorkspace(realGit, p),
 		commit: (w, m) => commitWorktree(realGit, w, m),
 		removeWorktree: (r, w, b) => removeTaskWorktree(realGit, r, w, b),
@@ -824,6 +940,14 @@ describe("applyPlanStep (real git)", () => {
 		expect(stepOf(stored, "a").appliedCommitSha).toBe(sha);
 		expect(stored.integrationTipSha).toBe(sha);
 		expect(stored.status).toBe("completed"); // the only step is applied
+		// The apply only changes status/commit; the receipt snapshotted at review_ready survives onto
+		// the applied row, and describePlan still surfaces it.
+		expect(stepOf(stored, "a").receipt).toEqual(SAMPLE_RECEIPT);
+		const appliedView = present(
+			describePlan(stored, h.deps).steps.find((s) => s.id === "a"),
+			"applied step a view",
+		);
+		expect(appliedView.receipt).toEqual(SAMPLE_RECEIPT);
 
 		// The integration branch advanced by exactly one commit, with the deterministic message and the
 		// step's change committed.
