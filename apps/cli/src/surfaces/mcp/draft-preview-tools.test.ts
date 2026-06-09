@@ -7,9 +7,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { server } from "./server.ts";
 
 // Drive the registered MCP surface over an in-memory transport (no stdio, no spawned
-// workers): this exercises the real chit_draft_preview handler. The tool is strictly
-// read-only -- it parses, resolves profiles, and compiles a draft -- so unlike
-// chit_plan_start it never spawns a worker and is safe to call directly here.
+// workers): this exercises the real chit_draft_preview / chit_draft_launch handlers.
+// Preview is strictly read-only. Launch dry-run additionally reads git to resolve the
+// base commit it includes in the approval hash, but still creates no Chit state.
 let client: Client;
 let stateDir: string;
 let configDir: string;
@@ -93,22 +93,25 @@ describe("chit_draft_preview registration", () => {
 });
 
 describe("chit_draft_launch dry run creates no state", () => {
-	test("confirm omitted: returns preview + approvalHash, launches no plan/batch/job", async () => {
+	test("confirm omitted: returns preview + base + approvalHash, launches no plan/batch/job", async () => {
 		const result = await launch({ draft: PLAN_DRAFT, cwd: process.cwd() });
 		expect(result.isError).toBeFalsy();
 		const view = JSON.parse(textOf(result));
 		expect(view.launched).toBe(false);
 		expect(view.status).toBe("preview_ready");
+		expect(view.base.ref).toBe("HEAD");
+		expect(view.base.sha).toMatch(/^[0-9a-f]{40}$/);
 		expect(view.approvalHash).toMatch(/^[0-9a-f]{64}$/);
 		expect(view.nextAction).toContain("nothing was launched");
 		expect(view.nextAction).toContain("confirm:true");
 		await assertNoLaunchState();
 	});
 
-	test("the launch dry-run hash equals the chit_draft_preview hash for the same draft", async () => {
-		const dry = JSON.parse(textOf(await launch({ draft: PLAN_DRAFT, cwd: process.cwd() })));
+	test("chit_draft_preview is not an executable approval source", async () => {
 		const shown = JSON.parse(textOf(await preview(PLAN_DRAFT)));
-		expect(dry.approvalHash).toBe(shown.approvalHash);
+		expect(shown.approvalHash).toBeUndefined();
+		expect(shown.base).toBeUndefined();
+		expect(shown.nextAction).toContain("chit_draft_launch without confirm");
 	});
 });
 
@@ -134,7 +137,8 @@ describe("chit_draft_launch confirmed launch is hash-gated", () => {
 
 	test("a draft edited after approval is refused with its old hash, creating no state", async () => {
 		// Approve the original draft, then change a step body and try to launch on the old hash.
-		const approved = JSON.parse(textOf(await preview(PLAN_DRAFT))).approvalHash as string;
+		const approved = JSON.parse(textOf(await launch({ draft: PLAN_DRAFT, cwd: process.cwd() })))
+			.approvalHash as string;
 		const edited = {
 			...PLAN_DRAFT,
 			steps: [PLAN_DRAFT.steps[0], { ...PLAN_DRAFT.steps[1], body: "Do something ELSE" }],
@@ -191,12 +195,12 @@ describe("chit_draft_preview previews a valid plan draft", () => {
 			profileId: "default",
 			usesDefaultProfile: true,
 		});
-		// The approval surface must say it launched nothing and point at chit_draft_launch,
-		// carrying the approval hash that binds the compiled artifact.
+		// The structural preview says it launched nothing and points at chit_draft_launch,
+		// where the executable approval hash is produced with a resolved base.
 		expect(view.nextAction).toContain("nothing was launched");
 		expect(view.nextAction).toContain("chit_draft_launch");
-		expect(view.approvalHash).toMatch(/^[0-9a-f]{64}$/);
-		expect(view.nextAction).toContain(view.approvalHash);
+		expect(view.approvalHash).toBeUndefined();
+		expect(view.base).toBeUndefined();
 
 		// No plan record was created: the read-only preview must not touch the store.
 		const plans = (await client.callTool({
@@ -248,7 +252,7 @@ describe("chit_draft_preview previews a valid batch draft", () => {
 		});
 		expect(view.batch.tasks[1]).toMatchObject({ id: "web", dependencies: ["api"] });
 		expect(view.nextAction).toContain("chit_draft_launch");
-		expect(view.approvalHash).toMatch(/^[0-9a-f]{64}$/);
+		expect(view.approvalHash).toBeUndefined();
 	});
 });
 

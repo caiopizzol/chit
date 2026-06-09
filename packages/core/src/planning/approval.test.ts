@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { NormalizedProfile } from "../config/types.ts";
 import { DEFAULT_PROFILE_ID } from "../config/types.ts";
-import { compileDraftArtifact, draftApprovalPayload } from "./approval.ts";
+import { bindDraftApprovalBase, compileDraftArtifact, draftApprovalPayload } from "./approval.ts";
 import { parseDraft } from "./parse.ts";
 
 // The closed profile menu the artifact compiles against: the built-in default plus a
@@ -49,6 +49,8 @@ const BATCH_DRAFT = {
 	],
 };
 
+const BASE = { ref: "HEAD", sha: "abc123" };
+
 describe("compileDraftArtifact", () => {
 	test("a plan draft compiles to the exact plan the launch runs", () => {
 		const artifact = compileDraftArtifact(parseDraft(PLAN_DRAFT), PROFILES);
@@ -80,7 +82,7 @@ describe("compileDraftArtifact", () => {
 
 describe("canonicalApprovalPayload determinism", () => {
 	test("key order in the source draft does not change the payload", () => {
-		const a = draftApprovalPayload(parseDraft(PLAN_DRAFT), PROFILES).payload;
+		const a = draftApprovalPayload(parseDraft(PLAN_DRAFT), PROFILES, BASE).payload;
 		// Same draft, every object's keys reversed: a different insertion order, identical value.
 		const reordered = parseDraft({
 			steps: [
@@ -97,32 +99,55 @@ describe("canonicalApprovalPayload determinism", () => {
 			strategy: "plan",
 			schema: 1,
 		});
-		const b = draftApprovalPayload(reordered, PROFILES).payload;
+		const b = draftApprovalPayload(reordered, PROFILES, BASE).payload;
 		expect(b).toBe(a);
 	});
 
 	test("a material change to the draft changes the payload", () => {
-		const base = draftApprovalPayload(parseDraft(PLAN_DRAFT), PROFILES).payload;
+		const base = draftApprovalPayload(parseDraft(PLAN_DRAFT), PROFILES, BASE).payload;
 		const changed = draftApprovalPayload(
 			parseDraft({
 				...PLAN_DRAFT,
 				steps: [PLAN_DRAFT.steps[0], { ...PLAN_DRAFT.steps[1], body: "Do the work DIFFERENTLY" }],
 			}),
 			PROFILES,
+			BASE,
 		).payload;
 		expect(changed).not.toBe(base);
 	});
 
+	test("a material change to the approved base changes the payload", () => {
+		const draft = parseDraft(PLAN_DRAFT);
+		const first = draftApprovalPayload(draft, PROFILES, { ref: "main", sha: "abc123" }).payload;
+		const changedRef = draftApprovalPayload(draft, PROFILES, {
+			ref: "release",
+			sha: "abc123",
+		}).payload;
+		const changedSha = draftApprovalPayload(draft, PROFILES, {
+			ref: "main",
+			sha: "def456",
+		}).payload;
+		expect(changedRef).not.toBe(first);
+		expect(changedSha).not.toBe(first);
+	});
+
 	test("plan and batch artifacts never collide", () => {
-		const plan = draftApprovalPayload(parseDraft(PLAN_DRAFT), PROFILES);
-		const batch = draftApprovalPayload(parseDraft(BATCH_DRAFT), PROFILES);
+		const plan = draftApprovalPayload(parseDraft(PLAN_DRAFT), PROFILES, BASE);
+		const batch = draftApprovalPayload(parseDraft(BATCH_DRAFT), PROFILES, BASE);
 		expect(plan.strategy).toBe("plan");
 		expect(batch.strategy).toBe("batch");
 		expect(plan.payload).not.toBe(batch.payload);
 	});
 
 	test("the payload is valid canonical JSON of the artifact", () => {
-		const { artifact, payload } = draftApprovalPayload(parseDraft(BATCH_DRAFT), PROFILES);
+		const { artifact, payload } = draftApprovalPayload(parseDraft(BATCH_DRAFT), PROFILES, BASE);
 		expect(JSON.parse(payload)).toEqual(JSON.parse(JSON.stringify(artifact)));
+	});
+
+	test("binding a compiled artifact adds the approved base without mutating the compiled shape", () => {
+		const compiled = compileDraftArtifact(parseDraft(BATCH_DRAFT), PROFILES);
+		const approval = bindDraftApprovalBase(compiled, BASE);
+		expect(approval).toMatchObject({ strategy: "batch", base: BASE });
+		expect(compiled).not.toHaveProperty("base");
 	});
 });

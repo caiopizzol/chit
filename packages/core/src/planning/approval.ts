@@ -1,18 +1,19 @@
 // The structural approval binding for a planner draft. A draft is previewed, a human
-// reviews it, and then a confirmed launch must run EXACTLY what was reviewed -- nothing
-// edited in between. To bind the approval to the work, we hash the COMPILED execution
-// artifact (the strategy plus the exact compiled plan or batch task list a launch feeds
-// to the engine), not the compact human preview: the preview omits prompts and config
-// internals, so two materially different drafts can share one preview, but never one
-// compiled artifact. The dry-run shows the hash; the confirmed launch re-parses,
-// re-compiles, recomputes the hash, and refuses if it differs from the one the operator
-// approved -- so a draft changed after approval cannot ride an old hash into execution.
+// reviews it, and then a confirmed launch must run EXACTLY what was reviewed: the
+// compiled work plus the base commit it branches from. To bind the approval to the work,
+// we hash the COMPILED execution artifact (the strategy plus the exact compiled plan or
+// batch task list a launch feeds to the engine) and the resolved base commit, not the
+// compact human preview: the preview omits prompts and config internals, so two
+// materially different drafts can share one preview, but never one approval artifact.
+// The dry-run shows the hash; the confirmed launch re-parses, re-compiles, recomputes
+// the hash, and refuses if it differs from the one the operator approved, so a draft or
+// base changed after approval cannot ride an old hash into execution.
 //
 // This module is browser-safe (no node imports). It builds the canonical PAYLOAD only;
 // the actual digest is computed in the CLI/MCP layer (node crypto), keeping core free of
 // node dependencies. canonicalApprovalPayload(artifact) is the exact bytes that layer
-// hashes, so a Studio preview and the MCP tool derive the identical hash from the
-// identical artifact.
+// hashes, so every caller derives the identical hash from the identical approval
+// artifact.
 
 import type { NormalizedProfile } from "../config/types.ts";
 import type { NormalizedPlan } from "../plan/types.ts";
@@ -27,6 +28,18 @@ export type CompiledArtifact =
 	| { strategy: "plan"; plan: NormalizedPlan }
 	| { strategy: "batch"; batch: CompiledBatchTask[] };
 
+// The resolved base the approved launch branches from. `ref` is what the operator asked
+// to resolve (for display and tamper detection); `sha` is the concrete commit the engine
+// launches from.
+export interface DraftApprovalBase {
+	ref: string;
+	sha: string;
+}
+
+export type DraftApprovalArtifact =
+	| { strategy: "plan"; base: DraftApprovalBase; plan: NormalizedPlan }
+	| { strategy: "batch"; base: DraftApprovalBase; batch: CompiledBatchTask[] };
+
 // Compile a validated draft into the artifact a launch would execute. Runs the SAME pure
 // compilers (compile.ts) as preview and launch, so every validation a launch enforces
 // (unknown profile, plan-only manifestPath, batch codeDependsOn, missing/traversal
@@ -40,6 +53,16 @@ export function compileDraftArtifact(
 		return { strategy: "plan", plan: compilePlanDraft(draft, profiles) };
 	}
 	return { strategy: "batch", batch: compileBatchDraft(draft, profiles) };
+}
+
+export function bindDraftApprovalBase(
+	artifact: CompiledArtifact,
+	base: DraftApprovalBase,
+): DraftApprovalArtifact {
+	if (artifact.strategy === "plan") {
+		return { strategy: "plan", base, plan: artifact.plan };
+	}
+	return { strategy: "batch", base, batch: artifact.batch };
 }
 
 // Deterministic canonical JSON: object keys are sorted at every depth, arrays keep their
@@ -64,7 +87,7 @@ function canonicalize(value: unknown): unknown {
 // The exact payload string the CLI/MCP layer hashes to produce a draft's approval hash.
 // Stable across key order and equal for equal artifacts (see canonicalize), so the dry-run
 // hash and the confirmed-launch recompute match iff the compiled artifact is unchanged.
-export function canonicalApprovalPayload(artifact: CompiledArtifact): string {
+export function canonicalApprovalPayload(artifact: DraftApprovalArtifact): string {
 	return JSON.stringify(canonicalize(artifact));
 }
 
@@ -74,7 +97,13 @@ export function canonicalApprovalPayload(artifact: CompiledArtifact): string {
 export function draftApprovalPayload(
 	draft: PlannerDraft,
 	profiles: Record<string, NormalizedProfile>,
-): { strategy: DraftStrategy; artifact: CompiledArtifact; payload: string } {
+	base: DraftApprovalBase,
+): { strategy: DraftStrategy; artifact: DraftApprovalArtifact; payload: string } {
 	const artifact = compileDraftArtifact(draft, profiles);
-	return { strategy: artifact.strategy, artifact, payload: canonicalApprovalPayload(artifact) };
+	const approvalArtifact = bindDraftApprovalBase(artifact, base);
+	return {
+		strategy: approvalArtifact.strategy,
+		artifact: approvalArtifact,
+		payload: canonicalApprovalPayload(approvalArtifact),
+	};
 }

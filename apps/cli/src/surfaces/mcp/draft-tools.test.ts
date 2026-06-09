@@ -2,24 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	compileDraftArtifact,
-	DEFAULT_PROFILE_ID,
-	type NormalizedProfile,
-	parseDraft,
-} from "@chit-run/core";
+import { DEFAULT_PROFILE_ID, type NormalizedProfile } from "@chit-run/core";
 import type { BatchEngineDeps, LaunchJobParams } from "../../batches/engine.ts";
 import { BatchStore } from "../../batches/store.ts";
 import type { GitResult, GitRunner } from "../../batches/worktree.ts";
 import type { LoopJobRecord } from "../../jobs/types.ts";
 import type { LaunchPlanJobParams, PlanEngineDeps } from "../../plans/engine.ts";
 import { PlanStore } from "../../plans/store.ts";
-import {
-	type DraftLaunchDeps,
-	DraftLaunchRefused,
-	draftApprovalHash,
-	runDraftLaunch,
-} from "./draft-tools.ts";
+import { type DraftLaunchDeps, DraftLaunchRefused, runDraftLaunch } from "./draft-tools.ts";
 
 // runDraftLaunch is the security boundary between a previewed draft and a real launch.
 // These tests drive it with FAKE plan/batch engine deps (no real git, no spawned worker),
@@ -45,7 +35,10 @@ function fakeGit(): GitRunner {
 	return (args) => {
 		if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return ok(`${cwd}\n`);
 		if (args[0] === "rev-parse" && args[1] === "--git-common-dir") return ok(`${cwd}/.git\n`);
-		if (args[0] === "rev-parse") return ok("basesha\n");
+		if (args[0] === "rev-parse") {
+			const ref = String(args[1] ?? "HEAD");
+			return ok(`${ref.endsWith("-sha") ? ref : `${ref}-sha`}\n`);
+		}
 		return ok("");
 	};
 }
@@ -172,8 +165,15 @@ const BATCH_DRAFT = {
 	],
 };
 
-function hashOf(draft: unknown): string {
-	return draftApprovalHash(compileDraftArtifact(parseDraft(draft), PROFILES));
+function dryApprove(
+	draft: string | Record<string, unknown>,
+	deps = makeDeps(),
+	opts: { baseBranch?: string } = {},
+): { approvalHash: string; base: { ref: string; sha: string } } {
+	const dry = runDraftLaunch({ draft, cwd, ...opts }, deps);
+	expect(dry.launched).toBe(false);
+	if (dry.launched) throw new Error("expected dry-run approval");
+	return { approvalHash: dry.approvalHash, base: dry.base };
 }
 
 beforeEach(() => {
@@ -193,13 +193,14 @@ afterEach(() => {
 });
 
 describe("runDraftLaunch dry run (confirm omitted/false)", () => {
-	test("returns the preview + approval hash and launches nothing", () => {
+	test("returns the preview, resolved base, approval hash, and launches nothing", () => {
 		const deps = makeDeps();
 		const result = runDraftLaunch({ draft: PLAN_DRAFT, cwd }, deps);
 		expect(result.launched).toBe(false);
 		if (result.launched) throw new Error("expected a dry run");
 		expect(result.strategy).toBe("plan");
 		expect(result.preview.status).toBe("preview_ready");
+		expect(result.base).toEqual({ ref: "HEAD", sha: "HEAD-sha" });
 		expect(result.approvalHash).toMatch(/^[0-9a-f]{64}$/);
 		// No plan was started and no job launched.
 		expect(planLaunched).toHaveLength(0);
@@ -213,27 +214,35 @@ describe("runDraftLaunch dry run (confirm omitted/false)", () => {
 		expect(batchLaunched).toHaveLength(0);
 	});
 
-	test("the dry-run hash equals the hash the confirmed launch will require", () => {
+	test("the dry-run hash includes the resolved base", () => {
 		const deps = makeDeps();
 		const dry = runDraftLaunch({ draft: PLAN_DRAFT, cwd }, deps);
-		expect(dry.approvalHash).toBe(hashOf(PLAN_DRAFT));
+		const otherBase = runDraftLaunch({ draft: PLAN_DRAFT, cwd, baseBranch: "feature" }, deps);
+		expect(dry.launched).toBe(false);
+		expect(otherBase.launched).toBe(false);
+		if (dry.launched || otherBase.launched) throw new Error("expected dry runs");
+		expect(dry.approvalHash).not.toBe(otherBase.approvalHash);
+		expect(otherBase.base).toEqual({ ref: "feature", sha: "feature-sha" });
 	});
 });
 
 describe("runDraftLaunch confirmed plan launch", () => {
 	test("launches through the plan engine only with a matching approval hash", () => {
 		const deps = makeDeps();
+		const approved = dryApprove(PLAN_DRAFT, deps);
 		const result = runDraftLaunch(
-			{ draft: PLAN_DRAFT, confirm: true, approvalHash: hashOf(PLAN_DRAFT), cwd },
+			{ draft: PLAN_DRAFT, confirm: true, approvalHash: approved.approvalHash, cwd },
 			deps,
 		);
 		expect(result.launched).toBe(true);
 		if (!result.launched || result.strategy !== "plan") throw new Error("expected a plan launch");
+		expect(result.base).toEqual(approved.base);
 		// The same plan view chit_plan_start returns, leading with plan_id.
 		expect(result.view.plan_id).toBeDefined();
 		expect(result.view.steps.map((s) => s.id)).toEqual(["scaffold", "impl"]);
 		// Exactly the first step launched (the dependent waits).
 		expect(planLaunched).toHaveLength(1);
+		expect(planLaunched[0]?.worktree.baseSha).toBe("HEAD-sha");
 		expect(new PlanStore(cwd).list()).toHaveLength(1);
 	});
 
@@ -258,15 +267,24 @@ describe("runDraftLaunch confirmed plan launch", () => {
 describe("runDraftLaunch confirmed batch launch", () => {
 	test("launches through the batch engine only with a matching approval hash", () => {
 		const deps = makeDeps();
+		const approved = dryApprove(BATCH_DRAFT, deps, { baseBranch: "feature" });
 		const result = runDraftLaunch(
-			{ draft: BATCH_DRAFT, confirm: true, approvalHash: hashOf(BATCH_DRAFT), cwd },
+			{
+				draft: BATCH_DRAFT,
+				confirm: true,
+				approvalHash: approved.approvalHash,
+				cwd,
+				baseBranch: "feature",
+			},
 			deps,
 		);
 		expect(result.launched).toBe(true);
 		if (!result.launched || result.strategy !== "batch") throw new Error("expected a batch launch");
+		expect(result.base).toEqual({ ref: "feature", sha: "feature-sha" });
 		expect(result.view.tasks.map((t) => t.id).sort()).toEqual(["api", "web"]);
 		// Only the independent task launches in the first wave; the gated one waits.
 		expect(batchLaunched).toHaveLength(1);
+		expect(batchLaunched[0]?.worktree.baseSha).toBe("feature-sha");
 		expect(new BatchStore(cwd).list()).toHaveLength(1);
 	});
 
@@ -274,7 +292,12 @@ describe("runDraftLaunch confirmed batch launch", () => {
 		const deps = makeDeps();
 		expect(() =>
 			runDraftLaunch(
-				{ draft: BATCH_DRAFT, confirm: true, approvalHash: hashOf(PLAN_DRAFT), cwd },
+				{
+					draft: BATCH_DRAFT,
+					confirm: true,
+					approvalHash: dryApprove(PLAN_DRAFT).approvalHash,
+					cwd,
+				},
 				deps,
 			),
 		).toThrow(DraftLaunchRefused);
@@ -286,13 +309,26 @@ describe("runDraftLaunch confirmed batch launch", () => {
 describe("runDraftLaunch refuses a changed draft with an old approval hash", () => {
 	test("editing a step body after approval invalidates the old hash", () => {
 		const deps = makeDeps();
-		const oldHash = hashOf(PLAN_DRAFT);
+		const oldHash = dryApprove(PLAN_DRAFT, deps).approvalHash;
 		const changed = {
 			...PLAN_DRAFT,
 			steps: [PLAN_DRAFT.steps[0], { ...PLAN_DRAFT.steps[1], body: "Do something ELSE entirely" }],
 		};
 		expect(() =>
 			runDraftLaunch({ draft: changed, confirm: true, approvalHash: oldHash, cwd }, deps),
+		).toThrow(/does not match/);
+		expect(planLaunched).toHaveLength(0);
+		expect(new PlanStore(cwd).list()).toHaveLength(0);
+	});
+
+	test("changing the base after approval invalidates the old hash", () => {
+		const deps = makeDeps();
+		const oldHash = dryApprove(PLAN_DRAFT, deps, { baseBranch: "main" }).approvalHash;
+		expect(() =>
+			runDraftLaunch(
+				{ draft: PLAN_DRAFT, confirm: true, approvalHash: oldHash, cwd, baseBranch: "feature" },
+				deps,
+			),
 		).toThrow(/does not match/);
 		expect(planLaunched).toHaveLength(0);
 		expect(new PlanStore(cwd).list()).toHaveLength(0);
