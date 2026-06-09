@@ -18,6 +18,7 @@ export * from "./plan/types.ts";
 export * from "./planning/claims.ts";
 export * from "./planning/compile.ts";
 export * from "./planning/parse.ts";
+export * from "./planning/preview.ts";
 export * from "./planning/types.ts";
 export * from "./resolve/resolve.ts";
 export * from "./resolve/types.ts";

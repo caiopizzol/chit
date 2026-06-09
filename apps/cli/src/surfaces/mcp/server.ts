@@ -27,11 +27,14 @@ import { isAbsolute, resolve } from "node:path";
 import {
 	buildLoopReceipt,
 	composeLoopStatusLine,
+	DraftError,
 	type LoopRecord,
 	type LoopRunStatus,
 	type ManifestSpec,
 	PlanError as PlanParseError,
+	parseDraft,
 	parseManifest,
+	previewDraft,
 	type RequiredCheck,
 	type ResolvedManifest,
 	resolveManifest,
@@ -3109,6 +3112,70 @@ server.registerTool(
 			return jsonResult(runPlanCleanup({ planId: plan_id, confirm }, store, planDeps));
 		} catch (e) {
 			return planError(e);
+		}
+	},
+);
+
+// --- draft preview (read-only) --------------------------------------------
+//
+// The approval surface for a planner-authored execution draft, BEFORE any planner
+// agent exists. chit_draft_preview takes a declared draft, validates it through the
+// core parser, resolves its profile ids against this server's configured menu
+// (config.profiles), and compiles it with the same pure compilers a real launch uses.
+// Every validation a launch enforces (unknown profile, plan-only manifestPath, batch
+// codeDependsOn, missing/traversal claims, cycles) fails HERE. It is strictly
+// read-only: it launches nothing, calls no model, and creates no run / worktree / job
+// / state. Approved plan or batch execution still goes through chit_plan_start or
+// chit_batch_start.
+
+// Map a draft-string input to an object: parse a JSON string, pass an object through.
+// A non-JSON string is the operator's most likely mistake, so it gets its own message
+// rather than the generic structural error parseDraft would raise on a bare string.
+function coerceDraftInput(draft: string | Record<string, unknown>): unknown {
+	if (typeof draft !== "string") return draft;
+	try {
+		return JSON.parse(draft);
+	} catch (e) {
+		throw new DraftError("$", `draft is not valid JSON: ${(e as Error).message}`);
+	}
+}
+
+server.registerTool(
+	"chit_draft_preview",
+	{
+		description:
+			"Preview a planner-authored execution draft (schema 1) WITHOUT launching it. Validates the draft through the core parser, resolves each step's profileId against this server's vetted profile menu, and compiles it to its execution shape (plan or batch) -- the same compile a real launch runs, so an unknown profile, a plan-only manifestPath, a batch code dependency, a missing or traversal path claim, or a dependency cycle is rejected here, before a human approves. Returns a compact preview: strategy, title, stepCount, and per-step shape (dependencies, resolved profile, effective manifest/iteration/timeout/check budget, and a capped body one-liner). Strictly read-only: it launches no run, calls no model, and creates no worktree, job, or state. Approved execution still requires chit_plan_start (plan) or chit_batch_start (batch).",
+		inputSchema: {
+			draft: z
+				.union([z.string(), z.record(z.string(), z.unknown())])
+				.describe(
+					"The planner draft: a JSON object (schema 1, strategy plan|batch, title, steps[]) or a JSON string of one.",
+				),
+		},
+	},
+	async ({ draft }) => {
+		let config: ReturnType<typeof getConfig>;
+		try {
+			config = getConfig();
+		} catch (e) {
+			return errorResult(`could not load config: ${(e as Error).message}`);
+		}
+		try {
+			const parsed = parseDraft(coerceDraftInput(draft));
+			const preview = previewDraft(parsed, config.profiles);
+			return jsonResult({
+				...preview,
+				nextAction:
+					"Preview only: nothing was launched and no run, worktree, job, or state was created. " +
+					(preview.strategy === "plan"
+						? "To execute approved work today, provide a compiled plan to chit_plan_start; this tool is the validation gate, not the launcher."
+						: "To execute approved work today, provide compiled tasks to chit_batch_start; this tool is the validation gate, not the launcher."),
+			});
+		} catch (e) {
+			// A DraftError (parse or compile) is about the caller's own draft and carries no
+			// local paths, so its message passes through; anything else is genericized.
+			if (e instanceof DraftError) return errorResult(e.message);
+			return errorResult(safeMcpError(e));
 		}
 	},
 );
