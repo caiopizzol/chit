@@ -1439,6 +1439,23 @@ header.app .config-btn {
 	font-size: 16px;
 	font-weight: 600;
 }
+/* Current-phase elapsed in the head, shown only when no agent block carries it. */
+.live-detail-phase-age {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12px;
+	color: var(--faded);
+}
+/* Compact iteration hint derived from the statusLine. */
+.live-detail-iter {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--faded);
+	border: 1px solid var(--hairline);
+	border-radius: 20px;
+	padding: 2px 8px;
+}
 /* Selected-run action strip. Paper-and-ink, square corners, mono caps -- the same
    restrained outline idiom as the shared secondary button, scaled down to sit
    quietly under the detail head. No accent color (per brand). */
@@ -1601,6 +1618,13 @@ header.app .config-btn {
 	font-family: "JetBrains Mono", monospace;
 	font-size: 11px;
 	color: var(--carbon);
+}
+/* Current-phase elapsed, carried by the live block only. */
+.agent-phase-elapsed {
+	margin-top: 2px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: var(--faded);
 }
 .agent-connector {
 	align-self: center;

@@ -1,5 +1,6 @@
 // Pure, clock-free helpers for the live monitor. Selection identity, row
-// flattening, age formatting, and the snapshot diff that feeds the console all
+// flattening, age formatting, the selected-run detail shaping (ages, agent
+// blocks, iteration hint), and the snapshot diff that feeds the console all
 // live here so they can be unit-tested without React or a polling timer. The
 // hook (useLive) owns the network, the timer, and the wall-clock stamp; this
 // module only transforms data it is handed.
@@ -49,6 +50,112 @@ export function phaseLabel(row: LiveActivityRow): string {
 export function concisePhase(row: LiveActivityRow): string {
 	if (row.source === "foreground") return row.phase;
 	return row.phase ?? row.display;
+}
+
+// --- Selected-run detail shaping (pure helpers) ---
+
+// The phase string the role mapping reads. Foreground rows always carry `phase`;
+// a background row may only have the lifecycle `display` (queued / running), so
+// it stands in when no phase is reported.
+function normalizedPhase(row: LiveActivityRow): string {
+	const phase = row.source === "background" ? (row.phase ?? row.display) : row.phase;
+	return phase.toLowerCase();
+}
+
+// Which participant role the current phase belongs to. Drives the rail summary
+// dot and which agent block lights up (and carries the phase timing) in the
+// detail. Phases outside the implement/review/check vocabulary -- queued,
+// cancelling -- map to "other": no block claims them.
+export function activeRole(row: LiveActivityRow): "implementer" | "reviewer" | "checks" | "other" {
+	const phase = normalizedPhase(row);
+	if (phase.includes("implement") || phase.includes("plan")) return "implementer";
+	if (phase.includes("review")) return "reviewer";
+	if (phase.includes("check")) return "checks";
+	return "other";
+}
+
+// Which role a participant key stands for. The wire shape allows arbitrary keys
+// and the hosts use abbreviated ones (`impl`, `rev` -- see the foreground
+// registry and server fixtures), so this matches on stems shared by the short
+// and long spellings rather than the full role names.
+function participantRole(key: string): "implementer" | "reviewer" | "checks" | "other" {
+	const k = key.toLowerCase();
+	if (k.includes("impl") || k.includes("plan")) return "implementer";
+	if (k.includes("rev")) return "reviewer";
+	if (k.includes("check")) return "checks";
+	return "other";
+}
+
+// One participant block of the selected run, ready to draw: the safe
+// agent+adapter pair, whether the current phase lights it up, and -- on the live
+// block only -- the formatted current-phase elapsed. Carrying the phase timing on
+// the block that is executing replaces the separate PHASE metric row, so the
+// operator reads "who is running, and for how long" in one place.
+export interface AgentBlockView {
+	role: string;
+	agentId: string;
+	adapter: string;
+	live: boolean;
+	phaseElapsed?: string;
+}
+
+export function agentBlockViews(row: LiveActivityRow): AgentBlockView[] {
+	const entries = row.participants ? Object.entries(row.participants) : [];
+	// An "other" phase (queued, cancelling) claims no block: matching it against
+	// participantRole's "other" would light unrelated blocks.
+	const active = activeRole(row);
+	const views: AgentBlockView[] = entries.map(([role, p]) => ({
+		role,
+		agentId: p.agentId,
+		adapter: p.adapter,
+		live: active !== "other" && participantRole(role) === active,
+	}));
+	if (active === "checks" && !views.some((v) => v.live)) {
+		views.push({
+			role: "checks",
+			agentId: "chit",
+			adapter: "required checks",
+			live: true,
+		});
+	}
+	if (row.phaseElapsedMs !== undefined) {
+		const live = views.find((v) => v.live);
+		if (live) live.phaseElapsed = formatAge(row.phaseElapsedMs);
+	}
+	return views;
+}
+
+// The formatted current-phase elapsed for the detail head, present only when no
+// agent block carries it (no participants reported, or a phase no block claims).
+// The fallback keeps the phase timing visible for every row without ever drawing
+// it twice.
+export function headPhaseElapsed(row: LiveActivityRow): string | undefined {
+	if (row.phaseElapsedMs === undefined) return undefined;
+	if (agentBlockViews(row).some((v) => v.live)) return undefined;
+	return formatAge(row.phaseElapsedMs);
+}
+
+// A compact iteration hint derived from the statusLine every chit surface
+// already composes ("iteration N · ..."). Parsing the existing line keeps the
+// wire type unchanged; a statusLine without an iteration count (a one-shot
+// background run) yields no hint rather than a fabricated one.
+export function iterationHint(row: LiveActivityRow): string | undefined {
+	const m = /\biteration (\d+)\b/.exec(row.statusLine);
+	return m ? `iter ${m[1]}` : undefined;
+}
+
+// Age metrics shown for the selected run, kept timing-oriented: total elapsed
+// for both sources, plus the worker heartbeat for background rows (the liveness
+// signal a durable job actually has). The foreground last-activity age tracked
+// the phase timing closely enough to be redundant, and the current-phase
+// elapsed lives on the active agent block (agentBlockViews) instead of a
+// separate PHASE metric.
+export function detailAges(row: LiveActivityRow): Array<[string, number | undefined]> {
+	if (row.source === "foreground") return [["elapsed", row.elapsedMs]];
+	return [
+		["elapsed", row.elapsedMs],
+		["heartbeat", row.lastHeartbeatAgeMs],
+	];
 }
 
 // Which body the live overlay should render. "grid" is the normal live view.

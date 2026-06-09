@@ -1,18 +1,23 @@
 // Unit tests for the live-monitor pure helpers: age formatting, row identity,
-// the phase label, and the snapshot diff that feeds the console. No React, no
-// timer, no network - just data in, data out.
+// the phase label, the selected-run detail shaping, and the snapshot diff that
+// feeds the console. No React, no timer, no network - just data in, data out.
 
 import { describe, expect, test } from "bun:test";
 import type { BackgroundLiveRow, ForegroundLiveRow, LiveActivity } from "../server/types.ts";
 import type { LiveCancelOutcome } from "./api.ts";
 import {
+	activeRole,
+	agentBlockViews,
 	cancelAvailable,
 	cancelMessage,
 	cancelPending,
 	concisePhase,
+	detailAges,
 	diffActivity,
 	flattenRows,
 	formatAge,
+	headPhaseElapsed,
+	iterationHint,
 	liveBody,
 	phaseLabel,
 	rowKey,
@@ -122,6 +127,179 @@ describe("concisePhase", () => {
 	test("background uses phase when present, otherwise display", () => {
 		expect(concisePhase(bg({ display: "running", phase: "reviewing" }))).toBe("reviewing");
 		expect(concisePhase(bg({ display: "queued", phase: undefined }))).toBe("queued");
+	});
+});
+
+describe("activeRole", () => {
+	test("maps the phase vocabulary to participant roles", () => {
+		expect(activeRole(fg({ phase: "implementing" }))).toBe("implementer");
+		expect(activeRole(fg({ phase: "planning" }))).toBe("implementer");
+		expect(activeRole(fg({ phase: "reviewing" }))).toBe("reviewer");
+		expect(activeRole(fg({ phase: "running checks" }))).toBe("checks");
+		expect(activeRole(fg({ phase: "cancelling" }))).toBe("other");
+	});
+
+	test("a background row without a phase falls back to its display", () => {
+		expect(activeRole(bg({ display: "queued", phase: undefined }))).toBe("other");
+		expect(activeRole(bg({ display: "running", phase: "reviewing" }))).toBe("reviewer");
+	});
+});
+
+describe("agentBlockViews", () => {
+	const participants = {
+		implementer: { agentId: "claude-code", adapter: "claude-cli" },
+		reviewer: { agentId: "codex", adapter: "codex-cli" },
+	};
+
+	test("no participants yields no blocks", () => {
+		expect(agentBlockViews(fg({ participants: undefined }))).toEqual([]);
+	});
+
+	test("the block matching the active phase is live and carries the phase elapsed", () => {
+		const views = agentBlockViews(fg({ phase: "reviewing", participants, phaseElapsedMs: 65_000 }));
+		expect(views).toEqual([
+			{ role: "implementer", agentId: "claude-code", adapter: "claude-cli", live: false },
+			{
+				role: "reviewer",
+				agentId: "codex",
+				adapter: "codex-cli",
+				live: true,
+				phaseElapsed: "1m 5s",
+			},
+		]);
+	});
+
+	test("an underivable phase elapsed leaves the live block without a timing badge", () => {
+		const views = agentBlockViews(
+			fg({ phase: "implementing", participants, phaseElapsedMs: undefined }),
+		);
+		expect(views[0]).toEqual({
+			role: "implementer",
+			agentId: "claude-code",
+			adapter: "claude-cli",
+			live: true,
+		});
+	});
+
+	test("a phase no block claims lights nothing and assigns no timing", () => {
+		const views = agentBlockViews(fg({ phase: "cancelling", participants, phaseElapsedMs: 5000 }));
+		expect(views.every((v) => !v.live && v.phaseElapsed === undefined)).toBe(true);
+	});
+
+	test("abbreviated participant keys (impl / rev) light the active block too", () => {
+		// The hosts report abbreviated role keys (foreground registry, server
+		// fixtures), so the matching must not depend on full role names.
+		const abbreviated = {
+			impl: { agentId: "claude", adapter: "claude-cli" },
+			rev: { agentId: "codex", adapter: "codex-cli" },
+		};
+		const implementing = agentBlockViews(
+			fg({ phase: "implementing", participants: abbreviated, phaseElapsedMs: 4000 }),
+		);
+		expect(implementing).toEqual([
+			{ role: "impl", agentId: "claude", adapter: "claude-cli", live: true, phaseElapsed: "4s" },
+			{ role: "rev", agentId: "codex", adapter: "codex-cli", live: false },
+		]);
+		const reviewing = agentBlockViews(
+			fg({ phase: "reviewing", participants: abbreviated, phaseElapsedMs: 4000 }),
+		);
+		expect(reviewing).toEqual([
+			{ role: "impl", agentId: "claude", adapter: "claude-cli", live: false },
+			{ role: "rev", agentId: "codex", adapter: "codex-cli", live: true, phaseElapsed: "4s" },
+		]);
+	});
+
+	test("a checks phase gets a synthetic chit block with the phase elapsed", () => {
+		const views = agentBlockViews(
+			fg({ phase: "running required checks", participants, phaseElapsedMs: 41_000 }),
+		);
+		expect(views).toEqual([
+			{ role: "implementer", agentId: "claude-code", adapter: "claude-cli", live: false },
+			{ role: "reviewer", agentId: "codex", adapter: "codex-cli", live: false },
+			{
+				role: "checks",
+				agentId: "chit",
+				adapter: "required checks",
+				live: true,
+				phaseElapsed: "41s",
+			},
+		]);
+	});
+});
+
+describe("headPhaseElapsed", () => {
+	const participants = {
+		implementer: { agentId: "claude-code", adapter: "claude-cli" },
+	};
+
+	test("absent when the live agent block already carries the timing", () => {
+		expect(
+			headPhaseElapsed(fg({ phase: "implementing", participants, phaseElapsedMs: 5000 })),
+		).toBeUndefined();
+	});
+
+	test("present when no block claims the phase, or no participants are reported", () => {
+		expect(headPhaseElapsed(fg({ phase: "cancelling", participants, phaseElapsedMs: 5000 }))).toBe(
+			"5s",
+		);
+		expect(
+			headPhaseElapsed(
+				fg({ phase: "implementing", participants: undefined, phaseElapsedMs: 5000 }),
+			),
+		).toBe("5s");
+	});
+
+	test("absent for an abbreviated participant key that claims the phase", () => {
+		const abbreviated = { impl: { agentId: "claude", adapter: "claude-cli" } };
+		expect(
+			headPhaseElapsed(
+				fg({ phase: "implementing", participants: abbreviated, phaseElapsedMs: 4000 }),
+			),
+		).toBeUndefined();
+	});
+
+	test("absent when the synthetic checks block carries the timing", () => {
+		expect(
+			headPhaseElapsed(
+				fg({
+					phase: "running required checks",
+					participants,
+					phaseElapsedMs: 41_000,
+				}),
+			),
+		).toBeUndefined();
+	});
+
+	test("absent when the row reports no phase elapsed at all", () => {
+		expect(headPhaseElapsed(fg({ phaseElapsedMs: undefined }))).toBeUndefined();
+	});
+});
+
+describe("iterationHint", () => {
+	test("derives a compact hint from the statusLine vocabulary", () => {
+		expect(iterationHint(fg({ statusLine: "iteration 3 · implementing" }))).toBe("iter 3");
+		expect(iterationHint(bg({ statusLine: "iteration 12 · pass · 2/2 checks passed" }))).toBe(
+			"iter 12",
+		);
+	});
+
+	test("a statusLine without an iteration count yields no hint", () => {
+		expect(iterationHint(bg({ statusLine: "running" }))).toBeUndefined();
+	});
+});
+
+describe("detailAges", () => {
+	test("foreground shows elapsed only -- no last-activity row, no phase row", () => {
+		expect(
+			detailAges(fg({ elapsedMs: 1000, phaseElapsedMs: 500, lastActivityAgeMs: 200 })),
+		).toEqual([["elapsed", 1000]]);
+	});
+
+	test("background keeps the worker heartbeat next to elapsed", () => {
+		expect(detailAges(bg({ elapsedMs: 1000, lastHeartbeatAgeMs: 200 }))).toEqual([
+			["elapsed", 1000],
+			["heartbeat", 200],
+		]);
 	});
 });
 

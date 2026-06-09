@@ -13,29 +13,21 @@ import type { LiveActivityRow } from "../server/types.ts";
 import { cancelLiveRun } from "./api.ts";
 import { ConfigPanel } from "./ConfigPanel.tsx";
 import {
+	activeRole,
+	agentBlockViews,
 	cancelAvailable,
 	cancelMessage,
 	cancelPending,
 	concisePhase,
+	detailAges,
 	flattenRows,
 	formatAge,
+	headPhaseElapsed,
+	iterationHint,
 	liveBody,
 	rowKey,
 } from "./live.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
-
-function normalizedPhase(row: LiveActivityRow): string {
-	const phase = row.source === "background" ? (row.phase ?? row.display) : row.phase;
-	return phase.toLowerCase();
-}
-
-function activeRole(row: LiveActivityRow): "implementer" | "reviewer" | "checks" | "other" {
-	const phase = normalizedPhase(row);
-	if (phase.includes("implement") || phase.includes("plan")) return "implementer";
-	if (phase.includes("review")) return "reviewer";
-	if (phase.includes("check")) return "checks";
-	return "other";
-}
 
 function agentTone(agentId: string): "claude" | "codex" | "neutral" {
 	const id = agentId.toLowerCase();
@@ -57,32 +49,32 @@ function rowSummary(row: LiveActivityRow): { dot: string; text: string } {
 }
 
 // The agent+adapter participants of a run, drawn as connected blocks. The
-// active phase lights up the matching role so the operator can see who is
-// executing without reading a transcript.
+// active phase lights up the matching role, and that live block carries the
+// current-phase elapsed, so the operator sees who is executing and for how long
+// without reading a transcript.
 function AgentBlocks({ row }: { row: LiveActivityRow }) {
-	const participants = row.participants;
-	const entries = participants ? Object.entries(participants) : [];
-	if (entries.length === 0) {
+	const views = agentBlockViews(row);
+	if (views.length === 0) {
 		return <p className="live-muted">No agent participants reported.</p>;
 	}
-	const active = activeRole(row);
 	return (
 		<div className="agent-blocks">
-			{entries.map(([role, p], i) => (
-				<Fragment key={role}>
+			{views.map((v, i) => (
+				<Fragment key={v.role}>
 					{i > 0 && (
 						<span className="agent-connector" aria-hidden="true">
 							→
 						</span>
 					)}
 					<div
-						className={`agent-block agent-block--${agentTone(p.agentId)}${
-							role.toLowerCase().includes(active) ? " agent-block--live" : ""
+						className={`agent-block agent-block--${agentTone(v.agentId)}${
+							v.live ? " agent-block--live" : ""
 						}`}
 					>
-						<span className="agent-role">{role}</span>
-						<span className="agent-id">{p.agentId}</span>
-						<span className="agent-adapter">{p.adapter}</span>
+						<span className="agent-role">{v.role}</span>
+						<span className="agent-id">{v.agentId}</span>
+						<span className="agent-adapter">{v.adapter}</span>
+						{v.phaseElapsed && <span className="agent-phase-elapsed">{v.phaseElapsed}</span>}
 					</div>
 				</Fragment>
 			))}
@@ -149,24 +141,6 @@ function RailGroup({
 			)}
 		</section>
 	);
-}
-
-// Ages shown for the selected run. Foreground rows report last-activity age;
-// background rows report a worker heartbeat age. The other two (elapsed, phase
-// elapsed) are shared.
-function detailAges(row: LiveActivityRow): Array<[string, number | undefined]> {
-	if (row.source === "foreground") {
-		return [
-			["elapsed", row.elapsedMs],
-			["phase", row.phaseElapsedMs],
-			["last activity", row.lastActivityAgeMs],
-		];
-	}
-	return [
-		["elapsed", row.elapsedMs],
-		["phase", row.phaseElapsedMs],
-		["heartbeat", row.lastHeartbeatAgeMs],
-	];
 }
 
 function TaskDisclosure({ task }: { task: string }) {
@@ -247,11 +221,17 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 	if (!row) {
 		return <p className="live-muted live-detail-empty">Select a live run to inspect it.</p>;
 	}
+	// Phase timing normally rides on the live agent block; the head only shows it
+	// when no block claims the phase, so it appears exactly once either way.
+	const phaseAge = headPhaseElapsed(row);
+	const iteration = iterationHint(row);
 	return (
 		<div className="live-detail">
 			<div className="live-detail-head">
 				<span className={`live-source live-source--${row.source}`}>{row.source}</span>
 				<span className="live-detail-phase">{concisePhase(row)}</span>
+				{phaseAge && <span className="live-detail-phase-age">{phaseAge}</span>}
+				{iteration && <span className="live-detail-iter">{iteration}</span>}
 			</div>
 			<ActionStrip key={rowKey(row)} row={row} refresh={refresh} />
 			<p className="live-detail-scope">{row.scope}</p>
