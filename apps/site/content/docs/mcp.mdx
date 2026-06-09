@@ -10,10 +10,11 @@ The model is small and worth holding in your head:
 - A **chit** is a declared routine (a manifest). A **run** executes one chit.
 - A manifest's **policy** decides what a run is: **one-shot** (a single pass over the step DAG) or **loop** (a write-capable implementer and a read-only reviewer iterate until the reviewer says proceed, blocks, or the budget runs out).
 - A **mode** decides where the run lives: **foreground** (this chat supervises it, one unit per call) or **background** (a detached worker drives it to completion and it survives a reconnect).
+- A **plan** coordinates several loop runs sequentially, applying each converged step into an integration worktree before launching dependent steps.
 - A **batch** coordinates several background runs, one per git worktree.
 - **Audit** reads the receipts a run leaves behind.
 
-You hold one id: the **run_id** that `chit_start` returns. Everything else (`chit_next`, `chit_status`, `chit_trace`, `chit_cancel`) takes that id.
+For single runs, you hold one id: the **run_id** that `chit_start` returns. Plans and batches have their own handles (`plan_id`, `batch_id`) because they coordinate several runs.
 
 Install the CLI, then register the MCP server with `chit mcp`:
 
@@ -41,7 +42,8 @@ A run is a stepwise projection of a manifest DAG. chit, not the model, decides w
 
 One public id, and it never shifts meaning.
 
-- **run_id** is the only handle you pass. `chit_start` returns it; `chit_next` / `chit_status` / `chit_trace` / `chit_cancel` take it. For a foreground run it lives in this session's memory; for a background run it is the durable record's id, so it resolves after a reconnect.
+- **run_id** is the single-run handle. `chit_start` returns it; `chit_next` / `chit_status` / `chit_trace` / `chit_cancel` take it. For a foreground run it lives in this session's memory; for a background run it is the durable record's id, so it resolves after a reconnect.
+- **plan_id** and **batch_id** are coordinator handles. A plan or batch owns several task runs, each with its own `run_id`, but you drive the coordinator with its own id.
 - **audit refs** are receipt ids. A run records one per audited step or iteration; they appear in `chit_trace` and `chit_status` output and you open them with `chit_audit_show`. A run is never its own audit ref.
 - **loop ids and job ids are internal.** They key the loop log and the durable job record on disk. chit never asks you for one and never returns one as a handle. If you see an id in a control or status result, it is the run_id.
 
@@ -127,12 +129,13 @@ For a foreground **loop** run, the view is the audit surface you read between an
 
 ### chit_wait
 
-Block until a background run or batch reaches a meaningful state, then return the same view as `chit_status` / `chit_batch_status` plus a `waitResult`. This is the "tell me when it's done" tool: reach for it instead of polling `chit_status` in a loop, and never read chit's state files to detect completion (they are private). Read-only: it never advances a batch or mutates a run; it watches the durable state and returns. Emits a heartbeat while waiting; press Esc to stop waiting (the run keeps running). Inputs: `run_id` OR `batch_id`, `timeout_ms?` (default 900000), `cwd?` (batch only).
+Block until a background run, plan, or batch reaches a meaningful state, then return the same view as `chit_status` / `chit_plan_status` / `chit_batch_status` plus a `waitResult`. This is the "tell me when it's done" tool: reach for it instead of polling status in a loop, and never read chit's state files to detect completion (they are private). Read-only: it never advances a plan or batch and never mutates a run; it watches the durable state and returns. Emits a heartbeat while waiting; press Esc to stop waiting (the work keeps running). Inputs: exactly one of `run_id`, `plan_id`, or `batch_id`; `timeout_ms?` (default 900000); `cwd?` for plan and batch.
 
 - With a `run_id` (background runs only): waits until the run is terminal (`completed` / `failed` / `cancelled`, or its worker died), so a crashed worker never hangs the wait. A **foreground** run is rejected (advance it with `chit_next`, which already blocks per unit).
+- With a `plan_id`: waits until the active step's job needs reconciliation, the plan is `ready_for_apply`, or the plan is terminal. It does **not** advance, reconcile, apply, or launch. The operator loop is: `chit_wait` -> `chit_plan_advance` -> `chit_plan_status`, repeated until a step is ready to apply or the plan settles.
 - With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch (it is read-only; only `chit_batch_advance` mutates state). A blocking-until-fully-done wait would deadlock, since nothing would ever advance the batch. So the operator loop is: `chit_wait` → `chit_batch_advance` → `chit_batch_status`, repeated until the batch is terminal: `ready_for_review` when every task is clean, or `needs_human` when a task needs a decision (a `needs_attention` task) or is blocked.
 
-`waitResult` is `terminal` | `needs_advance` | `timeout`. `needs_advance` means call `chit_batch_advance` now, then wait again; `terminal` means the batch is done.
+`waitResult` is `terminal` | `needs_advance` | `ready_for_apply` | `timeout`. `needs_advance` means call the matching advance tool now, then wait again; `ready_for_apply` means a plan step converged and is waiting for the gated `apply` payload.
 
 ### chit_trace
 
@@ -147,6 +150,36 @@ Cancel a run by `run_id`, foreground or background. Input: `run_id`.
 - Background: records the cancel intent first (so it survives a worker restart), then signals the worker's process group; the worker stops at the next safe point and records a clean `cancelled` stop.
 
 A run that already finished is reported back unchanged.
+
+## Run a sequential plan
+
+A **plan** runs several loop tasks in order. Each step gets its own worktree, converges, then pauses as `review_ready`. You decide whether to apply that step into the plan's integration worktree. Only after a step is applied can a dependent step launch, and it launches from the integration tip, so it can see the code its dependency produced. Use a plan when later work needs earlier work's diff. Use a batch when tasks are independent and can run in parallel.
+
+### chit_plan_start
+
+Approve and start a plan. The start is **gated**: with `confirm` omitted or false it parses the plan, resolves the base to a concrete commit SHA, returns the normalized plan plus `approval_hash`, and creates nothing. With `confirm:true`, chit re-parses, re-resolves, recomputes the hash over the plan, resolved base, and `max_iterations`, and refuses unless `approval_hash` matches. On a match it launches the first runnable step from the approved commit SHA.
+
+Inputs: `plan` (inline object or JSON string) or `plan_path`, `cwd?`, `base_branch?`, `max_iterations?`, `confirm?`, `approval_hash?`.
+
+### chit_plan_list
+
+List plans in this repo, newest first: `plan_id`, title, status, step count, and how many steps are applied / review_ready / needs_human / failed. Use it to recover a `plan_id`, then inspect with `chit_plan_status`. Read-only. Inputs: `limit?`, `cwd?`.
+
+### chit_plan_status
+
+Read-only overview for one plan: integration branch/worktree, current status, every step's run state, changed files, checks, receipts, and next action. It never launches, reconciles, applies, or cleans up. Inputs: `plan_id`, `cwd?`.
+
+### chit_plan_advance
+
+The progression trigger. Without an `apply` payload, it reconciles the active step's finished job and launches the next runnable step if one is ready. With `apply`, it runs the gated apply for one `review_ready` step into the plan integration branch. Apply is dry-run by default; pass `apply.confirm:true` to commit the step into the integration branch. Inputs: `plan_id`, `cwd?`, `max_iterations?`, and optional `apply: { step_id, confirm?, include_untracked? }`.
+
+### chit_plan_cancel
+
+Cancel the active step's job and mark pending steps cancelled. Worktrees stay in place for inspection; cleanup is separate. Inputs: `plan_id`, `cwd?`.
+
+### chit_plan_cleanup
+
+Retire the plan-managed worktrees and branches once every step is applied or the plan is cancelled. Safe by default: with `confirm` omitted or false it lists what would be removed and removes nothing. It keeps plan, job, loop, and audit receipts. Inputs: `plan_id`, `cwd?`, `confirm?`.
 
 ## Run several tasks in parallel
 

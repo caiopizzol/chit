@@ -23,13 +23,14 @@ The manifest is the artifact. A shared runtime executes it. Surfaces (MCP tools,
 2. **Chits.** JSON manifests wiring agents into handoff graphs for a task.
 3. **Surfaces.** Shims that expose a chit as MCP tools, a CLI command, or a Claude Code skill.
 
-## Three ways to run it
+## Four ways to run it
 
-The same chit, three execution modes; you choose how much to watch.
+The same runtime, four execution modes; you choose how much to watch.
 
 - **Foreground.** Checkpoint every iteration. chit runs one round at a time (`chit_start`, then `chit_next` per iteration); you read the diff and the verdict, then advance.
 - **Background.** Run one task unattended. `chit_start` with `mode: "background"` converges in a detached worker against a git worktree; check on it with `chit_status` and read the receipt.
-- **Batch.** Run several tasks in parallel, one worktree each, with declared dependencies. `chit_batch_start` coordinates the waves; the deliverable is a set of reviewable branches.
+- **Plan.** Run a reviewed sequence where each step sees the previous applied step's code. `chit_plan_start` is approval-gated: first dry-run and review the normalized plan plus base, then confirm with the returned `approval_hash`.
+- **Batch.** Run several tasks in parallel, one worktree each, with declared dependencies. `chit_batch_start` is approval-gated the same way; the deliverable is a set of reviewable branches.
 
 ## Safety model
 

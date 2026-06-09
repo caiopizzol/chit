@@ -13,11 +13,14 @@ The primary surface. chit registers as a stdio MCP server and you drive it from 
 claude mcp add chit --scope local -- chit mcp
 ```
 
-Three tool groups:
+Four tool groups:
 
-- **Run tools** start and drive any run, with one `run_id` as the handle: `chit_start` opens it, `chit_next` advances one unit (a one-shot wave or a loop iteration, each with a live heartbeat), `chit_status` / `chit_trace` inspect it, `chit_wait` blocks until a background run finishes (instead of polling), and `chit_cancel` stops it.
+- **Run tools** start and drive any run, with one `run_id` as the handle: `chit_start` opens it, `chit_next` advances one unit (a one-shot wave or a loop iteration, each with a live heartbeat), `chit_status` / `chit_trace` inspect it, `chit_wait` blocks until a background run, plan, or batch needs attention (instead of polling), and `chit_cancel` stops it.
+- **Plan tools** run reviewed sequential work where later steps see earlier applied diffs: `chit_plan_start`, `chit_plan_status`, `chit_plan_advance`, `chit_plan_list`, `chit_plan_cancel`, `chit_plan_cleanup`.
 - **Batch tools** run several loop tasks in parallel, one git worktree each: `chit_batch_start`, `chit_batch_status`, `chit_batch_advance`, `chit_batch_list`, `chit_batch_cancel`, `chit_batch_cleanup`.
 - **Audit tools** read recorded transcripts: `chit_audit_list`, `chit_audit_show`.
+
+`chit_plan_start` and `chit_batch_start` are approval-gated. A first call is a dry run that returns the normalized work, resolved base, and `approval_hash`; only a second call with `confirm:true` and that hash launches.
 
 See [the MCP reference](/docs/mcp).
 
