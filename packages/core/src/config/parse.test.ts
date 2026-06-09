@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "./parse.ts";
-import { ConfigError } from "./types.ts";
+import { ConfigError, DEFAULT_PROFILE_ID } from "./types.ts";
 
 // parseConfig owns agents + roles in one config. Agents reuse the registry parser
 // (built-ins merged); roles are behavior + governance with an OPTIONAL default
@@ -137,5 +137,80 @@ describe("parseConfig: roles", () => {
 				roles: { reviewer: { agent: 7, instructions: "R.", session: "per_scope" } },
 			}),
 		).toThrow(/agent/);
+	});
+});
+
+describe("parseConfig: profiles", () => {
+	test("absent profiles -> just the built-in default (additive, no behavior change)", () => {
+		const c = parseConfig(undefined);
+		expect(Object.keys(c.profiles)).toEqual([DEFAULT_PROFILE_ID]);
+		const def = c.profiles[DEFAULT_PROFILE_ID];
+		expect(def?.builtIn).toBe(true);
+		// The default profile vets no manifestPath (the bundled default converge) and no
+		// iteration/timeout overrides (driver defaults) -- today's behavior, preserved.
+		expect(def?.manifestPath).toBeUndefined();
+		expect(def?.maxIterations).toBeUndefined();
+		expect(def?.callTimeoutMs).toBeUndefined();
+	});
+
+	test("an agents-only config still carries the built-in default profile", () => {
+		const c = parseConfig({
+			agents: { "codex-deep": { adapter: "codex-exec", model: "gpt-5-codex" } },
+		});
+		expect(c.profiles[DEFAULT_PROFILE_ID]?.builtIn).toBe(true);
+	});
+
+	test("a file profile is parsed and merged with the built-in default", () => {
+		const c = parseConfig({
+			profiles: {
+				"deep-converge": {
+					manifestPath: "/vetted/converge.json",
+					maxIterations: 8,
+					callTimeoutMs: 900000,
+				},
+			},
+		});
+		expect(c.profiles[DEFAULT_PROFILE_ID]?.builtIn).toBe(true); // built-in still present
+		const p = c.profiles["deep-converge"];
+		expect(p?.builtIn).toBe(false);
+		expect(p?.manifestPath).toBe("/vetted/converge.json");
+		expect(p?.maxIterations).toBe(8);
+		expect(p?.callTimeoutMs).toBe(900000);
+	});
+
+	test("the built-in default profile id cannot be redefined by user config", () => {
+		expect(() => parseConfig({ profiles: { default: { manifestPath: "/x.json" } } })).toThrow(
+			/cannot be redefined/,
+		);
+	});
+
+	test("a non-kebab profile id is a ConfigError", () => {
+		expect(() => parseConfig({ profiles: { Deep: { manifestPath: "/x.json" } } })).toThrow(/kebab/);
+	});
+
+	test("an unknown profile field is a ConfigError", () => {
+		expect(() => parseConfig({ profiles: { deep: { permissions: {} } } })).toThrow(
+			/unknown field "permissions"/,
+		);
+	});
+
+	test("an empty manifestPath is a ConfigError", () => {
+		expect(() => parseConfig({ profiles: { deep: { manifestPath: "" } } })).toThrow(/manifestPath/);
+	});
+
+	test("a non-integer maxIterations is a ConfigError", () => {
+		expect(() => parseConfig({ profiles: { deep: { maxIterations: 0 } } })).toThrow(
+			/maxIterations/,
+		);
+	});
+
+	test("a non-object profile is a ConfigError", () => {
+		expect(() => parseConfig({ profiles: { deep: "nope" } })).toThrow(ConfigError);
+	});
+
+	test("a profile with no fields is valid (selects the bundled default manifest)", () => {
+		const c = parseConfig({ profiles: { plain: {} } });
+		expect(c.profiles.plain?.builtIn).toBe(false);
+		expect(c.profiles.plain?.manifestPath).toBeUndefined();
 	});
 });

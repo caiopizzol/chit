@@ -9,46 +9,25 @@
 //   - claimedPaths is required and non-empty UNLESS the task sets allowPathOverlap
 //     (an explicit opt-in to running without a declared footprint).
 
-import type { RequiredCheck } from "@chit-run/core";
+import { ClaimError, normalizeClaimedPath, type RequiredCheck } from "@chit-run/core";
 import type { BatchTask } from "./types.ts";
 
 export class PlanError extends Error {}
 
 const SAFE_TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-// Normalize a claimed path to a canonical repo-relative form so the overlap check
-// (overlap.ts, raw string comparison) is not fooled by `./`, `//`, or trailing
-// slashes: `src/**` and `./src//` must compare equal. Rejects absolute paths and
-// `..` traversal (a claim must name a path inside the repo). Preserves a trailing
-// `/**` or `/` (the subtree markers overlap.ts keys on).
+// Normalize a claimed path to a canonical repo-relative form (see
+// normalizeClaimedPath in @chit-run/core: the one shared implementation, so the draft
+// contract and the batch engine never disagree about what a claim means). This wraps
+// the shared validator with task context for the batch error surface.
 export function normalizeClaim(claim: string, taskId: string): string {
-	const raw = claim.trim();
-	if (raw === "") throw new PlanError(`task ${JSON.stringify(taskId)}: a claimedPath is empty`);
-	if (raw.startsWith("/")) {
-		throw new PlanError(
-			`task ${JSON.stringify(taskId)}: claimedPath must be repo-relative, got ${JSON.stringify(claim)}`,
-		);
+	try {
+		return normalizeClaimedPath(claim);
+	} catch (e) {
+		if (e instanceof ClaimError)
+			throw new PlanError(`task ${JSON.stringify(taskId)}: ${e.message}`);
+		throw e;
 	}
-	const dirGlob = raw.endsWith("/**");
-	const dirSlash = !dirGlob && raw.endsWith("/");
-	const body = dirGlob ? raw.slice(0, -3) : dirSlash ? raw.slice(0, -1) : raw;
-	const segments: string[] = [];
-	for (const seg of body.split("/")) {
-		if (seg === "" || seg === ".") continue; // collapse `//`, drop `./`
-		if (seg === "..") {
-			throw new PlanError(
-				`task ${JSON.stringify(taskId)}: claimedPath may not contain "..": ${JSON.stringify(claim)}`,
-			);
-		}
-		segments.push(seg);
-	}
-	if (segments.length === 0) {
-		throw new PlanError(
-			`task ${JSON.stringify(taskId)}: claimedPath is empty after normalization: ${JSON.stringify(claim)}`,
-		);
-	}
-	const base = segments.join("/");
-	return dirGlob ? `${base}/**` : dirSlash ? `${base}/` : base;
 }
 
 // The caller-facing shape of one task in chit_batch_start.

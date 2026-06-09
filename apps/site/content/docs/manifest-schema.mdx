@@ -178,4 +178,4 @@ None of these block the parser. They are settled for now with the working answer
 4. **`inputs` types beyond `string` and `file[]`.** Add `boolean`, `number`, `enum` only when a recipe needs them.
 5. **Error semantics.** Fail-fast: if any `call` step fails, no downstream step runs. The runtime returns a structured failure envelope (which step failed, the error, partial outputs). Per-step `on_failure: continue` can come later.
 6. **YAML vs JSON.** JSON for now: parses everywhere, no dependency. Revisit if hand-authoring multi-line prompts becomes the dominant path.
-7. **Config location.** `~/.config/chit/config.json`, holding `agents` (the registry, merged over built-in `codex` and `claude`) and `roles` (reusable participant profiles a manifest references by id). There is no separate `agents.json`.
+7. **Config location.** `~/.config/chit/config.json`, holding `agents` (the registry, merged over built-in `codex` and `claude`), `roles` (reusable participant profiles a manifest references by id), and optional `profiles` (vetted execution profiles a planner-authored draft selects by id). There is no separate `agents.json`.

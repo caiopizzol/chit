@@ -36,7 +36,7 @@ Checked against origin/main (`3f49bf3`):
 - Those validators are called **independently in six sites**, none routed through `buildGraphModel`:
   `cli/run.ts:497,510` · `cli/converge.ts:584,593,831,846` · `surfaces/claude-skill.ts:149,159` · `surfaces/mcp/engine.ts:82,88` · `runs/run-once.ts:71,80` · `graph-model.ts:220` (the display path).
 - Execution reads participants **directly** too: `runtime/execute.ts:13,51` picks the adapter by `participant.agent`, and `:70` injects the persona via `buildAgentInput(participant.role, renderedPrompt)`.
-- The persona is part of the **session fingerprint** (`sessions/fingerprint.ts:55` `role: participant.role`) — changing a persona forks a fresh thread, by design.
+- The persona is part of the **session fingerprint** (`sessions/fingerprint.ts:55` `role: participant.role`) - changing a persona forks a fresh thread, by design.
 - `buildGraphModel` (`graph-model.ts:132`) is the **display/audit** seam only: `chit show` renders from it, and `resolveParticipantSnapshots` (`:263`) reuses it for audit. Audit already omits the persona text (records agent/adapter/session/permissions/config).
 - Config loads node-side, parses in core: `loadRegistry()` (`apps/cli/src/agents/parse.ts`) reads `~/.config/chit/agents.json` via core `parseRegistry`.
 
@@ -53,9 +53,9 @@ loadConfig()                       -> { agents, roles } (node; one file)
 resolveManifest(spec, agents, roles) -> ResolvedManifest (node-side; participants concrete + provenance)
 ```
 
-Every consumer — `findUnknownAgents`, `findEnforcementGaps`, `buildGraphModel`
+Every consumer - `findUnknownAgents`, `findEnforcementGaps`, `buildGraphModel`
 (show), `resolveParticipantSnapshots` (audit), `execute` (adapter build +
-`buildAgentInput`), converge — consumes **ResolvedManifest**, never the raw spec.
+`buildAgentInput`), converge - consumes **ResolvedManifest**, never the raw spec.
 A distinct `ResolvedManifest` type makes "you cannot execute an unresolved
 manifest" a compile-time guarantee, which is what structurally prevents the
 show-looks-right-but-execution-sees-raw bug.
@@ -69,7 +69,7 @@ Types:
 ## 1. Vocabulary (lock in docs first, zero code)
 
 agent / role / participant / run / batch / audit, plus the "participants are not
-sub-agents" line. This is the highest-leverage step — the confusion that started
+sub-agents" line. This is the highest-leverage step - the confusion that started
 this work is a naming collision.
 
 ## 2. The gating decision: `role` -> `instructions`
@@ -83,7 +83,7 @@ the reusable concept. Resolve by renaming:
 Recommendation: **take the clean break.** 0.x, ~zero adoption, precedent
 (`audit_ref`). The alternative (keep `role` as prompt, add a separate
 `preset`/`use` reference field) permanently leaves the field `role` meaning
-something different from the concept "role" — the exact collision being removed.
+something different from the concept "role" - the exact collision being removed.
 
 Blast radius (verified, not estimated): `parse.ts` (`REQUIRED_PARTICIPANT_KEYS`,
 field parse) · `manifest/types.ts` (`NormalizedParticipant.role`) · `execute.ts:70`
@@ -128,7 +128,7 @@ resolve in the registry. Core gets a browser-safe `parseConfig` (agents + roles
 structure); the node loader reads the file (mirrors `loadRegistry`).
 
 ```jsonc
-// model-agnostic role (no default agent) — the participant must supply one
+// model-agnostic role (no default agent) - the participant must supply one
 "reviewer":         { "instructions": "Review the diff skeptically…",
                       "permissions": { "filesystem": "read_only" }, "session": "per_scope" },
 // role WITH a convenient default agent
@@ -181,7 +181,7 @@ structurally valid in core; resolution is the node-side step.
   blocks the run. The displayed graph is always the effective one.
 - **Audit** records the resolved snapshot (it already records
   agent/adapter/session/permissions/config) plus cheap provenance
-  (`roleRef`, `overrides`). Resolved values are the source of truth — audit must
+  (`roleRef`, `overrides`). Resolved values are the source of truth - audit must
   never depend on re-reading `config.json` later (it can change).
 
 ## 8. Planner-generated batches (later; reuses everything above)
@@ -190,20 +190,21 @@ The planner is a **role** (read-only) run under a policy whose output is a
 **proposed batch plan**, not a side effect:
 
 1. Operator runs the planner.
-2. Planner proposes tasks + role bindings (from the known roles) + dependencies + claimedPaths.
-3. chit materializes a batch plan referencing the same roles, and returns it for inspection.
+2. Planner proposes tasks + execution profile ids (from the known profiles) + dependencies + claimedPaths.
+3. chit materializes a batch plan referencing the same vetted profiles, and returns it for inspection.
 4. Operator approves / edits.
 5. chit runs the declared batch (existing batch engine, unchanged).
 
 **Dynamic authoring, static execution.** The graph is still a file you read before
-it fires. Roles are the prerequisite: the planner picks from known roles, so its
-output is concrete and resolvable, not free-text chaos.
+it fires. Roles and execution profiles are the prerequisites: the planner picks from
+known entries, so its output is concrete and resolvable, not free-text chaos.
 
 ## Anti-scope (the line to hold)
 
 - No dynamic execution: chit never spawns a variable number of agents mid-run because a model decided to. "Spawn agents" = a declared fan-out in the chit (static, inspectable), not model-decided spawning. That is the differentiator vs. agent frameworks.
 - No deep override magic.
-- No second config concept beyond agent + role.
+- No free-form planner override magic. Execution profiles are closed menu entries
+  over vetted manifests and defaults, not a second role system.
 
 ## Staged implementation (each stage green + shippable)
 
