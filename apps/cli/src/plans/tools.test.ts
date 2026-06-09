@@ -7,7 +7,7 @@ import type { GitResult, GitRunner } from "../batches/worktree.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import type { LaunchPlanJobParams, PlanEngineDeps } from "./engine.ts";
 import { PlanStore } from "./store.ts";
-import { loadPlanInput, runPlanStart } from "./tools.ts";
+import { loadPlanInput, PlanApprovalRefused, runPlanStart } from "./tools.ts";
 
 let dir: string;
 let stateDir: string;
@@ -100,16 +100,28 @@ describe("loadPlanInput", () => {
 const ok = (stdout = ""): GitResult => ({ code: 0, stdout, stderr: "" });
 
 // A plain main-repo checkout: --git-common-dir is <cwd>/.git, so mainRepoOfWorktree
-// resolves repo back to cwd (repo === callerCheckout for a non-linked launch).
+// resolves repo back to cwd (repo === callerCheckout for a non-linked launch). A symbolic
+// ref (HEAD / develop) resolves to the harness's current head sha (mutable, so a test can
+// simulate the ref moving after approval); a concrete sha resolves to itself, so pinning a
+// launch to base.sha lands on that exact commit.
 function makeHarness() {
 	const cwd = realpathSync(mkdtempSync(join(tmpdir(), "chit-plan-start-cwd-")));
 	const jobs = new Map<string, LoopJobRecord>();
 	const launched: LaunchPlanJobParams[] = [];
 	let seq = 0;
+	let headSha = "sha-approved";
+	const setHeadSha = (sha: string) => {
+		headSha = sha;
+	};
 	const git: GitRunner = (args) => {
 		if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return ok(`${cwd}\n`);
 		if (args[0] === "rev-parse" && args[1] === "--git-common-dir") return ok(`${cwd}/.git\n`);
-		if (args[0] === "rev-parse") return ok("basesha\n");
+		if (args[0] === "rev-parse") {
+			const ref = args[1] ?? "HEAD";
+			// Symbolic refs follow the moving head; a concrete sha resolves to itself.
+			if (ref === "HEAD" || ref === "develop") return ok(`${headSha}\n`);
+			return ok(`${ref}\n`);
+		}
 		return ok("");
 	};
 	const deps: PlanEngineDeps = {
@@ -162,7 +174,7 @@ function makeHarness() {
 		},
 		now: () => 1000,
 	};
-	return { cwd, deps, store: new PlanStore(cwd), jobs, launched };
+	return { cwd, deps, store: new PlanStore(cwd), jobs, launched, setHeadSha };
 }
 
 const START_PLAN = {
@@ -174,60 +186,203 @@ const START_PLAN = {
 	],
 };
 
-describe("runPlanStart", () => {
-	test("starts from an inline plan: returns the view, launches only the first step, persists", () => {
+// The genId that a dry run must never reach (a dry run creates no plan, so no id is drawn).
+const noLaunch = () => {
+	throw new Error("genId must not be called on a dry run");
+};
+
+describe("runPlanStart: dry run (the default, no confirm)", () => {
+	test("returns the normalized plan, resolved base, and an approval hash; launches nothing", () => {
 		const { cwd, deps, store, launched } = makeHarness();
-		const view = runPlanStart({ plan: START_PLAN }, cwd, store, deps, () => "gen-id");
-		// The view leads with plan_id and carries the step join.
-		expect(view.plan_id).toBe("gen-id");
-		expect(view.title).toBe("start demo");
-		const a = present(
-			view.steps.find((s) => s.id === "a"),
-			"step a",
-		);
-		const b = present(
-			view.steps.find((s) => s.id === "b"),
-			"step b",
-		);
-		expect(a.status).toBe("running");
-		expect(a.run_id).toBeDefined();
-		expect(b.status).toBe("pending"); // the dependent waits
-		// Persisted under the durable store so chit_plan_list/status recover it later.
-		expect(present(store.get("gen-id"), "stored plan").id).toBe("gen-id");
-		// Exactly one step launched, carrying its worktree metadata for chit_apply.
-		expect(launched).toHaveLength(1);
-		expect(present(launched[0], "launched a").worktree.repo).toBe(cwd);
+		const result = runPlanStart({ plan: START_PLAN }, cwd, store, deps, noLaunch);
+		expect(result.launched).toBe(false);
+		if (result.launched) throw new Error("expected a dry run");
+		expect(result.strategy).toBe("plan");
+		expect(result.plan.title).toBe("start demo");
+		expect(result.plan.steps.map((s) => s.id)).toEqual(["a", "b"]);
+		// The base ref defaults to HEAD and resolves to the harness head sha.
+		expect(result.base).toEqual({ ref: "HEAD", sha: "sha-approved" });
+		expect(result.approvalHash).toMatch(/^[0-9a-f]{64}$/);
+		// No plan record, no job, no worktree.
+		expect(store.get("gen-id")).toBeUndefined();
+		expect(launched).toHaveLength(0);
 	});
 
-	test("starts from a plan_path file (read relative to cwd)", () => {
+	test("resolves an explicit base_branch ref to its commit for the approval", () => {
 		const { cwd, deps, store } = makeHarness();
-		writeFileSync(join(cwd, "plan.json"), JSON.stringify(START_PLAN));
-		const view = runPlanStart({ planPath: "plan.json" }, cwd, store, deps, () => "gen-id");
-		expect(view.plan_id).toBe("gen-id");
-		expect(view.steps.map((s) => s.id)).toEqual(["a", "b"]);
-		expect(present(store.get("gen-id"), "stored plan").steps).toHaveLength(2);
-	});
-
-	test("uses the plan's own id when authored, else the generated id", () => {
-		const { cwd, deps, store } = makeHarness();
-		const view = runPlanStart({ plan: { ...START_PLAN, id: "my-plan" } }, cwd, store, deps, () => {
-			throw new Error("genId must not be called when the plan declares an id");
-		});
-		expect(view.plan_id).toBe("my-plan");
-		expect(store.get("my-plan")).toBeDefined();
-	});
-
-	test("forwards base_branch and max_iterations to the engine", () => {
-		const { cwd, deps, store, launched } = makeHarness();
-		const view = runPlanStart(
-			{ plan: START_PLAN, baseBranch: "develop", maxIterations: 7 },
+		const result = runPlanStart(
+			{ plan: START_PLAN, baseBranch: "develop" },
 			cwd,
 			store,
 			deps,
+			noLaunch,
+		);
+		if (result.launched) throw new Error("expected a dry run");
+		expect(result.base).toEqual({ ref: "develop", sha: "sha-approved" });
+	});
+});
+
+// Re-run the dry run THEN confirm with the hash it returned, mirroring the operator flow.
+function approveAndConfirm(
+	h: ReturnType<typeof makeHarness>,
+	input: Parameters<typeof runPlanStart>[0],
+	genId: () => string,
+) {
+	const dry = runPlanStart(input, h.cwd, h.store, h.deps, noLaunch);
+	if (dry.launched) throw new Error("expected a dry run");
+	return runPlanStart(
+		{ ...input, confirm: true, approvalHash: dry.approvalHash },
+		h.cwd,
+		h.store,
+		h.deps,
+		genId,
+	);
+}
+
+describe("runPlanStart: confirmed launch (hash-gated)", () => {
+	test("a matching approval_hash launches the first step and persists, pinned to the base sha", () => {
+		const h = makeHarness();
+		const result = approveAndConfirm(h, { plan: START_PLAN }, () => "gen-id");
+		expect(result.launched).toBe(true);
+		if (!result.launched) throw new Error("expected a launch");
+		expect(result.view.plan_id).toBe("gen-id");
+		const a = present(
+			result.view.steps.find((s) => s.id === "a"),
+			"step a",
+		);
+		const b = present(
+			result.view.steps.find((s) => s.id === "b"),
+			"step b",
+		);
+		expect(a.status).toBe("running");
+		expect(b.status).toBe("pending"); // the dependent waits
+		// The launch is pinned to the approved COMMIT, not the ref: baseBranch is recorded as the
+		// sha, never "HEAD", so a later ref move cannot redirect the run.
+		expect(result.view.baseBranch).toBe("sha-approved");
+		expect(result.base).toEqual({ ref: "HEAD", sha: "sha-approved" });
+		// Persisted and launched exactly once, carrying its worktree metadata for chit_apply.
+		expect(present(h.store.get("gen-id"), "stored plan").id).toBe("gen-id");
+		expect(h.launched).toHaveLength(1);
+		expect(present(h.launched[0], "launched a").worktree.repo).toBe(h.cwd);
+		expect(present(h.launched[0], "launched a").worktree.baseSha).toBe("sha-approved");
+	});
+
+	test("uses the plan's own id when authored, else the generated id", () => {
+		const h = makeHarness();
+		const result = approveAndConfirm(h, { plan: { ...START_PLAN, id: "my-plan" } }, () => {
+			throw new Error("genId must not be called when the plan declares an id");
+		});
+		if (!result.launched) throw new Error("expected a launch");
+		expect(result.view.plan_id).toBe("my-plan");
+		expect(h.store.get("my-plan")).toBeDefined();
+	});
+
+	test("forwards max_iterations (bound into the hash) onto the launched job", () => {
+		const h = makeHarness();
+		const result = approveAndConfirm(
+			h,
+			{ plan: START_PLAN, baseBranch: "develop", maxIterations: 7 },
 			() => "p",
 		);
-		expect(view.baseBranch).toBe("develop");
+		if (!result.launched) throw new Error("expected a launch");
 		// The step declares no maxIterations, so the plan default flows onto the launched job.
-		expect(present(launched[0], "launched a").maxIterations).toBe(7);
+		expect(present(h.launched[0], "launched a").maxIterations).toBe(7);
+	});
+});
+
+describe("runPlanStart: the gate refuses before any mutation", () => {
+	test("confirm with no approval_hash is refused", () => {
+		const { cwd, deps, store, launched } = makeHarness();
+		expect(() =>
+			runPlanStart({ plan: START_PLAN, confirm: true }, cwd, store, deps, noLaunch),
+		).toThrow(PlanApprovalRefused);
+		expect(store.get("gen-id")).toBeUndefined();
+		expect(launched).toHaveLength(0);
+	});
+
+	test("confirm with a wrong approval_hash is refused", () => {
+		const { cwd, deps, store, launched } = makeHarness();
+		expect(() =>
+			runPlanStart(
+				{ plan: START_PLAN, confirm: true, approvalHash: "deadbeef" },
+				cwd,
+				store,
+				deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(launched).toHaveLength(0);
+	});
+
+	test("a plan edited after the dry run is refused with the old hash", () => {
+		const { cwd, deps, store, launched } = makeHarness();
+		const dry = runPlanStart({ plan: START_PLAN }, cwd, store, deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		const edited = {
+			...START_PLAN,
+			steps: [START_PLAN.steps[0], { ...START_PLAN.steps[1], body: "do b DIFFERENTLY" }],
+		};
+		expect(() =>
+			runPlanStart(
+				{ plan: edited, confirm: true, approvalHash: dry.approvalHash },
+				cwd,
+				store,
+				deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(launched).toHaveLength(0);
+	});
+
+	test("a changed base ref is refused with the old hash", () => {
+		const { cwd, deps, store, launched } = makeHarness();
+		const dry = runPlanStart({ plan: START_PLAN }, cwd, store, deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		// Approved against HEAD; confirming against a different ref (develop) recomputes a different
+		// hash even though both resolve to the same sha here, because the ref is part of the artifact.
+		expect(() =>
+			runPlanStart(
+				{ plan: START_PLAN, baseBranch: "develop", confirm: true, approvalHash: dry.approvalHash },
+				cwd,
+				store,
+				deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(launched).toHaveLength(0);
+	});
+
+	test("a moved base sha (same ref) is refused with the old hash", () => {
+		const h = makeHarness();
+		const dry = runPlanStart({ plan: START_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		// The ref (HEAD) is unchanged, but its commit moved after approval.
+		h.setHeadSha("sha-moved");
+		expect(() =>
+			runPlanStart(
+				{ plan: START_PLAN, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a changed max_iterations is refused with the old hash (the budget is bound)", () => {
+		const { cwd, deps, store, launched } = makeHarness();
+		const dry = runPlanStart({ plan: START_PLAN, maxIterations: 3 }, cwd, store, deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		expect(() =>
+			runPlanStart(
+				{ plan: START_PLAN, maxIterations: 9, confirm: true, approvalHash: dry.approvalHash },
+				cwd,
+				store,
+				deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(launched).toHaveLength(0);
 	});
 });

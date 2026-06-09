@@ -17,9 +17,9 @@ export class PlanError extends Error {}
 const SAFE_TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 // Normalize a claimed path to a canonical repo-relative form (see
-// normalizeClaimedPath in @chit-run/core: the one shared implementation, so the draft
-// contract and the batch engine never disagree about what a claim means). This wraps
-// the shared validator with task context for the batch error surface.
+// normalizeClaimedPath in @chit-run/core: the one shared implementation, so batch
+// planning surfaces never disagree about what a claim means). This wraps the shared
+// validator with task context for the batch error surface.
 export function normalizeClaim(claim: string, taskId: string): string {
 	try {
 		return normalizeClaimedPath(claim);

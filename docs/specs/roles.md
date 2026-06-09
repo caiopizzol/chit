@@ -186,25 +186,26 @@ structurally valid in core; resolution is the node-side step.
 
 ## 8. Planner-generated batches (later; reuses everything above)
 
-The planner is a **role** (read-only) run under a policy whose output is a
-**proposed batch plan**, not a side effect:
+The planner is a **role** (read-only) run under a policy whose output is a native
+plan or batch proposal, not a side effect:
 
 1. Operator runs the planner.
-2. Planner proposes tasks + execution profile ids (from the known profiles) + dependencies + claimedPaths.
-3. chit materializes a batch plan referencing the same vetted profiles, and returns it for inspection.
+2. Planner proposes a `chit_plan_start` plan or `chit_batch_start` task graph.
+3. The orchestrator shows that proposal for inspection.
 4. Operator approves / edits.
-5. chit runs the declared batch (existing batch engine, unchanged).
+5. chit runs the declared plan or batch through the existing engine.
 
 **Dynamic authoring, static execution.** The graph is still a file you read before
-it fires. Roles and execution profiles are the prerequisites: the planner picks from
-known entries, so its output is concrete and resolvable, not free-text chaos.
+it fires. Roles are the prerequisite: the planner itself is a configured role, and
+its output is concrete native input to an existing tool, not free-text chaos.
 
 ## Anti-scope (the line to hold)
 
 - No dynamic execution: chit never spawns a variable number of agents mid-run because a model decided to. "Spawn agents" = a declared fan-out in the chit (static, inspectable), not model-decided spawning. That is the differentiator vs. agent frameworks.
 - No deep override magic.
-- No free-form planner override magic. Execution profiles are closed menu entries
-  over vetted manifests and defaults, not a second role system.
+- No free-form planner override magic. The planner may propose native plan or batch
+  inputs, but it does not get a second config system for permissions, models, or
+  manifests.
 
 ## Staged implementation (each stage green + shippable)
 

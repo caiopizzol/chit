@@ -4,9 +4,19 @@
 // engine (start/advance/describe/cancel/list) and the real side-effecting deps are
 // wired in server.ts.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { type NormalizedPlan, PlanError, parsePlan } from "@chit-run/core";
+import {
+	buildPlanApprovalArtifact,
+	canonicalApprovalPayload,
+	type NormalizedPlan,
+	type PlanApprovalArtifact,
+	type PlanApprovalBase,
+	PlanError,
+	parsePlan,
+} from "@chit-run/core";
+import { repoToplevel, resolveBaseSha } from "../batches/worktree.ts";
 import {
 	applyPlanStep,
 	cleanupPlan,
@@ -67,21 +77,63 @@ export interface PlanStartInput {
 	planPath?: string;
 	baseBranch?: string;
 	maxIterations?: number;
+	// The universal approval gate. confirm omitted/false is a DRY RUN (review only); confirm
+	// true launches, and then requires an approvalHash that matches the dry run's.
+	confirm?: boolean;
+	approvalHash?: string;
 }
 
-// The chit_plan_start handler core, with the store, engine deps, and id generator
-// injected so it is testable without resolving a real repo or spawning the detached
-// converge workers the real deps launch. Normalizes the input, picks the plan id (the
-// plan's own when authored, else a generated one), starts the plan, and returns the
-// public view (which leads with plan_id). The MCP handler in server.ts only adds the
-// real PlanStore / PlanEngineDeps and the cwd/repo resolution around this.
+// A confirmed plan start was refused at the approval gate (missing or non-matching hash).
+// It is the caller's own error and carries no local paths, so the handler surfaces it
+// verbatim, distinct from a PlanError (a bad plan) and from an engine launch error.
+export class PlanApprovalRefused extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PlanApprovalRefused";
+	}
+}
+
+// The approval hash for a normalized plan plus resolved base plus launch-time budget: a
+// sha256 over the core's canonical payload bytes. The canonical serialization (core) sorts
+// keys at every depth, so the hash binds the artifact's VALUE, not the order it was built
+// in. Node crypto lives here in the CLI layer, never in @chit-run/core (which stays
+// browser-safe and only builds the payload).
+export function planApprovalHash(artifact: PlanApprovalArtifact): string {
+	return createHash("sha256").update(canonicalApprovalPayload(artifact)).digest("hex");
+}
+
+export type PlanStartResult =
+	| {
+			launched: false;
+			strategy: "plan";
+			plan: NormalizedPlan;
+			base: PlanApprovalBase;
+			maxIterations?: number;
+			approvalHash: string;
+	  }
+	| { launched: true; view: PlanView; base: PlanApprovalBase; approvalHash: string };
+
+// The chit_plan_start handler core, with the store, engine deps, and id generator injected
+// so it is testable without resolving a real repo or spawning the detached converge workers
+// the real deps launch. It is universally gated:
+//   - confirm omitted/false -> DRY RUN: load + parse the plan, resolve the base ref to a
+//     concrete commit, compute the approval hash over { plan, base, maxIterations }, and
+//     return launched:false with the normalized plan, base, and hash. It creates NO plan
+//     record, worktree, job, or branch -- it only reads git to resolve the base commit,
+//     which is part of what the operator approves.
+//   - confirm true -> require approvalHash AND that it matches the hash recomputed from THIS
+//     call's re-loaded plan and re-resolved base. A missing or stale hash throws
+//     PlanApprovalRefused BEFORE any mutation, so a plan, base, or budget changed after
+//     approval can never reach execution on an old hash. On a match, launch through the
+//     SAME startPlan engine path, pinned to the approved base SHA (not the moving ref) so
+//     execution runs exactly the commit that was approved.
 export function runPlanStart(
 	input: PlanStartInput,
 	cwd: string,
 	store: PlanStore,
 	deps: PlanEngineDeps,
 	genId: () => string,
-): PlanView {
+): PlanStartResult {
 	const normalizedPlan = loadPlanInput(
 		{
 			...(input.plan !== undefined && { plan: input.plan }),
@@ -89,10 +141,47 @@ export function runPlanStart(
 		},
 		cwd,
 	);
-	return launchNormalizedPlan(
+	// Resolve the base ref to a concrete commit exactly as startPlan does: the ref the
+	// operator (or the plan) names, resolved against the LAUNCHING checkout so a linked-worktree
+	// launch pins to that checkout's tip, not the main repo's HEAD. Binding the sha (not just the
+	// ref) means a ref that moves between approval and confirmation changes the hash.
+	const ref = input.baseBranch ?? normalizedPlan.baseBranch ?? "HEAD";
+	const callerCheckout = repoToplevel(deps.git, cwd);
+	const sha = resolveBaseSha(deps.git, callerCheckout, ref);
+	const base: PlanApprovalBase = { ref, sha };
+	const artifact = buildPlanApprovalArtifact(normalizedPlan, base, input.maxIterations);
+	const hash = planApprovalHash(artifact);
+
+	if (input.confirm !== true) {
+		return {
+			launched: false,
+			strategy: "plan",
+			plan: normalizedPlan,
+			base,
+			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+			approvalHash: hash,
+		};
+	}
+
+	if (input.approvalHash === undefined || input.approvalHash.length === 0) {
+		throw new PlanApprovalRefused(
+			"a confirmed plan start requires approval_hash: run chit_plan_start once without confirm " +
+				"to review the plan and resolved base, then pass the shown approval_hash back with confirm:true",
+		);
+	}
+	if (input.approvalHash !== hash) {
+		throw new PlanApprovalRefused(
+			"approval_hash does not match the plan and resolved base: they changed since approval " +
+				`(recomputed ${hash}). Re-run chit_plan_start without confirm, review the new plan and base, and pass the new approval_hash.`,
+		);
+	}
+
+	const view = launchNormalizedPlan(
 		{
 			normalizedPlan,
-			...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
+			// Pin to the approved COMMIT, not the ref: even if the ref moved after approval, the
+			// hash already matched the sha, so the launch runs exactly what was approved.
+			baseBranch: base.sha,
 			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
 		},
 		cwd,
@@ -100,13 +189,13 @@ export function runPlanStart(
 		deps,
 		genId,
 	);
+	return { launched: true, view, base, approvalHash: hash };
 }
 
-// Launch an ALREADY-compiled plan through the exact chit_plan_start engine path. The draft
-// launcher compiles a planner draft to a NormalizedPlan itself (and binds it with an
-// approval hash) before this point, so unlike runPlanStart there is no plan JSON to parse:
-// the compiled plan is started directly. Keeping this beside runPlanStart guarantees a
-// draft launch and an operator-authored plan start share one engine path and one view.
+// Launch an ALREADY-parsed, approved plan through the exact startPlan engine path. runPlanStart
+// parses + gates + hashes before this point, so there is no plan JSON to parse here: the
+// approved plan is started directly. Keeping this beside runPlanStart keeps the gate and the
+// launch in one place and one view.
 export function launchNormalizedPlan(
 	input: { normalizedPlan: NormalizedPlan; baseBranch?: string; maxIterations?: number },
 	cwd: string,

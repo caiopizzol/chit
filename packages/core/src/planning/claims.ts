@@ -1,9 +1,6 @@
-// Canonical batch claimedPath normalization, shared by the CLI batch planner
-// (apps/cli/src/batches/plan.ts) and the core draft compiler (compile.ts) so the two
-// can never drift: a claim the draft contract approves is exactly a claim the batch
-// engine accepts. Pure and browser-safe (no node imports). The error carries a
-// context-free message; each caller wraps it with its own context (a task id, a draft
-// step path).
+// Canonical batch claimedPath normalization, shared by batch planning surfaces so
+// claim validation cannot drift. Pure and browser-safe (no node imports). The error
+// carries a context-free message; each caller wraps it with its own context (a task id).
 
 export class ClaimError extends Error {
 	constructor(message: string) {

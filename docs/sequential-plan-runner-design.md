@@ -177,8 +177,10 @@ branch is what keeps a human on every forward flow. We do not take the shortcut.
 
 The human is in control at four points, all structural:
 
-1. **Before it fires.** The plan is a file the operator reads/edits before
-   `chit_plan_start` (same contract as a manifest).
+1. **Before it fires.** `chit_plan_start` is a dry run by default: the
+   operator reviews the normalized plan, resolved base commit, and approval
+   hash before calling it again with `confirm: true` and the matching
+   `approval_hash`.
 2. **After each step is terminal.** Review the step's worktree diff and receipt;
    approve or reject. The plan does not advance on its own.
 3. **At apply.** The forward flow is a gated apply: a dry run reports the tracked
@@ -295,7 +297,7 @@ existing tools rather than replacing them:
 
 | Tool | Inputs | Output | Composes |
 |---|---|---|---|
-| `chit_plan_start` | `plan` or `plan_path`, `cwd?`, `base_branch?` | `plan_id` + plan view | launches the first step like `chit_start` |
+| `chit_plan_start` | `plan` or `plan_path`, `cwd?`, `base_branch?`, `max_iterations?`, `confirm?`, `approval_hash?` | dry run (default): `launched:false`, the normalized plan, resolved `base`, and `approvalHash`. Confirmed: `plan_id` + plan view | dry run resolves the base and hashes the approval; a confirmed launch starts the first step like `chit_start` |
 | `chit_plan_list` | `cwd?`, `limit?` | one-line summary per plan (id, status, step counts, `cleanedAt`) | the `listBatches` pattern (`engine.ts:733`) |
 | `chit_plan_status` | `plan_id`, `cwd?` | read-only plan view | join over plan + job records |
 | `chit_plan_advance` | `plan_id`, `apply?: { step_id, confirm, include_untracked? }` | updated view (incl. the integration commit sha on apply) | the gated apply uses `applyRunWorkspace` (the `chit_apply` core), then **commits** the staged work to the integration branch, then launches newly-unblocked steps |
@@ -307,6 +309,15 @@ is for batches (`server.ts:2474`); read-only over the plan store.
 
 Notes:
 
+- **`chit_plan_start` is universally gated by approval.** With `confirm` omitted or
+  false it is a DRY RUN: it parses the plan, resolves the base ref to a concrete
+  `{ ref, sha }`, computes a sha256 `approvalHash` over the normalized plan plus that
+  base plus the launch-time `max_iterations`, and returns `launched:false` with the
+  plan, base, and hash. It creates no plan record, worktree, job, or branch. With
+  `confirm:true` it re-parses, re-resolves the base, recomputes the hash, and refuses
+  before any mutation unless `approval_hash` matches - so a plan, base, or budget
+  edited after approval cannot launch on an old hash. On a match it launches from the
+  approved commit `sha` (pinned even if the ref later moves), not the ref.
 - **`chit_plan_advance` owns the apply-then-commit gate.** Folding the gated apply
   into advance (rather than asking the operator to call `chit_apply` with
   `target_cwd` pointed at the integration worktree by hand) removes a footgun while

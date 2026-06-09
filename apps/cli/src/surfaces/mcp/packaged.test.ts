@@ -126,10 +126,10 @@ describe("packaged chit binary", () => {
 		expect(out).toContain('"tools"');
 	}, 20000);
 
-	// The release-boundary contract: the packaged binary exposes EXACTLY the 24
-	// unified tools (16 run/batch/audit + 6 plan + 2 draft preview/launch) and ZERO of
-	// the removed run/converge/job tool names.
-	test("tools/list is exactly the 24 unified tools, with no removed names", async () => {
+	// The release-boundary contract: the packaged binary exposes EXACTLY the 22
+	// unified tools (16 run/batch/audit + 6 plan) and ZERO of the removed
+	// run/converge/job or draft tool names.
+	test("tools/list is exactly the 22 unified tools, with no removed names", async () => {
 		const proc = Bun.spawn(["bun", DIST, "mcp"], { stdin: "pipe", stdout: "pipe" });
 		const init = {
 			jsonrpc: "2.0",
@@ -163,8 +163,6 @@ describe("packaged chit binary", () => {
 			"chit_batch_status",
 			"chit_cancel",
 			"chit_cleanup",
-			"chit_draft_launch",
-			"chit_draft_preview",
 			"chit_next",
 			"chit_plan_advance",
 			"chit_plan_cancel",
@@ -179,5 +177,7 @@ describe("packaged chit binary", () => {
 		]);
 		// No removed run/converge/job tool families survive anywhere in the surface.
 		expect(unique.some((n) => /^chit_(run|converge|job)_/.test(n))).toBe(false);
+		// The draft preview/launch tools are gone: native plan execution is the only plan surface.
+		expect(unique.some((n) => /^chit_draft_/.test(n))).toBe(false);
 	}, 20000);
 });

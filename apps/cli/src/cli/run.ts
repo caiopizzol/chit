@@ -1068,7 +1068,7 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 	let handle: { url: string; stop(): void };
 	try {
 		// Inject both the registry and the roles so Studio's server resolves role
-		// references in a draft before building the graph model (buildGraphModel
+		// references in a manifest before building the graph model (buildGraphModel
 		// consumes a ResolvedManifest).
 		const config = loadConfig();
 		handle = await startStudio({

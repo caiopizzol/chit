@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ClaimError, normalizeClaimedPath } from "./claims.ts";
 
-// The one shared claim normalizer used by both the batch planner and the draft
-// compiler. These pin the canonical form and the rejections; the CLI batch tests
-// (apps/cli/src/batches/plan.test.ts) and the draft compiler tests both depend on
-// this exact behavior, so it lives here as the single source of truth.
+// The one shared claim normalizer used by the batch planner. These pin the canonical
+// form and the rejections; the CLI batch tests (apps/cli/src/batches/plan.test.ts)
+// depend on this exact behavior, so it lives here as the single source of truth.
 
 describe("normalizeClaimedPath", () => {
 	test("canonicalizes ./, //, and trailing markers", () => {

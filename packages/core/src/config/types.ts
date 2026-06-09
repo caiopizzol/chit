@@ -30,35 +30,10 @@ export interface NormalizedRole {
 	permissions: { filesystem: FilesystemPermission };
 }
 
-// A vetted execution profile: a CLOSED menu entry an operator (or a planner draft)
-// selects by id to say "run this work the vetted way." A profile is the ONLY place a
-// manifest path is chosen for planner-authored work: a draft picks a profileId, it
-// never synthesizes a manifestPath, permissions, model, adapter, or agent config.
-// `manifestPath` undefined means the bundled default converge manifest (today's
-// behavior). maxIterations / callTimeoutMs are optional vetted defaults the compiler
-// injects when a draft step does not override them.
-export interface NormalizedProfile {
-	id: string;
-	manifestPath?: string;
-	maxIterations?: number;
-	callTimeoutMs?: number;
-	// True for the built-in `default` profile; false for a profile from config.json.
-	builtIn: boolean;
-}
-
-// The id of the built-in profile that preserves today's bundled default converge
-// behavior: no manifestPath (the bundled default), no iteration/timeout overrides
-// (the driver defaults apply). Always present in NormalizedConfig.profiles and not
-// redefinable by user config.
-export const DEFAULT_PROFILE_ID = "default";
-
 // The whole config: the agent registry (built-ins merged with the file's agents),
-// the named roles, and the execution profiles (the built-in default merged with the
-// file's profiles). `roles` is empty when the file declares none; `profiles` always
-// contains at least the built-in `default`.
+// and the named roles. `roles` is empty when the file declares none.
 export interface NormalizedConfig {
 	registry: NormalizedRegistry;
 	roles: Record<string, NormalizedRole>;
-	profiles: Record<string, NormalizedProfile>;
 	configPath?: string;
 }
