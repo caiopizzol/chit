@@ -7,6 +7,7 @@ import type { AuditEvent, LoopRecord } from "@chit-run/core";
 import type {
 	ConflictResponse,
 	DocumentDetail,
+	EffectiveConfigView,
 	ErrorSaveResponse,
 	InstalledSummary,
 	InstallSummary,
@@ -235,6 +236,30 @@ export async function cancelLiveRun(runId: string, source: string): Promise<Live
 		return { kind: "already-finished", state: body.state };
 	}
 	return { kind: "not-found" };
+}
+
+// --- Effective config (read-only) ---
+
+// Outcome of a config fetch. 501 (no host-injected config source: a standalone
+// Studio) and 422 (a malformed config file the operator should fix) are expected
+// control flow the panel renders calmly, not exceptions; only transport/auth
+// failures throw.
+export type EffectiveConfigOutcome =
+	| { kind: "ok"; config: EffectiveConfigView }
+	| { kind: "unavailable" }
+	| { kind: "error"; status: number; error: string };
+
+// Fetch the effective config for the Studio target repo. The server re-reads
+// the config files per request, so each call observes current disk state -- the
+// panel fetches on open rather than caching across opens.
+export async function fetchEffectiveConfig(): Promise<EffectiveConfigOutcome> {
+	const res = await fetch("/api/config", { headers: authHeaders() });
+	if (res.status === 501) return { kind: "unavailable" };
+	if (res.status === 401) {
+		throw new StudioApiError(res.status, `GET /api/config: ${res.status} ${await res.text()}`);
+	}
+	if (!res.ok) return { kind: "error", status: res.status, error: await res.text() };
+	return { kind: "ok", config: (await res.json()) as EffectiveConfigView };
 }
 
 // --- Audit transcript (read-only) ---

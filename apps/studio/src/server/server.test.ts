@@ -5,12 +5,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseRegistry } from "@chit-run/core";
+import { parseConfig, parseRegistry } from "@chit-run/core";
 import { buildBootstrap, DocStore, hashRaw } from "./docs.ts";
 import { buildApp } from "./index.ts";
 import { generateToken } from "./token.ts";
 import type {
+	EffectiveConfigView,
 	LiveActivity,
+	StudioConfigSource,
 	StudioLifecycle,
 	StudioLiveActions,
 	StudioLiveSource,
@@ -51,6 +53,7 @@ function setup(
 		lifecycle?: StudioLifecycle;
 		liveSource?: StudioLiveSource;
 		liveActions?: StudioLiveActions;
+		configSource?: StudioConfigSource;
 	} = {},
 ): Setup {
 	const cwd = tempCwd();
@@ -72,6 +75,7 @@ function setup(
 		lifecycle: opts.lifecycle,
 		liveSource: opts.liveSource,
 		liveActions: opts.liveActions,
+		configSource: opts.configSource,
 	});
 	return { cwd, path, token, app };
 }
@@ -927,6 +931,110 @@ describe("GET /api/live", () => {
 			for (const banned of ["config", "env", "permissions"]) {
 				expect(text).not.toContain(banned);
 			}
+		} finally {
+			teardown(s);
+		}
+	});
+});
+
+describe("GET /api/config", () => {
+	// A config source whose load() re-parses on every call, like the real
+	// loadConfig-backed one. The raw object is swappable so the freshness test can
+	// change "disk" between requests.
+	function stubConfigSource(initialRaw: unknown): StudioConfigSource & { raw: unknown } {
+		const source = {
+			raw: initialRaw,
+			load() {
+				return parseConfig(source.raw, "/home/u/.config/chit/config.json");
+			},
+		};
+		return source;
+	}
+
+	test("requires a token", async () => {
+		const s = setup({ configSource: stubConfigSource(undefined) });
+		try {
+			const res = await s.app.fetch(
+				new Request(`http://${HOST}/api/config`, { headers: { host: HOST } }),
+			);
+			expect(res.status).toBe(401);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("no config source injected returns 501 (standalone Studio)", async () => {
+		const s = setup();
+		try {
+			const res = await req(s.app, "/api/config", { token: s.token });
+			expect(res.status).toBe(501);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("defaults-only config: builtin agents, no roles, no paths", async () => {
+		const s = setup({ configSource: stubConfigSource(undefined) });
+		try {
+			const res = await req(s.app, "/api/config", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as EffectiveConfigView;
+			expect(body.agents.map((a) => a.id)).toEqual(["claude", "codex"]);
+			expect(body.agents.every((a) => a.origin === "builtin")).toBe(true);
+			expect(body.roles).toEqual([]);
+			expect(body.configPath).toBeUndefined();
+			expect(body.repoConfigPath).toBeUndefined();
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("re-reads the source per request (no forever cache)", async () => {
+		const source = stubConfigSource(undefined);
+		const s = setup({ configSource: source });
+		try {
+			const first = (await (
+				await req(s.app, "/api/config", { token: s.token })
+			).json()) as EffectiveConfigView;
+			expect(first.agents.find((a) => a.id === "deep")).toBeUndefined();
+			source.raw = { agents: { deep: { adapter: "codex-exec", model: "m1" } } };
+			const second = (await (
+				await req(s.app, "/api/config", { token: s.token })
+			).json()) as EffectiveConfigView;
+			expect(second.agents.find((a) => a.id === "deep")?.model).toBe("m1");
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("env values never cross the wire; key names only", async () => {
+		const source = stubConfigSource({
+			agents: { custom: { adapter: "codex-exec", env: { API_KEY: "hush-hush-value" } } },
+		});
+		const s = setup({ configSource: source });
+		try {
+			const res = await req(s.app, "/api/config", { token: s.token });
+			const text = await res.text();
+			expect(text).not.toContain("hush-hush-value");
+			const body = JSON.parse(text) as EffectiveConfigView;
+			expect(body.agents.find((a) => a.id === "custom")?.envKeys).toEqual(["API_KEY"]);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("a failing load surfaces as 422 with the loader's message, not a fake empty view", async () => {
+		const source: StudioConfigSource = {
+			load() {
+				// What parseConfig throws on a malformed file: a message naming the path.
+				return parseConfig(42, "/repo/chit.config.json");
+			},
+		};
+		const s = setup({ configSource: source });
+		try {
+			const res = await req(s.app, "/api/config", { token: s.token });
+			expect(res.status).toBe(422);
+			expect(await res.text()).toContain("chit.config.json");
 		} finally {
 			teardown(s);
 		}

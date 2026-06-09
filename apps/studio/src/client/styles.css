@@ -114,7 +114,8 @@ header.app .dirty-dot {
 header.app .save-btn,
 header.app .install-btn,
 header.app .installed-btn,
-header.app .loops-btn {
+header.app .loops-btn,
+header.app .config-btn {
 	font-size: 10px;
 	padding: 4px 12px;
 	letter-spacing: 0.1em;
@@ -1696,4 +1697,93 @@ header.app .loops-btn {
 	.live-console-run {
 		display: none;
 	}
+}
+
+/* Effective-config drawer: the read-only "what will run here" view opened from
+   the Live Tower top bar. Reuses the drawer shell; entries are grouped by
+   origin (builtin / global / repo) so the layer label appears once per group. */
+.config-sources {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 12px;
+	margin: 0 0 18px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+}
+.config-sources dt {
+	color: var(--faded);
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	font-size: 10px;
+	padding-top: 1px;
+}
+.config-sources dd {
+	margin: 0;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+.config-section {
+	margin: 0 0 20px;
+}
+.config-origin {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--faded);
+	margin: 12px 0 6px;
+	padding-bottom: 3px;
+	border-bottom: 1px solid var(--hairline);
+}
+.config-origin--repo {
+	color: var(--ink);
+}
+.config-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.config-item {
+	padding: 7px 0;
+}
+.config-item + .config-item {
+	border-top: 1px solid var(--hairline);
+}
+.config-item-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+.config-id {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12px;
+	font-weight: 600;
+}
+.config-adapter {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	color: var(--faded);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+.config-meta {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: var(--ink);
+	margin: 3px 0 0;
+	line-height: 1.45;
+}
+.config-desc {
+	font-size: 12px;
+	color: var(--faded);
+	margin: 3px 0 0;
+	line-height: 1.45;
+}
+.config-error {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: #8a3b2e;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
 }

@@ -5,8 +5,15 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { LoopRecord } from "@chit-run/core";
-import type { LiveActivity, LoopSummary } from "../server/types.ts";
-import { cancelLiveRun, fetchLive, fetchLoop, fetchLoops, StudioApiError } from "./api.ts";
+import type { EffectiveConfigView, LiveActivity, LoopSummary } from "../server/types.ts";
+import {
+	cancelLiveRun,
+	fetchEffectiveConfig,
+	fetchLive,
+	fetchLoop,
+	fetchLoops,
+	StudioApiError,
+} from "./api.ts";
 import { TOKEN_STORAGE_KEY } from "./boot.ts";
 
 const realFetch = globalThis.fetch;
@@ -141,6 +148,50 @@ describe("fetchLive", () => {
 	test("throws StudioApiError on a non-2xx response", async () => {
 		mock(500, "boom");
 		await expect(fetchLive()).rejects.toBeInstanceOf(StudioApiError);
+	});
+});
+
+describe("fetchEffectiveConfig", () => {
+	const view: EffectiveConfigView = {
+		configPath: "/home/u/.config/chit/config.json",
+		agents: [
+			{
+				id: "claude",
+				adapter: "claude-cli",
+				origin: "builtin",
+				strictMcp: true,
+				passModelOnResume: false,
+			},
+		],
+		roles: [],
+	};
+
+	test("GETs /api/config with the bearer token and maps a 200 to ok", async () => {
+		const calls = mock(200, view);
+		const out = await fetchEffectiveConfig();
+		expect(out).toEqual({ kind: "ok", config: view });
+		expect(calls[0]?.url).toBe("/api/config");
+		expect(calls[0]?.headers.Authorization).toBe("Bearer tok");
+	});
+
+	test("maps a 501 (no host config source) to unavailable", async () => {
+		mock(501, "config view not available");
+		expect(await fetchEffectiveConfig()).toEqual({ kind: "unavailable" });
+	});
+
+	test("maps a 422 load failure to the error outcome, not a throw", async () => {
+		mock(422, "config load failed: /repo/chit.config.json: invalid JSON");
+		const out = await fetchEffectiveConfig();
+		expect(out.kind).toBe("error");
+		if (out.kind === "error") {
+			expect(out.status).toBe(422);
+			expect(out.error).toContain("chit.config.json");
+		}
+	});
+
+	test("throws StudioApiError on 401 (auth failure is not a config state)", async () => {
+		mock(401, "unauthorized");
+		await expect(fetchEffectiveConfig()).rejects.toBeInstanceOf(StudioApiError);
 	});
 });
 

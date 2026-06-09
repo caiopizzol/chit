@@ -3,7 +3,14 @@
 // server is the only consumer in sub-unit 1.0; the client will import the
 // same module from across the workspace once it lands.
 
-import type { GraphModel, LoopStopStatus, ResolvedManifest } from "@chit-run/core";
+import type {
+	FilesystemPermission,
+	GraphModel,
+	LoopStopStatus,
+	NormalizedConfig,
+	ResolvedManifest,
+	SessionPolicy,
+} from "@chit-run/core";
 
 export type ParsedStudioDocument = {
 	id: string;
@@ -275,6 +282,68 @@ export type JobStateName = "queued" | "running" | "completed" | "cancelled" | "f
 // foreground run -- the route rejects that with 422 first.
 export interface StudioLiveActions {
 	cancelBackground(runId: string): LiveCancelResult;
+}
+
+// GET /api/config. A read-only view of the EFFECTIVE config for the Studio
+// target repo: which agents and roles Chit would use there, and where each
+// definition came from. Produced by mapping the host's NormalizedConfig through
+// effectiveConfigView (config.ts), which owns the redaction: env VALUES never
+// cross this surface (key names only), and role instructions are cut to a
+// bounded preview so a huge persona never ships by default. The config is
+// re-read per request via StudioConfigSource, so the view observes current
+// disk state, not a boot snapshot.
+
+// Which layer defined an effective entity. Mirrors core's ConfigOrigin.source;
+// kept as a local union so the wire contract is explicit about its vocabulary.
+export type ConfigOriginSource = "builtin" | "global" | "repo";
+
+export interface EffectiveAgentView {
+	id: string;
+	adapter: string;
+	origin: ConfigOriginSource;
+	model?: string;
+	reasoningEffort?: string;
+	// Effective values, present only for the claude-cli adapter where they mean
+	// something (same convention as core's ParticipantConfig).
+	strictMcp?: boolean;
+	passModelOnResume?: boolean;
+	callTimeoutMs?: number;
+	noProgressTimeoutMs?: number;
+	description?: string;
+	// Env KEY NAMES only, sorted; values are redacted server-side and never
+	// appear anywhere in the response.
+	envKeys?: string[];
+}
+
+export interface EffectiveRoleView {
+	id: string;
+	origin: ConfigOriginSource;
+	// The role's optional default agent; absent for a model-agnostic role.
+	agent?: string;
+	session: SessionPolicy;
+	filesystem: FilesystemPermission;
+	// Whitespace-collapsed, bounded preview of the instructions plus the full
+	// length, so the panel can show "what kind of persona" without dumping it.
+	instructionsPreview: string;
+	instructionsLength: number;
+}
+
+export interface EffectiveConfigView {
+	// The global / repo config files that were actually read; absent when the
+	// file does not exist (defaults-only config has neither).
+	configPath?: string;
+	repoConfigPath?: string;
+	agents: EffectiveAgentView[];
+	roles: EffectiveRoleView[];
+}
+
+// Host-injected config reader, same injection pattern as lifecycle/liveSource:
+// the CLI owns loadConfig (node-side, git-aware repo-root discovery) and Studio
+// must not import CLI internals. load() is called PER REQUEST and must re-read
+// disk, so the route reports the config a run launched now would actually use.
+// Absent (standalone Studio with no host) means GET /api/config returns 501.
+export interface StudioConfigSource {
+	load(): NormalizedConfig;
 }
 
 export type Bootstrap =

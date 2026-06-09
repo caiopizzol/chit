@@ -9,6 +9,7 @@ import { isKnownSurface } from "@chit-run/core";
 import { Hono } from "hono";
 import { defaultAuditDir, readAuditRun } from "./audit.ts";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
+import { effectiveConfigView } from "./config.ts";
 import { discover } from "./discovery.ts";
 import { buildBootstrap, DocStore } from "./docs.ts";
 import { listLoops, readLoop } from "./loops.ts";
@@ -17,6 +18,7 @@ import { generateToken } from "./token.ts";
 import type {
 	LiveActivity,
 	LiveCancelResult,
+	StudioConfigSource,
 	StudioLifecycle,
 	StudioLiveActions,
 	StudioLiveSource,
@@ -39,7 +41,11 @@ export { PathError } from "./paths.ts";
 export type {
 	BackgroundLiveRow,
 	Bootstrap,
+	ConfigOriginSource,
 	DocumentDetail,
+	EffectiveAgentView,
+	EffectiveConfigView,
+	EffectiveRoleView,
 	ForegroundLiveRow,
 	InstalledSummary,
 	InstallSummary,
@@ -48,6 +54,7 @@ export type {
 	LiveCancelRequest,
 	LiveCancelResult,
 	LiveParticipant,
+	StudioConfigSource,
 	StudioDocument,
 	StudioInstallParams,
 	StudioLifecycle,
@@ -89,6 +96,10 @@ export interface StartStudioOptions {
 	// owns JobStore and the worker signaling. Absent means POST /api/live/cancel
 	// returns 501 (a read-only / standalone Studio).
 	liveActions?: StudioLiveActions;
+	// Effective-config reader, injected by the host (the CLI), which owns the
+	// file-backed loadConfig. Called per GET /api/config request so the view
+	// observes current disk state. Absent means the route returns 501.
+	configSource?: StudioConfigSource;
 }
 
 export interface StudioHandle {
@@ -139,6 +150,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 		loopsDir: opts.loopsDir,
 		liveSource: opts.liveSource,
 		liveActions: opts.liveActions,
+		configSource: opts.configSource,
 	});
 
 	const server = Bun.serve({
@@ -187,6 +199,9 @@ interface BuildAppOptions {
 	// Live actions injected by the host (see StartStudioOptions). POST
 	// /api/live/cancel calls this; absent means 501.
 	liveActions?: StudioLiveActions;
+	// Effective-config reader injected by the host (see StartStudioOptions). GET
+	// /api/config calls this per request; absent means 501.
+	configSource?: StudioConfigSource;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -373,6 +388,25 @@ export function buildApp(opts: BuildAppOptions) {
 		// client renders the status. (The already-finished body lets the rail show
 		// "already cancelled/completed" instead of a misleading success.)
 		return c.json(result);
+	});
+
+	// Read-only effective-config view: which agents and roles Chit would use in
+	// the Studio target repo, and which layer defined each. The host re-reads the
+	// config files on every load() call, so the response reflects current disk
+	// state, never a boot snapshot. Redaction (env keys only, bounded instruction
+	// previews) happens in effectiveConfigView before anything crosses the wire.
+	// Unlike /api/live, a load failure here is SIGNAL (a malformed config file the
+	// operator should fix), so it surfaces as 422 with the loader's message rather
+	// than degrading to an empty view that would misreport the effective state.
+	app.get("/api/config", (c) => {
+		if (!opts.configSource) {
+			return new Response("config view not available", { status: 501 });
+		}
+		try {
+			return c.json(effectiveConfigView(opts.configSource.load()));
+		} catch (e) {
+			return new Response(`config load failed: ${(e as Error).message}`, { status: 422 });
+		}
 	});
 
 	// Audit transcript for one run. A loop iteration's

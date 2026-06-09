@@ -8,6 +8,7 @@ import {
 	findEnforcementGaps,
 	findMissingCapabilities,
 	findUnknownAgents,
+	parseConfig,
 	parseManifest,
 	type ResolvedManifest,
 	renderShow,
@@ -1065,23 +1066,43 @@ export function studioClientDir(moduleDir: string): string | undefined {
 	return existsSync(join(packaged, "index.js")) ? packaged : undefined;
 }
 
+// The config Studio boots with. A readable config loads normally; a MALFORMED
+// one falls back to built-in defaults with a stderr warning instead of aborting
+// `chit studio`. The fallback only seeds the boot registry/roles -- GET
+// /api/config keeps calling loadConfig fresh per request, so the broken file
+// still surfaces as a 422 + the loader's message in the config drawer, where
+// the operator can actually read what to fix. Exported for tests.
+export function studioBootConfig(cwd: string, warn: (msg: string) => void): NormalizedConfig {
+	try {
+		return loadConfig(undefined, { cwd });
+	} catch (e) {
+		warn(
+			`chit studio: starting with built-in defaults, config failed to load: ${(e as Error).message}`,
+		);
+		return parseConfig(undefined);
+	}
+}
+
 async function runStudio(args: ParsedArgs): Promise<number> {
 	const { PathError, startStudio } = await import("@chit-run/studio/server");
+	// The Studio target repo, captured once so the boot config, the per-request
+	// config reads, and the loop-log dir all observe the same repo.
+	const studioCwd = process.cwd();
 	let handle: { url: string; stop(): void };
 	try {
 		// Inject both the registry and the roles so Studio's server resolves role
 		// references in a manifest before building the graph model (buildGraphModel
 		// consumes a ResolvedManifest).
-		const config = loadConfig();
+		const config = studioBootConfig(studioCwd, (msg) => process.stderr.write(`${msg}\n`));
 		handle = await startStudio({
-			cwd: process.cwd(),
+			cwd: studioCwd,
 			explicitPath: args.manifestPath,
 			registry: config.registry,
 			roles: config.roles,
 			lifecycle: buildStudioLifecycle(),
 			// The CLI owns the loop-log location scheme; inject the resolved dir so
 			// Studio reads the same place chit writes.
-			loopsDir: loopLogDir(process.cwd()),
+			loopsDir: loopLogDir(studioCwd),
 			// Live activity backed by current Chit state: the cross-process foreground
 			// registry and the durable background jobs. Defaults to the real XDG state
 			// dirs, the same locations the MCP server and workers write.
@@ -1091,6 +1112,14 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			// does not own the MCP foreground controller, so it never claims to cancel
 			// a foreground run.
 			liveActions: buildStudioLiveActions(),
+			// Effective-config reader for GET /api/config: a fresh loadConfig per
+			// request against the Studio target repo cwd, so the view tracks config
+			// edits made while Studio is open (same freshness contract as MCP
+			// launches). Studio redacts before anything crosses the wire. Deliberately
+			// NOT studioBootConfig: a load failure here must propagate so the route
+			// answers 422 with the loader's message, not a defaults view that would
+			// misreport the effective state.
+			configSource: { load: () => loadConfig(undefined, { cwd: studioCwd }) },
 			// In a published install the client bundle ships beside chit.js, not at
 			// the Studio server's default path. Undefined in a source checkout, where
 			// the server default already resolves correctly.

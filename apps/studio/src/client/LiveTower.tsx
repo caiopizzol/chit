@@ -11,6 +11,7 @@
 import { Fragment, useCallback, useState } from "react";
 import type { LiveActivityRow } from "../server/types.ts";
 import { cancelLiveRun } from "./api.ts";
+import { ConfigPanel } from "./ConfigPanel.tsx";
 import {
 	cancelAvailable,
 	cancelMessage,
@@ -307,6 +308,10 @@ function Console({ log }: { log: LiveConsoleEntry[] }) {
 export function LiveTower() {
 	const live = useLive();
 	const { activity, status, error, log, selectedKey, selected, select, refresh } = live;
+	// The effective-config drawer is an on-demand overlay so the default view
+	// stays the live monitor; mounting on open is what makes each open re-fetch
+	// (the server re-reads disk per request).
+	const [configOpen, setConfigOpen] = useState(false);
 	const body = liveBody(activity, log.length);
 	const liveCount = flattenRows(activity).length;
 	const selectedLog = selected
@@ -338,8 +343,16 @@ export function LiveTower() {
 							reconnecting…
 						</span>
 					)}
+					<button
+						type="button"
+						className="btn-secondary config-btn"
+						onClick={() => setConfigOpen(true)}
+					>
+						config
+					</button>
 				</span>
 			</header>
+			{configOpen && <ConfigPanel onClose={() => setConfigOpen(false)} />}
 			{status === "loading" ? (
 				<div className="live-main live-body">
 					<p className="live-muted">Loading live activity…</p>
