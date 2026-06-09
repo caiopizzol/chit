@@ -12,10 +12,12 @@ import { server } from "./server.ts";
 // Driven over an in-memory transport against the real chit_start handler, in
 // background mode so every probe is refused BEFORE a detached worker or job
 // record exists (config, resolution, and input validation all gate the launch).
-// Three sibling temp "repos" (no .git: discovery falls back to the cwd itself)
-// prove the three behaviors: the repo trust boundary fires from the tool-input
-// cwd; a repo-defined role is actually applied; and the per-repo config cache
-// keeps the two repos' configs apart within one server process.
+// Sibling temp "repos" (no .git: discovery falls back to the cwd itself) prove
+// the behaviors: the repo trust boundary fires from the tool-input cwd; a
+// repo-defined role is actually applied; per-repo config never leaks between two
+// repos within one server process; and an EDIT to a repo's chit.config.json is
+// observed by the next start in that same repo (config is loaded fresh per
+// start, never cached for the server's lifetime).
 
 let client: Client;
 let stateDir: string;
@@ -122,15 +124,59 @@ describe("chit_start loads layered config from the run cwd", () => {
 		}
 	});
 
-	test("a repo without that config still fails on the unknown role (cache is per repo)", async () => {
-		// Runs against the SAME server process as the test above: if the config cache
-		// were global instead of keyed by repo, the previous repo's "ghost" role would
+	test("a repo without that config still fails on the unknown role (config is per repo)", async () => {
+		// Runs against the SAME server process as the test above: if config were held
+		// globally instead of resolved per repo, the previous repo's "ghost" role would
 		// leak here and this would fail on the missing input instead.
 		const repo = makeRepo(undefined);
 		try {
 			const result = await startOneShot(repo);
 			expect(result.isError).toBe(true);
 			expect(textOf(result)).toContain('unknown role "ghost"');
+		} finally {
+			rmSync(repo.cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("editing the same repo's chit.config.json is observed by the next start", async () => {
+		// The dogfood gap this guards: the server is long-lived, and a per-repo config
+		// cache kept serving the FIRST load of a repo's chit.config.json forever, so a
+		// later edit that crossed the trust boundary (a forbidden agents.*.env) was
+		// silently ignored until reconnect. All three starts here target the SAME repo
+		// root within one server process; each must see the file as it is NOW.
+		const repo = makeRepo({
+			roles: { ghost: { agent: "codex", instructions: "Probe.", session: "stateless" } },
+		});
+		try {
+			// 1. The clean config loads: refusal is the missing input, past config + role.
+			const first = await startOneShot(repo);
+			expect(first.isError).toBe(true);
+			expect(textOf(first)).toContain('missing required input "q"');
+
+			// 2. Edit the config to add a forbidden agents.*.env: the next start must
+			// reject on the trust boundary, not reuse the cached clean config.
+			writeFileSync(
+				join(repo.cwd, "chit.config.json"),
+				JSON.stringify({
+					roles: { ghost: { agent: "codex", instructions: "Probe.", session: "stateless" } },
+					agents: { sneaky: { adapter: "codex-exec", env: { PATH: "/evil" } } },
+				}),
+			);
+			const second = await startOneShot(repo);
+			expect(second.isError).toBe(true);
+			expect(textOf(second)).toContain('"env" is not allowed in repo config');
+
+			// 3. Same for strictMcp, the other repo-forbidden field.
+			writeFileSync(
+				join(repo.cwd, "chit.config.json"),
+				JSON.stringify({
+					roles: { ghost: { agent: "codex", instructions: "Probe.", session: "stateless" } },
+					agents: { sneaky: { adapter: "codex-exec", strictMcp: false } },
+				}),
+			);
+			const third = await startOneShot(repo);
+			expect(third.isError).toBe(true);
+			expect(textOf(third)).toContain('"strictMcp" is not allowed in repo config');
 		} finally {
 			rmSync(repo.cwd, { recursive: true, force: true });
 		}

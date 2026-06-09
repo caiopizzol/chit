@@ -559,18 +559,26 @@ describe("convergeLoop", () => {
 
 describe("runConverge (CLI)", () => {
 	test("an unexpected fs error exits 1 with a clean message, not a raw stack", async () => {
-		// --cwd points at a regular file, so startLoop's mkdirSync(.chit/loops)
-		// throws a raw ENOTDIR (not a ConvergeError); it must still surface cleanly
-		// via the final catch, mirroring loop-log's discipline.
-		const filePath = join(cwd, "not-a-dir");
-		writeFileSync(filePath, "x");
+		// Point XDG_STATE_HOME at a regular file, so startLoop's state-dir mkdir
+		// throws a raw ENOTDIR (not a ConvergeError). The CLI must still surface it
+		// cleanly via the final catch, before any adapter can start.
+		const statePath = join(cwd, "not-a-dir");
+		writeFileSync(statePath, "x");
+		const savedStateHome = process.env.XDG_STATE_HOME;
 		const out: string[] = [];
 		const err: string[] = [];
 		const io: ConvergeIO = { out: (s) => out.push(s), err: (s) => err.push(s) };
-		const code = await runConverge(
-			["--task", "t", "--scope", "s", "--cwd", filePath, "--loop-id", "L1"],
-			io,
-		);
+		let code: number;
+		try {
+			process.env.XDG_STATE_HOME = statePath;
+			code = await runConverge(
+				["--task", "t", "--scope", "s", "--cwd", cwd, "--loop-id", "L1"],
+				io,
+			);
+		} finally {
+			if (savedStateHome === undefined) delete process.env.XDG_STATE_HOME;
+			else process.env.XDG_STATE_HOME = savedStateHome;
+		}
 		expect(code).toBe(1);
 		// A clean `chit converge:` error line that is not one of the permission
 		// warnings — i.e. the fs error surfaced as a message, not a raw stack.

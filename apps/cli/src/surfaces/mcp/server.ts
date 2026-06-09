@@ -84,7 +84,7 @@ import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore, JobStoreError } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
-import { repoKey, repoRoot } from "../../loops/location.ts";
+import { repoKey } from "../../loops/location.ts";
 import {
 	type FoundLoop,
 	findLoopByRunId,
@@ -169,23 +169,20 @@ const foregroundRegistry = new ForegroundRegistry();
 // binary imports this module to expose `chit mcp`, so importing it must not read
 // ~/.config/chit/config.json (that read belongs to a running server, not to every
 // `chit` invocation). loadConfig can also throw on a malformed config; deferring it
-// keeps that failure on the mcp path, not on import. Call sites read `.registry` and
-// `.roles` off the cached config directly.
+// keeps that failure on the mcp path, not on import.
 //
-// Config is LAYERED: global config + the target repo's chit.config.json, so the
-// cache is keyed by the repo root the run cwd resolves to. Two runs in the same
-// repo share one load; runs against different repos never see each other's repo
-// config. cwd is REQUIRED so a new call site cannot silently validate against the
-// server process's repo while executing in another.
-const configCache = new Map<string, ReturnType<typeof loadConfig>>();
+// Config is LAYERED: global config + the target repo's chit.config.json, resolved
+// from the run's cwd. Loaded FRESH on every call, never cached: the server is
+// long-lived, and a cached config kept serving a repo's stale chit.config.json
+// after the user edited it -- a new run must validate against the CURRENT trust
+// boundary (a freshly forbidden env/strictMcp must reject, a freshly added role
+// must resolve). The load is two small JSON reads plus one git-root resolution,
+// paid only at run start/launch/validation, never per step. cwd is REQUIRED so a
+// new call site cannot silently validate against the server process's repo while
+// executing in another; per-repo isolation falls out of loadConfig layering the
+// repo file off the given cwd.
 function getConfig(cwd: string): ReturnType<typeof loadConfig> {
-	const key = repoRoot(cwd);
-	let config = configCache.get(key);
-	if (config === undefined) {
-		config = loadConfig(undefined, { cwd });
-		configCache.set(key, config);
-	}
-	return config;
+	return loadConfig(undefined, { cwd });
 }
 
 // Exported so a test can connect a client over an in-memory transport and assert the
@@ -800,8 +797,8 @@ function launchOneShotJob(p: {
 	// Load config FIRST, in its own try, so a malformed config.json reports as a
 	// config error rather than being misattributed to the manifest below. The loop
 	// launcher (prepareConvergeExecute) and the CLI run path isolate config the same
-	// way. getConfig is memoized, so this resolves the roles the manifest needs and
-	// the registry the governance gate needs from one load.
+	// way. One load resolves both the roles the manifest needs and the registry the
+	// governance gate needs, so this launch sees one consistent config.
 	let config: ReturnType<typeof getConfig>;
 	try {
 		config = getConfig(p.cwd);
@@ -1546,11 +1543,17 @@ server.registerTool(
 			// run_id match -- it is the jobId (bg) / loopId (fg) below; both run in ws.cwd.
 			const runId = crypto.randomUUID();
 			let ws: ReturnType<typeof prepareRunWorkspace>;
+			// Config is loaded fresh per start (no cache), so capture the load
+			// planManagedWorkspace's ensureConfig performs and reuse it below: this start
+			// validates and executes against ONE config snapshot, and a config edit (or a
+			// file made malformed) between the two points cannot split the run's view or
+			// throw past the worktree cleanup.
+			let runConfig: ReturnType<typeof getConfig> | undefined;
 			try {
 				ws = planManagedWorkspace(
 					{
 						ensureConfig: () => {
-							getConfig(runCwd);
+							runConfig = getConfig(runCwd);
 						},
 						openWorkspace: (inPlace) =>
 							prepareRunWorkspace(realGit, runCwd, { runId, scope, inPlace }),
@@ -1597,10 +1600,12 @@ server.registerTool(
 				});
 			}
 			runController.sweepLoops(Date.now());
-			// Config resolves against the CALLER's checkout (runCwd), not the managed
+			// Config resolved against the CALLER's checkout (runCwd), not the managed
 			// worktree: the worktree is cut off HEAD, so resolving there would silently
 			// drop uncommitted chit.config.json edits the user expects this run to use.
-			const runConfig = getConfig(runCwd);
+			// runConfig was set by ensureConfig above (planManagedWorkspace always loads
+			// config before opening a workspace); the fallback only satisfies the type.
+			runConfig ??= getConfig(runCwd);
 			const prep = prepareConvergeExecute(
 				raw,
 				runConfig.registry,
@@ -1673,11 +1678,14 @@ server.registerTool(
 		runController.sweepOneShot(Date.now());
 		let run: Run;
 		try {
+			// One load (config is fresh per call, not cached), so the registry and roles
+			// this run validates against come from the same config snapshot.
+			const oneShotConfig = getConfig(runCwd);
 			run = startRun(crypto.randomUUID(), {
 				rawManifest: raw,
 				inputs,
-				registry: getConfig(runCwd).registry,
-				roles: getConfig(runCwd).roles,
+				registry: oneShotConfig.registry,
+				roles: oneShotConfig.roles,
 				...(scope !== undefined && { scope }),
 				invocationCwd: runCwd,
 				allowUnenforcedPermissions: allow_unenforced_permissions,
