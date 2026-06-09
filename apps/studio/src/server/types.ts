@@ -180,10 +180,12 @@ export interface LoopSummary {
 //
 // Every row is a GLANCE summary, safe to hand a browser: ids, a bounded
 // scope/task one-liner, phase/display, ages derived against the reader's clock,
-// agent+adapter participants, a compact statusLine, and a managed worktree path
-// only when already safe to expose. `taskFull` is the explicit local detail
-// payload for the selected-run prompt disclosure. A row NEVER carries model
-// outputs, review prose, config/env values, or audit blobs.
+// iteration counters and timeout/budget numbers (iteration, iterationsCompleted,
+// maxIterations, callTimeoutMs -- plain numbers, nothing more), agent+adapter
+// participants, a compact statusLine, and a managed worktree path only when
+// already safe to expose. `taskFull` is the explicit local detail payload for
+// the selected-run prompt disclosure. A row NEVER carries model outputs, review
+// prose, config/env values, or audit blobs.
 
 // The one safe participant pair the rail/detail shows: which agent ran and via
 // which adapter. The full provenance (permissions, config, env keys) is
@@ -204,6 +206,12 @@ export interface ForegroundLiveRow {
 	taskFull?: string;
 	phase: string;
 	statusLine: string;
+	// Structured iteration/budget counters so the client never parses statusLine:
+	// the iteration now running, the run's iteration budget, and the per-call
+	// timeout override (ms) it was launched with. Plain numbers only.
+	iteration?: number;
+	maxIterations?: number;
+	callTimeoutMs?: number;
 	// A chit-managed worktree path, present only for an isolated run (already safe
 	// to expose -- the same path the loop/run views surface).
 	worktreePath?: string;
@@ -229,6 +237,14 @@ export interface BackgroundLiveRow {
 	display: string;
 	phase?: string;
 	statusLine: string;
+	// Structured iteration/budget counters for a LOOP job (one-shot jobs have no
+	// loop identity, so all four stay undefined): current/last iteration, completed
+	// count, the iteration budget, and the per-call timeout override (ms). Plain
+	// numbers only.
+	iteration?: number;
+	iterationsCompleted?: number;
+	maxIterations?: number;
+	callTimeoutMs?: number;
 	worktreePath?: string;
 	elapsedMs?: number;
 	phaseElapsedMs?: number;

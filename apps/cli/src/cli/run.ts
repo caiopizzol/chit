@@ -981,6 +981,9 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 				...(summary.taskFull !== undefined && { taskFull: summary.taskFull }),
 				phase: summary.phase,
 				statusLine: summary.statusLine,
+				iteration: summary.iteration,
+				...(summary.maxIterations !== undefined && { maxIterations: summary.maxIterations }),
+				...(summary.callTimeoutMs !== undefined && { callTimeoutMs: summary.callTimeoutMs }),
 				...(summary.worktreePath !== undefined && { worktreePath: summary.worktreePath }),
 				...(summary.elapsedMs !== undefined && { elapsedMs: summary.elapsedMs }),
 				...(summary.phaseElapsedMs !== undefined && { phaseElapsedMs: summary.phaseElapsedMs }),
@@ -1028,6 +1031,14 @@ function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
 		// JobRecord.task is the raw converge body. Keep `task` bounded for the rail,
 		// and expose the full value only through Studio's selected-run disclosure.
 		...(job.policy === "loop" && { task: compactTask(job.task), taskFull: job.task }),
+		// Structured loop counters/budgets, straight from the persisted record (plain
+		// numbers only). A one-shot job has no loop identity, so none of these apply.
+		...(job.policy === "loop" && {
+			...(job.iteration !== undefined && { iteration: job.iteration }),
+			iterationsCompleted: job.iterationsCompleted,
+			maxIterations: job.maxIterations,
+			...(job.callTimeoutMs !== undefined && { callTimeoutMs: job.callTimeoutMs }),
+		}),
 		...(job.phase !== undefined && { phase: job.phase }),
 		...(job.worktreePath !== undefined && { worktreePath: job.worktreePath }),
 		...(timing.elapsedMs !== undefined && { elapsedMs: timing.elapsedMs }),

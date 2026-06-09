@@ -15,7 +15,7 @@ import { join } from "node:path";
 import type { AuditParticipantSnapshot } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import { JobStore } from "../jobs/store.ts";
-import type { LoopJobRecord } from "../jobs/types.ts";
+import type { LoopJobRecord, OneShotJobRecord } from "../jobs/types.ts";
 import {
 	ForegroundRegistry,
 	type ForegroundSnapshot,
@@ -484,7 +484,9 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
 		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
 		try {
-			new ForegroundRegistry(fgDir).write(liveSnapshot({ worktreePath: "/wt/fg-1" }));
+			new ForegroundRegistry(fgDir).write(
+				liveSnapshot({ worktreePath: "/wt/fg-1", maxIterations: 5, callTimeoutMs: 900_000 }),
+			);
 			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
 			expect(live.background).toHaveLength(0);
 			expect(live.foreground).toHaveLength(1);
@@ -496,6 +498,10 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			expect(row?.taskFull).toBe("converge the parser with full context");
 			expect(row?.phase).toBe("implementing");
 			expect(row?.statusLine).toBe("iteration 2 · implementing");
+			// Structured counters so the client never parses statusLine.
+			expect(row?.iteration).toBe(2);
+			expect(row?.maxIterations).toBe(5);
+			expect(row?.callTimeoutMs).toBe(900_000);
 			expect(row?.worktreePath).toBe("/wt/fg-1");
 			// Ages derive against the reader's clock; they are present and non-negative.
 			expect(row?.elapsedMs).toBeGreaterThanOrEqual(0);
@@ -586,7 +592,9 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 				scope: "sc-bg",
 				task: "migrate the routes",
 				maxIterations: 3,
+				callTimeoutMs: 600_000,
 				allowUnenforced: false,
+				iteration: 2,
 				iterationsCompleted: 1,
 				auditRefs: [],
 				state: "running",
@@ -609,6 +617,11 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			expect(row?.task).toBe("migrate the routes");
 			expect(row?.display).toBe("running");
 			expect(row?.phase).toBe("reviewing");
+			// Structured loop counters/budgets, straight from the persisted record.
+			expect(row?.iteration).toBe(2);
+			expect(row?.iterationsCompleted).toBe(1);
+			expect(row?.maxIterations).toBe(3);
+			expect(row?.callTimeoutMs).toBe(600_000);
 			expect(row?.participants).toEqual({ rev: { agentId: "codex", adapter: "codex-exec" } });
 
 			// No provenance sentinel may cross the live surface.
@@ -623,6 +636,47 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			]) {
 				expect(serialized).not.toContain(sentinel);
 			}
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("a one-shot background job omits the loop iteration/budget fields", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const job: OneShotJobRecord = {
+				policy: "one-shot",
+				runId: "bg-oneshot",
+				repoKey: "k",
+				cwd: "/repo",
+				manifestPath: "/repo/consult.json",
+				manifestId: "consult",
+				inputs: {},
+				audit: false,
+				allowUnenforced: false,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+			};
+			new JobStore(jobsDir).create(job);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			expect(live.background).toHaveLength(1);
+			const row = live.background[0];
+			expect(row?.runId).toBe("bg-oneshot");
+			// No loop identity, so none of the structured loop fields appear (omitted,
+			// not null/zero).
+			expect(row?.iteration).toBeUndefined();
+			expect(row?.iterationsCompleted).toBeUndefined();
+			expect(row?.maxIterations).toBeUndefined();
+			expect(row?.callTimeoutMs).toBeUndefined();
+			const serialized = JSON.stringify(row);
+			expect(serialized).not.toContain("iterationsCompleted");
+			expect(serialized).not.toContain("maxIterations");
+			expect(serialized).not.toContain("callTimeoutMs");
 		} finally {
 			rmSync(fgDir, { recursive: true, force: true });
 			rmSync(jobsDir, { recursive: true, force: true });

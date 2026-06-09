@@ -34,10 +34,12 @@
 //
 // Snapshots are intentionally concise and safe: ids, scope/task summaries, the
 // repo key, a managed worktree path when present, the current iteration/phase,
-// timestamps to derive elapsed/phase/last-activity, the executing participants
-// (agent + adapter only), and a compact statusLine. The optional taskFull is the
-// user-authored task for Studio's explicit prompt disclosure. Snapshots NEVER
-// carry model outputs, review prose, config/env values, or audit blobs.
+// the run's iteration budget (maxIterations) and per-call timeout (callTimeoutMs,
+// counters/numbers only), timestamps to derive elapsed/phase/last-activity, the
+// executing participants (agent + adapter only), and a compact statusLine. The
+// optional taskFull is the user-authored task for Studio's explicit prompt
+// disclosure. Snapshots NEVER carry model outputs, review prose, config/env
+// values, or audit blobs.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -133,6 +135,12 @@ export interface ForegroundSnapshot {
 	worktreePath?: string;
 	// The iteration now running (session.iteration + 1 when it began).
 	iteration: number;
+	// The run's iteration budget, so a reader can show "iteration N of M" without
+	// parsing statusLine. A plain counter, never model output.
+	maxIterations?: number;
+	// The per-call timeout override (ms) the run was launched with, if any. A budget
+	// number only -- never a config/env value.
+	callTimeoutMs?: number;
 	phase: ForegroundPhase;
 	// Loop start (ISO 8601), for total elapsed.
 	startedAt: string;
@@ -200,6 +208,8 @@ function parseSnapshot(raw: unknown, expectedRunId: string): ForegroundSnapshot 
 	if (typeof r.taskFull === "string") snapshot.taskFull = r.taskFull;
 	if (typeof r.worktreePath === "string") snapshot.worktreePath = r.worktreePath;
 	if (typeof r.phaseStartedAt === "string") snapshot.phaseStartedAt = r.phaseStartedAt;
+	if (typeof r.maxIterations === "number") snapshot.maxIterations = r.maxIterations;
+	if (typeof r.callTimeoutMs === "number") snapshot.callTimeoutMs = r.callTimeoutMs;
 	const participants = sanitizeParticipants(r.participants);
 	if (participants !== undefined) snapshot.participants = participants;
 	return snapshot;
@@ -344,6 +354,8 @@ export class ForegroundRegistry {
 			repoKey: repoKeyOf(session.cwd),
 			...(session.worktreePath !== undefined && { worktreePath: session.worktreePath }),
 			iteration: a.iteration,
+			maxIterations: session.maxIterations,
+			...(session.callTimeoutMs !== undefined && { callTimeoutMs: session.callTimeoutMs }),
 			phase,
 			startedAt: new Date(session.startedAtMs).toISOString(),
 			...(a.phaseStartedAtMs !== undefined && {
@@ -402,6 +414,8 @@ export interface ForegroundActivitySummary {
 	repoKey: string;
 	worktreePath?: string;
 	iteration: number;
+	maxIterations?: number;
+	callTimeoutMs?: number;
 	phase: ForegroundPhase;
 	statusLine: string;
 	elapsedMs?: number;
@@ -430,6 +444,8 @@ export function summarizeForegroundForStatus(
 		repoKey: s.repoKey,
 		...(s.worktreePath !== undefined && { worktreePath: s.worktreePath }),
 		iteration: s.iteration,
+		...(s.maxIterations !== undefined && { maxIterations: s.maxIterations }),
+		...(s.callTimeoutMs !== undefined && { callTimeoutMs: s.callTimeoutMs }),
 		phase: s.phase,
 		statusLine: s.statusLine,
 		...(ageMs(s.startedAt, nowMs) !== undefined && { elapsedMs: ageMs(s.startedAt, nowMs) }),

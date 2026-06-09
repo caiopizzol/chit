@@ -832,6 +832,9 @@ describe("GET /api/live", () => {
 					taskFull: "converge the parser with full context",
 					phase: "implementing",
 					statusLine: "iteration 2 · implementing",
+					iteration: 2,
+					maxIterations: 5,
+					callTimeoutMs: 900_000,
 					worktreePath: "/state/chit/worktrees/fg-1",
 					elapsedMs: 12_000,
 					phaseElapsedMs: 4_000,
@@ -849,6 +852,10 @@ describe("GET /api/live", () => {
 					display: "running",
 					phase: "reviewing",
 					statusLine: "running · reviewing",
+					iteration: 2,
+					iterationsCompleted: 1,
+					maxIterations: 3,
+					callTimeoutMs: 600_000,
 					elapsedMs: 60_000,
 					phaseElapsedMs: 10_000,
 					lastHeartbeatAgeMs: 2_000,
@@ -870,9 +877,17 @@ describe("GET /api/live", () => {
 			expect(body.foreground[0]?.source).toBe("foreground");
 			expect(body.foreground[0]?.runId).toBe("fg-1");
 			expect(body.foreground[0]?.taskFull).toBe("converge the parser with full context");
+			// The structured iteration/budget counters pass through untouched.
+			expect(body.foreground[0]?.iteration).toBe(2);
+			expect(body.foreground[0]?.maxIterations).toBe(5);
+			expect(body.foreground[0]?.callTimeoutMs).toBe(900_000);
 			expect(body.background[0]?.source).toBe("background");
 			expect(body.background[0]?.runId).toBe("bg-1");
 			expect(body.background[0]?.display).toBe("running");
+			expect(body.background[0]?.iteration).toBe(2);
+			expect(body.background[0]?.iterationsCompleted).toBe(1);
+			expect(body.background[0]?.maxIterations).toBe(3);
+			expect(body.background[0]?.callTimeoutMs).toBe(600_000);
 			// Participants are the agent+adapter pair only.
 			expect(body.foreground[0]?.participants).toEqual({
 				impl: { agentId: "claude", adapter: "claude-cli" },

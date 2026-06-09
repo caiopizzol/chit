@@ -142,6 +142,8 @@ describe("ForegroundRegistry store", () => {
 				...snapshot("weird"),
 				worktreePath: 123, // not a string
 				phaseStartedAt: { nested: true }, // not a string
+				maxIterations: "3", // not a number
+				callTimeoutMs: null, // not a number
 				participants: { impl: { agentId: "claude" } }, // missing adapter -> participant dropped
 			}),
 		);
@@ -149,7 +151,27 @@ describe("ForegroundRegistry store", () => {
 		expect(live).toHaveLength(1);
 		expect(live[0]?.worktreePath).toBeUndefined();
 		expect(live[0]?.phaseStartedAt).toBeUndefined();
+		expect(live[0]?.maxIterations).toBeUndefined();
+		expect(live[0]?.callTimeoutMs).toBeUndefined();
 		expect(live[0]?.participants).toBeUndefined(); // the only entry was malformed
+	});
+
+	test("maxIterations and callTimeoutMs round-trip through write/list", () => {
+		const reg = new ForegroundRegistry(dir);
+		reg.write(snapshot("budgeted", { maxIterations: 5, callTimeoutMs: 900_000 }));
+		const live = reg.list(NOW);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.maxIterations).toBe(5);
+		expect(live[0]?.callTimeoutMs).toBe(900_000);
+	});
+
+	test("a snapshot without maxIterations/callTimeoutMs still reads (older writer tolerated)", () => {
+		const reg = new ForegroundRegistry(dir);
+		reg.write(snapshot("plain")); // fixture omits both
+		const live = reg.list(NOW);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.maxIterations).toBeUndefined();
+		expect(live[0]?.callTimeoutMs).toBeUndefined();
 	});
 
 	test("a heartbeat re-sync advances updatedAt but preserves lastActivityAt", () => {
@@ -262,6 +284,19 @@ describe("ForegroundRegistry session sync", () => {
 		expect(snap?.taskFull).toBe("implement the slice");
 		expect(snap?.pid).toBe(process.pid);
 		expect(snap?.statusLine).toBe("iteration 2 · reviewing");
+		expect(snap?.maxIterations).toBe(3); // from the session's iteration budget
+	});
+
+	test("snapshotFor carries callTimeoutMs when the run has an override, omits it otherwise", () => {
+		const reg = new ForegroundRegistry(dir);
+		const withBudget = reg.snapshotFor(
+			fakeSession({ callTimeoutMs: 1_200_000 } as Partial<ConvergeSession>),
+			NOW,
+		);
+		expect(withBudget?.callTimeoutMs).toBe(1_200_000);
+		const without = reg.snapshotFor(fakeSession(), NOW);
+		expect(without?.callTimeoutMs).toBeUndefined();
+		expect(JSON.stringify(without)).not.toContain("callTimeoutMs"); // omitted, not null
 	});
 
 	test("snapshotFor returns undefined when the iteration has settled (no activity)", () => {
@@ -405,6 +440,18 @@ describe("summarizeForegroundForStatus", () => {
 		expect(json).not.toContain("envKeys");
 		expect(json).not.toContain("SECRET");
 		expect(json).not.toContain("config");
+	});
+
+	test("passes maxIterations and callTimeoutMs through; omits them when absent", () => {
+		const withBudget = summarizeForegroundForStatus(
+			snapshot("r", { maxIterations: 4, callTimeoutMs: 600_000 }),
+			NOW,
+		);
+		expect(withBudget.maxIterations).toBe(4);
+		expect(withBudget.callTimeoutMs).toBe(600_000);
+		const without = summarizeForegroundForStatus(snapshot("r"), NOW);
+		expect(without.maxIterations).toBeUndefined();
+		expect(without.callTimeoutMs).toBeUndefined();
 	});
 
 	test("omits an age it cannot derive (a future or unparseable timestamp)", () => {
