@@ -44,15 +44,16 @@ import { AuditStore, AuditStoreError } from "../../audit/store.ts";
 import {
 	advanceBatch,
 	type BatchEngineDeps,
+	BatchEngineError,
 	batchWaitState,
 	cancelBatch,
 	cleanupBatch,
 	describeBatch,
 	listBatches,
-	startBatch,
 } from "../../batches/engine.ts";
 import { PlanError } from "../../batches/plan.ts";
 import { BatchStore, BatchStoreError } from "../../batches/store.ts";
+import { BatchApprovalRefused, runBatchStart } from "../../batches/tools.ts";
 import {
 	applyRunWorkspace,
 	cleanupRunWorkspace,
@@ -2448,7 +2449,10 @@ server.registerTool(
 // OS sandbox, claude via plan mode), so a built-in-adapter batch never hits an
 // enforcement gap; a manifest with an unenforceable permission fails that task
 // loudly via launchConvergeJob.
-const batchDeps: BatchEngineDeps = {
+// A `let` (not `const`) ONLY so a test can swap in fake launch deps via setBatchDepsForTest and
+// drive a confirmed chit_batch_start over the in-memory transport without spawning real converge
+// workers or touching git. Production never calls the setter; it stays on the real machinery below.
+let batchDeps: BatchEngineDeps = {
 	git: realGit,
 	createWorktree: (repo, cid, tid, sha, toolingSource) =>
 		createTaskWorktree(realGit, repo, cid, tid, sha, toolingSource),
@@ -2500,6 +2504,18 @@ const batchDeps: BatchEngineDeps = {
 	now: () => Date.now(),
 };
 
+// Test-only seam: replace the batch deps and return a restore fn. Lets an MCP-boundary test assert
+// the confirmed (hash-matched) chit_batch_start launch returns launched:true plus a batch view,
+// using fake deps that resolve git and record launches in memory instead of the real machinery that
+// spawns detached workers and creates worktrees. Never called in production.
+export function setBatchDepsForTest(deps: BatchEngineDeps): () => void {
+	const previous = batchDeps;
+	batchDeps = deps;
+	return () => {
+		batchDeps = previous;
+	};
+}
+
 const batchTaskSchema = z.object({
 	id: z.string().describe("Unique task id within the batch (a safe slug)"),
 	title: z.string().describe("Short task title"),
@@ -2543,7 +2559,16 @@ const batchTaskSchema = z.object({
 });
 
 function batchError(e: unknown) {
-	if (e instanceof PlanError || e instanceof WorktreeError || e instanceof BatchStoreError) {
+	if (
+		// The approval-gate refusal is the caller's own and carries no local path, so its
+		// message passes through verbatim, distinct from a PlanError (a bad graph) and a
+		// BatchEngineError / worktree / store error.
+		e instanceof BatchApprovalRefused ||
+		e instanceof PlanError ||
+		e instanceof BatchEngineError ||
+		e instanceof WorktreeError ||
+		e instanceof BatchStoreError
+	) {
 		return errorResult(e.message);
 	}
 	return errorResult(safeMcpError(e));
@@ -2553,7 +2578,7 @@ server.registerTool(
 	"chit_batch_start",
 	{
 		description:
-			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Plans the task graph, launches the initial runnable wave (no-dependency tasks, up to max_parallel), and returns immediately. Then drive it with chit_wait (it blocks until a job finishes or a task becomes runnable, instead of polling) followed by chit_batch_advance to launch the next wave, repeating until the batch is terminal. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). To swap the pairing, point manifestPath at your own converge manifest (participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
+			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Universally gated by approval: with confirm omitted or false it is a DRY RUN that normalizes and validates the task graph, resolves the base ref to a concrete commit SHA, returns the normalized tasks plus resolved base plus an approvalHash, and creates NOTHING (no batch record, worktree, job, or branch). With confirm:true it re-normalizes the graph, re-resolves the base, recomputes the hash over the tasks, base, and launch knobs, and REFUSES unless your approval_hash matches, so a task graph, base, or knob edited after approval cannot start on an old hash. On a match it launches the initial runnable wave (no-dependency tasks, up to max_parallel) from the approved commit SHA (pinned even if the ref moved) and returns the batch_id plus the batch view. Then drive it with chit_wait (it blocks until a job finishes or a task becomes runnable, instead of polling) followed by chit_batch_advance to launch the next wave, repeating until the batch is terminal. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). To swap the pairing, point manifestPath at your own converge manifest (participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
 		inputSchema: {
 			tasks: z
 				.array(batchTaskSchema)
@@ -2589,6 +2614,18 @@ server.registerTool(
 				.describe(
 					"Batch-level hard per-call timeout (ms) for the implementer and reviewer, applied to every task without its own callTimeoutMs. A task's callTimeoutMs overrides this; agent config / the 15-min default is the fallback.",
 				),
+			confirm: z
+				.boolean()
+				.optional()
+				.describe(
+					"Omit or false for a dry run (normalize the task graph, resolve the base, return the tasks/base/approvalHash, create nothing). true to start, which requires a matching approval_hash.",
+				),
+			approval_hash: z
+				.string()
+				.optional()
+				.describe(
+					"The approvalHash from a prior chit_batch_start dry run of this exact task graph, base, and knobs (max_parallel, max_iterations, manifest_path, required_checks, call_timeout_ms). Required when confirm is true; the start is refused if it does not match the recomputed hash.",
+				),
 		},
 	},
 	async ({
@@ -2600,36 +2637,61 @@ server.registerTool(
 		max_iterations,
 		required_checks,
 		call_timeout_ms,
+		confirm,
+		approval_hash,
 	}) => {
 		const runCwd = resolve(cwd ?? process.cwd());
-		// Resolve manifest paths to absolute against the batch cwd up front, so the
-		// per-task worktree never re-resolves a relative path against the wrong base.
-		const batchManifest =
-			manifest_path !== undefined
-				? isAbsolute(manifest_path)
-					? manifest_path
-					: resolve(runCwd, manifest_path)
-				: undefined;
-		const planned = tasks.map((t) => ({
-			...t,
-			...(t.manifestPath !== undefined && {
-				manifestPath: isAbsolute(t.manifestPath) ? t.manifestPath : resolve(runCwd, t.manifestPath),
-			}),
-		}));
 		const store = new BatchStore(runCwd);
 		try {
-			const batch = startBatch(store, batchDeps, {
-				id: crypto.randomUUID(),
-				cwd: runCwd,
-				tasks: planned,
-				maxParallel: max_parallel,
-				...(base_branch !== undefined && { baseBranch: base_branch }),
-				...(batchManifest !== undefined && { manifestPath: batchManifest }),
-				maxIterations: max_iterations,
-				...(required_checks !== undefined && { requiredChecks: required_checks }),
-				...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
+			// runBatchStart owns the normalize/gate/hash/launch glue (unit-tested with fake deps);
+			// the handler only adds the real store + deps and the cwd resolution. It resolves manifest
+			// paths to absolute against runCwd internally, so the dry run and the confirmed start
+			// bind/run the same concrete paths.
+			const result = runBatchStart(
+				{
+					tasks,
+					maxParallel: max_parallel,
+					...(base_branch !== undefined && { baseBranch: base_branch }),
+					...(manifest_path !== undefined && { manifestPath: manifest_path }),
+					maxIterations: max_iterations,
+					...(required_checks !== undefined && { requiredChecks: required_checks }),
+					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
+					...(confirm !== undefined && { confirm }),
+					...(approval_hash !== undefined && { approvalHash: approval_hash }),
+				},
+				runCwd,
+				store,
+				batchDeps,
+				() => crypto.randomUUID(),
+			);
+			// Dry run: the normalized tasks + resolved base + hash to approve. Nothing was launched and
+			// no batch record, worktree, job, or branch was created.
+			if (!result.launched) {
+				return jsonResult({
+					launched: false,
+					strategy: result.strategy,
+					tasks: result.tasks,
+					base: result.base,
+					maxParallel: result.maxParallel,
+					maxIterations: result.maxIterations,
+					...(result.manifestPath !== undefined && { manifestPath: result.manifestPath }),
+					...(result.requiredChecks !== undefined && { requiredChecks: result.requiredChecks }),
+					...(result.callTimeoutMs !== undefined && { callTimeoutMs: result.callTimeoutMs }),
+					approvalHash: result.approvalHash,
+					nextAction:
+						"Dry run: nothing was launched and no batch record, worktree, job, or branch was created. " +
+						"Review the task graph and base above, then call chit_batch_start again with the SAME tasks, " +
+						`confirm:true, and approval_hash:${result.approvalHash}. Editing the tasks, base, or knobs changes the hash and the start is refused.`,
+				});
+			}
+			// Confirmed, hash-matched start: the batch view (leading with batch_id), plus the base and
+			// hash that launched it.
+			return jsonResult({
+				...result.view,
+				launched: true,
+				base: result.base,
+				approvalHash: result.approvalHash,
 			});
-			return jsonResult(describeBatch(batch, batchDeps));
 		} catch (e) {
 			return batchError(e);
 		}
