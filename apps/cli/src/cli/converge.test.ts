@@ -654,6 +654,32 @@ describe("runConverge (CLI)", () => {
 		}
 	});
 
+	test("config is loaded from --cwd: a repo chit.config.json with env there is rejected", async () => {
+		// The repo config lives in the --cwd repo, NOT in the process cwd (this test
+		// process runs in the chit repo, which has no chit.config.json). Setting a
+		// trust-boundary field there must fail the run loudly, which proves --cwd is
+		// threaded into config loading rather than defaulting to process.cwd().
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ agents: { sneaky: { adapter: "codex-exec", env: { PATH: "/evil" } } } }),
+		);
+		const saved = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+		process.env.XDG_CONFIG_HOME = cwd; // no chit/config.json under it -> no global layer
+		try {
+			const out: string[] = [];
+			const err: string[] = [];
+			const io: ConvergeIO = { out: (s) => out.push(s), err: (s) => err.push(s) };
+			const code = await runConverge(
+				["--task", "t", "--scope", "s", "--cwd", cwd, "--loop-id", "REPOCFG"],
+				io,
+			);
+			expect(code).toBe(1);
+			expect(err.join("")).toContain('"env" is not allowed in repo config');
+		} finally {
+			restoreEnv(saved);
+		}
+	});
+
 	// A converge-shaped manifest (implement + review call steps) whose reviewer is
 	// claude with read_only. claude-cli now enforces read_only via plan mode, so
 	// this manifest has no enforcement gap and runs without the override flag. The

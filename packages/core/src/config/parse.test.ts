@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseConfig } from "./parse.ts";
+import { RegistryError } from "../agents/registry.ts";
+import { type ConfigLayer, parseConfig, parseConfigLayers } from "./parse.ts";
 import { ConfigError } from "./types.ts";
 
 // parseConfig owns agents + roles in one config. Agents reuse the registry parser
@@ -137,6 +138,168 @@ describe("parseConfig: roles", () => {
 				roles: { reviewer: { agent: 7, instructions: "R.", session: "per_scope" } },
 			}),
 		).toThrow(/agent/);
+	});
+});
+
+// Layering: built-ins -> global -> repo. Later layers replace user-defined
+// entities WHOLE (no field merging); built-ins are non-redefinable in every
+// layer; the repo layer is untrusted and may not set env/strictMcp; provenance
+// records one origin per effective entity.
+describe("parseConfigLayers", () => {
+	const GLOBAL = "/home/u/.config/chit/config.json";
+	const REPO = "/repo/chit.config.json";
+
+	function layers(global: unknown, repo: unknown): ConfigLayer[] {
+		const out: ConfigLayer[] = [];
+		if (global !== undefined) out.push({ raw: global, path: GLOBAL, source: "global" });
+		if (repo !== undefined) out.push({ raw: repo, path: REPO, source: "repo" });
+		return out;
+	}
+
+	test("no layers -> built-ins only, with builtin provenance", () => {
+		const c = parseConfigLayers([]);
+		expect(Object.keys(c.registry.agents).sort()).toEqual(["claude", "codex"]);
+		expect(c.roles).toEqual({});
+		expect(c.provenance?.agents.codex).toEqual({ source: "builtin" });
+		expect(c.provenance?.agents.claude).toEqual({ source: "builtin" });
+	});
+
+	test("a global-only stack matches single-file parseConfig", () => {
+		const raw = {
+			agents: { "codex-deep": { adapter: "codex-exec", model: "gpt-5-codex" } },
+			roles: { reviewer: { instructions: "Review.", session: "per_scope" } },
+		};
+		const layered = parseConfigLayers(layers(raw, undefined));
+		const single = parseConfig(raw, GLOBAL);
+		expect(layered.registry).toEqual(single.registry);
+		expect(layered.roles).toEqual(single.roles);
+		expect(layered.provenance?.agents["codex-deep"]).toEqual({ source: "global", path: GLOBAL });
+	});
+
+	test("a repo agent replaces a global agent WHOLE (no field merging)", () => {
+		const c = parseConfigLayers(
+			layers(
+				{
+					agents: {
+						"codex-deep": {
+							adapter: "codex-exec",
+							model: "gpt-5-codex",
+							description: "deep reasoning",
+						},
+					},
+				},
+				{ agents: { "codex-deep": { adapter: "codex-exec", model: "gpt-5-mini" } } },
+			),
+		);
+		const agent = c.registry.agents["codex-deep"];
+		expect(agent?.model).toBe("gpt-5-mini");
+		// Whole-entity replacement: the global description does NOT survive.
+		expect(agent?.description).toBeUndefined();
+		expect(c.provenance?.agents["codex-deep"]).toEqual({ source: "repo", path: REPO });
+	});
+
+	test("a repo role replaces a global role WHOLE (no field merging)", () => {
+		const c = parseConfigLayers(
+			layers(
+				{
+					roles: {
+						reviewer: {
+							agent: "claude",
+							instructions: "Review gently.",
+							session: "per_topology",
+							permissions: { filesystem: "write" },
+						},
+					},
+				},
+				{ roles: { reviewer: { instructions: "Review skeptically.", session: "per_scope" } } },
+			),
+		);
+		const role = c.roles.reviewer;
+		expect(role?.instructions).toBe("Review skeptically.");
+		expect(role?.session).toBe("per_scope");
+		// Whole-entity replacement: the global agent default and write permission do
+		// NOT survive; the repo definition's defaults apply.
+		expect(role?.agent).toBeUndefined();
+		expect(role?.permissions.filesystem).toBe("read_only");
+		expect(c.provenance?.roles.reviewer).toEqual({ source: "repo", path: REPO });
+	});
+
+	test("entities NOT redefined by the repo layer keep their global origin", () => {
+		const c = parseConfigLayers(
+			layers(
+				{
+					agents: { "codex-deep": { adapter: "codex-exec" } },
+					roles: { reviewer: { instructions: "Review.", session: "per_scope" } },
+				},
+				{ agents: { "repo-agent": { adapter: "claude-cli" } } },
+			),
+		);
+		expect(c.provenance?.agents["codex-deep"]).toEqual({ source: "global", path: GLOBAL });
+		expect(c.provenance?.agents["repo-agent"]).toEqual({ source: "repo", path: REPO });
+		expect(c.provenance?.roles.reviewer).toEqual({ source: "global", path: GLOBAL });
+	});
+
+	test("a repo role may reference an agent defined in the global layer", () => {
+		const c = parseConfigLayers(
+			layers(
+				{ agents: { "codex-deep": { adapter: "codex-exec" } } },
+				{ roles: { reviewer: { agent: "codex-deep", instructions: "R.", session: "per_scope" } } },
+			),
+		);
+		expect(c.roles.reviewer?.agent).toBe("codex-deep");
+	});
+
+	test("the repo layer cannot redefine a built-in agent", () => {
+		expect(() =>
+			parseConfigLayers(layers(undefined, { agents: { codex: { adapter: "codex-exec" } } })),
+		).toThrow(RegistryError);
+		expect(() =>
+			parseConfigLayers(layers(undefined, { agents: { claude: { adapter: "claude-cli" } } })),
+		).toThrow(/built-in agent id cannot be redefined/);
+	});
+
+	test("the repo layer rejects env loudly (trust boundary)", () => {
+		expect(() =>
+			parseConfigLayers(
+				layers(undefined, {
+					agents: { sneaky: { adapter: "codex-exec", env: { PATH: "/evil" } } },
+				}),
+			),
+		).toThrow(/"env" is not allowed in repo config \(trust boundary\)/);
+	});
+
+	test("the repo layer rejects strictMcp loudly (trust boundary)", () => {
+		expect(() =>
+			parseConfigLayers(
+				layers(undefined, { agents: { sneaky: { adapter: "claude-cli", strictMcp: false } } }),
+			),
+		).toThrow(/"strictMcp" is not allowed in repo config \(trust boundary\)/);
+	});
+
+	test("the global layer may still use env and strictMcp", () => {
+		const c = parseConfigLayers(
+			layers(
+				{
+					agents: {
+						tuned: { adapter: "claude-cli", env: { FOO: "bar" }, strictMcp: false },
+					},
+				},
+				undefined,
+			),
+		);
+		expect(c.registry.agents.tuned?.env).toEqual({ FOO: "bar" });
+		expect(c.registry.agents.tuned?.strictMcp).toBe(false);
+	});
+
+	test("an unknown top-level field in the repo layer names the repo path", () => {
+		let caught: unknown;
+		try {
+			parseConfigLayers(layers(undefined, { rolez: {} }));
+		} catch (e) {
+			caught = e;
+		}
+		expect(caught).toBeInstanceOf(ConfigError);
+		expect((caught as ConfigError).path).toBe(REPO);
 	});
 });
 

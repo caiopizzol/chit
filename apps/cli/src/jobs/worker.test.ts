@@ -382,6 +382,58 @@ describe("background converge worker", () => {
 			rmSync(cfgHome, { recursive: true, force: true });
 		}
 	});
+
+	test("an isolated loop worker loads repo config from the launching checkout", async () => {
+		// The worker runs in job.cwd (the managed worktree), but repo config is an
+		// operator-facing file in the checkout that launched the run. If the worker
+		// discovers config from job.cwd, uncommitted chit.config.json edits vanish.
+		const savedCfg = process.env.XDG_CONFIG_HOME;
+		const cfgHome = mkdtempSync(join(tmpdir(), "chit-worker-cfg-"));
+		const callerCheckout = mkdtempSync(join(tmpdir(), "chit-worker-caller-"));
+		mkdirSync(join(cfgHome, "chit"), { recursive: true });
+		writeFileSync(
+			join(callerCheckout, "chit.config.json"),
+			JSON.stringify({
+				roles: {
+					reviewer: { instructions: "From caller checkout.", session: "per_scope" },
+				},
+			}),
+		);
+		process.env.XDG_CONFIG_HOME = cfgHome;
+		const spy = spyOn(convergeMod, "prepareConvergeExecute").mockReturnValue({
+			ok: true,
+			execute: fakeExecute([{ verdict: "proceed" }]),
+			loopSteps: { implementStep: "implement", reviewStep: "review" },
+			participants: {},
+			warnings: [],
+		});
+		try {
+			seedJob({
+				worktreePath: cwd,
+				branch: "chit-run/j1/s",
+				baseSha: "abc123",
+				repo: callerCheckout,
+				callerCheckout,
+			});
+			await runJobWorker("j1", {
+				jobStore: store,
+				installSignalHandlers: false,
+				heartbeatMs: 1_000_000,
+				now: () => 1000,
+			});
+			const rolesArg = spy.mock.calls.at(0)?.[5] as
+				| Record<string, { instructions?: string }>
+				| undefined;
+			expect(rolesArg?.reviewer?.instructions).toBe("From caller checkout.");
+			expect(store.get("j1")?.state).toBe("completed");
+		} finally {
+			spy.mockRestore();
+			if (savedCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = savedCfg;
+			rmSync(cfgHome, { recursive: true, force: true });
+			rmSync(callerCheckout, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("background worker: non-default loop policy steps (Stage 2)", () => {

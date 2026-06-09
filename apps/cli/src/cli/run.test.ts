@@ -814,6 +814,32 @@ describe("chit run (subprocess)", () => {
 		}
 	});
 
+	test("config layers from --invocation-cwd: a repo chit.config.json with env there is rejected", async () => {
+		// The repo config lives in the --invocation-cwd dir, not in the directory the
+		// CLI process runs from. Its trust-boundary violation must fail the run, which
+		// proves the flag is threaded into config loading.
+		const repoDir = mkdtempSync(join(tmpdir(), "chit-repocfg-"));
+		try {
+			writeFileSync(
+				join(repoDir, "chit.config.json"),
+				JSON.stringify({ agents: { sneaky: { adapter: "codex-exec", env: { PATH: "/evil" } } } }),
+			);
+			const { stderr, code } = await runCLI([
+				"run",
+				ASK_CODEX,
+				"--input",
+				"question=hi",
+				"--invocation-cwd",
+				repoDir,
+			]);
+			expect(code).toBe(2);
+			expect(stderr).toContain("invalid config");
+			expect(stderr).toContain('"env" is not allowed in repo config');
+		} finally {
+			rmSync(repoDir, { recursive: true, force: true });
+		}
+	});
+
 	test("a manifest that fails to parse reports as 'invalid manifest'", async () => {
 		// Valid JSON (so it is not a read error) that parseManifest rejects: schema 2.
 		const badManifest = writeManifestFixture("bad-schema", {

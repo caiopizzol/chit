@@ -43,6 +43,19 @@ describe("workspace classification", () => {
 		]);
 	});
 
+	// The repo config deliberately lives at the repo root (chit.config.json), NOT
+	// under .chit/: .chit/** is dropped from changedFiles, so a config there would
+	// be invisible to converge review. This pins both halves of that decision.
+	test("chit.config.json is a changed file (visible to converge); .chit stays excluded", () => {
+		expect(isChitOwned("chit.config.json")).toBe(false);
+		const out = classifyWorkspace({
+			tracked: ["chit.config.json"],
+			untracked: [".chit/loops/p1.jsonl"],
+		});
+		expect(out.changedFiles).toEqual(["chit.config.json"]);
+		expect(out.workspaceWarnings).toEqual([]);
+	});
+
 	test("a clean tree yields empty lists", () => {
 		expect(classifyWorkspace({ tracked: [], untracked: [] })).toEqual({
 			changedFiles: [],

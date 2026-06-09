@@ -104,9 +104,13 @@ function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	// contracted to RETURN an ExecuteResolution (runLoopJob has no catch around it,
 	// so a throw here would leave the job stuck running -> stale instead of closing
 	// it failed). Catch the load and report it as a prep failure.
+	const configCwd = job.callerCheckout ?? job.cwd;
 	let config: ReturnType<typeof loadConfig>;
 	try {
-		config = loadConfig();
+		// Managed loop jobs execute in an isolated worktree, but their repo config
+		// belongs to the checkout that launched the run. That checkout may carry
+		// uncommitted chit.config.json edits the worktree cut from HEAD does not.
+		config = loadConfig(undefined, { cwd: configCwd });
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
 	}
@@ -511,8 +515,9 @@ async function defaultRunOnce(
 	const path = isAbsolute(job.manifestPath) ? job.manifestPath : resolve(job.cwd, job.manifestPath);
 	// Load the config ONCE and validate + run against the same object, so a
 	// concurrent config edit cannot make the worker authorize against one config and
-	// execute adapters from another. Resolution needs the roles, so load first.
-	const config = loadConfig();
+	// execute adapters from another. Resolution needs the roles, so load first. A
+	// managed job's callerCheckout is the config source; job.cwd remains where it runs.
+	const config = loadConfig(undefined, { cwd: job.callerCheckout ?? job.cwd });
 	const registry = config.registry;
 	let manifest: ResolvedManifest;
 	try {

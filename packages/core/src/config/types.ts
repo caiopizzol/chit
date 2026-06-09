@@ -30,10 +30,31 @@ export interface NormalizedRole {
 	permissions: { filesystem: FilesystemPermission };
 }
 
+// Config layers a user can write. Built-ins are a third, implicit origin below
+// both. Later layers win: global sits over built-ins, repo sits over global.
+export type ConfigLayerSource = "global" | "repo";
+
+// Where an effective entity came from: the layer that defined it, plus the file
+// path for user layers. Replacement across layers is whole-entity (no field
+// merging), so one origin fully describes the effective definition.
+export interface ConfigOrigin {
+	source: "builtin" | ConfigLayerSource;
+	path?: string;
+}
+
+export interface ConfigProvenance {
+	agents: Record<string, ConfigOrigin>;
+	roles: Record<string, ConfigOrigin>;
+}
+
 // The whole config: the agent registry (built-ins merged with the file's agents),
-// and the named roles. `roles` is empty when the file declares none.
+// and the named roles. `roles` is empty when the file declares none. configPath /
+// repoConfigPath are the global and repo files that were actually read; provenance
+// records, per effective agent and role, which layer defined it.
 export interface NormalizedConfig {
 	registry: NormalizedRegistry;
 	roles: Record<string, NormalizedRole>;
 	configPath?: string;
+	repoConfigPath?: string;
+	provenance?: ConfigProvenance;
 }

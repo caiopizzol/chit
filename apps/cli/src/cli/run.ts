@@ -466,7 +466,9 @@ export async function runMain(argv: string[]): Promise<number> {
 	// resolveManifest throws on an unknown role / no-agent participant.
 	let config: NormalizedConfig;
 	try {
-		config = loadConfig();
+		// --invocation-cwd is the run's working directory, so repo-config discovery
+		// starts there (same value the runtime gets as invocationCwd below).
+		config = loadConfig(undefined, { cwd: args.invocationCwd ?? process.cwd() });
 	} catch (e) {
 		process.stderr.write(`chit: invalid config: ${(e as Error).message}\n`);
 		return 2;

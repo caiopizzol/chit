@@ -7,11 +7,25 @@ chit has a few layers and one rule: the manifest is the artifact, and a shared r
 
 ## Agents
 
-An agent is an invocable participant: Codex CLI, Claude CLI, or anything else reachable through an adapter. Agents live in a registry inside your config (`~/.config/chit/config.json`) with built-in `codex` and `claude` entries that your config merges on top. A manifest never talks to a vendor directly; it names a participant, and the registry resolves it to an adapter.
+An agent is an invocable participant: Codex CLI, Claude CLI, or anything else reachable through an adapter. Agents live in a registry built from layered config (see [Config layering](#config-layering) below): the built-in `codex` and `claude` entries, plus the agents your global config (`~/.config/chit/config.json`) and the repo's `chit.config.json` define alongside them. The built-in ids cannot be redefined. A manifest never talks to a vendor directly; it names a participant, and the registry resolves it to an adapter.
 
 ## Roles
 
 A role is a reusable participant profile, defined in the `roles` section of the same config file: instructions (the persona), a session policy, permissions, and optionally a default agent. A participant can reference a role by name instead of spelling those fields out, and override any of them. A role with no default agent is model-agnostic: the chit that references it supplies the agent. Roles keep a shared persona and its governance in one place, so the same reviewer profile is declared once and reused across chits instead of copied into each one.
+
+## Config layering
+
+Config is read in layers. Later layers win:
+
+1. **Built-ins** - the `codex` and `claude` agents. Always present. No layer can redefine them.
+2. **Global config** - `~/.config/chit/config.json`. Your agents and roles, on your machine.
+3. **Repo config** - `chit.config.json` at the repo root (the git top-level, or the working directory outside git). The project's agents and roles, committed and shared with the repo.
+
+A later layer replaces an agent or role by id, whole. There is no field merging: the effective definition is exactly one file's definition. `chit doctor` reports which layer defined each agent and which config files were read.
+
+Repo config is project input, not operator input, so it stays inside a trust boundary: `env` and `strictMcp` are rejected in `chit.config.json` with a hard error. Set those in the global config instead.
+
+The file lives at the repo root on purpose: visible, diffable, and reviewed like any other file in the repo.
 
 ## Chits
 

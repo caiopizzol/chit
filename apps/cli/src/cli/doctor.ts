@@ -180,15 +180,24 @@ function checkRegistry(deps: DoctorDeps): Check {
 				name: "agents",
 				status: "fail",
 				detail: `invalid config: ${e.message}`,
-				hint: "fix or remove ~/.config/chit/config.json",
+				hint: "fix or remove ~/.config/chit/config.json (or the repo's chit.config.json)",
 			};
 		}
 		throw e;
 	}
-	const ids = Object.keys(config.registry.agents).sort().join(", ");
-	const source = config.configPath
+	// Each non-built-in agent is tagged with the layer that defined it (global or
+	// repo), so the operator can answer "where did this agent come from" here.
+	const ids = Object.keys(config.registry.agents)
+		.sort()
+		.map((id) => {
+			const origin = config.provenance?.agents[id];
+			return origin && origin.source !== "builtin" ? `${id} (${origin.source})` : id;
+		})
+		.join(", ");
+	let source = config.configPath
 		? `from ${config.configPath}`
 		: "built-in defaults (no config.json)";
+	if (config.repoConfigPath) source += ` + repo ${config.repoConfigPath}`;
 	return { name: "agents", status: "pass", detail: `${ids || "none"} (${source})` };
 }
 

@@ -1119,10 +1119,11 @@ export async function runConverge(argv: string[], io: ConvergeIO = defaultIO): P
 	}
 
 	// Load the config (agents + roles) first: resolution needs the roles, and a
-	// malformed config is reported distinctly from a malformed manifest.
+	// malformed config is reported distinctly from a malformed manifest. --cwd is
+	// the run's repo, so repo-config discovery starts there, not where chit runs.
 	let config: NormalizedConfig;
 	try {
-		config = loadConfig();
+		config = loadConfig(undefined, { cwd: parsed.cwd });
 	} catch (e) {
 		// e.g. an invalid ~/.config/chit/config.json (ConfigError). Surface it
 		// cleanly rather than as a raw stack, matching the rest of this command.

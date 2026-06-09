@@ -75,7 +75,7 @@ The orchestrator's job does not change in either mode: you still run the final g
 ## Discipline that bites
 
 - **MCP server staleness.** The chit MCP server is a persistent process; it runs the adapter and runtime code from when it started. After changing an adapter or the runtime, reconnect the server before any MCP-driven run reflects the change. The reviewer reads files from disk, so reviews stay current; runs through the adapter do not.
-- **Config: agents and roles.** `~/.config/chit/config.json` holds `agents` (model, reasoning effort, and timeouts on named agents, merged over built-in `codex` and `claude`) and `roles` (reusable participant profiles a manifest references by id). A manifest references agents or roles. `chit show` and `chit audit show` report the effective config so you can see what a run used.
+- **Config: agents and roles.** Config is layered: built-in `codex` and `claude`, then `~/.config/chit/config.json` (global), then the repo's `chit.config.json`. Both files hold `agents` (model, reasoning effort, and timeouts on named agents; built-in ids cannot be redefined) and `roles` (reusable participant profiles a manifest references by id). A later layer replaces an agent or role by id, whole. The repo file cannot set `env` or `strictMcp`; those belong in the global config. A manifest references agents or roles. `chit show` and `chit audit show` report the effective config, and `chit doctor` reports which layer defined each agent.
 - **Worktrees.** Run converge in a worktree; clean it up when the slice lands. Both the audit transcript and the loop log live in the local state dir (keyed by repo), so they survive even after the worktree is removed.
 
 ## Pointers

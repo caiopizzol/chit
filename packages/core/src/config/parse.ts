@@ -3,14 +3,24 @@
 // section is parsed here, reusing the manifest's session/filesystem vocabulary so a
 // role and a participant validate those fields identically. A role's optional
 // default `agent` is checked against the parsed registry (built-ins included), so an
-// unknown default agent fails at parse. No node imports: file loading lives in the
-// CLI's config loader.
+// unknown default agent fails at parse.
+//
+// Config is LAYERED: built-ins, then the global config, then the repo config
+// (chit.config.json at the repo root). parseConfigLayers is the layering engine;
+// parseConfig remains the single-file entry. No node imports: file discovery and
+// git-top-level logic live in the CLI's config loader.
 
 import { parseRegistry } from "../agents/registry.ts";
 import type { NormalizedRegistry } from "../agents/types.ts";
 import { ALLOWED_FILESYSTEM_VALUES, ALLOWED_SESSIONS } from "../manifest/parse.ts";
 import type { FilesystemPermission, SessionPolicy } from "../manifest/types.ts";
-import { ConfigError, type NormalizedConfig, type NormalizedRole } from "./types.ts";
+import {
+	ConfigError,
+	type ConfigLayerSource,
+	type ConfigProvenance,
+	type NormalizedConfig,
+	type NormalizedRole,
+} from "./types.ts";
 
 const ALLOWED_CONFIG_KEYS = new Set(["agents", "roles"]);
 const ALLOWED_ROLE_KEYS = new Set(["agent", "instructions", "session", "permissions"]);
@@ -23,42 +33,101 @@ function isObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-export function parseConfig(raw: unknown, configPath = "<inline>"): NormalizedConfig {
-	if (raw !== undefined && raw !== null && !isObject(raw)) {
-		throw new ConfigError(configPath, "top-level must be a JSON object");
-	}
-	const obj = (raw ?? {}) as Record<string, unknown>;
-	for (const k of Object.keys(obj)) {
-		if (!ALLOWED_CONFIG_KEYS.has(k)) {
-			throw new ConfigError(configPath, `unknown top-level field "${k}"`);
-		}
-	}
+// One config layer to parse: the raw JSON, the file path (for error messages and
+// provenance), and which layer it is. Repo layers are untrusted project input.
+export interface ConfigLayer {
+	raw: unknown;
+	path: string;
+	source: ConfigLayerSource;
+}
 
-	// Agents (+ built-ins) via the registry parser. Pass ONLY the agents sub-object
-	// so the registry parser never sees `roles` (it rejects unknown top-level keys).
-	const registry: NormalizedRegistry = parseRegistry(
-		obj.agents === undefined ? undefined : { agents: obj.agents },
-		configPath,
-	);
+// Agent fields a repo config may not set. Both cross the trust boundary between
+// "project preference" and "what runs on the operator's machine": env injects
+// process environment into agent CLIs; strictMcp loosens MCP isolation. Rejected
+// loudly (never silently dropped) so a repo cannot smuggle them in; the global
+// config may still use both.
+const REPO_FORBIDDEN_AGENT_FIELDS = ["env", "strictMcp"] as const;
 
-	const roles: Record<string, NormalizedRole> = {};
-	if (obj.roles !== undefined) {
-		if (!isObject(obj.roles)) {
-			throw new ConfigError(`${configPath}: roles`, "must be a JSON object");
-		}
-		for (const [id, entry] of Object.entries(obj.roles)) {
-			const path = `${configPath}: roles.${id}`;
-			if (!ROLE_ID_RE.test(id)) {
+function rejectRepoTrustFields(agentsRaw: unknown, configPath: string): void {
+	// Shape errors (non-object agents/entries) are parseRegistry's job; this scan
+	// only answers "does any agent entry set a trust-boundary field".
+	if (!isObject(agentsRaw)) return;
+	for (const [id, entry] of Object.entries(agentsRaw)) {
+		if (!isObject(entry)) continue;
+		for (const field of REPO_FORBIDDEN_AGENT_FIELDS) {
+			if (field in entry) {
 				throw new ConfigError(
-					path,
-					"role id must be kebab-case (lowercase letters, digits, hyphens; starts with a letter)",
+					`${configPath}: agents.${id}.${field}`,
+					`"${field}" is not allowed in repo config (trust boundary); set it in the global config instead`,
 				);
 			}
-			roles[id] = parseRole(entry, path, registry);
+		}
+	}
+}
+
+// Layered parse: built-ins, then each layer in order. A later layer replaces a
+// user-defined agent or role by id as a WHOLE entity (no field merging), so the
+// recorded origin fully describes the effective definition. Built-in ids stay
+// non-redefinable in every layer (parseRegistry enforces it per layer). A layer's
+// roles are validated against the ACCUMULATED registry, so a repo role may
+// reference an agent defined in the global config.
+export function parseConfigLayers(layers: ConfigLayer[]): NormalizedConfig {
+	const registry: NormalizedRegistry = parseRegistry(undefined);
+	const provenance: ConfigProvenance = { agents: {}, roles: {} };
+	for (const id of Object.keys(registry.agents)) {
+		provenance.agents[id] = { source: "builtin" };
+	}
+	const roles: Record<string, NormalizedRole> = {};
+
+	for (const { raw, path, source } of layers) {
+		if (raw !== undefined && raw !== null && !isObject(raw)) {
+			throw new ConfigError(path, "top-level must be a JSON object");
+		}
+		const obj = (raw ?? {}) as Record<string, unknown>;
+		for (const k of Object.keys(obj)) {
+			if (!ALLOWED_CONFIG_KEYS.has(k)) {
+				throw new ConfigError(path, `unknown top-level field "${k}"`);
+			}
+		}
+
+		if (source === "repo") rejectRepoTrustFields(obj.agents, path);
+
+		// Agents (+ built-ins) via the registry parser, per layer. Pass ONLY the
+		// agents sub-object so the registry parser never sees `roles` (it rejects
+		// unknown top-level keys).
+		const layerRegistry = parseRegistry(
+			obj.agents === undefined ? undefined : { agents: obj.agents },
+			path,
+		);
+		for (const [id, agent] of Object.entries(layerRegistry.agents)) {
+			if (agent.builtIn) continue;
+			registry.agents[id] = agent;
+			provenance.agents[id] = { source, path };
+		}
+
+		if (obj.roles !== undefined) {
+			if (!isObject(obj.roles)) {
+				throw new ConfigError(`${path}: roles`, "must be a JSON object");
+			}
+			for (const [id, entry] of Object.entries(obj.roles)) {
+				const rolePath = `${path}: roles.${id}`;
+				if (!ROLE_ID_RE.test(id)) {
+					throw new ConfigError(
+						rolePath,
+						"role id must be kebab-case (lowercase letters, digits, hyphens; starts with a letter)",
+					);
+				}
+				roles[id] = parseRole(entry, rolePath, registry);
+				provenance.roles[id] = { source, path };
+			}
 		}
 	}
 
-	return { registry, roles };
+	return { registry, roles, provenance };
+}
+
+export function parseConfig(raw: unknown, configPath = "<inline>"): NormalizedConfig {
+	return parseConfigLayers(raw === undefined ? [] : [{ raw, path: configPath, source: "global" }]);
 }
 
 function parseRole(raw: unknown, path: string, registry: NormalizedRegistry): NormalizedRole {

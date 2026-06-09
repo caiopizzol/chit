@@ -84,7 +84,7 @@ import { acquireLock, LockError, releaseLock } from "../../jobs/lock.ts";
 import { JobStore, JobStoreError } from "../../jobs/store.ts";
 import type { JobRecord, LoopJobRecord, OneShotJobRecord } from "../../jobs/types.ts";
 import { runJobWorker } from "../../jobs/worker.ts";
-import { repoKey } from "../../loops/location.ts";
+import { repoKey, repoRoot } from "../../loops/location.ts";
 import {
 	type FoundLoop,
 	findLoopByRunId,
@@ -171,10 +171,21 @@ const foregroundRegistry = new ForegroundRegistry();
 // `chit` invocation). loadConfig can also throw on a malformed config; deferring it
 // keeps that failure on the mcp path, not on import. Call sites read `.registry` and
 // `.roles` off the cached config directly.
-let configCache: ReturnType<typeof loadConfig> | undefined;
-function getConfig(): ReturnType<typeof loadConfig> {
-	configCache ??= loadConfig();
-	return configCache;
+//
+// Config is LAYERED: global config + the target repo's chit.config.json, so the
+// cache is keyed by the repo root the run cwd resolves to. Two runs in the same
+// repo share one load; runs against different repos never see each other's repo
+// config. cwd is REQUIRED so a new call site cannot silently validate against the
+// server process's repo while executing in another.
+const configCache = new Map<string, ReturnType<typeof loadConfig>>();
+function getConfig(cwd: string): ReturnType<typeof loadConfig> {
+	const key = repoRoot(cwd);
+	let config = configCache.get(key);
+	if (config === undefined) {
+		config = loadConfig(undefined, { cwd });
+		configCache.set(key, config);
+	}
+	return config;
 }
 
 // Exported so a test can connect a client over an in-memory transport and assert the
@@ -658,9 +669,10 @@ function launchConvergeJob(p: {
 	} else {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
+	const configCwd = p.worktree?.callerCheckout ?? p.cwd;
 	let config: ReturnType<typeof getConfig>;
 	try {
-		config = getConfig();
+		config = getConfig(configCwd);
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
 	}
@@ -792,7 +804,7 @@ function launchOneShotJob(p: {
 	// the registry the governance gate needs from one load.
 	let config: ReturnType<typeof getConfig>;
 	try {
-		config = getConfig();
+		config = getConfig(p.cwd);
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
 	}
@@ -1538,7 +1550,7 @@ server.registerTool(
 				ws = planManagedWorkspace(
 					{
 						ensureConfig: () => {
-							getConfig();
+							getConfig(runCwd);
 						},
 						openWorkspace: (inPlace) =>
 							prepareRunWorkspace(realGit, runCwd, { runId, scope, inPlace }),
@@ -1585,13 +1597,17 @@ server.registerTool(
 				});
 			}
 			runController.sweepLoops(Date.now());
+			// Config resolves against the CALLER's checkout (runCwd), not the managed
+			// worktree: the worktree is cut off HEAD, so resolving there would silently
+			// drop uncommitted chit.config.json edits the user expects this run to use.
+			const runConfig = getConfig(runCwd);
 			const prep = prepareConvergeExecute(
 				raw,
-				getConfig().registry,
+				runConfig.registry,
 				scope,
 				ws.cwd, // agents implement/review IN the managed worktree (== runCwd when in_place)
 				allow_unenforced_permissions,
-				getConfig().roles,
+				runConfig.roles,
 				call_timeout_ms, // per-run override -> applied to every participant's adapter
 			);
 			if (!prep.ok) {
@@ -1660,8 +1676,8 @@ server.registerTool(
 			run = startRun(crypto.randomUUID(), {
 				rawManifest: raw,
 				inputs,
-				registry: getConfig().registry,
-				roles: getConfig().roles,
+				registry: getConfig(runCwd).registry,
+				roles: getConfig(runCwd).roles,
 				...(scope !== undefined && { scope }),
 				invocationCwd: runCwd,
 				allowUnenforcedPermissions: allow_unenforced_permissions,

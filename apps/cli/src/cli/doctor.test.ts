@@ -64,6 +64,27 @@ describe("runChecks", () => {
 		expect(byName(checks, "agents").detail).toContain("built-in defaults");
 	});
 
+	test("agents detail tags layered agents with their origin and names the repo config", () => {
+		const layered = {
+			registry: { agents: { claude: {}, codex: {}, "codex-deep": {} } },
+			roles: {},
+			configPath: "/home/u/.config/chit/config.json",
+			repoConfigPath: "/repo/chit.config.json",
+			provenance: {
+				agents: {
+					claude: { source: "builtin" },
+					codex: { source: "builtin" },
+					"codex-deep": { source: "repo", path: "/repo/chit.config.json" },
+				},
+				roles: {},
+			},
+		} as unknown as NormalizedConfig;
+		const detail = byName(runChecks(deps({ loadReg: () => layered })), "agents").detail;
+		expect(detail).toContain("codex-deep (repo)");
+		expect(detail).toContain("from /home/u/.config/chit/config.json");
+		expect(detail).toContain("+ repo /repo/chit.config.json");
+	});
+
 	test("bun missing is a hard failure", () => {
 		expect(byName(runChecks(deps({ bunVersion: undefined })), "bun").status).toBe("fail");
 	});
