@@ -24,6 +24,7 @@ describe("example manifests", () => {
 			"converge-codex-writer.json",
 			"converge-required-checks.json",
 			"converge.json",
+			"plan-author.json",
 		]);
 	});
 
@@ -98,6 +99,38 @@ describe("example manifests", () => {
 			reviewStep: "review",
 			requiredChecks: [{ command: "bun", args: ["test"], name: "tests" }],
 		});
+	});
+
+	test("plan-author is a one-shot read-only planner whose output is a plan", () => {
+		const m = parseManifest(loadExample("plan-author"));
+
+		expect(m.id).toBe("plan-author");
+		// One-shot: it drafts a plan in a single pass, no implement/review loop.
+		expect(m.policy).toEqual({ kind: "one-shot" });
+		expect(m.executionOrder).toEqual([["plan"], ["out"]]);
+		expect(m.output).toBe("out");
+
+		// goal is required; context is the optional override channel.
+		expect(m.inputs.goal?.type).toBe("string");
+		expect(m.inputs.goal?.optional).toBe(false);
+		expect(m.inputs.context?.optional).toBe(true);
+
+		// The planner inspects the repo but never edits it.
+		expect(Object.keys(m.participants)).toEqual(["planner"]);
+		expect(m.participants.planner?.permissions?.filesystem).toBe("read_only");
+
+		// It must teach the native sequential shape and fence off the batch/PlannerDraft
+		// confusions, so a NEW operator reading the chit gets the constraints verbatim.
+		const persona = m.participants.planner?.instructions ?? "";
+		expect(persona).toContain("chit_plan_start");
+		expect(persona).toContain("NOT a chit_batch_start");
+		expect(persona).toContain("CODE dependency");
+		expect(persona).toContain("no PlannerDraft");
+		expect(persona).toContain('"args": ["run", "test"]');
+		expect(persona).toContain("focused tests are better than raw `bun test`");
+		expect(persona).toContain("first byte of your output MUST be `{`");
+		const planPrompt = m.steps.plan?.kind === "call" ? m.steps.plan.prompt : "";
+		expect(planPrompt).toContain("first output character must be `{`");
 	});
 
 	test("every loop example's reviewer prompt teaches the structured checks contract", () => {
