@@ -41,7 +41,9 @@ import {
 } from "../surfaces/lifecycle.ts";
 import {
 	compactTask,
+	type ForegroundActivitySummary,
 	ForegroundRegistry,
+	type ForegroundSnapshot,
 	summarizeForegroundForStatus,
 } from "../surfaces/mcp/foreground-registry.ts";
 import { startMcpServer } from "../surfaces/mcp/server.ts";
@@ -973,6 +975,7 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 		.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
 		.map((s): ForegroundLiveRow => {
 			const summary = summarizeForegroundForStatus(s, nowMs);
+			const phases = foregroundPhaseTimeline(s, summary);
 			return {
 				source: "foreground",
 				runId: summary.run_id,
@@ -990,9 +993,36 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 				...(summary.lastActivityAgeMs !== undefined && {
 					lastActivityAgeMs: summary.lastActivityAgeMs,
 				}),
+				...(phases !== undefined && { phases }),
 				...(summary.participants !== undefined && { participants: summary.participants }),
 			};
 		});
+}
+
+// The current iteration's phase timeline for a foreground row: each stored
+// completed phase becomes a fixed duration (its own two marks), and the active
+// phase -- when its clock is derivable -- appends as the single trailing "active"
+// entry, with elapsedMs against the reader's clock (the summary's phaseElapsedMs,
+// the same derivation the row's top-level field uses). A completed entry with an
+// unparseable or inverted pair is dropped rather than shown with a bogus duration.
+// Returns undefined when nothing is derivable (e.g. the pre-phase "starting"
+// spin-up), so the row omits the field. Foreground only by design: background
+// rows carry no per-iteration phase history.
+function foregroundPhaseTimeline(
+	s: ForegroundSnapshot,
+	summary: ForegroundActivitySummary,
+): ForegroundLiveRow["phases"] {
+	const timeline: NonNullable<ForegroundLiveRow["phases"]> = [];
+	for (const p of s.phases ?? []) {
+		const started = Date.parse(p.startedAt);
+		const ended = Date.parse(p.endedAt);
+		if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) continue;
+		timeline.push({ phase: p.phase, status: "completed", elapsedMs: ended - started });
+	}
+	if (summary.phaseElapsedMs !== undefined) {
+		timeline.push({ phase: summary.phase, status: "active", elapsedMs: summary.phaseElapsedMs });
+	}
+	return timeline.length > 0 ? timeline : undefined;
 }
 
 // Live background rows: only in-flight jobs (queued/running, including stale).

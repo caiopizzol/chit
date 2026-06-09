@@ -174,6 +174,52 @@ describe("ForegroundRegistry store", () => {
 		expect(live[0]?.callTimeoutMs).toBeUndefined();
 	});
 
+	test("a completed-phase timeline round-trips through write/list", () => {
+		const reg = new ForegroundRegistry(dir);
+		const phases = [
+			{
+				phase: "implementing",
+				startedAt: new Date(NOW - 50_000).toISOString(),
+				endedAt: new Date(NOW - 10_000).toISOString(),
+			},
+		];
+		reg.write(snapshot("timed", { phase: "reviewing", phases }));
+		const live = reg.list(NOW);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.phases).toEqual(phases);
+	});
+
+	test("malformed timeline entries are dropped on read; an all-invalid timeline reads as absent", () => {
+		const started = new Date(NOW - 30_000).toISOString();
+		const ended = new Date(NOW - 10_000).toISOString();
+		writeFileSync(
+			join(dir, "tl.json"),
+			JSON.stringify({
+				...snapshot("tl"),
+				phases: [
+					// valid, but carrying an off-contract extra key that must be stripped
+					{ phase: "implementing", startedAt: started, endedAt: ended, output: "SENTINEL_OUTPUT" },
+					{ phase: "not-a-phase", startedAt: started, endedAt: ended }, // unknown phase name
+					{ phase: "reviewing", startedAt: 123, endedAt: ended }, // wrong-typed mark
+					{ phase: "reviewing", startedAt: started }, // missing endedAt
+					"junk", // not an object
+				],
+			}),
+		);
+		writeFileSync(
+			join(dir, "tl-empty.json"),
+			JSON.stringify({ ...snapshot("tl-empty"), phases: ["junk"] }),
+		);
+		const live = new ForegroundRegistry(dir).list(NOW);
+		const withTimeline = live.find((s) => s.runId === "tl");
+		expect(withTimeline?.phases).toEqual([
+			{ phase: "implementing", startedAt: started, endedAt: ended },
+		]);
+		expect(JSON.stringify(live)).not.toContain("SENTINEL_OUTPUT");
+		// Nothing valid remained: the field is omitted, never emitted empty.
+		expect(live.find((s) => s.runId === "tl-empty")?.phases).toBeUndefined();
+	});
+
 	test("a heartbeat re-sync advances updatedAt but preserves lastActivityAt", () => {
 		// The server beats the registry while an iteration runs so a long phase stays live.
 		// A beat must move only the freshness marker (updatedAt), never the real activity mark
@@ -267,6 +313,7 @@ function fakeSession(over: Partial<ConvergeSession> = {}): ConvergeSession {
 			phase: "reviewing",
 			phaseStartedAtMs: NOW - 5_000,
 			lastActivityAtMs: NOW - 5_000,
+			phases: [],
 		},
 		...over,
 	} as unknown as ConvergeSession;
@@ -307,7 +354,7 @@ describe("ForegroundRegistry session sync", () => {
 
 	test("the phase is 'starting' before the first phase is known", () => {
 		const snap = new ForegroundRegistry(dir).snapshotFor(
-			fakeSession({ activity: { iteration: 1, lastActivityAtMs: NOW } }),
+			fakeSession({ activity: { iteration: 1, lastActivityAtMs: NOW, phases: [] } }),
 			NOW,
 		);
 		expect(snap?.phase).toBe("starting");
@@ -322,6 +369,59 @@ describe("ForegroundRegistry session sync", () => {
 		expect(withWt?.worktreePath).toBe("/tmp/wt/chit-run-x");
 		const inPlace = new ForegroundRegistry(dir).snapshotFor(fakeSession(), NOW);
 		expect(inPlace?.worktreePath).toBeUndefined();
+	});
+
+	test("snapshotFor mirrors the completed-phase history as ISO timestamps; omitted while empty", () => {
+		const reg = new ForegroundRegistry(dir);
+		// The fixture's activity has an empty history (the iteration's first phase is
+		// still running): the field is omitted, never written empty.
+		const empty = reg.snapshotFor(fakeSession(), NOW);
+		expect(empty?.phases).toBeUndefined();
+		expect(JSON.stringify(empty)).not.toContain('"phases"');
+		const withHistory = reg.snapshotFor(
+			fakeSession({
+				activity: {
+					iteration: 2,
+					phase: "reviewing",
+					phaseStartedAtMs: NOW - 5_000,
+					lastActivityAtMs: NOW - 5_000,
+					phases: [{ phase: "implementing", startedAtMs: NOW - 25_000, endedAtMs: NOW - 5_000 }],
+				},
+			}),
+			NOW,
+		);
+		expect(withHistory?.phases).toEqual([
+			{
+				phase: "implementing",
+				startedAt: new Date(NOW - 25_000).toISOString(),
+				endedAt: new Date(NOW - 5_000).toISOString(),
+			},
+		]);
+		// The active phase stays in phase/phaseStartedAt only -- no open timeline entry.
+		expect(withHistory?.phase).toBe("reviewing");
+	});
+
+	test("sync resets the on-disk timeline when a new iteration opens a fresh history", () => {
+		const reg = new ForegroundRegistry(dir);
+		const session = fakeSession({
+			activity: {
+				iteration: 2,
+				phase: "reviewing",
+				phaseStartedAtMs: NOW - 5_000,
+				lastActivityAtMs: NOW - 5_000,
+				phases: [{ phase: "implementing", startedAtMs: NOW - 25_000, endedAtMs: NOW - 5_000 }],
+			},
+		});
+		reg.sync(session, NOW);
+		expect(reg.list(NOW)[0]?.phases).toHaveLength(1);
+		// The engine opens iteration 3 with a fresh activity snapshot (empty history),
+		// as runNextIteration does; the mirrored file must drop the old timeline.
+		session.activity = { iteration: 3, lastActivityAtMs: NOW + 1_000, phases: [] };
+		reg.sync(session, NOW + 1_000);
+		const live = reg.list(NOW + 1_000);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.iteration).toBe(3);
+		expect(live[0]?.phases).toBeUndefined();
 	});
 
 	test("sync writes while active and removes once settled", () => {

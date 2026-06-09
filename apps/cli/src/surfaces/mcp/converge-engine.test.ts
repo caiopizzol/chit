@@ -15,6 +15,7 @@ import {
 	ConvergeEngineError,
 	cancelConverge,
 	describeConverge,
+	type LoopActivity,
 	type LoopPhase,
 	runNextIteration,
 	startConvergeSession,
@@ -69,6 +70,23 @@ function scriptedExecute(reviews: string[], opts: { auditRunId?: string } = {}):
 			outputs: { implement: "did it", review },
 			trace: [{ type: "step.completed", stepId: "review", output: review, durationMs: 10 }],
 			...(opts.auditRunId !== undefined && { auditRunId: opts.auditRunId }),
+		};
+	};
+}
+
+// scriptedExecute plus the step.started trace events the real executeManifest
+// emits, so tests of the phase timeline see the implement -> review transitions.
+function tracedExecute(reviews: string[]): ConvergeExecute {
+	let i = 0;
+	return async (_inputs, ctx) => {
+		ctx?.onTrace?.({ type: "step.started", stepId: "implement", kind: "call" });
+		ctx?.onTrace?.({ type: "step.started", stepId: "review", kind: "call" });
+		const review = reviews[i++] ?? "";
+		return {
+			ok: true,
+			output: "",
+			outputs: { implement: "did it", review },
+			trace: [{ type: "step.completed", stepId: "review", output: review, durationMs: 10 }],
 		};
 	};
 }
@@ -856,6 +874,49 @@ describe("runNextIteration: in-flight activity snapshot", () => {
 			},
 		});
 		expect(phases).toEqual(["implementing", "reviewing"]);
+	});
+
+	test("closes each completed phase into the iteration's history; the active phase is never an open entry", async () => {
+		// When review starts, the implement phase is over: it must appear in the history,
+		// closed at the SAME mark the review phase clock starts from -- and the now-active
+		// review phase must NOT be duplicated as an open history entry.
+		let atReviewStart:
+			| { history: LoopActivity["phases"]; reviewClock: number | undefined }
+			| undefined;
+		const session = start(tracedExecute([reviewJson("proceed")]));
+		await runNextIteration(session, {
+			onTrace: (e) => {
+				if (e.type === "step.started" && e.stepId === "review") {
+					atReviewStart = {
+						history: session.activity?.phases.map((p) => ({ ...p })) ?? [],
+						reviewClock: session.activity?.phaseStartedAtMs,
+					};
+				}
+			},
+		});
+		expect(atReviewStart?.history).toHaveLength(1);
+		const entry = atReviewStart?.history[0];
+		expect(entry?.phase).toBe("implementing");
+		expect(entry?.endedAtMs).toBeGreaterThanOrEqual(entry?.startedAtMs ?? Number.POSITIVE_INFINITY);
+		// The boundary is shared: the closed entry ends exactly where the new phase clock began.
+		expect(entry?.endedAtMs).toBe(atReviewStart?.reviewClock as number);
+	});
+
+	test("a new iteration opens with an empty phase history (per-iteration reset)", async () => {
+		const session = start(tracedExecute([reviewJson("revise"), reviewJson("proceed")]));
+		await runNextIteration(session); // round 1: revise (loop stays open), history accumulated
+		expect(session.activity).toBeUndefined(); // settled: snapshot (and its history) cleared
+		const historyAtSecondImplement: number[] = [];
+		await runNextIteration(session, {
+			onTrace: (e) => {
+				if (e.type === "step.started" && e.stepId === "implement") {
+					historyAtSecondImplement.push(session.activity?.phases.length ?? -1);
+				}
+			},
+		});
+		// Round 2's first phase sees a fresh, empty history -- nothing carried over.
+		expect(historyAtSecondImplement).toEqual([0]);
+		expect(session.terminalStatus).toBe("converged");
 	});
 
 	test("marks 'running required checks' when chit runs the checks", async () => {

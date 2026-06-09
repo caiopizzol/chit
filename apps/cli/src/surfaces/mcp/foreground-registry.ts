@@ -36,8 +36,9 @@
 // repo key, a managed worktree path when present, the current iteration/phase,
 // the run's iteration budget (maxIterations) and per-call timeout (callTimeoutMs,
 // counters/numbers only), timestamps to derive elapsed/phase/last-activity, the
-// executing participants (agent + adapter only), and a compact statusLine. The
-// optional taskFull is the user-authored task for Studio's explicit prompt
+// current iteration's completed-phase timeline (phase names + timestamps only),
+// the executing participants (agent + adapter only), and a compact statusLine.
+// The optional taskFull is the user-authored task for Studio's explicit prompt
 // disclosure. Snapshots NEVER carry model outputs, review prose, config/env
 // values, or audit blobs.
 
@@ -147,6 +148,12 @@ export interface ForegroundSnapshot {
 	// When the current phase began (ISO 8601), for phase elapsed. Absent during the
 	// brief "starting" spin-up before the first phase is known.
 	phaseStartedAt?: string;
+	// COMPLETED phases of the current iteration, in order (ISO 8601 marks; the reader
+	// derives each duration against its own parse, per the stored-timestamps rule).
+	// The active phase lives only in phase/phaseStartedAt above. Omitted while the
+	// iteration has no completed phase yet; reset with each iteration's fresh
+	// snapshot. Phase names and timestamps only -- never an output channel.
+	phases?: Array<{ phase: string; startedAt: string; endedAt: string }>;
 	// The latest activity mark (ISO 8601), for last-activity age.
 	lastActivityAt: string;
 	// When THIS snapshot was written (ISO 8601), the freshness marker the reader's
@@ -210,9 +217,31 @@ function parseSnapshot(raw: unknown, expectedRunId: string): ForegroundSnapshot 
 	if (typeof r.phaseStartedAt === "string") snapshot.phaseStartedAt = r.phaseStartedAt;
 	if (typeof r.maxIterations === "number") snapshot.maxIterations = r.maxIterations;
 	if (typeof r.callTimeoutMs === "number") snapshot.callTimeoutMs = r.callTimeoutMs;
+	const phases = sanitizePhases(r.phases);
+	if (phases !== undefined) snapshot.phases = phases;
 	const participants = sanitizeParticipants(r.participants);
 	if (participants !== undefined) snapshot.participants = participants;
 	return snapshot;
+}
+
+// Reduce a raw completed-phase timeline to the exact entries the snapshot promises
+// (a known phase name plus its two ISO marks), dropping malformed entries and any
+// extra keys an off-contract file may carry. Returns undefined when nothing valid
+// remains, so the field is omitted rather than emitted empty -- same contract as
+// sanitizeParticipants.
+function sanitizePhases(
+	raw: unknown,
+): Array<{ phase: string; startedAt: string; endedAt: string }> | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: Array<{ phase: string; startedAt: string; endedAt: string }> = [];
+	for (const entry of raw) {
+		if (entry === null || typeof entry !== "object") continue;
+		const e = entry as Record<string, unknown>;
+		if (typeof e.phase !== "string" || !FOREGROUND_PHASES.has(e.phase)) continue;
+		if (typeof e.startedAt !== "string" || typeof e.endedAt !== "string") continue;
+		out.push({ phase: e.phase, startedAt: e.startedAt, endedAt: e.endedAt });
+	}
+	return out.length > 0 ? out : undefined;
 }
 
 // Reduce a raw participants map to the agent+adapter pairs the snapshot promises,
@@ -360,6 +389,16 @@ export class ForegroundRegistry {
 			startedAt: new Date(session.startedAtMs).toISOString(),
 			...(a.phaseStartedAtMs !== undefined && {
 				phaseStartedAt: new Date(a.phaseStartedAtMs).toISOString(),
+			}),
+			// The current iteration's completed phases, as stored timestamps (never
+			// pre-derived durations). The engine starts each iteration's activity with an
+			// empty history, so this never spans iterations; omitted until one completes.
+			...(a.phases.length > 0 && {
+				phases: a.phases.map((p) => ({
+					phase: p.phase,
+					startedAt: new Date(p.startedAtMs).toISOString(),
+					endedAt: new Date(p.endedAtMs).toISOString(),
+				})),
 			}),
 			lastActivityAt: new Date(a.lastActivityAtMs).toISOString(),
 			updatedAt: new Date(nowMs).toISOString(),

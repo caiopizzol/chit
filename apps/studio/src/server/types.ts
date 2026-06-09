@@ -181,11 +181,12 @@ export interface LoopSummary {
 // Every row is a GLANCE summary, safe to hand a browser: ids, a bounded
 // scope/task one-liner, phase/display, ages derived against the reader's clock,
 // iteration counters and timeout/budget numbers (iteration, iterationsCompleted,
-// maxIterations, callTimeoutMs -- plain numbers, nothing more), agent+adapter
-// participants, a compact statusLine, and a managed worktree path only when
-// already safe to expose. `taskFull` is the explicit local detail payload for
-// the selected-run prompt disclosure. A row NEVER carries model outputs, review
-// prose, config/env values, or audit blobs.
+// maxIterations, callTimeoutMs -- plain numbers, nothing more), the current
+// iteration's phase timeline (phase names and durations only, foreground rows
+// only), agent+adapter participants, a compact statusLine, and a managed
+// worktree path only when already safe to expose. `taskFull` is the explicit
+// local detail payload for the selected-run prompt disclosure. A row NEVER
+// carries model outputs, review prose, config/env values, or audit blobs.
 
 // The one safe participant pair the rail/detail shows: which agent ran and via
 // which adapter. The full provenance (permissions, config, env keys) is
@@ -219,6 +220,12 @@ export interface ForegroundLiveRow {
 	elapsedMs?: number;
 	phaseElapsedMs?: number;
 	lastActivityAgeMs?: number;
+	// The current iteration's phase timeline: completed phases in order (durations
+	// fixed by their stored marks) plus at most one trailing active entry whose
+	// elapsedMs is derived against the reader's clock. Phase names and durations
+	// only -- never model output or config. Omitted when nothing is derivable
+	// (e.g. the pre-phase "starting" spin-up). Foreground rows only.
+	phases?: Array<{ phase: string; status: "completed" | "active"; elapsedMs: number }>;
 	participants?: Record<string, LiveParticipant>;
 }
 

@@ -512,6 +512,63 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 		}
 	});
 
+	test("maps the snapshot's completed phases plus one active entry onto the row's timeline", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const nowMs = Date.now();
+			new ForegroundRegistry(fgDir).write(
+				liveSnapshot({
+					phase: "reviewing",
+					phaseStartedAt: new Date(nowMs - 10_000).toISOString(),
+					phases: [
+						{
+							phase: "implementing",
+							startedAt: new Date(nowMs - 30_000).toISOString(),
+							endedAt: new Date(nowMs - 10_000).toISOString(),
+						},
+					],
+				}),
+			);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const row = live.foreground[0];
+			expect(row?.phases).toHaveLength(2);
+			// The completed entry's duration is fixed by its stored marks.
+			expect(row?.phases?.[0]).toEqual({
+				phase: "implementing",
+				status: "completed",
+				elapsedMs: 20_000,
+			});
+			// The trailing active entry derives against the reader's clock, so it is at
+			// least the 10s since phaseStartedAt (sane upper bound guards a runaway clock).
+			expect(row?.phases?.[1]?.phase).toBe("reviewing");
+			expect(row?.phases?.[1]?.status).toBe("active");
+			expect(row?.phases?.[1]?.elapsedMs).toBeGreaterThanOrEqual(10_000);
+			expect(row?.phases?.[1]?.elapsedMs).toBeLessThan(60_000);
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("the timeline is absent when nothing is derivable (pre-phase spin-up, no completed phases)", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			// A just-started run: phase "starting", no phase clock yet, no history.
+			new ForegroundRegistry(fgDir).write(
+				liveSnapshot({ phase: "starting", phaseStartedAt: undefined }),
+			);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const row = live.foreground[0];
+			expect(row?.phases).toBeUndefined();
+			expect(JSON.stringify(row)).not.toContain('"phases"');
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
 	// Above any real pid on the platforms chit runs on, so pidAlive is false.
 	const DEAD_PID = 2_147_483_647;
 

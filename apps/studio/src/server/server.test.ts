@@ -839,6 +839,10 @@ describe("GET /api/live", () => {
 					elapsedMs: 12_000,
 					phaseElapsedMs: 4_000,
 					lastActivityAgeMs: 500,
+					phases: [
+						{ phase: "implementing", status: "completed", elapsedMs: 8_000 },
+						{ phase: "reviewing", status: "active", elapsedMs: 4_000 },
+					],
 					participants: { impl: { agentId: "claude", adapter: "claude-cli" } },
 				},
 			],
@@ -881,6 +885,11 @@ describe("GET /api/live", () => {
 			expect(body.foreground[0]?.iteration).toBe(2);
 			expect(body.foreground[0]?.maxIterations).toBe(5);
 			expect(body.foreground[0]?.callTimeoutMs).toBe(900_000);
+			// The current iteration's phase timeline passes through untouched too.
+			expect(body.foreground[0]?.phases).toEqual([
+				{ phase: "implementing", status: "completed", elapsedMs: 8_000 },
+				{ phase: "reviewing", status: "active", elapsedMs: 4_000 },
+			]);
 			expect(body.background[0]?.source).toBe("background");
 			expect(body.background[0]?.runId).toBe("bg-1");
 			expect(body.background[0]?.display).toBe("running");

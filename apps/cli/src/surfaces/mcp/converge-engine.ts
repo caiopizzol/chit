@@ -62,6 +62,13 @@ export interface LoopActivity {
 	// Wall-clock ms of the latest recorded mark (the iteration's start, then each phase
 	// transition) -- the freshness marker the view turns into lastActivityAgeMs.
 	lastActivityAtMs: number;
+	// COMPLETED phases of the current iteration, in order: each entry closes when the
+	// next phase begins (the same transition that resets phaseStartedAtMs). The active
+	// phase lives only in phase/phaseStartedAtMs above, never duplicated here as an
+	// open entry. Starts empty with each iteration's fresh snapshot, so the history
+	// never spans iterations. Names and wall-clock marks only -- a timing timeline,
+	// not an output channel.
+	phases: Array<{ phase: LoopPhase; startedAtMs: number; endedAtMs: number }>;
 }
 
 // In-memory state for one MCP-driven converge loop. Never the source of truth
@@ -311,6 +318,12 @@ function notifyActivity(session: ConvergeSession): void {
 function markActivityPhase(session: ConvergeSession, phase: LoopPhase, atMs = Date.now()): void {
 	const a = session.activity;
 	if (a === undefined) return;
+	// The outgoing phase (if any) is complete the instant the new one begins: close it
+	// into the iteration's history at the SAME mark the new phase clock starts from, so
+	// the timeline and phaseStartedAtMs never disagree about the boundary.
+	if (a.phase !== undefined && a.phaseStartedAtMs !== undefined) {
+		a.phases.push({ phase: a.phase, startedAtMs: a.phaseStartedAtMs, endedAtMs: atMs });
+	}
 	a.phase = phase;
 	a.phaseStartedAtMs = atMs;
 	a.lastActivityAtMs = atMs;
@@ -357,7 +370,7 @@ export async function runNextIteration(
 	// step starts; the onTrace / onChecksStart marks below advance it. The initial
 	// lastActivityAtMs is the iteration's start, so the activity age reads "time since it began"
 	// during the brief spin-up before any phase.
-	session.activity = { iteration, lastActivityAtMs: Date.now() };
+	session.activity = { iteration, lastActivityAtMs: Date.now(), phases: [] };
 	// Mirror the freshly-opened snapshot (phase still unknown -> "starting") to the
 	// cross-process registry, in lockstep with setting `activity`.
 	notifyActivity(session);
