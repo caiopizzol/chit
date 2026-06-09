@@ -1445,7 +1445,7 @@ header.app .config-btn {
 	font-size: 12px;
 	color: var(--faded);
 }
-/* Compact iteration hint derived from the statusLine. */
+/* Compact iteration label from the structured counters. */
 .live-detail-iter {
 	font-family: "JetBrains Mono", monospace;
 	font-size: 10px;
@@ -1573,6 +1573,45 @@ header.app .config-btn {
 	color: var(--ink);
 }
 
+/* Current-iteration phase timeline: a compact ordered strip of phase name plus
+   elapsed, in the same calm mono timing idiom as the agent-block elapsed. The
+   active entry reads in ink; completed entries stay faded. */
+.live-phases {
+	list-style: none;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 14px;
+	padding: 0;
+}
+.live-phase {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 6px;
+	border: 1px solid var(--hairline);
+	border-radius: 20px;
+	padding: 2px 9px;
+}
+.live-phase--active {
+	border-color: var(--ink);
+}
+.live-phase-name {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0;
+	color: var(--faded);
+}
+.live-phase--active .live-phase-name {
+	color: var(--ink);
+}
+.live-phase-age {
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	color: var(--faded);
+}
+
 /* Connected agent blocks: who ran, drawn as a chain. */
 .agent-blocks {
 	display: flex;
@@ -1602,6 +1641,13 @@ header.app .config-btn {
 	border-color: var(--codex);
 	background: var(--codex-soft);
 	box-shadow: 0 0 0 3px var(--codex-soft);
+}
+/* Budget-relative warmth: the live block's phase has used >=70% of its
+   per-call timeout. A restrained amber border/shadow tint over the live
+   treatment -- no animation, no copy. */
+.agent-block--live.agent-block--warm {
+	border-color: var(--amber);
+	box-shadow: 0 0 0 3px var(--amber-soft);
 }
 .agent-role {
 	font-family: "JetBrains Mono", monospace;

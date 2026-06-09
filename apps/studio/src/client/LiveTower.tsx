@@ -23,8 +23,9 @@ import {
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
-	iterationHint,
+	iterationLabel,
 	liveBody,
+	phaseTimeline,
 	rowKey,
 } from "./live.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
@@ -69,7 +70,7 @@ function AgentBlocks({ row }: { row: LiveActivityRow }) {
 					<div
 						className={`agent-block agent-block--${agentTone(v.agentId)}${
 							v.live ? " agent-block--live" : ""
-						}`}
+						}${v.warm ? " agent-block--warm" : ""}`}
 					>
 						<span className="agent-role">{v.role}</span>
 						<span className="agent-id">{v.agentId}</span>
@@ -140,6 +141,24 @@ function RailGroup({
 				))
 			)}
 		</section>
+	);
+}
+
+// The current iteration's phase timeline: a compact ordered strip of phase name
+// plus elapsed, with the trailing active entry marked. Foreground rows only --
+// rows without a structured timeline (background, older servers) render nothing.
+function PhaseTimeline({ row }: { row: LiveActivityRow }) {
+	const entries = phaseTimeline(row);
+	if (entries.length === 0) return null;
+	return (
+		<ol className="live-phases">
+			{entries.map((e) => (
+				<li key={e.key} className={`live-phase${e.active ? " live-phase--active" : ""}`}>
+					<span className="live-phase-name">{e.phase}</span>
+					<span className="live-phase-age">{e.elapsed}</span>
+				</li>
+			))}
+		</ol>
 	);
 }
 
@@ -224,7 +243,7 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 	// Phase timing normally rides on the live agent block; the head only shows it
 	// when no block claims the phase, so it appears exactly once either way.
 	const phaseAge = headPhaseElapsed(row);
-	const iteration = iterationHint(row);
+	const iteration = iterationLabel(row);
 	return (
 		<div className="live-detail">
 			<div className="live-detail-head">
@@ -244,6 +263,7 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 					</div>
 				))}
 			</div>
+			<PhaseTimeline row={row} />
 			<AgentBlocks row={row} />
 			{row.worktreePath && (
 				<p className="live-worktree">

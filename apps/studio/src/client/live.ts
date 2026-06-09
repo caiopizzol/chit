@@ -1,7 +1,7 @@
 // Pure, clock-free helpers for the live monitor. Selection identity, row
 // flattening, age formatting, the selected-run detail shaping (ages, agent
-// blocks, iteration hint), and the snapshot diff that feeds the console all
-// live here so they can be unit-tested without React or a polling timer. The
+// blocks, iteration label, phase timeline), and the snapshot diff that feeds
+// the console all live here so they can be unit-tested without React or a polling timer. The
 // hook (useLive) owns the network, the timer, and the wall-clock stamp; this
 // module only transforms data it is handed.
 
@@ -97,6 +97,9 @@ export interface AgentBlockView {
 	adapter: string;
 	live: boolean;
 	phaseElapsed?: string;
+	// Set only when the live block's phase has consumed enough of its call-timeout
+	// budget to warrant the warm tint (budgetWarmth). Never set on idle blocks.
+	warm?: boolean;
 }
 
 export function agentBlockViews(row: LiveActivityRow): AgentBlockView[] {
@@ -118,9 +121,18 @@ export function agentBlockViews(row: LiveActivityRow): AgentBlockView[] {
 			live: true,
 		});
 	}
-	if (row.phaseElapsedMs !== undefined) {
-		const live = views.find((v) => v.live);
-		if (live) live.phaseElapsed = formatAge(row.phaseElapsedMs);
+	const live = views.find((v) => v.live);
+	if (live) {
+		if (row.phaseElapsedMs !== undefined) live.phaseElapsed = formatAge(row.phaseElapsedMs);
+		// callTimeoutMs bounds an adapter call, so the warm treatment only applies
+		// to the implementer/reviewer blocks -- a long checks phase is not a budget
+		// signal.
+		if (
+			(active === "implementer" || active === "reviewer") &&
+			budgetWarmth(row.phaseElapsedMs, row.callTimeoutMs) === "warm"
+		) {
+			live.warm = true;
+		}
 	}
 	return views;
 }
@@ -135,13 +147,61 @@ export function headPhaseElapsed(row: LiveActivityRow): string | undefined {
 	return formatAge(row.phaseElapsedMs);
 }
 
-// A compact iteration hint derived from the statusLine every chit surface
-// already composes ("iteration N · ..."). Parsing the existing line keeps the
-// wire type unchanged; a statusLine without an iteration count (a one-shot
-// background run) yields no hint rather than a fabricated one.
-export function iterationHint(row: LiveActivityRow): string | undefined {
-	const m = /\biteration (\d+)\b/.exec(row.statusLine);
-	return m ? `iter ${m[1]}` : undefined;
+// A compact iteration label from the structured counters the hosts now report
+// (iteration / maxIterations, plus iterationsCompleted for background loops).
+// Never parses statusLine: a row without structured counters (a one-shot
+// background run, an older server) yields no label rather than a fabricated one.
+export function iterationLabel(row: LiveActivityRow): string | undefined {
+	if (row.iteration !== undefined) {
+		return row.maxIterations !== undefined
+			? `iter ${row.iteration}/${row.maxIterations}`
+			: `iter ${row.iteration}`;
+	}
+	if (row.source === "background" && row.iterationsCompleted !== undefined) {
+		return `${row.iterationsCompleted} done`;
+	}
+	return undefined;
+}
+
+// One drawable entry of the foreground current-iteration phase timeline:
+// completed phases in order plus at most one trailing active entry, each with
+// its formatted duration. Empty when the row carries no timeline (background
+// rows, older servers, the pre-phase spin-up) so the detail renders nothing.
+export interface PhaseTimelineEntry {
+	// Stable render identity. The timeline is append-only within an iteration
+	// (entries never reorder), so position+name is a sound key even when a phase
+	// name repeats.
+	key: string;
+	phase: string;
+	elapsed: string;
+	active: boolean;
+}
+
+export function phaseTimeline(row: LiveActivityRow): PhaseTimelineEntry[] {
+	if (row.source !== "foreground" || !row.phases) return [];
+	return row.phases.map((p, i) => ({
+		key: `${i}-${p.phase}`,
+		phase: p.phase,
+		elapsed: formatAge(p.elapsedMs),
+		active: p.status === "active",
+	}));
+}
+
+// Budget-relative warmth for the current phase: "warm" once the phase has
+// consumed 70% or more of the per-call timeout that bounds it. When either
+// number is missing or invalid the budget is unknown, and the safe answer is no
+// treatment at all -- never a guess.
+export function budgetWarmth(
+	phaseElapsedMs: number | undefined,
+	callTimeoutMs: number | undefined,
+): "warm" | undefined {
+	if (phaseElapsedMs === undefined || !Number.isFinite(phaseElapsedMs) || phaseElapsedMs < 0) {
+		return undefined;
+	}
+	if (callTimeoutMs === undefined || !Number.isFinite(callTimeoutMs) || callTimeoutMs <= 0) {
+		return undefined;
+	}
+	return phaseElapsedMs / callTimeoutMs >= 0.7 ? "warm" : undefined;
 }
 
 // Age metrics shown for the selected run, kept timing-oriented: total elapsed

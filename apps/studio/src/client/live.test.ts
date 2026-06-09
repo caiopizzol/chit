@@ -8,6 +8,7 @@ import type { LiveCancelOutcome } from "./api.ts";
 import {
 	activeRole,
 	agentBlockViews,
+	budgetWarmth,
 	cancelAvailable,
 	cancelMessage,
 	cancelPending,
@@ -17,9 +18,10 @@ import {
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
-	iterationHint,
+	iterationLabel,
 	liveBody,
 	phaseLabel,
+	phaseTimeline,
 	rowKey,
 } from "./live.ts";
 
@@ -225,6 +227,41 @@ describe("agentBlockViews", () => {
 			},
 		]);
 	});
+
+	test("the live block warms once the phase nears its call-timeout budget", () => {
+		const views = agentBlockViews(
+			fg({ phase: "reviewing", participants, phaseElapsedMs: 70_000, callTimeoutMs: 100_000 }),
+		);
+		expect(views[1].live).toBe(true);
+		expect(views[1].warm).toBe(true);
+		// The idle block never warms.
+		expect(views[0].warm).toBeUndefined();
+	});
+
+	test("no warmth below the threshold or without a budget", () => {
+		const below = agentBlockViews(
+			fg({ phase: "implementing", participants, phaseElapsedMs: 30_000, callTimeoutMs: 100_000 }),
+		);
+		expect(below[0].warm).toBeUndefined();
+		const unbudgeted = agentBlockViews(
+			fg({ phase: "implementing", participants, phaseElapsedMs: 70_000 }),
+		);
+		expect(unbudgeted[0].warm).toBeUndefined();
+	});
+
+	test("the checks phase never warms -- the timeout bounds an adapter call", () => {
+		const views = agentBlockViews(
+			fg({
+				phase: "running required checks",
+				participants,
+				phaseElapsedMs: 70_000,
+				callTimeoutMs: 100_000,
+			}),
+		);
+		const checks = views.find((v) => v.role === "checks");
+		expect(checks?.live).toBe(true);
+		expect(checks?.warm).toBeUndefined();
+	});
 });
 
 describe("headPhaseElapsed", () => {
@@ -275,16 +312,84 @@ describe("headPhaseElapsed", () => {
 	});
 });
 
-describe("iterationHint", () => {
-	test("derives a compact hint from the statusLine vocabulary", () => {
-		expect(iterationHint(fg({ statusLine: "iteration 3 · implementing" }))).toBe("iter 3");
-		expect(iterationHint(bg({ statusLine: "iteration 12 · pass · 2/2 checks passed" }))).toBe(
-			"iter 12",
-		);
+describe("iterationLabel", () => {
+	test("foreground reads iter N/M from the structured counters", () => {
+		expect(iterationLabel(fg({ iteration: 2, maxIterations: 8 }))).toBe("iter 2/8");
 	});
 
-	test("a statusLine without an iteration count yields no hint", () => {
-		expect(iterationHint(bg({ statusLine: "running" }))).toBeUndefined();
+	test("foreground without a budget reads plain iter N", () => {
+		expect(iterationLabel(fg({ iteration: 3, maxIterations: undefined }))).toBe("iter 3");
+	});
+
+	test("background prefers the current iteration, with the budget when present", () => {
+		expect(iterationLabel(bg({ iteration: 4, maxIterations: 10 }))).toBe("iter 4/10");
+		expect(iterationLabel(bg({ iteration: 4, iterationsCompleted: 3 }))).toBe("iter 4");
+	});
+
+	test("background falls back to the completed count", () => {
+		expect(iterationLabel(bg({ iterationsCompleted: 5 }))).toBe("5 done");
+	});
+
+	test("no structured counters yields no label, even with an iteration statusLine", () => {
+		// Never falls back to parsing statusLine: the structured fields are the
+		// only source.
+		expect(iterationLabel(fg({ statusLine: "iteration 3 · implementing" }))).toBeUndefined();
+		expect(
+			iterationLabel(bg({ statusLine: "iteration 12 · pass · 2/2 checks passed" })),
+		).toBeUndefined();
+	});
+});
+
+describe("phaseTimeline", () => {
+	test("shapes the foreground timeline with formatted durations and the active mark", () => {
+		const row = fg({
+			phases: [
+				{ phase: "implementing", status: "completed", elapsedMs: 65_000 },
+				{ phase: "running checks", status: "completed", elapsedMs: 12_000 },
+				{ phase: "reviewing", status: "active", elapsedMs: 4_000 },
+			],
+		});
+		expect(phaseTimeline(row)).toEqual([
+			{ key: "0-implementing", phase: "implementing", elapsed: "1m 5s", active: false },
+			{ key: "1-running checks", phase: "running checks", elapsed: "12s", active: false },
+			{ key: "2-reviewing", phase: "reviewing", elapsed: "4s", active: true },
+		]);
+	});
+
+	test("an absent or empty timeline yields no entries", () => {
+		expect(phaseTimeline(fg({ phases: undefined }))).toEqual([]);
+		expect(phaseTimeline(fg({ phases: [] }))).toEqual([]);
+	});
+
+	test("background rows never carry a timeline", () => {
+		expect(phaseTimeline(bg())).toEqual([]);
+	});
+});
+
+describe("budgetWarmth", () => {
+	test("warm at or past 70% of the call timeout", () => {
+		expect(budgetWarmth(70_000, 100_000)).toBe("warm");
+		expect(budgetWarmth(100_000, 100_000)).toBe("warm");
+		// Overrun past the nominal budget is still just warm.
+		expect(budgetWarmth(150_000, 100_000)).toBe("warm");
+	});
+
+	test("no treatment below the threshold", () => {
+		expect(budgetWarmth(69_999, 100_000)).toBeUndefined();
+		expect(budgetWarmth(0, 100_000)).toBeUndefined();
+	});
+
+	test("an unknown or invalid budget yields no treatment", () => {
+		expect(budgetWarmth(70_000, undefined)).toBeUndefined();
+		expect(budgetWarmth(70_000, 0)).toBeUndefined();
+		expect(budgetWarmth(70_000, -1)).toBeUndefined();
+		expect(budgetWarmth(70_000, Number.NaN)).toBeUndefined();
+	});
+
+	test("an unknown or invalid phase elapsed yields no treatment", () => {
+		expect(budgetWarmth(undefined, 100_000)).toBeUndefined();
+		expect(budgetWarmth(-1, 100_000)).toBeUndefined();
+		expect(budgetWarmth(Number.NaN, 100_000)).toBeUndefined();
 	});
 });
 
