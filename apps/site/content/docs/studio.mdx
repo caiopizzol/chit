@@ -3,7 +3,7 @@ title: Studio
 description: A local visual control tower for live Chit activity across your sessions
 ---
 
-Studio opens as a control tower: a calm, read-only view of what is alive across Chit right now. Foreground loops running in your sessions and durable background jobs show up side by side, with the selected run's detail and a small console of recent transitions. It reads the runtime; it does not drive it.
+Studio opens as a control tower: a calm view of what is alive across Chit right now. Foreground loops running in your sessions and durable background jobs show up side by side, with the selected run's detail and a small console of recent transitions. It reads the runtime, and it can stop a background run. It does not launch, apply, or clean up work.
 
 Studio does not need a chit in the directory. It is a window onto activity, not a manifest editor, so it opens the same way from any directory, including an empty one. When nothing is running, it says so.
 
@@ -30,6 +30,12 @@ Studio polls `GET /api/live` while the page is open, lightly and on a self-sched
 
 Every row is a glance summary, safe to hand a browser: run ids, a bounded scope and task one-liner, phase or lifecycle display, ages derived against the reader's clock, the agent and adapter participants, a compact status line, and a safe worktree path only when one is already present. A row never carries prompts, model output, review prose, config or environment values, or audit blobs. Studio does not read private state files in the browser, and it does not stream model output.
 
+## Run actions
+
+Studio can request cancellation for a durable background run. The request goes through the same intent-first background cancel path as `chit_cancel`: Chit records the cancel intent, then signals the worker. The run settles through the normal job machinery and keeps its receipts.
+
+Foreground loops do not show a cancel action in Studio. They are owned by the MCP session that is currently supervising them, so stop them from that session with `chit_cancel` or the client's own interruption behavior.
+
 ## Not supported yet
 
-Run actions. The tower observes; it does not apply, cancel, or clean up runs. Launching a run from Studio and streaming its output live are not wired up.
+Launching runs, applying changes, cleaning up worktrees, plan actions, and live model-output streaming are not wired up.

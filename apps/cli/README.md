@@ -31,7 +31,7 @@ Manifests are small JSON files you write. Example manifests live in the source r
 
 ## Studio
 
-`chit studio` opens a live control tower in your browser: a read-only view of what is running across Chit right now, with a session rail, a selected run's detail, and a small event console. It ships with this package, so it works from a published install:
+`chit studio` opens a live control tower in your browser: what is running across Chit right now, with a session rail, a selected run's detail, a small event console, and a stop action for background runs. It ships with this package, so it works from a published install:
 
 ```sh
 chit studio

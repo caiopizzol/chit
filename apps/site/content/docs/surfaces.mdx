@@ -45,7 +45,7 @@ Install a chit as a slash-invocable skill inside Claude Code. The skill surface 
 
 ## Studio (secondary)
 
-Studio opens as a control tower: a read-only view of what is live across Chit right now, with a session rail of foreground loops and background jobs, the selected run's detail, and a small console of recent transitions. It reads `GET /api/live` and needs no chit in the directory. Launch it with `chit studio`; the client bundle ships with the CLI package, so it works from a published install. See [the Studio reference](/docs/studio).
+Studio opens as a control tower for what is live across Chit right now, with a session rail of foreground loops and background jobs, the selected run's detail, and a small console of recent transitions. It reads `GET /api/live`; for durable background jobs, it can also request cancellation through the same intent-first path as `chit_cancel`. It does not launch runs, apply changes, or clean up worktrees. Launch it with `chit studio`; the client bundle ships with the CLI package, so it works from a published install. See [the Studio reference](/docs/studio).
 
 ## Audit
 
