@@ -15,6 +15,7 @@ export * from "./manifest/parse.ts";
 export * from "./manifest/types.ts";
 export * from "./plan/parse.ts";
 export * from "./plan/types.ts";
+export * from "./planning/approval.ts";
 export * from "./planning/claims.ts";
 export * from "./planning/compile.ts";
 export * from "./planning/parse.ts";

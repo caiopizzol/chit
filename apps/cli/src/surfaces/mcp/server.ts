@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
 	buildLoopReceipt,
+	compileDraftArtifact,
 	composeLoopStatusLine,
 	DraftError,
 	type LoopRecord,
@@ -121,6 +122,12 @@ import {
 	startConvergeSession,
 	traceConverge,
 } from "./converge-engine.ts";
+import {
+	coerceDraftInput,
+	DraftLaunchRefused,
+	draftApprovalHash,
+	runDraftLaunch,
+} from "./draft-tools.ts";
 import {
 	cancelStep,
 	finalOutput,
@@ -3116,35 +3123,61 @@ server.registerTool(
 	},
 );
 
-// --- draft preview (read-only) --------------------------------------------
+// --- draft preview + launch -------------------------------------------------
 //
 // The approval surface for a planner-authored execution draft, BEFORE any planner
-// agent exists. chit_draft_preview takes a declared draft, validates it through the
-// core parser, resolves its profile ids against this server's configured menu
-// (config.profiles), and compiles it with the same pure compilers a real launch uses.
-// Every validation a launch enforces (unknown profile, plan-only manifestPath, batch
-// codeDependsOn, missing/traversal claims, cycles) fails HERE. It is strictly
-// read-only: it launches nothing, calls no model, and creates no run / worktree / job
-// / state. Approved plan or batch execution still goes through chit_plan_start or
-// chit_batch_start.
+// agent exists. chit_draft_preview (read-only) takes a declared draft, validates it
+// through the core parser, resolves its profile ids against this server's configured
+// menu (config.profiles), and compiles it with the same pure compilers a real launch
+// uses. Every validation a launch enforces (unknown profile, plan-only manifestPath,
+// batch codeDependsOn, missing/traversal claims, cycles) fails HERE. It launches
+// nothing, calls no model, and creates no run / worktree / job / state.
+//
+// chit_draft_launch is the first mutating step. It hashes the COMPILED execution
+// artifact (strategy + the exact compiled plan or batch task list) into an approval
+// hash that binds the launch to exactly what was reviewed. With confirm omitted it is a
+// dry run: it validates/compiles and returns the preview plus the approval hash, but
+// launches nothing. With confirm:true it re-parses, re-compiles, recomputes the hash,
+// and refuses unless the operator's approval_hash matches -- so a draft edited after
+// approval cannot ride an old hash into execution. A matching launch runs through the
+// EXISTING plan or batch engine path (the same one chit_plan_start / chit_batch_start
+// use); there is no second executor, no planner model call, and a draft can never carry
+// a manifestPath (that comes only from the vetted profile, inside the hashed artifact).
+// The input coercion, the approval-hash helper, and the gate/launch core
+// (runDraftLaunch) live in draft-tools.ts so the security boundary is unit-testable
+// without the MCP wiring; the handlers below only add config + the real stores/deps.
 
-// Map a draft-string input to an object: parse a JSON string, pass an object through.
-// A non-JSON string is the operator's most likely mistake, so it gets its own message
-// rather than the generic structural error parseDraft would raise on a bare string.
-function coerceDraftInput(draft: string | Record<string, unknown>): unknown {
-	if (typeof draft !== "string") return draft;
-	try {
-		return JSON.parse(draft);
-	} catch (e) {
-		throw new DraftError("$", `draft is not valid JSON: ${(e as Error).message}`);
+// Resolve a BatchStore + run cwd for a draft batch launch, mirroring chit_batch_start's
+// inline construction (resolve the cwd, anchor the store there).
+function batchStoreFor(cwd?: string): { store: BatchStore; cwd: string } {
+	const runCwd = resolve(cwd ?? process.cwd());
+	return { store: new BatchStore(runCwd), cwd: runCwd };
+}
+
+// Route a draft-launch error to a user-safe MCP message. The approval-gate refusal and a
+// bad-draft DraftError are the caller's own and pass through; a launch-time engine error
+// (plan/batch graph, worktree, store) passes through its typed message; anything else is
+// genericized so no local path leaks.
+function draftLaunchError(e: unknown) {
+	if (e instanceof DraftLaunchRefused || e instanceof DraftError) return errorResult(e.message);
+	if (
+		e instanceof PlanParseError ||
+		e instanceof PlanEngineError ||
+		e instanceof PlanStoreError ||
+		e instanceof PlanError ||
+		e instanceof WorktreeError ||
+		e instanceof BatchStoreError
+	) {
+		return errorResult(e.message);
 	}
+	return errorResult(safeMcpError(e));
 }
 
 server.registerTool(
 	"chit_draft_preview",
 	{
 		description:
-			"Preview a planner-authored execution draft (schema 1) WITHOUT launching it. Validates the draft through the core parser, resolves each step's profileId against this server's vetted profile menu, and compiles it to its execution shape (plan or batch) -- the same compile a real launch runs, so an unknown profile, a plan-only manifestPath, a batch code dependency, a missing or traversal path claim, or a dependency cycle is rejected here, before a human approves. Returns a compact preview: strategy, title, stepCount, and per-step shape (dependencies, resolved profile, effective manifest/iteration/timeout/check budget, and a capped body one-liner). Strictly read-only: it launches no run, calls no model, and creates no worktree, job, or state. Approved execution still requires chit_plan_start (plan) or chit_batch_start (batch).",
+			"Preview a planner-authored execution draft (schema 1) WITHOUT launching it. Validates the draft through the core parser, resolves each step's profileId against this server's vetted profile menu, and compiles it to its execution shape (plan or batch) -- the same compile a real launch runs, so an unknown profile, a plan-only manifestPath, a batch code dependency, a missing or traversal path claim, or a dependency cycle is rejected here, before a human approves. Returns a compact preview: strategy, title, stepCount, per-step shape (dependencies, resolved profile, effective manifest/iteration/timeout/check budget, and a capped body one-liner), and the approvalHash that binds the compiled artifact. Strictly read-only: it launches no run, calls no model, and creates no worktree, job, or state. To execute an approved draft, pass it to chit_draft_launch with confirm:true and the approvalHash.",
 		inputSchema: {
 			draft: z
 				.union([z.string(), z.record(z.string(), z.unknown())])
@@ -3163,13 +3196,16 @@ server.registerTool(
 		try {
 			const parsed = parseDraft(coerceDraftInput(draft));
 			const preview = previewDraft(parsed, config.profiles);
+			// The hash binds the COMPILED artifact, not this compact preview, so an approval can
+			// only execute the exact plan/task list that was reviewed (see chit_draft_launch).
+			const approvalHash = draftApprovalHash(compileDraftArtifact(parsed, config.profiles));
 			return jsonResult({
 				...preview,
+				approvalHash,
 				nextAction:
 					"Preview only: nothing was launched and no run, worktree, job, or state was created. " +
-					(preview.strategy === "plan"
-						? "To execute approved work today, provide a compiled plan to chit_plan_start; this tool is the validation gate, not the launcher."
-						: "To execute approved work today, provide compiled tasks to chit_batch_start; this tool is the validation gate, not the launcher."),
+					`To execute this approved draft, pass it UNCHANGED to chit_draft_launch with confirm:true and approval_hash:${approvalHash}. ` +
+					"Editing the draft changes the hash, so an approval can never execute different work.",
 			});
 		} catch (e) {
 			// A DraftError (parse or compile) is about the caller's own draft and carries no
@@ -3177,6 +3213,111 @@ server.registerTool(
 			if (e instanceof DraftError) return errorResult(e.message);
 			return errorResult(safeMcpError(e));
 		}
+	},
+);
+
+// --- draft launch (mutating, hash-gated) ------------------------------------
+
+server.registerTool(
+	"chit_draft_launch",
+	{
+		description:
+			"Launch a planner-authored execution draft (schema 1) after a human approves it. Takes the SAME draft shape as chit_draft_preview plus confirm and approval_hash. With confirm omitted or false it is a DRY RUN: it validates and compiles the draft, returns the preview plus the approvalHash, and launches nothing (no run, worktree, job, or state). With confirm:true it re-parses, re-compiles, recomputes the approval hash, and REFUSES unless your approval_hash matches -- so a draft edited after approval cannot launch on an old hash. On a match it launches through the existing engine: a plan draft starts via the chit_plan_start path (returns a plan_id + plan view), a batch draft via the chit_batch_start path (returns a batch view). It calls no planner model, auto-approves nothing, and a draft can never carry a manifestPath (that comes only from the vetted profile baked into the hashed artifact). Approval flow: call chit_draft_preview (or this tool without confirm), review the preview, then call this tool with confirm:true and the shown approval_hash.",
+		inputSchema: {
+			draft: z
+				.union([z.string(), z.record(z.string(), z.unknown())])
+				.describe(
+					"The planner draft: a JSON object (schema 1, strategy plan|batch, title, steps[]) or a JSON string of one. The same shape chit_draft_preview accepts.",
+				),
+			approval_hash: z
+				.string()
+				.optional()
+				.describe(
+					"The approvalHash from a prior dry-run / preview of this exact draft. Required when confirm is true; the launch is refused if it does not match the recompiled draft.",
+				),
+			confirm: z
+				.boolean()
+				.optional()
+				.describe(
+					"Omit or false for a dry run (validate + compile, return the preview and approvalHash, launch nothing). true to launch, which requires a matching approval_hash.",
+				),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+			base_branch: z
+				.string()
+				.optional()
+				.describe(
+					"Ref the work branches from. For a plan: the integration branch's base (default: the plan's baseBranch, else HEAD). For a batch: the base each task worktree branches from (default: HEAD).",
+				),
+			max_parallel: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe(
+					"Batch only: max concurrent tasks. Default 2. Ignored for a plan draft (a plan is a strict chain).",
+				),
+		},
+	},
+	async ({ draft, approval_hash, confirm, cwd, base_branch, max_parallel }) => {
+		let config: ReturnType<typeof getConfig>;
+		try {
+			config = getConfig();
+		} catch (e) {
+			return errorResult(`could not load config: ${(e as Error).message}`);
+		}
+
+		// The gate + launch dispatch lives in runDraftLaunch (unit-tested). The store
+		// resolvers are lazy, so a dry run never touches git -- it stays as read-only as a
+		// preview. genId is the real uuid source, mirroring chit_plan_start / chit_batch_start.
+		let result: ReturnType<typeof runDraftLaunch>;
+		try {
+			result = runDraftLaunch(
+				{
+					draft,
+					...(approval_hash !== undefined && { approvalHash: approval_hash }),
+					...(confirm !== undefined && { confirm }),
+					...(cwd !== undefined && { cwd }),
+					...(base_branch !== undefined && { baseBranch: base_branch }),
+					...(max_parallel !== undefined && { maxParallel: max_parallel }),
+				},
+				{
+					profiles: config.profiles,
+					planStoreFor,
+					planDeps,
+					batchStoreFor,
+					batchDeps,
+					genId: () => crypto.randomUUID(),
+				},
+			);
+		} catch (e) {
+			return draftLaunchError(e);
+		}
+
+		// Dry run: the preview + the hash to approve. Nothing was launched and no run,
+		// worktree, job, or state was created -- identical to chit_draft_preview.
+		if (!result.launched) {
+			return jsonResult({
+				...result.preview,
+				approvalHash: result.approvalHash,
+				launched: false,
+				nextAction:
+					"Dry run: nothing was launched and no run, worktree, job, or state was created. " +
+					"Review the preview above, then call chit_draft_launch again with the SAME draft, " +
+					`confirm:true, and approval_hash:${result.approvalHash}. Editing the draft changes the hash and the launch is refused.`,
+			});
+		}
+
+		// Confirmed, hash-matched launch: the same launch view the underlying plan/batch tool
+		// returns, plus the draft hash that launched it.
+		return jsonResult({
+			...result.view,
+			launched: true,
+			draftStrategy: result.strategy,
+			approvalHash: result.approvalHash,
+		});
 	},
 );
 

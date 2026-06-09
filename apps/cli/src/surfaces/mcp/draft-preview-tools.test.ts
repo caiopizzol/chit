@@ -51,14 +51,120 @@ async function preview(draft: unknown): Promise<ToolResult> {
 		arguments: { draft },
 	})) as ToolResult;
 }
+async function launch(args: Record<string, unknown>): Promise<ToolResult> {
+	return (await client.callTool({
+		name: "chit_draft_launch",
+		arguments: args,
+	})) as ToolResult;
+}
+// No plan AND no batch record exists in the isolated repo -- the launch path created no state.
+async function assertNoLaunchState(): Promise<void> {
+	const plans = (await client.callTool({
+		name: "chit_plan_list",
+		arguments: { cwd: process.cwd() },
+	})) as ToolResult;
+	const batches = (await client.callTool({
+		name: "chit_batch_list",
+		arguments: { cwd: process.cwd() },
+	})) as ToolResult;
+	expect(JSON.parse(textOf(plans))).toEqual({ plans: [] });
+	expect(JSON.parse(textOf(batches))).toEqual({ batches: [] });
+}
+
+const PLAN_DRAFT = {
+	schema: 1,
+	strategy: "plan",
+	title: "Wire the feature",
+	steps: [
+		{ id: "scaffold", title: "Scaffold", body: "Create the module" },
+		{ id: "impl", title: "Implement", body: "Do the work", codeDependsOn: ["scaffold"] },
+	],
+};
 
 describe("chit_draft_preview registration", () => {
-	test("the tool is registered alongside the plan/batch tools", async () => {
+	test("the tool is registered alongside the plan/batch tools and chit_draft_launch", async () => {
 		const { tools } = await client.listTools();
 		const names = new Set(tools.map((t) => t.name));
 		expect(names.has("chit_draft_preview")).toBe(true);
+		expect(names.has("chit_draft_launch")).toBe(true);
 		expect(names.has("chit_plan_start")).toBe(true);
 		expect(names.has("chit_batch_start")).toBe(true);
+	});
+});
+
+describe("chit_draft_launch dry run creates no state", () => {
+	test("confirm omitted: returns preview + approvalHash, launches no plan/batch/job", async () => {
+		const result = await launch({ draft: PLAN_DRAFT, cwd: process.cwd() });
+		expect(result.isError).toBeFalsy();
+		const view = JSON.parse(textOf(result));
+		expect(view.launched).toBe(false);
+		expect(view.status).toBe("preview_ready");
+		expect(view.approvalHash).toMatch(/^[0-9a-f]{64}$/);
+		expect(view.nextAction).toContain("nothing was launched");
+		expect(view.nextAction).toContain("confirm:true");
+		await assertNoLaunchState();
+	});
+
+	test("the launch dry-run hash equals the chit_draft_preview hash for the same draft", async () => {
+		const dry = JSON.parse(textOf(await launch({ draft: PLAN_DRAFT, cwd: process.cwd() })));
+		const shown = JSON.parse(textOf(await preview(PLAN_DRAFT)));
+		expect(dry.approvalHash).toBe(shown.approvalHash);
+	});
+});
+
+describe("chit_draft_launch confirmed launch is hash-gated", () => {
+	test("a confirmed launch with no approval_hash is refused, creating no state", async () => {
+		const result = await launch({ draft: PLAN_DRAFT, confirm: true, cwd: process.cwd() });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("requires approval_hash");
+		await assertNoLaunchState();
+	});
+
+	test("a confirmed launch with a wrong approval_hash is refused, creating no state", async () => {
+		const result = await launch({
+			draft: PLAN_DRAFT,
+			confirm: true,
+			approval_hash: "0".repeat(64),
+			cwd: process.cwd(),
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("does not match");
+		await assertNoLaunchState();
+	});
+
+	test("a draft edited after approval is refused with its old hash, creating no state", async () => {
+		// Approve the original draft, then change a step body and try to launch on the old hash.
+		const approved = JSON.parse(textOf(await preview(PLAN_DRAFT))).approvalHash as string;
+		const edited = {
+			...PLAN_DRAFT,
+			steps: [PLAN_DRAFT.steps[0], { ...PLAN_DRAFT.steps[1], body: "Do something ELSE" }],
+		};
+		const result = await launch({
+			draft: edited,
+			confirm: true,
+			approval_hash: approved,
+			cwd: process.cwd(),
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("does not match");
+		await assertNoLaunchState();
+	});
+
+	test("an invalid draft is rejected the same as preview, creating no state", async () => {
+		const result = await launch({
+			draft: {
+				schema: 1,
+				strategy: "plan",
+				title: "Bad profile",
+				steps: [{ id: "a", title: "A", body: "x", profileId: "ghost" }],
+			},
+			confirm: true,
+			approval_hash: "0".repeat(64),
+			cwd: process.cwd(),
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('unknown execution profile "ghost"');
+		await assertNoLaunchState();
 	});
 });
 
@@ -85,10 +191,12 @@ describe("chit_draft_preview previews a valid plan draft", () => {
 			profileId: "default",
 			usesDefaultProfile: true,
 		});
-		// The approval surface must say it launched nothing and point at the real start tool.
+		// The approval surface must say it launched nothing and point at chit_draft_launch,
+		// carrying the approval hash that binds the compiled artifact.
 		expect(view.nextAction).toContain("nothing was launched");
-		expect(view.nextAction).toContain("chit_plan_start");
-		expect(view.nextAction).not.toContain("same draft");
+		expect(view.nextAction).toContain("chit_draft_launch");
+		expect(view.approvalHash).toMatch(/^[0-9a-f]{64}$/);
+		expect(view.nextAction).toContain(view.approvalHash);
 
 		// No plan record was created: the read-only preview must not touch the store.
 		const plans = (await client.callTool({
@@ -139,8 +247,8 @@ describe("chit_draft_preview previews a valid batch draft", () => {
 			allowPathOverlap: false,
 		});
 		expect(view.batch.tasks[1]).toMatchObject({ id: "web", dependencies: ["api"] });
-		expect(view.nextAction).toContain("chit_batch_start");
-		expect(view.nextAction).not.toContain("these tasks");
+		expect(view.nextAction).toContain("chit_draft_launch");
+		expect(view.approvalHash).toMatch(/^[0-9a-f]{64}$/);
 	});
 });
 

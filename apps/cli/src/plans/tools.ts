@@ -89,11 +89,36 @@ export function runPlanStart(
 		},
 		cwd,
 	);
+	return launchNormalizedPlan(
+		{
+			normalizedPlan,
+			...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
+			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+		},
+		cwd,
+		store,
+		deps,
+		genId,
+	);
+}
+
+// Launch an ALREADY-compiled plan through the exact chit_plan_start engine path. The draft
+// launcher compiles a planner draft to a NormalizedPlan itself (and binds it with an
+// approval hash) before this point, so unlike runPlanStart there is no plan JSON to parse:
+// the compiled plan is started directly. Keeping this beside runPlanStart guarantees a
+// draft launch and an operator-authored plan start share one engine path and one view.
+export function launchNormalizedPlan(
+	input: { normalizedPlan: NormalizedPlan; baseBranch?: string; maxIterations?: number },
+	cwd: string,
+	store: PlanStore,
+	deps: PlanEngineDeps,
+	genId: () => string,
+): PlanView {
 	const started = startPlan(store, deps, {
 		// The plan's own id when authored, else a fresh generated one -- both pass the store's guard.
-		id: normalizedPlan.id ?? genId(),
+		id: input.normalizedPlan.id ?? genId(),
 		cwd,
-		normalizedPlan,
+		normalizedPlan: input.normalizedPlan,
 		...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
 		...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
 	});
