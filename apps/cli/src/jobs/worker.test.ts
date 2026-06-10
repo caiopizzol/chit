@@ -6,6 +6,7 @@ import type { LoopVerdict, RequiredCheck } from "@chit-run/core";
 import type { ConvergeExecute } from "../cli/converge.ts";
 import * as convergeMod from "../cli/converge.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
+import { digestManifestText } from "../manifest/binding.ts";
 import { MAX_LIVE_EVENTS } from "../runtime/live-events.ts";
 import { JobStore } from "./store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "./types.ts";
@@ -72,6 +73,30 @@ function fakeExecute(
 			auditRunId: `run-${i}`,
 		};
 	};
+}
+
+function loopManifestText(): string {
+	return JSON.stringify({
+		schema: 1,
+		id: "worker-binding-test",
+		description: "worker binding fixture",
+		inputs: { task: { type: "string" } },
+		participants: {
+			impl: {
+				agent: "runner",
+				instructions: "implement",
+				session: "stateless",
+				permissions: { filesystem: "write" },
+			},
+		},
+		steps: {
+			implement: { call: "impl", prompt: "{{ inputs.task }}" },
+			review: { call: "impl", prompt: "{{ steps.implement.output }}" },
+			out: { format: "{{ steps.review.output }}" },
+		},
+		output: "out",
+		policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+	});
 }
 
 function seedJob(over: Partial<LoopJobRecord> = {}): LoopJobRecord {
@@ -376,6 +401,63 @@ describe("background converge worker", () => {
 			// prepareConvergeExecute(raw, registry, scope, cwd, allowUnenforced, roles, callTimeoutMs)
 			expect(spy.mock.calls.at(0)?.[6]).toBe(234_000);
 			expect(store.get("j1")?.state).toBe("completed");
+		} finally {
+			spy.mockRestore();
+			if (savedCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = savedCfg;
+			rmSync(cfgHome, { recursive: true, force: true });
+		}
+	});
+
+	test("a digest-bound worker refuses participant drift before preparing execution", async () => {
+		// The plan/batch engine verifies participant drift before enqueue, but the detached
+		// worker loads config again in its own process. A config edit in that window must not
+		// silently swap the approved agent/model surface while the manifest digest still matches.
+		const savedCfg = process.env.XDG_CONFIG_HOME;
+		const cfgHome = mkdtempSync(join(tmpdir(), "chit-worker-cfg-"));
+		mkdirSync(join(cfgHome, "chit"), { recursive: true });
+		writeFileSync(
+			join(cfgHome, "chit", "config.json"),
+			JSON.stringify({
+				agents: { runner: { adapter: "codex-exec", model: "new-model" } },
+			}),
+		);
+		const manifest = loopManifestText();
+		writeFileSync(join(cwd, "m.json"), manifest);
+		process.env.XDG_CONFIG_HOME = cfgHome;
+		const spy = spyOn(convergeMod, "prepareConvergeExecute").mockReturnValue({
+			ok: true,
+			execute: fakeExecute([{ verdict: "proceed" }]),
+			loopSteps: { implementStep: "implement", reviewStep: "review" },
+			participants: {},
+			warnings: [],
+		});
+		try {
+			seedJob({
+				manifestPath: "m.json",
+				manifestDigest: digestManifestText(manifest),
+				manifestParticipants: {
+					impl: {
+						agentId: "runner",
+						adapter: "codex-exec",
+						session: "stateless",
+						permissions: { filesystem: "write" },
+						enforcesReadOnly: false,
+						config: { model: "approved-model" },
+						agentOrigin: "global",
+					},
+				},
+			});
+			await runJobWorker("j1", {
+				jobStore: store,
+				installSignalHandlers: false,
+				heartbeatMs: 1_000_000,
+				now: () => 1000,
+			});
+			const job = store.get("j1");
+			expect(job?.state).toBe("failed");
+			expect(job?.failure).toContain("manifest participant execution drift");
+			expect(spy).not.toHaveBeenCalled();
 		} finally {
 			spy.mockRestore();
 			if (savedCfg === undefined) delete process.env.XDG_CONFIG_HOME;

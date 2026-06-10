@@ -14,6 +14,7 @@
 // every caller derives the identical hash from the identical approval artifact.
 
 import { canonicalJson } from "../canonical-json.ts";
+import type { ManifestBinding } from "../manifest/binding.ts";
 import type { NormalizedPlan } from "./types.ts";
 
 // The resolved base the approved plan branches from. `ref` is what the operator (or the
@@ -30,23 +31,33 @@ export interface PlanApprovalBase {
 // approval. maxIterations is included only when present, so its absence and a present value
 // are distinct (and an absent budget keeps the same hash whether the caller omits the field
 // or passes undefined).
+// manifests binds, per step id, the EFFECTIVE execution surface of every step that
+// names a manifestPath: the manifest content digest (read from the git tree at the
+// approved base for a repo-relative path, or from the filesystem for an absolute
+// one) plus the safe participant execution summary. Binding only the path string
+// would let the file content or the resolved agents change between approval and
+// launch without moving the hash. Present only when at least one step names a
+// manifest, so manifest-free plans keep their hash.
 export interface PlanApprovalArtifact {
 	strategy: "plan";
 	base: PlanApprovalBase;
 	plan: NormalizedPlan;
 	maxIterations?: number;
+	manifests?: Record<string, ManifestBinding>;
 }
 
 export function buildPlanApprovalArtifact(
 	plan: NormalizedPlan,
 	base: PlanApprovalBase,
 	maxIterations?: number,
+	manifests?: Record<string, ManifestBinding>,
 ): PlanApprovalArtifact {
 	return {
 		strategy: "plan",
 		base,
 		plan,
 		...(maxIterations !== undefined && { maxIterations }),
+		...(manifests !== undefined && Object.keys(manifests).length > 0 && { manifests }),
 	};
 }
 

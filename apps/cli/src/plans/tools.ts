@@ -10,6 +10,7 @@ import { isAbsolute, resolve } from "node:path";
 import {
 	buildPlanApprovalArtifact,
 	canonicalApprovalPayload,
+	type ManifestBinding,
 	type NormalizedPlan,
 	type PlanApprovalArtifact,
 	type PlanApprovalBase,
@@ -17,6 +18,7 @@ import {
 	parsePlan,
 } from "@chit-run/core";
 import { repoToplevel, resolveBaseSha } from "../batches/worktree.ts";
+import { normalizeManifestReference } from "../manifest/binding.ts";
 import {
 	applyPlanStep,
 	cleanupPlan,
@@ -109,6 +111,10 @@ export type PlanStartResult =
 			plan: NormalizedPlan;
 			base: PlanApprovalBase;
 			maxIterations?: number;
+			// The resolved manifest binding per step that names a manifestPath: content
+			// digest + safe participant execution summary, bound by the approval hash so
+			// the operator reviews the execution surface, not just a path string.
+			manifests?: Record<string, ManifestBinding>;
 			approvalHash: string;
 	  }
 	| { launched: true; view: PlanView; base: PlanApprovalBase; approvalHash: string };
@@ -149,7 +155,13 @@ export function runPlanStart(
 	const callerCheckout = repoToplevel(deps.git, cwd);
 	const sha = resolveBaseSha(deps.git, callerCheckout, ref);
 	const base: PlanApprovalBase = { ref, sha };
-	const artifact = buildPlanApprovalArtifact(normalizedPlan, base, input.maxIterations);
+	// Bind every step's manifest reference to its EFFECTIVE execution surface: content
+	// digest (read from the git tree at the approved base for a repo-relative path, the
+	// filesystem for an absolute one) + safe participant execution summary. Both the dry
+	// run and the confirm pass through here, so an edited manifest or a config change
+	// that re-routes participants changes the hash and the confirm refuses.
+	const manifests = resolveStepManifests(normalizedPlan, base.sha, callerCheckout, cwd, deps);
+	const artifact = buildPlanApprovalArtifact(normalizedPlan, base, input.maxIterations, manifests);
 	const hash = planApprovalHash(artifact);
 
 	if (input.confirm !== true) {
@@ -159,6 +171,7 @@ export function runPlanStart(
 			plan: normalizedPlan,
 			base,
 			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+			...(manifests !== undefined && { manifests }),
 			approvalHash: hash,
 		};
 	}
@@ -183,6 +196,7 @@ export function runPlanStart(
 			// hash already matched the sha, so the launch runs exactly what was approved.
 			baseBranch: base.sha,
 			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+			...(manifests !== undefined && { manifests }),
 		},
 		cwd,
 		store,
@@ -192,12 +206,53 @@ export function runPlanStart(
 	return { launched: true, view, base, approvalHash: hash };
 }
 
+// Resolve the manifest binding for every step that names a manifestPath, keyed by
+// step id. Returns undefined when nothing is bound: no step names a manifest, or
+// the deps carry no resolver (test harnesses; production always wires one). A
+// reference that cannot be resolved -- missing from the tree at the approved base,
+// a symlink object, a path escaping the repo, bad JSON, an unresolvable
+// participant -- throws PlanError naming the step, so a bad plan is refused at the
+// gate exactly like a structural validation failure.
+function resolveStepManifests(
+	plan: NormalizedPlan,
+	baseSha: string,
+	callerCheckout: string,
+	cwd: string,
+	deps: PlanEngineDeps,
+): Record<string, ManifestBinding> | undefined {
+	if (deps.resolveManifestBinding === undefined) return undefined;
+	const resolveBinding = deps.resolveManifestBinding;
+	const manifests: Record<string, ManifestBinding> = {};
+	for (const step of plan.steps) {
+		if (step.manifestPath === undefined) continue;
+		try {
+			// Normalize first (rejects repo escapes; relative paths in a plan are repo-root
+			// relative, matching where the step worktree later resolves them).
+			const ref = normalizeManifestReference(step.manifestPath, callerCheckout, callerCheckout);
+			manifests[step.id] = resolveBinding({
+				manifestPath: ref.manifestPath,
+				baseSha,
+				gitCwd: callerCheckout,
+				configCwd: cwd,
+			});
+		} catch (e) {
+			throw new PlanError(`steps.${step.id}.manifestPath`, (e as Error).message);
+		}
+	}
+	return Object.keys(manifests).length > 0 ? manifests : undefined;
+}
+
 // Launch an ALREADY-parsed, approved plan through the exact startPlan engine path. runPlanStart
 // parses + gates + hashes before this point, so there is no plan JSON to parse here: the
 // approved plan is started directly. Keeping this beside runPlanStart keeps the gate and the
 // launch in one place and one view.
 export function launchNormalizedPlan(
-	input: { normalizedPlan: NormalizedPlan; baseBranch?: string; maxIterations?: number },
+	input: {
+		normalizedPlan: NormalizedPlan;
+		baseBranch?: string;
+		maxIterations?: number;
+		manifests?: Record<string, ManifestBinding>;
+	},
 	cwd: string,
 	store: PlanStore,
 	deps: PlanEngineDeps,
@@ -210,6 +265,7 @@ export function launchNormalizedPlan(
 		normalizedPlan: input.normalizedPlan,
 		...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
 		...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+		...(input.manifests !== undefined && { manifests: input.manifests }),
 	});
 	return describePlan(started, deps);
 }

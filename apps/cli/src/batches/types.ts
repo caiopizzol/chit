@@ -1,5 +1,6 @@
 import type {
 	AuditParticipantSnapshot,
+	BatchManifestBindings,
 	LoopStopStatus,
 	LoopVerdict,
 	RequiredCheck,
@@ -112,7 +113,8 @@ export interface BatchTask {
 	// is rejected at start unless this is set; when set, the task is treated as
 	// overlapping everything (it runs alone, never concurrent with another task).
 	allowPathOverlap?: boolean;
-	// Per-task converge manifest override (absolute). Resolution order:
+	// Per-task converge manifest override: absolute, or repo-root-relative (then read
+	// from the task worktree's checkout of the batch base). Resolution order:
 	// task.manifestPath -> batch.manifestPath -> the bundled default converge manifest.
 	manifestPath?: string;
 	// Per-task chit-executed verification commands. Precedence (closest declared wins,
@@ -150,9 +152,15 @@ export interface Batch {
 	baseBranch: string; // the ref task branches/worktrees are created from
 	baseSha: string; // resolved at start, so every task worktree shares one base
 	maxParallel: number;
-	// Batch-level default converge manifest (absolute), applied to any task
-	// without its own manifestPath. Undefined -> the bundled default.
+	// Batch-level default converge manifest (absolute, or repo-root-relative), applied
+	// to any task without its own manifestPath. Undefined -> the bundled default.
 	manifestPath?: string;
+	// The APPROVED manifest bindings (batch-level default + per-task overrides) from
+	// the gate's dry run: content digest + safe participant execution summary. Each
+	// task launch re-resolves its effective reference from the batch base and refuses
+	// to run the task when it no longer matches. Absent on a binding-free batch and on
+	// records that predate the binding.
+	manifests?: BatchManifestBindings;
 	// Batch-level chit-executed verification, applied to any task without its own
 	// requiredChecks (a task's override wins; the manifest policy's are the fallback).
 	requiredChecks?: RequiredCheck[];

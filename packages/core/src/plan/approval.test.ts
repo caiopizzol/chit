@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ManifestBinding } from "../manifest/binding.ts";
 import {
 	buildPlanApprovalArtifact,
 	canonicalApprovalPayload,
@@ -99,5 +100,64 @@ describe("canonicalApprovalPayload determinism", () => {
 		expect(JSON.parse(canonicalApprovalPayload(artifact))).toEqual(
 			JSON.parse(JSON.stringify(artifact)),
 		);
+	});
+
+	// The manifest binding closes the path-only hole: an edited manifest (a different
+	// content digest) or a config change that re-routes participants must move the
+	// payload, so a confirm with the old hash is refused.
+	const BINDING: ManifestBinding = {
+		manifestPath: "manifests/converge.json",
+		source: "git",
+		manifestDigest: "sha256:aaaa",
+		participants: {
+			implementer: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: { model: "opus" },
+			},
+		},
+	};
+
+	test("binding a step manifest changes the payload; an empty map does not", () => {
+		const none = payloadFor(PLAN, BASE);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, { impl: BINDING }),
+			),
+		).not.toBe(none);
+		expect(
+			canonicalApprovalPayload(buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, {})),
+		).toBe(none);
+	});
+
+	test("a changed manifest digest or participant summary changes the payload", () => {
+		const bound = canonicalApprovalPayload(
+			buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, { impl: BINDING }),
+		);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, {
+					impl: { ...BINDING, manifestDigest: "sha256:bbbb" },
+				}),
+			),
+		).not.toBe(bound);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, {
+					impl: {
+						...BINDING,
+						participants: {
+							implementer: {
+								...BINDING.participants.implementer,
+								config: { model: "haiku" },
+							},
+						},
+					},
+				}),
+			),
+		).not.toBe(bound);
 	});
 });

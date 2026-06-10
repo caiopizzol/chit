@@ -16,7 +16,15 @@
 // chain blocks on the apply gate by construction).
 
 import { dirname } from "node:path";
-import type { LoopReceipt, NormalizedPlan, PlanApplyPolicy, RequiredCheck } from "@chit-run/core";
+import type {
+	BoundParticipantSummary,
+	LoopReceipt,
+	ManifestBinding,
+	NormalizedPlan,
+	PlanApplyPolicy,
+	RequiredCheck,
+} from "@chit-run/core";
+import { describeManifestBindingDrift } from "@chit-run/core";
 import {
 	type GitRunner,
 	mainRepoOfWorktree,
@@ -29,6 +37,7 @@ import {
 } from "../batches/worktree.ts";
 import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
+import type { ResolveManifestBinding } from "../manifest/binding.ts";
 import { derivePlanStatus, selectNextStep } from "./schedule.ts";
 import type { PlanStore } from "./store.ts";
 import type { Plan, PlanStatus, PlanStepRecord, PlanStepStatus } from "./types.ts";
@@ -49,6 +58,12 @@ export interface LaunchPlanJobParams {
 	task: string; // the step body (the converge implementer's brief)
 	loopId: string;
 	manifestPath?: string;
+	// The APPROVED manifest content digest for this step's manifestPath, forwarded so
+	// the job record carries it and the worker re-verifies the bytes it actually reads.
+	manifestDigest?: string;
+	// The APPROVED participant execution summary for the same manifest binding. Forwarded
+	// to the worker so config drift after enqueue cannot silently change the agent/model surface.
+	manifestParticipants?: Record<string, BoundParticipantSummary>;
 	maxIterations: number;
 	// The step's chit-executed verification commands; launchJob resolves them against the
 	// manifest's checks at the snapshot boundary.
@@ -137,6 +152,14 @@ export interface PlanEngineDeps {
 	};
 	// Retire one plan-managed worktree + branch for cleanup (real: removeTaskWorktree(realGit, ...)).
 	removeWorktree: (repo: string, worktreePath: string, branch: string) => RemoveWorktreeResult;
+	// Re-resolve a manifest reference's CURRENT binding (content digest + participant
+	// summary) so a step launch can compare it to the approved one and pause needs_human
+	// on drift. Optional: when absent, no launch-time verification runs (a record with no
+	// approved bindings has nothing to verify against either). The real implementation
+	// loads fresh config per call -- the same lifecycle the worker has -- so config drift
+	// is made visible instead of pinned away. Throws ManifestBindingError when the
+	// reference can no longer be resolved (treated as drift).
+	resolveManifestBinding?: ResolveManifestBinding;
 	// Best-effort removal of the plan's now-empty worktree ROOT (~/worktrees/chit/<planId>) after
 	// every child worktree under it is retired (real: removeEmptyDir). The plan layout nests the
 	// integration worktree beside a steps/ dir, so no single removeWorktree call can drop the root --
@@ -159,6 +182,10 @@ export interface StartPlanOptions {
 	normalizedPlan: NormalizedPlan;
 	baseBranch?: string; // override the plan's baseBranch; default: the launcher's HEAD
 	maxIterations?: number; // per-step default when a step declares none
+	// The APPROVED manifest bindings (keyed by step id) from the gate's dry run, persisted
+	// on the plan record so every later step launch re-verifies against exactly what was
+	// approved.
+	manifests?: Record<string, ManifestBinding>;
 }
 
 // Create the plan, its integration worktree, persist the record, and launch the first
@@ -221,6 +248,8 @@ export function startPlan(store: PlanStore, deps: PlanEngineDeps, opts: StartPla
 		// per applied step. A step is cut from this tip (the integration commit holding every
 		// already-applied dependency).
 		integrationTipSha: baseSha,
+		...(opts.manifests !== undefined &&
+			Object.keys(opts.manifests).length > 0 && { manifests: opts.manifests }),
 		steps,
 		status: "running",
 		createdAt: now,
@@ -780,6 +809,19 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 		// already-applied dependency). The tip is set at start and advances one commit per applied
 		// step in a later slice; fall back to baseSha defensively.
 		const base = c.integrationTipSha ?? c.baseSha;
+		// Launch-time execution-contract verification: re-resolve the step's manifest binding
+		// from the commit THIS step is cut from (an earlier step may have edited the manifest;
+		// the config may have changed since approval -- a long plan can launch hours later) and
+		// pause needs_human on any drift, BEFORE creating a worktree or spawning a worker.
+		// Confirm-time verification alone is not enough here.
+		const drift = stepManifestDrift(c, next, base, deps);
+		if (drift !== undefined) {
+			next.status = "needs_human";
+			next.error = `manifest execution drift detected before launch: ${drift}. The step paused instead of silently running a changed execution surface; review the drift, then re-approve a fresh plan or abort.`;
+			c.status = derivePlanStatus(c);
+			c.updatedAt = iso(deps.now());
+			return c;
+		}
 		try {
 			// Link tooling from the checkout the plan was launched from (callerCheckout), so a step's
 			// fresh worktree resolves installed binaries exactly like the launch checkout does.
@@ -814,6 +856,14 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 					callerCheckout: c.callerCheckout,
 				},
 				...(next.manifestPath !== undefined && { manifestPath: next.manifestPath }),
+				// Stamp the approved digest on the job so the detached worker re-verifies the
+				// exact bytes it reads (the last read before execution).
+				...(c.manifests?.[next.id]?.manifestDigest !== undefined && {
+					manifestDigest: c.manifests[next.id]?.manifestDigest,
+				}),
+				...(c.manifests?.[next.id]?.participants !== undefined && {
+					manifestParticipants: c.manifests[next.id]?.participants,
+				}),
 				...(next.requiredChecks !== undefined && { requiredChecks: next.requiredChecks }),
 				...(next.callTimeoutMs !== undefined && { callTimeoutMs: next.callTimeoutMs }),
 			});
@@ -831,6 +881,39 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 	return c;
 }
 
+// Why the step's CURRENT manifest binding no longer matches the approved one, or
+// undefined when it matches (or there is nothing to verify: no manifestPath, no
+// approved binding on the record, or no resolver wired). The reference is
+// re-resolved from `base` -- the commit the step worktree is about to be cut from
+// -- through the SAME resolver shape the gate used, so an earlier step's manifest
+// edit, a moved file, or a config change that re-routes participants all surface
+// here. A resolution failure (manifest gone, now a symlink, config broken) is
+// drift too: what was approved can no longer be read the approved way.
+function stepManifestDrift(
+	c: Plan,
+	step: PlanStepRecord,
+	base: string,
+	deps: PlanEngineDeps,
+): string | undefined {
+	if (step.manifestPath === undefined) return undefined;
+	const approved = c.manifests?.[step.id];
+	if (approved === undefined || deps.resolveManifestBinding === undefined) return undefined;
+	try {
+		const current = deps.resolveManifestBinding({
+			manifestPath: approved.manifestPath,
+			baseSha: base,
+			// Object reads work from any checkout of the repo; the durable main repo outlives
+			// a removed linked launching worktree. Config resolves from the launching checkout,
+			// matching the worker's own config read point.
+			gitCwd: c.repo,
+			configCwd: c.callerCheckout,
+		});
+		return describeManifestBindingDrift(approved, current);
+	} catch (e) {
+		return (e as Error).message;
+	}
+}
+
 // --- read-only describe (the join; NEVER launches or mutates) --------------
 
 export interface PlanStepView {
@@ -846,6 +929,11 @@ export interface PlanStepView {
 	worktreePath?: string;
 	run_id?: string; // the durable background run advancing this step (run_id == its job id)
 	baseSha?: string; // the integration commit this step's worktree was cut from
+	// The step's manifest reference and its APPROVED content digest (from the plan
+	// record's bound manifests), so a receipt answers which execution surface was
+	// approved and run. Participant provenance is `participants` below.
+	manifestPath?: string;
+	manifestDigest?: string;
 	appliedCommitSha?: string; // the integration commit the gated apply produced (a later slice)
 	// Live run state for a running step, or the recorded outcome for a terminal one.
 	runState?: JobRecord["state"] | "stale";
@@ -944,6 +1032,10 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 			...(s.runId !== undefined && { run_id: s.runId }),
 			...(s.baseSha !== undefined && { baseSha: s.baseSha }),
 			...(s.appliedCommitSha !== undefined && { appliedCommitSha: s.appliedCommitSha }),
+			...(s.manifestPath !== undefined && { manifestPath: s.manifestPath }),
+			...(c.manifests?.[s.id]?.manifestDigest !== undefined && {
+				manifestDigest: c.manifests[s.id]?.manifestDigest,
+			}),
 			// The effective per-call budget for this step, surfaced like the batch task view does, so
 			// status shows the active value without the caller re-deriving it.
 			...(s.callTimeoutMs !== undefined && { callTimeoutMs: s.callTimeoutMs }),

@@ -20,7 +20,12 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { AuditParticipantSnapshot } from "@chit-run/core";
-import { parseManifest, type ResolvedManifest, resolveManifest } from "@chit-run/core";
+import {
+	describeParticipantSummaryDrift,
+	parseManifest,
+	type ResolvedManifest,
+	resolveManifest,
+} from "@chit-run/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
@@ -33,6 +38,7 @@ import {
 import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
 import { loadConfig } from "../config/load.ts";
 import { stopLoop } from "../loops/log-store.ts";
+import { readJobManifest, resolveManifestParticipantSummary } from "../manifest/binding.ts";
 import { type RunOnceResult, runManifestOnce, validateOneShotAuth } from "../runs/run-once.ts";
 import {
 	appendLiveEvent,
@@ -95,14 +101,17 @@ function iso(ms: number): string {
 function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	let raw: unknown;
 	if (job.manifestPath) {
-		const path = isAbsolute(job.manifestPath)
-			? job.manifestPath
-			: resolve(job.cwd, job.manifestPath);
-		try {
-			raw = JSON.parse(readFileSync(path, "utf-8"));
-		} catch (e) {
-			return { ok: false, error: `could not read manifest at ${path}: ${(e as Error).message}` };
-		}
+		// The guarded read: a relative (repo-relative) path is realpath-verified to stay
+		// under the run's worktree (no symlink escape), and when the job carries an
+		// approved digest the bytes must still match it -- the last verification before
+		// execution, so a manifest changed after approval cannot run on an old approval.
+		const read = readJobManifest({
+			manifestPath: job.manifestPath,
+			cwd: job.cwd,
+			...(job.manifestDigest !== undefined && { expectedDigest: job.manifestDigest }),
+		});
+		if (!read.ok) return { ok: false, error: read.error };
+		raw = read.raw;
 	} else {
 		raw = DEFAULT_CONVERGE_MANIFEST;
 	}
@@ -119,6 +128,24 @@ function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 		config = loadConfig(undefined, { cwd: configCwd });
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
+	}
+	if (job.manifestParticipants !== undefined) {
+		let currentParticipants: ReturnType<typeof resolveManifestParticipantSummary>;
+		try {
+			currentParticipants = resolveManifestParticipantSummary(raw, config);
+		} catch (e) {
+			return {
+				ok: false,
+				error: `could not resolve manifest participant summary: ${(e as Error).message}`,
+			};
+		}
+		const drift = describeParticipantSummaryDrift(job.manifestParticipants, currentParticipants);
+		if (drift !== undefined) {
+			return {
+				ok: false,
+				error: `manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; re-run the dry run and re-approve.`,
+			};
+		}
 	}
 	const prep = prepareConvergeExecute(
 		raw,

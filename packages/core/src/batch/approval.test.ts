@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ManifestBinding } from "../manifest/binding.ts";
 import {
 	type BatchApprovalBase,
 	type BatchApprovalInput,
@@ -267,5 +268,55 @@ describe("canonicalBatchApprovalPayload determinism", () => {
 		expect(JSON.parse(canonicalBatchApprovalPayload(artifact))).toEqual(
 			JSON.parse(JSON.stringify(artifact)),
 		);
+	});
+
+	// The manifest binding closes the path-only hole: an edited manifest (a different
+	// content digest) or a config change that re-routes participants must move the
+	// payload, so a confirm with the old hash is refused.
+	const BINDING: ManifestBinding = {
+		manifestPath: "manifests/converge.json",
+		source: "git",
+		manifestDigest: "sha256:aaaa",
+		participants: {
+			implementer: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: { model: "opus" },
+			},
+		},
+	};
+
+	test("binding a batch or task manifest changes the payload; an empty binding does not", () => {
+		const none = payloadFor(INPUT);
+		expect(payloadFor({ ...INPUT, manifests: { batch: BINDING } })).not.toBe(none);
+		expect(payloadFor({ ...INPUT, manifests: { tasks: { a: BINDING } } })).not.toBe(none);
+		expect(payloadFor({ ...INPUT, manifests: {} })).toBe(none);
+		expect(payloadFor({ ...INPUT, manifests: { tasks: {} } })).toBe(none);
+	});
+
+	test("a changed manifest digest or participant summary changes the payload", () => {
+		const bound = payloadFor({ ...INPUT, manifests: { batch: BINDING } });
+		expect(
+			payloadFor({
+				...INPUT,
+				manifests: { batch: { ...BINDING, manifestDigest: "sha256:bbbb" } },
+			}),
+		).not.toBe(bound);
+		expect(
+			payloadFor({
+				...INPUT,
+				manifests: {
+					batch: {
+						...BINDING,
+						participants: {
+							implementer: { ...BINDING.participants.implementer, agentId: "codex" },
+						},
+					},
+				},
+			}),
+		).not.toBe(bound);
 	});
 });

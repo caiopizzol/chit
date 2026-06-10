@@ -16,6 +16,7 @@ import {
 	buildLoopReceipt,
 	type LoopReceipt,
 	type LoopRecord,
+	type ManifestBinding,
 	type NormalizedPlan,
 	type PlanStep,
 } from "@chit-run/core";
@@ -56,6 +57,8 @@ class FakeJobs {
 		cwd: string;
 		scope: string;
 		manifestPath?: string;
+		manifestDigest?: string;
+		manifestParticipants?: LaunchPlanJobParams["manifestParticipants"];
 		requiredChecks?: LaunchPlanJobParams["requiredChecks"];
 		callTimeoutMs?: number;
 		maxIterations: number;
@@ -75,6 +78,9 @@ class FakeJobs {
 			...p.worktree,
 			scope: p.scope,
 			task: p.task,
+			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
+			...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
+			...(p.manifestParticipants !== undefined && { manifestParticipants: p.manifestParticipants }),
 			maxIterations: p.maxIterations,
 			allowUnenforced: false,
 			state: "queued",
@@ -87,6 +93,8 @@ class FakeJobs {
 			cwd: p.cwd,
 			scope: p.scope,
 			manifestPath: p.manifestPath,
+			manifestDigest: p.manifestDigest,
+			manifestParticipants: p.manifestParticipants,
 			requiredChecks: p.requiredChecks,
 			callTimeoutMs: p.callTimeoutMs,
 			maxIterations: p.maxIterations,
@@ -488,6 +496,182 @@ describe("advancePlan: reconciliation", () => {
 		const c1 = advancePlan(store, deps, "p1"); // job is still queued
 		expect(stepOf(c1, "a").status).toBe("running");
 		expect(c1.status).toBe("running");
+	});
+});
+
+// The approved binding a digest-bound plan carries per manifest-naming step.
+function binding(digest: string): ManifestBinding {
+	return {
+		manifestPath: "manifests/converge.json",
+		source: "git",
+		manifestDigest: digest,
+		participants: {
+			implementer: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: {},
+			},
+		},
+	};
+}
+
+describe("launch-time manifest binding verification (the long-plan gate)", () => {
+	test("a matching binding launches and forwards the approved digest to the job", () => {
+		deps.resolveManifestBinding = () => binding("sha256:aaaa");
+		const c = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a", { manifestPath: "manifests/converge.json" }),
+					step("b", { dependsOn: ["a"] }),
+				],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+		});
+		expect(stepOf(c, "a").status).toBe("running");
+		expect(jobs.launched).toHaveLength(1);
+		expect(present(jobs.launched[0], "launched a").manifestDigest).toBe("sha256:aaaa");
+		expect(present(jobs.launched[0], "launched a").manifestParticipants).toEqual(
+			c.manifests?.a?.participants,
+		);
+	});
+
+	test("digest drift pauses the step needs_human BEFORE any worktree or job exists", () => {
+		const requested: string[] = [];
+		deps.resolveManifestBinding = (p) => {
+			requested.push(p.baseSha);
+			return binding("sha256:CHANGED");
+		};
+		const c = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a", { manifestPath: "manifests/converge.json" }),
+					step("b", { dependsOn: ["a"] }),
+				],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+		});
+		const a = stepOf(c, "a");
+		expect(a.status).toBe("needs_human");
+		expect(a.error).toContain("manifest execution drift");
+		expect(a.error).toContain("manifest content changed");
+		expect(a.worktreePath).toBeUndefined(); // refused before the worktree was cut
+		expect(jobs.launched).toHaveLength(0);
+		expect(c.status).toBe("needs_human");
+		// Verified from the commit the step would be cut from (the integration tip / base).
+		expect(requested).toEqual(["basesha"]);
+	});
+
+	test("a later step re-verifies from ITS cut commit and pauses on drift after step a applied", () => {
+		// Approval-time and step-a-launch resolution agree; the manifest then drifts (an
+		// earlier step edited it, or the config changed) before step b launches.
+		let current = binding("sha256:aaaa");
+		deps.resolveManifestBinding = () => current;
+		startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a"),
+					step("b", { dependsOn: ["a"], manifestPath: "manifests/converge.json" }),
+				],
+			}),
+			manifests: { b: binding("sha256:aaaa") },
+		});
+		jobs.finish("job-1", { stopStatus: "converged" });
+		advancePlan(store, deps, "p1");
+		applyStep("p1", "a", "tip-1");
+		current = binding("sha256:bbbb"); // drift after approval, before b's launch
+		const c = advancePlan(store, deps, "p1");
+		const b = stepOf(c, "b");
+		expect(b.status).toBe("needs_human");
+		expect(b.error).toContain("manifest content changed");
+		expect(jobs.launched).toHaveLength(1); // only step a ever launched
+	});
+
+	test("participant summary drift (same digest) also pauses needs_human", () => {
+		deps.resolveManifestBinding = () => ({
+			...binding("sha256:aaaa"),
+			participants: {
+				implementer: {
+					agentId: "claude",
+					adapter: "claude-cli",
+					session: "per_scope",
+					permissions: { filesystem: "write" },
+					enforcesReadOnly: false,
+					config: { model: "a-different-model" },
+				},
+			},
+		});
+		const c = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a", { manifestPath: "manifests/converge.json" }),
+					step("b", { dependsOn: ["a"] }),
+				],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+		});
+		expect(stepOf(c, "a").status).toBe("needs_human");
+		expect(stepOf(c, "a").error).toContain("participant execution summary changed");
+		expect(jobs.launched).toHaveLength(0);
+	});
+
+	test("a binding that can no longer be resolved is drift too", () => {
+		deps.resolveManifestBinding = () => {
+			throw new Error("no manifests/converge.json in the git tree at basesha");
+		};
+		const c = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a", { manifestPath: "manifests/converge.json" }),
+					step("b", { dependsOn: ["a"] }),
+				],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+		});
+		expect(stepOf(c, "a").status).toBe("needs_human");
+		expect(stepOf(c, "a").error).toContain("no manifests/converge.json");
+	});
+
+	test("no approved binding (legacy record) or no resolver -> launches as before", () => {
+		// Resolver wired but the record carries no binding: nothing to verify against.
+		deps.resolveManifestBinding = () => binding("sha256:zzzz");
+		const c1 = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a", { manifestPath: "manifests/converge.json" }),
+					step("b", { dependsOn: ["a"] }),
+				],
+			}),
+		});
+		expect(stepOf(c1, "a").status).toBe("running");
+		// Binding on the record but no resolver (older deps): launches unverified.
+		delete deps.resolveManifestBinding;
+		const c2 = startPlan(store, deps, {
+			id: "p2",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [
+					step("a", { manifestPath: "manifests/converge.json" }),
+					step("b", { dependsOn: ["a"] }),
+				],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+		});
+		expect(stepOf(c2, "a").status).toBe("running");
 	});
 });
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PlanError } from "@chit-run/core";
+import { type ManifestBinding, PlanError } from "@chit-run/core";
 import type { GitResult, GitRunner } from "../batches/worktree.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import type { LaunchPlanJobParams, PlanEngineDeps } from "./engine.ts";
@@ -384,5 +384,140 @@ describe("runPlanStart: the gate refuses before any mutation", () => {
 			),
 		).toThrow(PlanApprovalRefused);
 		expect(launched).toHaveLength(0);
+	});
+});
+
+// --- manifest binding at the gate: the approval hash binds the execution surface ---
+
+function gateBinding(digest: string): ManifestBinding {
+	return {
+		manifestPath: "manifests/converge.json",
+		source: "git",
+		manifestDigest: digest,
+		participants: {
+			implementer: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: {},
+			},
+		},
+	};
+}
+
+const MANIFEST_PLAN = {
+	schema: 1,
+	title: "bound demo",
+	steps: [
+		{ id: "a", title: "A", body: "do a", manifestPath: "manifests/converge.json" },
+		{ id: "b", title: "B", body: "do b", dependsOn: ["a"] },
+	],
+};
+
+describe("runPlanStart: manifest binding (digest + participant summary in the hash)", () => {
+	test("the dry run resolves and returns the binding per manifest-naming step", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = (p) => {
+			// The gate must bind from the APPROVED base commit and a repo-root-relative identity.
+			expect(p.baseSha).toBe("sha-approved");
+			expect(p.manifestPath).toBe("manifests/converge.json");
+			return gateBinding("sha256:aaaa");
+		};
+		const dry = runPlanStart({ plan: MANIFEST_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		expect(present(dry.manifests, "manifests").a?.manifestDigest).toBe("sha256:aaaa");
+		expect(dry.manifests?.b).toBeUndefined(); // no manifestPath, nothing bound
+	});
+
+	test("a manifest whose content changed after the dry run is refused at confirm", () => {
+		const h = makeHarness();
+		let digest = "sha256:aaaa";
+		h.deps.resolveManifestBinding = () => gateBinding(digest);
+		const dry = runPlanStart({ plan: MANIFEST_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		digest = "sha256:bbbb"; // the manifest content moved between dry run and confirm
+		expect(() =>
+			runPlanStart(
+				{ plan: MANIFEST_PLAN, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a participant summary change (same plan, same digest) is refused at confirm", () => {
+		const h = makeHarness();
+		let model: string | undefined;
+		h.deps.resolveManifestBinding = () => {
+			const b = gateBinding("sha256:aaaa");
+			const impl = present(b.participants.implementer, "implementer");
+			return {
+				...b,
+				participants: { implementer: { ...impl, config: model !== undefined ? { model } : {} } },
+			};
+		};
+		const dry = runPlanStart({ plan: MANIFEST_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		model = "rerouted-model"; // a config edit re-routes the participant
+		expect(() =>
+			runPlanStart(
+				{ plan: MANIFEST_PLAN, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a confirmed start persists the approved bindings on the plan record", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = () => gateBinding("sha256:aaaa");
+		const result = approveAndConfirm(h, { plan: MANIFEST_PLAN }, () => "gen-id");
+		if (!result.launched) throw new Error("expected a launch");
+		const stored = present(h.store.get("gen-id"), "stored plan");
+		expect(stored.manifests?.a?.manifestDigest).toBe("sha256:aaaa");
+		// The step view stamps the approved digest for receipts.
+		const a = present(
+			result.view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(a.manifestDigest).toBe("sha256:aaaa");
+		expect(a.manifestPath).toBe("manifests/converge.json");
+		// The launched job carries the digest for the worker's own re-verification.
+		expect(present(h.launched[0], "launched a").manifestDigest).toBe("sha256:aaaa");
+		expect(present(h.launched[0], "launched a").manifestParticipants).toEqual(
+			stored.manifests?.a?.participants,
+		);
+	});
+
+	test("an unresolvable manifest reference is refused at the gate as a PlanError", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = () => {
+			throw new Error("no manifests/converge.json in the git tree at sha-approved");
+		};
+		expect(() => runPlanStart({ plan: MANIFEST_PLAN }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
+			PlanError,
+		);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a repo-escaping step manifestPath is refused at the gate", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = () => gateBinding("sha256:aaaa");
+		const escaping = {
+			...MANIFEST_PLAN,
+			steps: [{ id: "a", title: "A", body: "do a", manifestPath: "../outside.json" }],
+		};
+		expect(() => runPlanStart({ plan: escaping }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
+			/escapes the repo/,
+		);
+		expect(h.launched).toHaveLength(0);
 	});
 });

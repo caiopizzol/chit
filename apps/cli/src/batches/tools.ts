@@ -5,16 +5,18 @@
 // wired in server.ts. Mirrors plans/tools.ts so the two strategies gate identically.
 
 import { createHash } from "node:crypto";
-import { isAbsolute, resolve } from "node:path";
 import {
 	type BatchApprovalArtifact,
 	type BatchApprovalBase,
+	type BatchManifestBindings,
 	buildBatchApprovalArtifact,
 	canonicalBatchApprovalPayload,
+	type ManifestBinding,
 	type RequiredCheck,
 } from "@chit-run/core";
+import { normalizeManifestReference } from "../manifest/binding.ts";
 import { type BatchEngineDeps, type BatchView, describeBatch, startBatch } from "./engine.ts";
-import { planTasks, type TaskInput } from "./plan.ts";
+import { PlanError, planTasks, type TaskInput } from "./plan.ts";
 import type { BatchStore } from "./store.ts";
 import { type BatchTask, MAX_PARALLEL_CAP } from "./types.ts";
 import { repoToplevel, resolveBaseSha } from "./worktree.ts";
@@ -27,11 +29,23 @@ import { repoToplevel, resolveBaseSha } from "./worktree.ts";
 const DEFAULT_MAX_PARALLEL = 2;
 const DEFAULT_MAX_ITERATIONS = 3;
 
-// Resolve a (possibly relative) manifest path to an absolute path against the batch cwd, so
-// the dry run hashes and the confirmed start launches the SAME concrete path -- a relative
-// path re-resolved against a task worktree later would point somewhere else.
-function resolveManifestAbsolute(manifestPath: string, cwd: string): string {
-	return isAbsolute(manifestPath) ? manifestPath : resolve(cwd, manifestPath);
+// Normalize a manifest reference to its bound identity: an absolute path stays
+// itself (a global, operator-named file); a relative path becomes repo-root
+// relative (rejecting repo escapes) and is later read from the GIT TREE at the
+// batch base -- the content the task worktree checks out -- never from the caller
+// checkout's working tree. The worker then resolves the same relative path against
+// its task worktree, so the dry run binds exactly the bytes the task reads.
+function normalizeManifestIdentity(
+	manifestPath: string,
+	cwd: string,
+	repoRoot: string,
+	context: string,
+): string {
+	try {
+		return normalizeManifestReference(manifestPath, cwd, repoRoot).manifestPath;
+	} catch (e) {
+		throw new PlanError(`${context}: ${(e as Error).message}`);
+	}
 }
 
 export interface BatchStartInput {
@@ -78,6 +92,10 @@ export type BatchStartResult =
 			manifestPath?: string;
 			requiredChecks?: RequiredCheck[];
 			callTimeoutMs?: number;
+			// The resolved manifest bindings (batch default + per-task overrides): content
+			// digest + safe participant execution summary, bound by the approval hash so
+			// the operator reviews the execution surface, not just a path string.
+			manifests?: BatchManifestBindings;
 			approvalHash: string;
 	  }
 	| { launched: true; view: BatchView; base: BatchApprovalBase; approvalHash: string };
@@ -103,15 +121,25 @@ export function runBatchStart(
 	deps: BatchEngineDeps,
 	genId: () => string,
 ): BatchStartResult {
-	// Resolve manifest paths to absolute up front so the dry-run artifact and the confirmed
-	// launch bind/run the SAME paths. The per-task override is resolved here too; planTasks
-	// then carries the absolute path onto the BatchTask the artifact is built from.
+	// Normalize manifest references up front so the dry-run artifact and the confirmed
+	// launch bind/run the SAME identity: absolute paths stay themselves; relative paths
+	// become repo-root relative (rejecting repo escapes) and are read from the git tree
+	// at the batch base. The per-task override is normalized here too; planTasks then
+	// carries the normalized path onto the BatchTask the artifact is built from.
+	const callerCheckout = repoToplevel(deps.git, cwd);
 	const batchManifest =
-		input.manifestPath !== undefined ? resolveManifestAbsolute(input.manifestPath, cwd) : undefined;
+		input.manifestPath !== undefined
+			? normalizeManifestIdentity(input.manifestPath, cwd, callerCheckout, "manifest_path")
+			: undefined;
 	const plannedInputs: TaskInput[] = input.tasks.map((t) => ({
 		...t,
 		...(t.manifestPath !== undefined && {
-			manifestPath: resolveManifestAbsolute(t.manifestPath, cwd),
+			manifestPath: normalizeManifestIdentity(
+				t.manifestPath,
+				cwd,
+				callerCheckout,
+				`task ${JSON.stringify(t.id)} manifestPath`,
+			),
 		}),
 	}));
 
@@ -125,9 +153,22 @@ export function runBatchStart(
 	// checkout's tip, not the main repo's HEAD. Binding the sha (not just the ref) means a ref
 	// that moves between approval and confirmation changes the hash.
 	const ref = input.baseBranch ?? "HEAD";
-	const callerCheckout = repoToplevel(deps.git, cwd);
 	const sha = resolveBaseSha(deps.git, callerCheckout, ref);
 	const base: BatchApprovalBase = { ref, sha };
+
+	// Bind every manifest reference to its EFFECTIVE execution surface: content digest
+	// (from the git tree at the approved base for a repo-relative path, the filesystem
+	// for an absolute one) + safe participant execution summary. Both the dry run and
+	// the confirm pass through here, so an edited manifest or a config change that
+	// re-routes participants changes the hash and the confirm refuses.
+	const manifests = resolveBatchManifests(
+		normalizedTasks,
+		batchManifest,
+		base.sha,
+		callerCheckout,
+		cwd,
+		deps,
+	);
 
 	// Apply the SAME defaults/caps startBatch will execute with, and bind those effective values
 	// (not the raw inputs) so the operator approves what actually runs.
@@ -147,6 +188,7 @@ export function runBatchStart(
 		...(batchManifest !== undefined && { manifestPath: batchManifest }),
 		...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
 		...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+		...(manifests !== undefined && { manifests }),
 	});
 	const hash = batchApprovalHash(artifact);
 
@@ -161,6 +203,7 @@ export function runBatchStart(
 			...(batchManifest !== undefined && { manifestPath: batchManifest }),
 			...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
 			...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+			...(manifests !== undefined && { manifests }),
 			approvalHash: hash,
 		};
 	}
@@ -190,6 +233,44 @@ export function runBatchStart(
 		...(batchManifest !== undefined && { manifestPath: batchManifest }),
 		...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
 		...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+		...(manifests !== undefined && { manifests }),
 	});
 	return { launched: true, view: describeBatch(batch, deps), base, approvalHash: hash };
+}
+
+// Resolve the binding for the batch-level default manifest and every per-task
+// override. Returns undefined when nothing is bound: no manifest references, or the
+// deps carry no resolver (test harnesses; production always wires one). A reference
+// that cannot be resolved -- missing from the tree at the approved base, a symlink
+// object, bad JSON, an unresolvable participant -- throws PlanError naming the
+// surface, so a bad batch is refused at the gate like a structural failure.
+function resolveBatchManifests(
+	tasks: BatchTask[],
+	batchManifest: string | undefined,
+	baseSha: string,
+	callerCheckout: string,
+	cwd: string,
+	deps: BatchEngineDeps,
+): BatchManifestBindings | undefined {
+	if (deps.resolveManifestBinding === undefined) return undefined;
+	const resolveBinding = deps.resolveManifestBinding;
+	const bind = (manifestPath: string, context: string): ManifestBinding => {
+		try {
+			return resolveBinding({ manifestPath, baseSha, gitCwd: callerCheckout, configCwd: cwd });
+		} catch (e) {
+			throw new PlanError(`${context}: ${(e as Error).message}`);
+		}
+	};
+	const taskBindings: Record<string, ManifestBinding> = {};
+	for (const t of tasks) {
+		if (t.manifestPath === undefined) continue;
+		taskBindings[t.id] = bind(t.manifestPath, `task ${JSON.stringify(t.id)} manifestPath`);
+	}
+	const batchBinding =
+		batchManifest !== undefined ? bind(batchManifest, "manifest_path") : undefined;
+	if (batchBinding === undefined && Object.keys(taskBindings).length === 0) return undefined;
+	return {
+		...(batchBinding !== undefined && { batch: batchBinding }),
+		...(Object.keys(taskBindings).length > 0 && { tasks: taskBindings }),
+	};
 }

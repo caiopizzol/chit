@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RequiredCheck } from "@chit-run/core";
+import type { ManifestBinding, RequiredCheck } from "@chit-run/core";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import {
 	advanceBatch,
@@ -29,6 +29,8 @@ class FakeJobs {
 		jobId: string;
 		cwd: string;
 		manifestPath?: string;
+		manifestDigest?: string;
+		manifestParticipants?: LaunchJobParams["manifestParticipants"];
 		scope: string;
 		requiredChecks?: RequiredCheck[];
 		callTimeoutMs?: number;
@@ -54,6 +56,9 @@ class FakeJobs {
 			...p.worktree,
 			scope: p.scope,
 			task: p.task,
+			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
+			...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
+			...(p.manifestParticipants !== undefined && { manifestParticipants: p.manifestParticipants }),
 			maxIterations: p.maxIterations,
 			allowUnenforced: false,
 			state: "queued",
@@ -65,6 +70,8 @@ class FakeJobs {
 			jobId,
 			cwd: p.cwd,
 			manifestPath: p.manifestPath,
+			manifestDigest: p.manifestDigest,
+			manifestParticipants: p.manifestParticipants,
 			scope: p.scope,
 			requiredChecks: p.requiredChecks,
 			callTimeoutMs: p.callTimeoutMs,
@@ -1129,5 +1136,112 @@ describe("terminal nextAction after cleanup (cleanedAt) drops stale cleanup/work
 		expect(v.nextAction).not.toMatch(/inspect[^.]*worktree/i);
 		expect(v.nextAction).toContain("already retired");
 		expect(v.nextAction).toContain("receipt");
+	});
+});
+
+// --- launch-time manifest binding verification --------------------------------
+
+function engineBinding(manifestPath: string, digest: string): ManifestBinding {
+	return {
+		manifestPath,
+		source: "git",
+		manifestDigest: digest,
+		participants: {
+			implementer: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: {},
+			},
+		},
+	};
+}
+
+describe("launch-time manifest binding verification (batch tasks)", () => {
+	test("a matching binding launches and forwards the approved digest to the job", () => {
+		deps.resolveManifestBinding = (p) => engineBinding(p.manifestPath, "sha256:aaaa");
+		const c = startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 2,
+			manifestPath: "manifests/default.json",
+			manifests: { batch: engineBinding("manifests/default.json", "sha256:aaaa") },
+		});
+		expect(taskOf(c, "a").status).toBe("running");
+		expect(jobs.launched).toHaveLength(1);
+		expect(present(jobs.launched[0], "launched a").manifestDigest).toBe("sha256:aaaa");
+		expect(present(jobs.launched[0], "launched a").manifestParticipants).toEqual(
+			c.manifests?.batch?.participants,
+		);
+	});
+
+	test("digest drift refuses the task (failed, with the reason) before any worktree or job", () => {
+		const verified: string[] = [];
+		deps.resolveManifestBinding = (p) => {
+			verified.push(p.baseSha);
+			return engineBinding(p.manifestPath, "sha256:CHANGED");
+		};
+		const c = startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 2,
+			manifestPath: "manifests/default.json",
+			manifests: { batch: engineBinding("manifests/default.json", "sha256:aaaa") },
+		});
+		const a = taskOf(c, "a");
+		expect(a.status).toBe("failed");
+		expect(a.error).toContain("manifest execution drift");
+		expect(a.error).toContain("manifest content changed");
+		expect(a.worktreePath).toBeUndefined(); // refused before the worktree was cut
+		expect(jobs.launched).toHaveLength(0);
+		// Every batch task is cut from the batch base; verification reads from it.
+		expect(verified).toEqual(["basesha"]);
+	});
+
+	test("a per-task override verifies against ITS binding; a drifting sibling does not block it", () => {
+		deps.resolveManifestBinding = (p) =>
+			p.manifestPath === "manifests/own.json"
+				? engineBinding(p.manifestPath, "sha256:own")
+				: engineBinding(p.manifestPath, "sha256:DRIFTED");
+		const c = startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [task("a", { manifestPath: "manifests/own.json" }), task("b")],
+			maxParallel: 2,
+			manifestPath: "manifests/default.json",
+			manifests: {
+				batch: engineBinding("manifests/default.json", "sha256:aaaa"),
+				tasks: { a: engineBinding("manifests/own.json", "sha256:own") },
+			},
+		});
+		expect(taskOf(c, "a").status).toBe("running"); // its own binding matches
+		expect(taskOf(c, "b").status).toBe("failed"); // the batch default drifted
+		expect(jobs.launched).toHaveLength(1);
+	});
+
+	test("no approved binding (legacy record) or no resolver -> launches as before", () => {
+		deps.resolveManifestBinding = () => engineBinding("manifests/default.json", "sha256:zzzz");
+		const c1 = startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 2,
+			manifestPath: "manifests/default.json",
+		});
+		expect(taskOf(c1, "a").status).toBe("running");
+		delete deps.resolveManifestBinding;
+		const c2 = startBatch(store, deps, {
+			id: "b2",
+			cwd,
+			tasks: [task("a")],
+			maxParallel: 2,
+			manifestPath: "manifests/default.json",
+			manifests: { batch: engineBinding("manifests/default.json", "sha256:aaaa") },
+		});
+		expect(taskOf(c2, "a").status).toBe("running");
 	});
 });

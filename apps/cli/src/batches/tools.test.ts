@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ManifestBinding } from "@chit-run/core";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import type { BatchEngineDeps, LaunchJobParams } from "./engine.ts";
 import { PlanError, type TaskInput } from "./plan.ts";
@@ -342,5 +343,160 @@ describe("runBatchStart: the gate refuses before any mutation", () => {
 			),
 		).toThrow(BatchApprovalRefused);
 		expect(launched).toHaveLength(0);
+	});
+});
+
+// --- manifest binding at the gate: the approval hash binds the execution surface ---
+
+function gateBinding(manifestPath: string, digest: string): ManifestBinding {
+	return {
+		manifestPath,
+		source: "git",
+		manifestDigest: digest,
+		participants: {
+			implementer: {
+				agentId: "claude",
+				adapter: "claude-cli",
+				session: "per_scope",
+				permissions: { filesystem: "write" },
+				enforcesReadOnly: false,
+				config: {},
+			},
+		},
+	};
+}
+
+describe("runBatchStart: manifest binding (digest + participant summary in the hash)", () => {
+	test("a relative manifest path is normalized repo-root relative and bound from the base commit", () => {
+		const h = makeHarness();
+		const requests: Array<{ manifestPath: string; baseSha: string }> = [];
+		h.deps.resolveManifestBinding = (p) => {
+			requests.push({ manifestPath: p.manifestPath, baseSha: p.baseSha });
+			return gateBinding(p.manifestPath, "sha256:aaaa");
+		};
+		const result = runBatchStart(
+			{
+				tasks: [
+					{
+						id: "a",
+						title: "A",
+						body: "do a",
+						claimedPaths: ["src/a"],
+						manifestPath: "manifests/own.json",
+					},
+					{ id: "b", title: "B", body: "do b", claimedPaths: ["src/b"] },
+				],
+				manifestPath: "manifests/default.json",
+			},
+			h.cwd,
+			h.store,
+			h.deps,
+			noLaunch,
+		);
+		if (result.launched) throw new Error("expected a dry run");
+		// Identities are repo-root relative (NOT absolutized into the caller checkout),
+		// and every binding resolves from the approved base commit.
+		expect(result.manifestPath).toBe("manifests/default.json");
+		expect(present(result.tasks[0], "task a").manifestPath).toBe("manifests/own.json");
+		expect(result.manifests?.batch?.manifestPath).toBe("manifests/default.json");
+		expect(result.manifests?.tasks?.a?.manifestPath).toBe("manifests/own.json");
+		expect(result.manifests?.tasks?.b).toBeUndefined();
+		for (const r of requests) expect(r.baseSha).toBe("sha-approved");
+	});
+
+	test("an absolute manifest path stays absolute and is bound as a file read", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = (p) => ({
+			...gateBinding(p.manifestPath, "sha256:abs"),
+			source: "file",
+		});
+		const result = runBatchStart(
+			{ tasks: TASKS, manifestPath: "/global/manifest.json" },
+			h.cwd,
+			h.store,
+			h.deps,
+			noLaunch,
+		);
+		if (result.launched) throw new Error("expected a dry run");
+		expect(result.manifestPath).toBe("/global/manifest.json");
+		expect(result.manifests?.batch?.source).toBe("file");
+	});
+
+	test("a manifest whose content changed after the dry run is refused at confirm", () => {
+		const h = makeHarness();
+		let digest = "sha256:aaaa";
+		h.deps.resolveManifestBinding = (p) => gateBinding(p.manifestPath, digest);
+		const input: BatchStartInput = { tasks: TASKS, manifestPath: "manifests/default.json" };
+		const dry = runBatchStart(input, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		digest = "sha256:bbbb"; // the manifest content moved between dry run and confirm
+		expect(() =>
+			runBatchStart(
+				{ ...input, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(BatchApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a confirmed start persists the approved bindings on the batch record", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = (p) => gateBinding(p.manifestPath, "sha256:aaaa");
+		const input: BatchStartInput = { tasks: TASKS, manifestPath: "manifests/default.json" };
+		const dry = runBatchStart(input, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		const confirmed = runBatchStart(
+			{ ...input, confirm: true, approvalHash: dry.approvalHash },
+			h.cwd,
+			h.store,
+			h.deps,
+			() => "batch-id",
+		);
+		if (!confirmed.launched) throw new Error("expected a launch");
+		const stored = present(h.store.get("batch-id"), "stored batch");
+		expect(stored.manifests?.batch?.manifestDigest).toBe("sha256:aaaa");
+		// The launched job carries the digest for the worker's own re-verification, and
+		// the task view stamps it for receipts.
+		expect(present(h.launched[0], "launched a").manifestDigest).toBe("sha256:aaaa");
+		const taskA = present(
+			confirmed.view.tasks.find((t) => t.id === "a"),
+			"task a view",
+		);
+		expect(taskA.manifestDigest).toBe("sha256:aaaa");
+	});
+
+	test("a repo-escaping manifest path is refused at the gate", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = (p) => gateBinding(p.manifestPath, "sha256:aaaa");
+		expect(() =>
+			runBatchStart(
+				{ tasks: TASKS, manifestPath: "../outside.json" },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(/escapes the repo/);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("an unresolvable manifest reference is refused at the gate as a PlanError", () => {
+		const h = makeHarness();
+		h.deps.resolveManifestBinding = () => {
+			throw new Error("no manifests/default.json in the git tree at sha-approved");
+		};
+		expect(() =>
+			runBatchStart(
+				{ tasks: TASKS, manifestPath: "manifests/default.json" },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanError);
+		expect(h.launched).toHaveLength(0);
 	});
 });

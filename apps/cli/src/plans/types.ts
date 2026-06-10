@@ -3,6 +3,7 @@ import type {
 	LoopReceipt,
 	LoopStopStatus,
 	LoopVerdict,
+	ManifestBinding,
 	PlanApplyPolicy,
 	PlanCleanupPolicy,
 	RequiredCheck,
@@ -137,7 +138,9 @@ export interface PlanStepRecord {
 	// outputs, or blob bodies -- that provenance lives in participants above, not here. Absent
 	// on a running step (no receipt before it settles) and on a legacy record.
 	receipt?: LoopReceipt;
-	error?: string; // set when status === "failed"
+	// Set when status === "failed", and when a launch-time manifest-binding drift
+	// paused the step as "needs_human" (the reason names the drift).
+	error?: string;
 }
 
 export interface Plan {
@@ -171,6 +174,13 @@ export interface Plan {
 	integrationBranch: string;
 	integrationWorktree?: string; // absolute; the managed worktree the branch lives in
 	integrationTipSha?: string; // the branch tip; advances one commit per applied step
+	// The APPROVED manifest binding per step that names a manifestPath (keyed by step
+	// id): content digest + safe participant execution summary, exactly what the
+	// approval hash bound. Each later step launch re-resolves the reference from the
+	// step's own cut commit and pauses the step needs_human when it no longer matches
+	// -- confirm-time verification alone is not enough for a long plan. Absent on a
+	// manifest-free plan and on records that predate the binding.
+	manifests?: Record<string, ManifestBinding>;
 	steps: PlanStepRecord[];
 	status: PlanStatus;
 	createdAt: string; // ISO 8601

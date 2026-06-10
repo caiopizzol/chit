@@ -9,10 +9,17 @@
 // first wave; advance reconciles finished jobs and launches the next wave;
 // describe is READ-ONLY (never launches or mutates); cancel stops active jobs.
 
-import type { RequiredCheck } from "@chit-run/core";
+import type {
+	BatchManifestBindings,
+	BoundParticipantSummary,
+	ManifestBinding,
+	RequiredCheck,
+} from "@chit-run/core";
+import { describeManifestBindingDrift } from "@chit-run/core";
 import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
 import { pickRequiredChecks } from "../loops/required-checks.ts";
+import type { ResolveManifestBinding } from "../manifest/binding.ts";
 import { planTasks, resolveManifestPath, type TaskInput } from "./plan.ts";
 import { deriveBatchStatus, isBlocked, isStartable, selectRunnable } from "./schedule.ts";
 import type { BatchStore } from "./store.ts";
@@ -41,6 +48,13 @@ export interface LaunchJobParams {
 	task: string; // the task body (the converge implementer's brief)
 	loopId: string;
 	manifestPath?: string;
+	// The APPROVED manifest content digest for the task's effective manifest reference,
+	// forwarded so the job record carries it and the worker re-verifies the bytes it
+	// actually reads.
+	manifestDigest?: string;
+	// The APPROVED participant execution summary for the same manifest binding. Forwarded
+	// to the worker so config drift after enqueue cannot silently change the agent/model surface.
+	manifestParticipants?: Record<string, BoundParticipantSummary>;
 	maxIterations: number;
 	// The task's effective override (task ?? batch checks); launchJob resolves it
 	// against the manifest's checks at the snapshot boundary.
@@ -98,6 +112,12 @@ export interface BatchEngineDeps {
 		// can surface work no completed iteration captured. Absent when not inspected.
 		partialWork?: PartialWork;
 	};
+	// Re-resolve a manifest reference's CURRENT binding (content digest + participant
+	// summary) so a task launch can compare it to the approved one and refuse the task
+	// on drift. Optional: when absent, no launch-time verification runs (a record with
+	// no approved bindings has nothing to verify against either). The real
+	// implementation loads fresh config per call, matching the worker's lifecycle.
+	resolveManifestBinding?: ResolveManifestBinding;
 	// Remove a task's worktree + branch (real: removeTaskWorktree with realGit).
 	// Injected so cleanup is testable without touching real git/fs. Only called by
 	// cleanupBatch, only for terminal tasks, only under an explicit confirm.
@@ -127,6 +147,9 @@ export interface StartBatchOptions {
 	requiredChecks?: RequiredCheck[];
 	// Batch-level call-timeout override (ms), applied to any task without its own.
 	callTimeoutMs?: number;
+	// The APPROVED manifest bindings from the gate's dry run, persisted on the batch
+	// record so every task launch re-verifies against exactly what was approved.
+	manifests?: BatchManifestBindings;
 }
 
 // Create the batch, persist it, and launch the initial runnable wave.
@@ -163,6 +186,7 @@ export function startBatch(
 		...(opts.manifestPath !== undefined && { manifestPath: opts.manifestPath }),
 		...(opts.requiredChecks !== undefined && { requiredChecks: opts.requiredChecks }),
 		...(opts.callTimeoutMs !== undefined && { callTimeoutMs: opts.callTimeoutMs }),
+		...(opts.manifests !== undefined && { manifests: opts.manifests }),
 		status: "planning",
 		tasks,
 		createdAt: now,
@@ -444,6 +468,16 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 	for (const task of runnable) {
 		const t = c.tasks.find((x) => x.id === task.id);
 		if (!t) continue;
+		// Launch-time execution-contract verification: re-resolve the task's effective
+		// manifest binding from the batch base and refuse the task on any drift, BEFORE
+		// creating its worktree or spawning a worker. A failed task in the existing batch
+		// vocabulary; the rest of the batch goes on.
+		const drift = taskManifestDrift(c, t, deps);
+		if (drift !== undefined) {
+			t.status = "failed";
+			t.error = `manifest execution drift detected before launch: ${drift}. The task was refused instead of silently running a changed execution surface; re-run the dry run and re-approve.`;
+			continue;
+		}
 		try {
 			const { worktreePath, branch } = deps.createWorktree(
 				c.repo,
@@ -490,6 +524,14 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 				...(resolveManifestPath(t, c.manifestPath) !== undefined && {
 					manifestPath: resolveManifestPath(t, c.manifestPath),
 				}),
+				// Stamp the approved digest on the job so the detached worker re-verifies the
+				// exact bytes it reads (the last read before execution).
+				...(taskApprovedBinding(c, t) !== undefined && {
+					manifestDigest: taskApprovedBinding(c, t)?.manifestDigest,
+				}),
+				...(taskApprovedBinding(c, t)?.participants !== undefined && {
+					manifestParticipants: taskApprovedBinding(c, t)?.participants,
+				}),
 				...(taskChecks && { requiredChecks: taskChecks }),
 				...(taskCallTimeoutMs !== undefined && { callTimeoutMs: taskCallTimeoutMs }),
 				maxIterations,
@@ -507,6 +549,36 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 	c.status = deriveBatchStatus(c);
 	c.updatedAt = iso(deps.now());
 	return c;
+}
+
+// The APPROVED binding for a task's effective manifest reference, mirroring
+// resolveManifestPath's precedence: the task's own override binds under its id,
+// else the batch-level default binding. Undefined when nothing was bound (no
+// manifest reference, or a record that predates the binding).
+function taskApprovedBinding(c: Batch, t: BatchTask): ManifestBinding | undefined {
+	if (t.manifestPath !== undefined) return c.manifests?.tasks?.[t.id];
+	return c.manifests?.batch;
+}
+
+// Why the task's CURRENT manifest binding no longer matches the approved one, or
+// undefined when it matches (or there is nothing to verify: no manifest reference,
+// no approved binding, or no resolver wired). Every batch task is cut from the
+// batch base, so the reference is re-resolved from c.baseSha; a resolution failure
+// (manifest gone, now a symlink, config broken) is drift too.
+function taskManifestDrift(c: Batch, t: BatchTask, deps: BatchEngineDeps): string | undefined {
+	const approved = taskApprovedBinding(c, t);
+	if (approved === undefined || deps.resolveManifestBinding === undefined) return undefined;
+	try {
+		const current = deps.resolveManifestBinding({
+			manifestPath: approved.manifestPath,
+			baseSha: c.baseSha,
+			gitCwd: c.repo,
+			configCwd: c.callerCheckout ?? c.repo,
+		});
+		return describeManifestBindingDrift(approved, current);
+	} catch (e) {
+		return (e as Error).message;
+	}
 }
 
 // --- read-only describe (the join; NEVER launches or mutates) --------------
@@ -534,6 +606,10 @@ export interface BatchTaskView {
 	// The EFFECTIVE per-call timeout (ms) this task runs under (task ?? batch override),
 	// surfaced so the operator can see the active budget. Absent -> agent config / default.
 	callTimeoutMs?: number;
+	// The APPROVED manifest content digest for the task's effective manifest reference
+	// (task override, else the batch default), so a receipt answers which execution
+	// surface was approved and run. Participant provenance is `participants` below.
+	manifestDigest?: string;
 	// Execution provenance for the task's loop job: which agent/adapter/session/permissions/config
 	// each participant ran with. Joined live from the loop job (persisted at enqueue); absent until
 	// the job exists or on a legacy record.
@@ -602,6 +678,9 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 			// the active value without the caller re-deriving the precedence.
 			...((t.callTimeoutMs ?? c.callTimeoutMs) !== undefined && {
 				callTimeoutMs: t.callTimeoutMs ?? c.callTimeoutMs,
+			}),
+			...(taskApprovedBinding(c, t) !== undefined && {
+				manifestDigest: taskApprovedBinding(c, t)?.manifestDigest,
 			}),
 		};
 		if (t.status === "running" && t.jobId) {

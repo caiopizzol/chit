@@ -16,6 +16,7 @@
 // BY the run, so binding them would make the hash unstable against its own execution.
 
 import { canonicalJson } from "../canonical-json.ts";
+import type { ManifestBinding } from "../manifest/binding.ts";
 import type { RequiredCheck } from "../manifest/types.ts";
 
 // The resolved base every task worktree branches from. `ref` is what the operator (or the
@@ -63,6 +64,16 @@ export interface BatchApprovalTask {
 // conflict forces serialization, list order decides which task launches first. Reordering
 // the list is therefore a real execution change and MUST move the hash. Optional knobs are
 // included only when set, so absent and present-as-undefined bind identically.
+// The EFFECTIVE execution surface of every manifest the batch references: the
+// batch-level default manifest (when set) and each task override (keyed by task
+// id), each bound by content digest + safe participant execution summary. Binding
+// only the path string would let the manifest content or the resolved agents change
+// between approval and launch without moving the hash.
+export interface BatchManifestBindings {
+	batch?: ManifestBinding;
+	tasks?: Record<string, ManifestBinding>;
+}
+
 export interface BatchApprovalArtifact {
 	strategy: "batch";
 	base: BatchApprovalBase;
@@ -72,6 +83,7 @@ export interface BatchApprovalArtifact {
 	manifestPath?: string;
 	requiredChecks?: RequiredCheck[];
 	callTimeoutMs?: number;
+	manifests?: BatchManifestBindings;
 }
 
 export interface BatchApprovalInput {
@@ -82,6 +94,7 @@ export interface BatchApprovalInput {
 	manifestPath?: string;
 	requiredChecks?: RequiredCheck[];
 	callTimeoutMs?: number;
+	manifests?: BatchManifestBindings;
 }
 
 // Normalize one task to its execution-deciding core: keep id/title/body, sort the two set
@@ -112,7 +125,15 @@ export function buildBatchApprovalArtifact(input: BatchApprovalInput): BatchAppr
 		...(input.manifestPath !== undefined && { manifestPath: input.manifestPath }),
 		...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
 		...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+		...(hasBindings(input.manifests) && { manifests: input.manifests }),
 	};
+}
+
+// Bind manifests only when something is actually bound, so a binding-free batch
+// (no manifest references, or a caller that resolved none) keeps its hash.
+function hasBindings(m: BatchManifestBindings | undefined): boolean {
+	if (m === undefined) return false;
+	return m.batch !== undefined || Object.keys(m.tasks ?? {}).length > 0;
 }
 
 // The exact payload string the CLI/MCP layer hashes to produce a batch's approval hash.

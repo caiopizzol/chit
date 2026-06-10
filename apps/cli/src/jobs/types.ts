@@ -1,5 +1,6 @@
 import type {
 	AuditParticipantSnapshot,
+	BoundParticipantSummary,
 	LoopStopStatus,
 	LoopVerdict,
 	RequiredCheck,
@@ -106,6 +107,15 @@ export interface LoopJobRecord extends BaseJobRecord {
 	task: string; // the slice to converge on
 	// Absolute converge manifest path, or undefined for the embedded default.
 	manifestPath?: string;
+	// The APPROVED manifest content digest ("sha256:<hex>") when this run was launched
+	// from a digest-bound approval (a plan step or batch task). The worker re-reads the
+	// manifest in its own process and REFUSES to run when the bytes no longer match --
+	// the last verification before execution. Absent for direct runs and legacy records.
+	manifestDigest?: string;
+	// The APPROVED participant execution summary for the same digest-bound manifest.
+	// The worker compares its freshly resolved summary against this before running,
+	// closing the gap where config could change after enqueue but before execution.
+	manifestParticipants?: Record<string, BoundParticipantSummary>;
 	maxIterations: number;
 	// The EFFECTIVE chit-executed verification commands for this run, persisted at
 	// enqueue so the worker runs the intended checks without re-deriving them (and so a
