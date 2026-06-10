@@ -160,7 +160,7 @@ export function headPhaseElapsed(row: LiveActivityRow): string | undefined {
 	return formatAge(row.phaseElapsedMs);
 }
 
-// --- Execution identity shaping (pure helpers) ---
+// --- Execution topology shaping (pure helpers) ---
 
 // Shorten a content digest for a calm chip: keep the algorithm prefix (e.g.
 // "sha256:") and clip the hex to a short, still-recognizable head. A digest with
@@ -187,48 +187,73 @@ export function manifestName(path: string): string {
 	return parts.length > 0 ? (parts[parts.length - 1] as string) : path;
 }
 
-// One chip of the selected run's execution identity strip: a short label, the
-// compact display value, and the full value for a hover title (the path/digest
-// that the value abbreviates). Pure and ordered: recipe, then manifest, then
-// digest, so the strip reads "which recipe · which manifest · which bytes".
-export interface ExecutionChip {
-	key: string;
+// One identity block of the selected run's execution topology: the approved
+// recipe or the bound manifest, drawn as a block that wires INTO the
+// implementer/reviewer/checks agent chain so the detail reads as execution
+// wiring rather than a separate identity strip. `value` is the compact display
+// (recipe id / manifest name); `detail` is a quiet secondary line (recipe origin
+// layer / shortened content digest). `title`/`detailTitle` carry the full path
+// and full digest for a hover, so nothing legible is hidden while the block stays
+// compact. Privacy: built only from LiveExecutionIdentity (recipe id/origin,
+// manifest path, content digest) -- never manifest contents, prompts, config, or env.
+export interface IdentityBlockView {
+	kind: "recipe" | "manifest";
 	label: string;
 	value: string;
-	// The unabbreviated value, when the display value is a shortened form (manifest
-	// path, digest). Absent when value is already complete (the recipe id).
+	// The unabbreviated value, when the display value is a shortened form (the
+	// manifest path behind its last segment). Absent when value is already complete.
 	title?: string;
+	// A quiet secondary line: the recipe origin layer, or the manifest content
+	// digest. Absent when there is no second fact to carry.
+	detail?: string;
+	// The unabbreviated detail, when detail is a shortened form (the full digest
+	// behind shortDigest). Absent otherwise.
+	detailTitle?: string;
 }
 
-// The execution identity chips for a row, empty when the row carries none
-// (foreground rows, direct background runs with no recipe/manifest binding, older
-// servers) so the detail renders nothing. Recipe origin is folded into the recipe
-// chip value as a parenthetical layer, keeping the strip to one chip per fact.
-export function executionChips(row: LiveActivityRow): ExecutionChip[] {
+// The execution-identity blocks for a row, ordered recipe then manifest, empty
+// when the row carries no execution identity (foreground rows, direct background
+// runs with no recipe/manifest binding, older servers) so the topology shows just
+// the agent blocks. The recipe origin and the content digest ride their block as
+// the quiet detail line, keeping the topology to one block per execution entity.
+export function identityBlockViews(row: LiveActivityRow): IdentityBlockView[] {
 	if (row.source !== "background" || !row.execution) return [];
 	const ex = row.execution;
-	const chips: ExecutionChip[] = [];
+	const blocks: IdentityBlockView[] = [];
 	if (ex.recipe) {
-		const origin = ex.recipe.origin ? ` (${ex.recipe.origin})` : "";
-		chips.push({ key: "recipe", label: "recipe", value: `${ex.recipe.id}${origin}` });
-	}
-	if (ex.manifestPath) {
-		chips.push({
-			key: "manifest",
-			label: "manifest",
-			value: manifestName(ex.manifestPath),
-			title: ex.manifestPath,
+		blocks.push({
+			kind: "recipe",
+			label: "recipe",
+			value: ex.recipe.id,
+			...(ex.recipe.origin && { detail: ex.recipe.origin }),
 		});
 	}
-	if (ex.manifestDigest) {
-		chips.push({
-			key: "digest",
-			label: "digest",
-			value: shortDigest(ex.manifestDigest),
-			title: ex.manifestDigest,
-		});
+	if (ex.manifestPath || ex.manifestDigest) {
+		const block: IdentityBlockView = ex.manifestPath
+			? {
+					kind: "manifest",
+					label: "manifest",
+					value: manifestName(ex.manifestPath),
+					title: ex.manifestPath,
+				}
+			: // Digest-only binding (no path): the digest IS the block's value, so it is
+				// not repeated as a detail below.
+				{
+					kind: "manifest",
+					label: "manifest",
+					value: shortDigest(ex.manifestDigest as string),
+					title: ex.manifestDigest,
+				};
+		// The content digest rides the manifest block as its secondary line when a
+		// path already names the block, identifying the bytes the path was bound to
+		// with the full digest on hover.
+		if (ex.manifestPath && ex.manifestDigest) {
+			block.detail = shortDigest(ex.manifestDigest);
+			block.detailTitle = ex.manifestDigest;
+		}
+		blocks.push(block);
 	}
-	return chips;
+	return blocks;
 }
 
 // A compact iteration label from the structured counters the hosts now report

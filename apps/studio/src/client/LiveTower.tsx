@@ -8,7 +8,7 @@
 // the page, not an overlay, so it polls while mounted and resets its read
 // session on a reload rather than on an open/close toggle.
 
-import { Fragment, useCallback, useState } from "react";
+import { useCallback, useState } from "react";
 import type { LiveActivityRow } from "../server/types.ts";
 import { cancelLiveRun } from "./api.ts";
 import { ConfigPanel } from "./ConfigPanel.tsx";
@@ -21,10 +21,10 @@ import {
 	concisePhase,
 	detailAges,
 	eventTail,
-	executionChips,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
+	identityBlockViews,
 	iterationLabel,
 	liveBody,
 	phaseTimeline,
@@ -51,24 +51,56 @@ function rowSummary(row: LiveActivityRow): { dot: string; text: string } {
 	return { dot: "live-dot--neutral", text: concisePhase(row) };
 }
 
-// The agent+adapter participants of a run, drawn as connected blocks. The
-// active phase lights up the matching role, and that live block carries the
-// current-phase elapsed, so the operator sees who is executing and for how long
-// without reading a transcript.
-function AgentBlocks({ row }: { row: LiveActivityRow }) {
-	const views = agentBlockViews(row);
-	if (views.length === 0) {
+// The wiring arrow between two blocks in the execution topology. Decorative --
+// the chain order already reads left to right -- so it is hidden from assistive
+// tech.
+function Connector() {
+	return (
+		<span className="agent-connector" aria-hidden="true">
+			→
+		</span>
+	);
+}
+
+// The selected run's execution topology: the approved recipe and bound manifest
+// (when the run carries execution identity) drawn as blocks that wire into the
+// implementer/reviewer/checks agent chain. The whole thing reads as the execution
+// wiring -- what runs, bound to which bytes, executed by whom -- in one connected
+// graph rather than a separate identity strip above a separate agent graph. The
+// active phase lights up the matching agent block, and that live block carries the
+// current-phase elapsed. Rows without execution identity show just the agent
+// blocks; a run with neither shows the calm note.
+function ExecutionTopology({ row }: { row: LiveActivityRow }) {
+	const identity = identityBlockViews(row);
+	const agents = agentBlockViews(row);
+	if (identity.length === 0 && agents.length === 0) {
 		return <p className="live-muted">No agent participants reported.</p>;
 	}
+	// Each block carries its own leading connector inside a non-wrapping node, so a
+	// connector can never strand at a line break or split from the block it points
+	// to: when the chain is too wide for the panel it wraps node-by-node, the arrow
+	// always travelling with the block it feeds.
 	return (
 		<div className="agent-blocks">
-			{views.map((v, i) => (
-				<Fragment key={v.role}>
-					{i > 0 && (
-						<span className="agent-connector" aria-hidden="true">
-							→
+			{identity.map((b, i) => (
+				<div className="topo-node" key={`id-${b.kind}`}>
+					{i > 0 && <Connector />}
+					<div className={`exec-block exec-block--${b.kind}`}>
+						<span className="agent-role">{b.label}</span>
+						<span className="exec-block-value" title={b.title}>
+							{b.value}
 						</span>
-					)}
+						{b.detail && (
+							<span className="exec-block-detail" title={b.detailTitle}>
+								{b.detail}
+							</span>
+						)}
+					</div>
+				</div>
+			))}
+			{agents.map((v, i) => (
+				<div className="topo-node" key={v.role}>
+					{(identity.length > 0 || i > 0) && <Connector />}
 					<div
 						className={`agent-block agent-block--${agentTone(v.agentId)}${
 							v.live ? " agent-block--live" : ""
@@ -80,7 +112,7 @@ function AgentBlocks({ row }: { row: LiveActivityRow }) {
 						{v.model && <span className="agent-model">{v.model}</span>}
 						{v.phaseElapsed && <span className="agent-phase-elapsed">{v.phaseElapsed}</span>}
 					</div>
-				</Fragment>
+				</div>
 			))}
 		</div>
 	);
@@ -260,26 +292,6 @@ function ActionStrip({ row, refresh }: { row: LiveActivityRow; refresh: () => vo
 	);
 }
 
-// The selected run's execution identity: a compact strip of what it runs --
-// recipe, bound manifest, content digest. Background loops launched from a
-// recipe / digest-bound approval carry this; every other row renders nothing, so
-// the default selected-run answer stays calm. Not a receipt -- identity chips
-// only, with the full path/digest on hover.
-function ExecutionIdentity({ row }: { row: LiveActivityRow }) {
-	const chips = executionChips(row);
-	if (chips.length === 0) return null;
-	return (
-		<div className="live-exec">
-			{chips.map((c) => (
-				<span className="live-exec-chip" key={c.key} title={c.title ?? c.value}>
-					<span className="live-exec-label">{c.label}</span>
-					<span className="live-exec-value">{c.value}</span>
-				</span>
-			))}
-		</div>
-	);
-}
-
 function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => void }) {
 	if (!row) {
 		return <p className="live-muted live-detail-empty">Select a live run to inspect it.</p>;
@@ -298,7 +310,6 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 			</div>
 			<ActionStrip key={rowKey(row)} row={row} refresh={refresh} />
 			<p className="live-detail-scope">{row.scope}</p>
-			<ExecutionIdentity row={row} />
 			{row.task && <TaskDisclosure task={row.taskFull ?? row.task} />}
 			<div className="live-ages">
 				{detailAges(row).map(([label, ms]) => (
@@ -309,7 +320,7 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 				))}
 			</div>
 			<PhaseTimeline row={row} />
-			<AgentBlocks row={row} />
+			<ExecutionTopology row={row} />
 			<RecentActivity row={row} />
 			{row.worktreePath && (
 				<p className="live-worktree">

@@ -21,7 +21,7 @@ The local server is part of the threat model. A launch token is generated at boo
 
 - **Top bar.** The chit live identity and a count of how many runs are live right now.
 - **Session rail.** A compact summary of active sessions, split into two groups. Foreground holds in-flight loop iterations mirrored from the cross-process registry. Background holds durable jobs from the job store, with `stale` derived when a worker has gone silent. The rail is a summary, not a dense table: one row per run with its phase, age, scope, and a short status line. The whole row selects.
-- **Run detail.** The selected run, shown with its agent blocks (which agent ran, via which adapter), derived ages, and a chit-managed worktree path when one is present.
+- **Run detail.** The selected run, shown as its execution wiring: when a background run was launched from a recipe and bound to a manifest, the approved recipe and bound manifest appear as blocks connected into the agent blocks (which agent ran, via which adapter), so the chain reads recipe to manifest to the implementer, reviewer, and checks. Runs without that identity show just the agent blocks. Alongside are the derived ages and a chit-managed worktree path when one is present.
 - **Console.** A small event stream of local transitions, newest first. A run appearing, changing phase, or disappearing logs one line; steady-state age ticks do not. The console holds the recent tail so the final transition stays readable after a run clears, and a page reload starts a fresh read session.
 
 ## What it reads

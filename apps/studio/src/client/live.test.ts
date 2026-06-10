@@ -22,10 +22,10 @@ import {
 	diffActivity,
 	EVENT_TAIL_DRAW_LIMIT,
 	eventTail,
-	executionChips,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
+	identityBlockViews,
 	iterationLabel,
 	liveBody,
 	manifestName,
@@ -321,15 +321,15 @@ describe("manifestName", () => {
 	});
 });
 
-describe("executionChips", () => {
-	test("foreground rows and rows with no execution identity yield no chips", () => {
-		expect(executionChips(fg())).toEqual([]);
-		expect(executionChips(bg())).toEqual([]);
-		expect(executionChips(bg({ execution: {} }))).toEqual([]);
+describe("identityBlockViews", () => {
+	test("foreground rows and rows with no execution identity yield no blocks", () => {
+		expect(identityBlockViews(fg())).toEqual([]);
+		expect(identityBlockViews(bg())).toEqual([]);
+		expect(identityBlockViews(bg({ execution: {} }))).toEqual([]);
 	});
 
-	test("recipe, manifest, and digest become ordered chips with full values on title", () => {
-		const chips = executionChips(
+	test("recipe and manifest become ordered blocks, digest riding the manifest block", () => {
+		const blocks = identityBlockViews(
 			bg({
 				execution: {
 					recipe: { id: "deep-converge", origin: "repo", mode: "converge" },
@@ -338,26 +338,52 @@ describe("executionChips", () => {
 				},
 			}),
 		);
-		expect(chips).toEqual([
-			{ key: "recipe", label: "recipe", value: "deep-converge (repo)" },
+		expect(blocks).toEqual([
+			{ kind: "recipe", label: "recipe", value: "deep-converge", detail: "repo" },
 			{
-				key: "manifest",
+				kind: "manifest",
 				label: "manifest",
 				value: "converge.json",
 				title: "/repo/chits/converge.json",
-			},
-			{
-				key: "digest",
-				label: "digest",
-				value: "sha256:0123456789…",
-				title: "sha256:0123456789abcdef0123456789abcdef",
+				detail: "sha256:0123456789…",
+				detailTitle: "sha256:0123456789abcdef0123456789abcdef",
 			},
 		]);
 	});
 
-	test("a recipe with no origin omits the parenthetical layer", () => {
-		const chips = executionChips(bg({ execution: { recipe: { id: "quick", mode: "converge" } } }));
-		expect(chips).toEqual([{ key: "recipe", label: "recipe", value: "quick" }]);
+	test("a recipe with no origin omits the detail line", () => {
+		const blocks = identityBlockViews(
+			bg({ execution: { recipe: { id: "quick", mode: "converge" } } }),
+		);
+		expect(blocks).toEqual([{ kind: "recipe", label: "recipe", value: "quick" }]);
+	});
+
+	test("a manifest path with no digest yields a manifest block with no detail", () => {
+		const blocks = identityBlockViews(
+			bg({ execution: { manifestPath: "/repo/chits/converge.json" } }),
+		);
+		expect(blocks).toEqual([
+			{
+				kind: "manifest",
+				label: "manifest",
+				value: "converge.json",
+				title: "/repo/chits/converge.json",
+			},
+		]);
+	});
+
+	test("a digest-only binding shows the digest as the manifest block value", () => {
+		const blocks = identityBlockViews(
+			bg({ execution: { manifestDigest: "sha256:0123456789abcdef0123456789abcdef" } }),
+		);
+		expect(blocks).toEqual([
+			{
+				kind: "manifest",
+				label: "manifest",
+				value: "sha256:0123456789…",
+				title: "sha256:0123456789abcdef0123456789abcdef",
+			},
+		]);
 	});
 });
 

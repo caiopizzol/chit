@@ -1500,36 +1500,40 @@ header.app .config-btn {
 	font-weight: 600;
 	color: var(--ink);
 }
-/* Execution identity strip: a calm row of chips (recipe / manifest / digest)
-   answering what the selected run executes. Quiet mono labels, no panel chrome --
-   it sits under the scope and never competes with the agent graph. Renders only
-   when the run carries execution identity. */
-.live-exec {
+/* Execution-identity blocks: the approved recipe and bound manifest, drawn at
+   the head of the agent chain so the run detail reads as one execution-wiring
+   graph (recipe → manifest → agents). Same block geometry as the agent blocks
+   they connect into, but a quiet receipt fill and a steady hairline -- they are
+   the "what runs", not a live agent, so they never take the live/warm treatment.
+   Renders only when the run carries execution identity. */
+.exec-block {
+	position: relative;
+	flex: 0 1 auto;
 	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	margin: 8px 0 0;
-}
-.live-exec-chip {
-	display: inline-flex;
-	align-items: baseline;
-	gap: 6px;
-	padding: 3px 8px;
+	flex-direction: column;
+	gap: 2px;
+	border: 1.5px solid var(--hairline);
+	border-radius: 9px;
 	background: var(--receipt);
-	border-radius: 3px;
-	max-width: 100%;
+	padding: 9px 12px;
+	min-width: 112px;
+	max-width: 240px;
 }
-.live-exec-label {
+/* The recipe id / manifest name, in the same weight as an agent id but kept on
+   one line with an ellipsis so a long value never widens the block. */
+.exec-block-value {
+	font-weight: 600;
+	font-size: 14px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The recipe origin / manifest content digest line. */
+.exec-block-detail {
+	margin-top: 2px;
 	font-family: "JetBrains Mono", monospace;
-	font-size: 9.5px;
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
+	font-size: 11px;
 	color: var(--faded);
-}
-.live-exec-value {
-	font-family: "JetBrains Mono", monospace;
-	font-size: 11.5px;
-	color: var(--carbon);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -1646,25 +1650,40 @@ header.app .config-btn {
 	color: var(--faded);
 }
 
-/* Connected agent blocks: who ran, drawn as a chain. */
+/* The execution topology: recipe and manifest identity blocks wired into the
+   agent blocks (who ran), drawn as one chain. Blocks are content-sized and the
+   chain wraps node-by-node when the full
+   recipe → manifest → implementer → reviewer → checks chain outruns the panel, so
+   a wide topology stays calm instead of overflowing. */
 .agent-blocks {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: stretch;
 	gap: 0;
+	row-gap: 8px;
 	margin: 8px 0 18px;
-	max-width: 520px;
+}
+/* One block plus its leading connector, kept on a single line (nowrap) so the
+   arrow always wraps together with the block it points to -- a connector can
+   never be stranded at a line break. align-items: stretch lets the block match
+   the tallest block on its row. */
+.topo-node {
+	display: inline-flex;
+	flex-wrap: nowrap;
+	align-items: stretch;
 }
 .agent-block {
 	position: relative;
-	flex: 1 1 0;
+	flex: 0 1 auto;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
 	border: 1.5px solid var(--hairline);
 	border-radius: 9px;
 	background: #fff;
-	padding: 10px 14px;
-	min-width: 150px;
+	padding: 9px 12px;
+	min-width: 118px;
+	max-width: 240px;
 }
 .agent-block--claude.agent-block--live {
 	border-color: var(--claude);
@@ -1718,7 +1737,7 @@ header.app .config-btn {
 	font-family: "JetBrains Mono", monospace;
 	color: var(--faded);
 	font-size: 15px;
-	width: 34px;
+	width: 24px;
 	text-align: center;
 }
 /* Recent-event tail: the selected run's last few runtime events as quiet
@@ -1842,9 +1861,6 @@ header.app .config-btn {
 		max-height: 260px;
 		border-right: none;
 		border-bottom: 1px solid var(--hairline);
-	}
-	.agent-blocks {
-		max-width: none;
 	}
 	.live-console-line {
 		grid-template-columns: auto minmax(0, 1fr);
