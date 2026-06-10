@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ManifestBinding, PlanError } from "@chit-run/core";
 import type { GitResult, GitRunner } from "../batches/worktree.ts";
+import { loadConfig } from "../config/load.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
-import type { ResolvedRecipe } from "../manifest/binding.ts";
+import {
+	type ResolvedRecipe,
+	resolveManifestBindingWith,
+	resolveRecipe,
+} from "../manifest/binding.ts";
 import type { LaunchPlanJobParams, PlanEngineDeps } from "./engine.ts";
 import { PlanStore } from "./store.ts";
 import { loadPlanInput, PlanApprovalRefused, runPlanStart } from "./tools.ts";
@@ -99,6 +105,23 @@ describe("loadPlanInput", () => {
 // resolves a real repo or spawns the detached workers the real deps launch. -----------
 
 const ok = (stdout = ""): GitResult => ({ code: 0, stdout, stderr: "" });
+
+function shellGit(args: string[], cwd: string): GitResult {
+	try {
+		return {
+			code: 0,
+			stdout: execFileSync("git", args, { cwd, encoding: "utf-8" }),
+			stderr: "",
+		};
+	} catch (e) {
+		const err = e as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
+		return {
+			code: err.status ?? 1,
+			stdout: String(err.stdout ?? ""),
+			stderr: String(err.stderr ?? ""),
+		};
+	}
+}
 
 // A plain main-repo checkout: --git-common-dir is <cwd>/.git, so mainRepoOfWorktree
 // resolves repo back to cwd (repo === callerCheckout for a non-linked launch). A symbolic
@@ -642,6 +665,168 @@ describe("runPlanStart: recipe-backed steps (resolved recipe in the hash)", () =
 		expect(a.manifestPath).toBe("manifests/converge.json");
 		expect(a.manifestDigest).toBe("sha256:aaaa");
 		expect(a.callTimeoutMs).toBe(1200000);
+	});
+
+	test("a real repo chit.config.json recipe menu resolves through the dry-run and confirm path", () => {
+		const repo = realpathSync(mkdtempSync(join(tmpdir(), "chit-plan-recipe-menu-")));
+		const git: GitRunner = (args, cwd = repo) => shellGit(args, cwd);
+		try {
+			expect(shellGit(["init", "-b", "main"], repo).code).toBe(0);
+			expect(shellGit(["config", "user.email", "test@example.com"], repo).code).toBe(0);
+			expect(shellGit(["config", "user.name", "Test User"], repo).code).toBe(0);
+			mkdirSync(join(repo, "manifests"), { recursive: true });
+			writeFileSync(
+				join(repo, "manifests", "converge.json"),
+				JSON.stringify({
+					schema: 1,
+					id: "dogfood-loop",
+					description: "recipe menu dogfood loop",
+					inputs: {
+						task: { type: "string" },
+						prior_review: { type: "string", optional: true },
+					},
+					participants: {
+						implementer: {
+							agent: "claude",
+							instructions: "implement",
+							session: "stateless",
+							permissions: { filesystem: "write" },
+						},
+						reviewer: {
+							agent: "codex",
+							instructions: "review",
+							session: "stateless",
+							permissions: { filesystem: "read_only" },
+						},
+					},
+					steps: {
+						implement: { call: "implementer", prompt: "{{ inputs.task }}" },
+						review: { call: "reviewer", prompt: "{{ steps.implement.output }}" },
+						out: { format: "{{ steps.review.output }}" },
+					},
+					output: "out",
+					policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+				}),
+			);
+			expect(shellGit(["add", "manifests/converge.json"], repo).code).toBe(0);
+			expect(shellGit(["commit", "-m", "test: add manifest"], repo).code).toBe(0);
+			writeFileSync(
+				join(repo, "chit.config.json"),
+				JSON.stringify({
+					recipes: {
+						"dogfood-loop": {
+							mode: "converge",
+							manifestPath: "manifests/converge.json",
+							maxIterations: 2,
+							callTimeoutMs: 60000,
+							description: "Run the temp repo dogfood loop",
+						},
+					},
+				}),
+			);
+
+			const jobs = new Map<string, LoopJobRecord>();
+			const launched: LaunchPlanJobParams[] = [];
+			const deps: PlanEngineDeps = {
+				git,
+				createIntegrationWorktree: (_repo, planId) => ({
+					worktreePath: `/tmp/${planId}/integration`,
+					branch: `chit-plan/${planId}/integration`,
+				}),
+				createStepWorktree: (_repo, planId, stepId) => ({
+					worktreePath: `/tmp/${planId}/steps/${stepId}`,
+					branch: `chit-plan/${planId}/steps/${stepId}`,
+				}),
+				launchJob: (p) => {
+					launched.push(p);
+					const jobId = "job-1";
+					jobs.set(jobId, {
+						runId: jobId,
+						policy: "loop",
+						loopId: p.loopId,
+						repoKey: "k",
+						cwd: p.cwd,
+						...p.worktree,
+						scope: p.scope,
+						task: p.task,
+						maxIterations: p.maxIterations,
+						allowUnenforced: false,
+						state: "queued",
+						createdAt: "t",
+						iterationsCompleted: 0,
+						auditRefs: [],
+						...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
+						...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
+						...(p.manifestParticipants !== undefined && {
+							manifestParticipants: p.manifestParticipants,
+						}),
+						...(p.recipe !== undefined && { recipe: p.recipe }),
+					});
+					return { jobId, loopId: p.loopId };
+				},
+				getJob: (id) => jobs.get(id),
+				cancelJob: () => {},
+				isStale: () => false,
+				loopDetail: () => ({ changedFiles: [], workspaceWarnings: [] }),
+				applyWorkspace: () => {
+					throw new Error("applyWorkspace is not wired in this recipe menu test");
+				},
+				commit: () => {
+					throw new Error("commit is not wired in this recipe menu test");
+				},
+				removeWorktree: () => {
+					throw new Error("removeWorktree is not wired in this recipe menu test");
+				},
+				removeEmptyDir: () => false,
+				resolveManifestBinding: (p) => {
+					const config = loadConfig(undefined, { cwd: p.configCwd });
+					return resolveManifestBindingWith(p, { git, config });
+				},
+				resolveRecipe: (p) => {
+					const config = loadConfig(undefined, { cwd: p.configCwd });
+					return resolveRecipe(p.recipeId, config, {
+						git,
+						repoRoot: p.gitCwd,
+						baseSha: p.baseSha,
+					});
+				},
+				now: () => 1000,
+			};
+			const store = new PlanStore(repo);
+			const plan = {
+				schema: 1,
+				title: "real recipe menu",
+				steps: [{ id: "a", title: "A", body: "do a", recipe: "dogfood-loop" }],
+			};
+
+			const dry = runPlanStart({ plan }, repo, store, deps, noLaunch);
+			if (dry.launched) throw new Error("expected a dry run");
+			expect(dry.recipes?.a).toMatchObject({
+				id: "dogfood-loop",
+				mode: "converge",
+				maxIterations: 2,
+				callTimeoutMs: 60000,
+			});
+			expect(dry.manifests?.a?.manifestPath).toBe("manifests/converge.json");
+			expect(dry.manifests?.a?.manifestDigest).toMatch(/^sha256:/);
+
+			const confirmed = runPlanStart(
+				{ plan, confirm: true, approvalHash: dry.approvalHash },
+				repo,
+				store,
+				deps,
+				() => "recipe-menu-plan",
+			);
+			if (!confirmed.launched) throw new Error("expected launch");
+			const launchedStep = present(launched[0], "launched recipe step");
+			expect(launchedStep.recipe).toEqual(dry.recipes?.a);
+			expect(launchedStep.manifestPath).toBe("manifests/converge.json");
+			expect(launchedStep.manifestDigest).toBe(dry.manifests?.a?.manifestDigest);
+			expect(launchedStep.maxIterations).toBe(2);
+			expect(launchedStep.callTimeoutMs).toBe(60000);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
 	});
 
 	test("step-level budgets override the recipe defaults on the launched job", () => {

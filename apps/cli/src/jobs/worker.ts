@@ -393,6 +393,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 					cwd: job.cwd,
 					loopId: job.loopId,
 					iteration: i,
+					...(job.recipe !== undefined && { recipe: job.recipe }),
 					task: job.task,
 					prior_review: priorReview,
 					execute: resolved.execute,

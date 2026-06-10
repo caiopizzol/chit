@@ -59,6 +59,7 @@ class FakeJobs {
 		manifestPath?: string;
 		manifestDigest?: string;
 		manifestParticipants?: LaunchPlanJobParams["manifestParticipants"];
+		recipe?: LaunchPlanJobParams["recipe"];
 		requiredChecks?: LaunchPlanJobParams["requiredChecks"];
 		callTimeoutMs?: number;
 		maxIterations: number;
@@ -81,6 +82,7 @@ class FakeJobs {
 			...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
 			...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
 			...(p.manifestParticipants !== undefined && { manifestParticipants: p.manifestParticipants }),
+			...(p.recipe !== undefined && { recipe: p.recipe }),
 			maxIterations: p.maxIterations,
 			allowUnenforced: false,
 			state: "queued",
@@ -95,6 +97,7 @@ class FakeJobs {
 			manifestPath: p.manifestPath,
 			manifestDigest: p.manifestDigest,
 			manifestParticipants: p.manifestParticipants,
+			recipe: p.recipe,
 			requiredChecks: p.requiredChecks,
 			callTimeoutMs: p.callTimeoutMs,
 			maxIterations: p.maxIterations,
@@ -686,6 +689,7 @@ describe("launch-time manifest binding verification (the long-plan gate)", () =>
 		expect(launched.manifestPath).toBe("manifests/converge.json");
 		expect(launched.manifestDigest).toBe("sha256:aaaa");
 		expect(launched.manifestParticipants).toEqual(c.manifests?.a?.participants);
+		expect(launched.recipe).toEqual(c.recipes?.a);
 		// ...and the recipe's default budgets (the step declared none; the plan default is 3).
 		expect(launched.maxIterations).toBe(4);
 		expect(launched.callTimeoutMs).toBe(1200000);

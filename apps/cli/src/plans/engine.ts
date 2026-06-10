@@ -23,6 +23,7 @@ import type {
 	NormalizedPlan,
 	PlanApplyPolicy,
 	PlanApprovalRecipe,
+	RecipeReceipt,
 	RequiredCheck,
 } from "@chit-run/core";
 import { describeManifestBindingDrift } from "@chit-run/core";
@@ -65,6 +66,7 @@ export interface LaunchPlanJobParams {
 	// The APPROVED participant execution summary for the same manifest binding. Forwarded
 	// to the worker so config drift after enqueue cannot silently change the agent/model surface.
 	manifestParticipants?: Record<string, BoundParticipantSummary>;
+	recipe?: RecipeReceipt;
 	maxIterations: number;
 	// The step's chit-executed verification commands; launchJob resolves them against the
 	// manifest's checks at the snapshot boundary.
@@ -894,6 +896,7 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 				...(c.manifests?.[next.id]?.participants !== undefined && {
 					manifestParticipants: c.manifests[next.id]?.participants,
 				}),
+				...(c.recipes?.[next.id] !== undefined && { recipe: c.recipes[next.id] }),
 				...(next.requiredChecks !== undefined && { requiredChecks: next.requiredChecks }),
 				...(stepCallTimeoutMs !== undefined && { callTimeoutMs: stepCallTimeoutMs }),
 			});

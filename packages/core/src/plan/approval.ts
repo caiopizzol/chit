@@ -14,7 +14,7 @@
 // every caller derives the identical hash from the identical approval artifact.
 
 import { canonicalJson } from "../canonical-json.ts";
-import type { ConfigOrigin } from "../config/types.ts";
+import type { RecipeReceipt } from "../config/types.ts";
 import type { ManifestBinding } from "../manifest/binding.ts";
 import type { NormalizedPlan } from "./types.ts";
 
@@ -33,14 +33,7 @@ export interface PlanApprovalBase {
 // participant summary) is bound through the same per-step `manifests` record direct
 // manifestPath steps use -- a recipe is a reference to a manifest, never a second
 // execution vocabulary, so it must not grow a second binding shape either.
-export interface PlanApprovalRecipe {
-	id: string;
-	origin?: ConfigOrigin;
-	mode: "converge";
-	maxIterations?: number;
-	callTimeoutMs?: number;
-	description?: string;
-}
+export interface PlanApprovalRecipe extends RecipeReceipt {}
 
 // The exact thing a confirmed plan start would run: the normalized plan, the resolved base
 // commit, and the launch-time per-step iteration budget (when the operator set one). This is

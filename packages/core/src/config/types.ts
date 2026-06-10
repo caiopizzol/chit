@@ -56,6 +56,18 @@ export interface ConfigOrigin {
 	path?: string;
 }
 
+// Durable receipt shape for an approved recipe selection. This intentionally omits
+// manifestPath because the resolved manifest is bound and surfaced separately; a recipe is
+// a named reference layer, not a second manifest vocabulary.
+export interface RecipeReceipt {
+	id: string;
+	origin?: ConfigOrigin;
+	mode: "converge";
+	maxIterations?: number;
+	callTimeoutMs?: number;
+	description?: string;
+}
+
 export interface ConfigProvenance {
 	agents: Record<string, ConfigOrigin>;
 	roles: Record<string, ConfigOrigin>;

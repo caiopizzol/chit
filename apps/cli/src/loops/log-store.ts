@@ -46,6 +46,7 @@ import {
 	type LoopStopStatus,
 	type LoopVerdict,
 	parseLoopLog,
+	type RecipeReceipt,
 	serializeLoopRecord,
 	type Verification,
 	type VerificationSource,
@@ -157,6 +158,7 @@ export interface StartOptions {
 		callerCheckout: string;
 	};
 	participants?: Record<string, AuditParticipantSnapshot>;
+	recipe?: RecipeReceipt;
 }
 
 export function startLoop(cwd: string, opts: StartOptions): { loopId: string; path: string } {
@@ -186,6 +188,7 @@ export function startLoop(cwd: string, opts: StartOptions): { loopId: string; pa
 			callerCheckout: opts.workspace.callerCheckout,
 		}),
 		...(opts.participants !== undefined && { participants: opts.participants }),
+		...(opts.recipe !== undefined && { recipe: opts.recipe }),
 	};
 	// Fresh file (truncates on force); serializeLoopRecord validates first.
 	writeFileSync(path, `${serializeLoopRecord(header)}\n`);

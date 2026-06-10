@@ -3,6 +3,7 @@ import type {
 	BoundParticipantSummary,
 	LoopStopStatus,
 	LoopVerdict,
+	RecipeReceipt,
 	RequiredCheck,
 	Verification,
 	VerificationSource,
@@ -116,6 +117,10 @@ export interface LoopJobRecord extends BaseJobRecord {
 	// The worker compares its freshly resolved summary against this before running,
 	// closing the gap where config could change after enqueue but before execution.
 	manifestParticipants?: Record<string, BoundParticipantSummary>;
+	// The approved config recipe selected for this run, when launched from a
+	// recipe-backed plan step. Stored on the job so status/trace can answer which
+	// named recipe ran even after the plan driver is gone.
+	recipe?: RecipeReceipt;
 	maxIterations: number;
 	// The EFFECTIVE chit-executed verification commands for this run, persisted at
 	// enqueue so the worker runs the intended checks without re-deriving them (and so a

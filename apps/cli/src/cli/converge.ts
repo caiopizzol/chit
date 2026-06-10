@@ -31,6 +31,7 @@ import {
 	type NormalizedRegistry,
 	type NormalizedRole,
 	parseManifest,
+	type RecipeReceipt,
 	type RequiredCheck,
 	type ResolvedManifest,
 	resolveManifest,
@@ -145,6 +146,7 @@ export type ConvergeExecute = (
 	ctx?: {
 		loopId: string;
 		iteration: number;
+		recipe?: RecipeReceipt;
 		signal?: AbortSignal;
 		// Live per-step trace, in addition to the audit recorder. The background
 		// worker uses it to surface the current phase (implementing/reviewing).
@@ -425,6 +427,7 @@ export interface ConvergeIterationContext {
 	// When present, threaded to execute so a driver can observe safe per-event
 	// skeletons (ids + event type, never the raw payload) between step boundaries.
 	onAdapterEvent?: (event: AdapterEventSkeleton) => void;
+	recipe?: RecipeReceipt;
 	// When present, invoked immediately BEFORE chit runs the required checks, and
 	// ONLY when there are checks to run, so a foreground driver can surface a
 	// "running required checks" phase. Guarded: a throwing callback never breaks
@@ -515,6 +518,7 @@ export async function runConvergeIteration(
 			{
 				loopId: ctx.loopId,
 				iteration: ctx.iteration,
+				...(ctx.recipe !== undefined && { recipe: ctx.recipe }),
 				...(ctx.signal && { signal: ctx.signal }),
 				...(ctx.onTrace && { onTrace: ctx.onTrace }),
 				...(ctx.onAdapterEvent && { onAdapterEvent: ctx.onAdapterEvent }),
@@ -1012,6 +1016,7 @@ export function makeAuditedExecute(
 			scope,
 			...(ctx?.loopId !== undefined && { loopId: ctx.loopId }),
 			...(ctx?.iteration !== undefined && { iteration: ctx.iteration }),
+			...(ctx?.recipe !== undefined && { recipe: ctx.recipe }),
 			participants: resolveParticipantSnapshots(manifest, registry),
 		});
 		recorder.runStarted();

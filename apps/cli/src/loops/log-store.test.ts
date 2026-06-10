@@ -284,6 +284,14 @@ describe("loop-log store: header workspace metadata + findLoopByRunId (#100)", (
 	});
 
 	test("startLoop records participant provenance in the durable header; it round-trips redacted", () => {
+		const recipe = {
+			id: "deep-feature",
+			mode: "converge" as const,
+			origin: { source: "repo" as const, path: "/repo/chit.config.json" },
+			maxIterations: 4,
+			callTimeoutMs: 1200000,
+			description: "Use the deeper feature loop",
+		};
 		startLoop(cwd, {
 			scope: "s",
 			task: "t",
@@ -291,9 +299,11 @@ describe("loop-log store: header workspace metadata + findLoopByRunId (#100)", (
 			loopId: "P1",
 			workspace: ws,
 			participants,
+			recipe,
 		});
 		const header = readLoop(cwd, "P1")[0] as unknown as Record<string, unknown>;
 		expect(header.participants).toEqual(participants);
+		expect(header.recipe).toEqual(recipe);
 		expect(JSON.stringify(header.participants)).not.toContain("sk-");
 		expect(JSON.stringify(header.participants)).not.toContain("ANTHROPIC_API_KEY=");
 	});

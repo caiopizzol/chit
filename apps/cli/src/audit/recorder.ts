@@ -17,6 +17,7 @@ import type {
 	AdapterEventEvent,
 	AuditParticipantSnapshot,
 	AuditSurface,
+	RecipeReceipt,
 	RunStartedEvent,
 	RunStatus,
 	StepCompletedEvent,
@@ -50,6 +51,7 @@ export interface RunMeta {
 	loopId?: string;
 	iteration?: number;
 	commandArgs?: string[];
+	recipe?: RecipeReceipt;
 	// Resolved per-participant config at run start, recorded on run.started so the
 	// audit shows what the run ACTUALLY used (the registry can change afterward).
 	participants?: Record<string, AuditParticipantSnapshot>;
@@ -106,6 +108,7 @@ export class AuditRecorder {
 			if (this.meta.loopId !== undefined) ev.loopId = this.meta.loopId;
 			if (this.meta.iteration !== undefined) ev.iteration = this.meta.iteration;
 			if (this.meta.commandArgs !== undefined) ev.commandArgs = this.meta.commandArgs;
+			if (this.meta.recipe !== undefined) ev.recipe = this.meta.recipe;
 			if (this.meta.participants !== undefined) ev.participants = this.meta.participants;
 			this.store.appendEvent(this.runId, ev);
 		});

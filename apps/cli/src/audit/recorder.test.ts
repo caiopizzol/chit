@@ -105,15 +105,21 @@ describe("AuditRecorder", () => {
 	});
 
 	test("run.started carries optional loop linkage metadata when present", () => {
+		const recipe = {
+			id: "deep-feature",
+			mode: "converge" as const,
+			origin: { source: "global" as const, path: "/home/user/.config/chit/config.json" },
+			callTimeoutMs: 1200000,
+		};
 		const rec = new AuditRecorder(
 			store,
 			"R2",
-			{ manifestId: "m", cwd: "/c", surface: "converge", loopId: "L1", iteration: 2 },
+			{ manifestId: "m", cwd: "/c", surface: "converge", loopId: "L1", iteration: 2, recipe },
 			fixedClock,
 		);
 		rec.runStarted();
 		const ev = store.readEvents("R2")[0];
-		expect(ev).toMatchObject({ type: "run.started", loopId: "L1", iteration: 2 });
+		expect(ev).toMatchObject({ type: "run.started", loopId: "L1", iteration: 2, recipe });
 	});
 
 	test("step.failed maps through with error and duration", () => {

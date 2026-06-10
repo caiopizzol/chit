@@ -13,6 +13,7 @@ import {
 	type AuditParticipantSnapshot,
 	parseAuditParticipantSnapshots,
 } from "../audit/events.ts";
+import type { ConfigOrigin, RecipeReceipt } from "../config/types.ts";
 
 export type LoopVerdict = "proceed" | "revise" | "block";
 export type LoopStopStatus =
@@ -111,6 +112,10 @@ export interface LoopHeaderRecord {
 	// run still answers "what ran" from its durable log. Same redacted shape as audit
 	// run.started: envKeys only, never env values. Absent on older logs.
 	participants?: Record<string, AuditParticipantSnapshot>;
+	// The approved config recipe selected for this run, when a plan step used one.
+	// Manifest path/digest/participants are surfaced through the normal manifest
+	// binding fields elsewhere; this is the named recipe layer the operator approved.
+	recipe?: RecipeReceipt;
 }
 
 export interface LoopIterationRecord {
@@ -276,6 +281,49 @@ function stringArray(o: Record<string, unknown>, key: string, ctx: string): stri
 	return v as string[];
 }
 
+function configOrigin(
+	o: Record<string, unknown>,
+	key: string,
+	ctx: string,
+): ConfigOrigin | undefined {
+	if (o[key] === undefined) return undefined;
+	const v = obj(o[key], `${ctx}.${key}`);
+	const source = v.source;
+	if (source !== "builtin" && source !== "global" && source !== "repo") {
+		throw new LoopLogError(`${ctx}.${key}: "source" must be builtin, global, or repo`);
+	}
+	const origin: ConfigOrigin = { source };
+	if (v.path !== undefined) origin.path = str(v, "path", `${ctx}.${key}`);
+	return origin;
+}
+
+function recipeReceipt(
+	o: Record<string, unknown>,
+	key: string,
+	ctx: string,
+): RecipeReceipt | undefined {
+	if (o[key] === undefined) return undefined;
+	const v = obj(o[key], `${ctx}.${key}`);
+	const mode = v.mode;
+	if (mode !== "converge") {
+		throw new LoopLogError(`${ctx}.${key}: "mode" must be converge`);
+	}
+	const receipt: RecipeReceipt = {
+		id: str(v, "id", `${ctx}.${key}`),
+		mode,
+	};
+	const origin = configOrigin(v, "origin", `${ctx}.${key}`);
+	if (origin !== undefined) receipt.origin = origin;
+	if (v.maxIterations !== undefined) {
+		receipt.maxIterations = int(v, "maxIterations", `${ctx}.${key}`, 1);
+	}
+	if (v.callTimeoutMs !== undefined) {
+		receipt.callTimeoutMs = int(v, "callTimeoutMs", `${ctx}.${key}`, 1);
+	}
+	if (v.description !== undefined) receipt.description = str(v, "description", `${ctx}.${key}`);
+	return receipt;
+}
+
 const USAGE_INT_FIELDS = [
 	"inputTokens",
 	"outputTokens",
@@ -348,6 +396,8 @@ export function validateLoopRecord(raw: unknown): LoopRecord {
 				throw new LoopLogError((e as Error).message);
 			}
 		}
+		const recipe = recipeReceipt(o, "recipe", ctx);
+		if (recipe !== undefined) rec.recipe = recipe;
 		return rec;
 	}
 	if (type === "iteration") {

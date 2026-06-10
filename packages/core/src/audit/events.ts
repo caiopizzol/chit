@@ -16,6 +16,7 @@
 // Type-only imports of sibling domain types (browser-safe, no runtime/node deps),
 // for the run.started participant config snapshot.
 import type { ParticipantConfig } from "../agents/types.ts";
+import type { ConfigOrigin, RecipeReceipt } from "../config/types.ts";
 import type { FilesystemPermission, SessionPolicy } from "../manifest/types.ts";
 
 // An opaque reference to a blob the store writes (today a sha256 hex digest, but
@@ -68,6 +69,7 @@ export interface RunStartedEvent extends AuditEnvelope {
 	manifestPath?: string;
 	scope?: string;
 	commandArgs?: string[];
+	recipe?: RecipeReceipt;
 	// The resolved per-participant config at run start. Optional: older audit runs
 	// (and writers that do not pass it) omit it, and the reader says so.
 	participants?: Record<string, AuditParticipantSnapshot>;
@@ -392,6 +394,49 @@ function optParticipantSnapshots(
 	return parseAuditParticipantSnapshots(o.participants, `${ctx}.participants`);
 }
 
+function optConfigOrigin(
+	o: Record<string, unknown>,
+	key: string,
+	ctx: string,
+): ConfigOrigin | undefined {
+	if (o[key] === undefined) return undefined;
+	const v = obj(o[key], `${ctx}.${key}`);
+	const source = v.source;
+	if (source !== "builtin" && source !== "global" && source !== "repo") {
+		throw new AuditEventError(`${ctx}.${key}: "source" must be builtin, global, or repo`);
+	}
+	const origin: ConfigOrigin = { source };
+	const path = optStr(v, "path", `${ctx}.${key}`);
+	if (path !== undefined) origin.path = path;
+	return origin;
+}
+
+function optRecipeReceipt(
+	o: Record<string, unknown>,
+	key: string,
+	ctx: string,
+): RecipeReceipt | undefined {
+	if (o[key] === undefined) return undefined;
+	const v = obj(o[key], `${ctx}.${key}`);
+	const mode = v.mode;
+	if (mode !== "converge") {
+		throw new AuditEventError(`${ctx}.${key}: "mode" must be converge`);
+	}
+	const receipt: RecipeReceipt = {
+		id: str(v, "id", `${ctx}.${key}`),
+		mode,
+	};
+	const origin = optConfigOrigin(v, "origin", `${ctx}.${key}`);
+	if (origin !== undefined) receipt.origin = origin;
+	const maxIterations = optInt(v, "maxIterations", `${ctx}.${key}`, 1);
+	if (maxIterations !== undefined) receipt.maxIterations = maxIterations;
+	const callTimeoutMs = optInt(v, "callTimeoutMs", `${ctx}.${key}`, 1);
+	if (callTimeoutMs !== undefined) receipt.callTimeoutMs = callTimeoutMs;
+	const description = optStr(v, "description", `${ctx}.${key}`);
+	if (description !== undefined) receipt.description = description;
+	return receipt;
+}
+
 // Validate a single parsed event. Defensive: the writer should emit valid
 // events, but Studio reads files that may be hand-edited, partial, or stale.
 export function validateAuditEvent(raw: unknown): AuditEvent {
@@ -423,6 +468,8 @@ export function validateAuditEvent(raw: unknown): AuditEvent {
 		if (scope !== undefined) ev.scope = scope;
 		const commandArgs = optStringArray(o, "commandArgs", ctx);
 		if (commandArgs !== undefined) ev.commandArgs = commandArgs;
+		const recipe = optRecipeReceipt(o, "recipe", ctx);
+		if (recipe !== undefined) ev.recipe = recipe;
 		const participants = optParticipantSnapshots(o, ctx);
 		if (participants !== undefined) ev.participants = participants;
 		return ev;
