@@ -28,6 +28,7 @@ import type { JobRecord } from "../jobs/types.ts";
 import { runJobWorker } from "../jobs/worker.ts";
 import { loopLogDir } from "../loops/location.ts";
 import { executeManifest } from "../runtime/execute.ts";
+import { type LiveEventSummary, sanitizeLiveEvents } from "../runtime/live-events.ts";
 import { RuntimeError } from "../runtime/render.ts";
 import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
@@ -890,6 +891,7 @@ type LiveCancelResult = import("@chit-run/studio/server").LiveCancelResult;
 type ForegroundLiveRow = import("@chit-run/studio/server").ForegroundLiveRow;
 type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
 type LiveParticipant = import("@chit-run/studio/server").LiveParticipant;
+type LiveEventView = import("@chit-run/studio/server").LiveEventView;
 
 // Live-activity source injected into Studio so GET /api/live reflects current Chit
 // state without @chit-run/studio importing CLI internals (the CLI owns the state
@@ -976,6 +978,7 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 		.map((s): ForegroundLiveRow => {
 			const summary = summarizeForegroundForStatus(s, nowMs);
 			const phases = foregroundPhaseTimeline(s, summary);
+			const recentEvents = liveEventViews(s.events, nowMs);
 			return {
 				source: "foreground",
 				runId: summary.run_id,
@@ -994,6 +997,7 @@ function foregroundLiveRows(registry: ForegroundRegistry, nowMs: number): Foregr
 					lastActivityAgeMs: summary.lastActivityAgeMs,
 				}),
 				...(phases !== undefined && { phases }),
+				...(recentEvents !== undefined && { recentEvents }),
 				...(summary.participants !== undefined && { participants: summary.participants }),
 			};
 		});
@@ -1025,6 +1029,36 @@ function foregroundPhaseTimeline(
 	return timeline.length > 0 ? timeline : undefined;
 }
 
+// Map a live-event tail onto Studio's wire shape. Shared by foreground and
+// background rows, the same way both share the participant reduction. The tail
+// is re-run through sanitizeLiveEvents first -- the read paths already sanitize
+// at the trust boundary (parseSnapshot / JobStore), but this surface hands rows
+// to a browser, so the cap and the field allowlist (kind/label/ids, never
+// raw/body/prompt/output) are enforced here too rather than assumed. The
+// sanitizer gets the reader's clock, so an entry with a future timestamp (no
+// derivable age) is dropped BEFORE the cap -- a skewed or hostile tail can
+// never crowd out the datable safe entries. Each surviving entry's stored
+// timestamp becomes an age against that same clock (the row-level age
+// convention). Returns undefined when nothing survives, so the row omits the
+// field.
+function liveEventViews(
+	events: LiveEventSummary[] | undefined,
+	nowMs: number,
+): LiveEventView[] | undefined {
+	const out: LiveEventView[] = [];
+	for (const e of sanitizeLiveEvents(events, nowMs)) {
+		out.push({
+			ageMs: nowMs - e.ts,
+			kind: e.kind,
+			label: e.label,
+			...(e.stepId !== undefined && { stepId: e.stepId }),
+			...(e.participantId !== undefined && { participantId: e.participantId }),
+			...(e.agentId !== undefined && { agentId: e.agentId }),
+		});
+	}
+	return out.length > 0 ? out : undefined;
+}
+
 // Live background rows: only in-flight jobs (queued/running, including stale).
 // Terminal receipts belong in the Loops/receipt views, not in the live control
 // tower. JobStore.list() is newest-first and skips corrupt files; guard the whole
@@ -1033,7 +1067,9 @@ function foregroundPhaseTimeline(
 function backgroundLiveRows(jobStore: JobStore, nowMs: number): BackgroundLiveRow[] {
 	let all: JobRecord[];
 	try {
-		all = jobStore.list();
+		// The reader clock makes the store drop future-dated tail entries before its
+		// own cap, so they cannot crowd out datable ones (see withSanitizedTail).
+		all = jobStore.list(nowMs);
 	} catch {
 		return [];
 	}
@@ -1052,6 +1088,7 @@ function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
 	// duration baked in -- the reader composes that from the derived ages).
 	const statusLine = job.phase ? `${display} · ${job.phase}` : display;
 	const participants = liveParticipants(job);
+	const recentEvents = liveEventViews(job.recentEvents, nowMs);
 	return {
 		source: "background",
 		runId: job.runId,
@@ -1076,6 +1113,7 @@ function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
 		...(timing.lastHeartbeatAgeMs !== undefined && {
 			lastHeartbeatAgeMs: timing.lastHeartbeatAgeMs,
 		}),
+		...(recentEvents !== undefined && { recentEvents }),
 		...(participants !== undefined && { participants }),
 	};
 }

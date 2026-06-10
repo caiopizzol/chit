@@ -94,12 +94,22 @@ export function summarizeAdapterEvent(
 // is dropped rather than carried along. Malformed entries are dropped
 // silently; a corrupt tail is not worth failing a status read over. Keeps the
 // newest MAX_LIVE_EVENTS valid entries.
-export function sanitizeLiveEvents(value: unknown): LiveEventSummary[] {
+//
+// When a reader clock is supplied, entries dated in the future of that clock
+// are dropped as invalid BEFORE the cap: they have no derivable age for this
+// reader, and counting them against the cap would let a skewed or hostile
+// tail crowd out the datable entries a reader could actually show. Read-only
+// consumers (status views, the Studio live tower) pass their clock;
+// read-modify-write sanitization passes none, because a future timestamp from
+// a merely skewed writer is not the reader's to destroy on disk.
+export function sanitizeLiveEvents(value: unknown, nowMs?: number): LiveEventSummary[] {
 	if (!Array.isArray(value)) return [];
 	const valid: LiveEventSummary[] = [];
 	for (const entry of value) {
 		const summary = sanitizeLiveEvent(entry);
-		if (summary) valid.push(summary);
+		if (!summary) continue;
+		if (nowMs !== undefined && summary.ts > nowMs) continue;
+		valid.push(summary);
 	}
 	return valid.slice(-MAX_LIVE_EVENTS);
 }

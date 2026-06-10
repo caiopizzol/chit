@@ -164,4 +164,29 @@ describe("sanitizeLiveEvents", () => {
 		expect(out[0]?.ts).toBe(5);
 		expect(out[out.length - 1]?.ts).toBe(MAX_LIVE_EVENTS + 4);
 	});
+
+	test("a reader clock drops future-dated entries BEFORE the cap, keeping datable ones", () => {
+		const now = 100_000;
+		// Datable entries first, then a full cap's worth of future ones: capping
+		// before the future filter would evict every datable entry and emit [].
+		const entries: unknown[] = [];
+		for (let i = 0; i < 10; i++) entries.push(summary({ ts: now - 1_000 + i, label: `safe-${i}` }));
+		for (let i = 0; i < MAX_LIVE_EVENTS; i++) {
+			entries.push(summary({ ts: now + 1_000 + i, label: `future-${i}` }));
+		}
+		const out = sanitizeLiveEvents(entries, now);
+		expect(out.map((e) => e.label)).toEqual(Array.from({ length: 10 }, (_, i) => `safe-${i}`));
+	});
+
+	test("an entry dated exactly at the reader clock is kept (age 0 is derivable)", () => {
+		const out = sanitizeLiveEvents([summary({ ts: 5_000 })], 5_000);
+		expect(out).toHaveLength(1);
+	});
+
+	test("without a reader clock, future-dated entries pass through unchanged", () => {
+		// Shape-only sanitization (the read-modify-write paths): a skewed writer's
+		// future timestamp is preserved, not destroyed.
+		const out = sanitizeLiveEvents([summary({ ts: Number.MAX_SAFE_INTEGER })]);
+		expect(out).toHaveLength(1);
+	});
 });

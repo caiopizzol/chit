@@ -16,6 +16,7 @@ import type { AuditParticipantSnapshot } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import { JobStore } from "../jobs/store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "../jobs/types.ts";
+import { type LiveEventSummary, MAX_LIVE_EVENTS } from "../runtime/live-events.ts";
 import {
 	ForegroundRegistry,
 	type ForegroundSnapshot,
@@ -855,6 +856,276 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			expect(row?.task?.endsWith("...")).toBe(true);
 			expect(row?.taskFull).toBe(task);
 			expect(row?.taskFull).toContain("FULL_TASK_TAIL");
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("maps a foreground snapshot's event tail to recentEvents with reader-clock ages", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const nowMs = Date.now();
+			new ForegroundRegistry(fgDir).write(
+				liveSnapshot({
+					events: [
+						{
+							ts: nowMs - 5_000,
+							kind: "step.started",
+							label: "step implement started",
+							stepId: "implement",
+							participantId: "impl",
+							agentId: "claude",
+						},
+						{ ts: nowMs - 1_000, kind: "adapter.event", label: "assistant", stepId: "implement" },
+					],
+				}),
+			);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const row = live.foreground[0];
+			expect(row?.recentEvents).toHaveLength(2);
+			// Allowlisted fields cross verbatim, oldest first.
+			expect(row?.recentEvents?.[0]?.kind).toBe("step.started");
+			expect(row?.recentEvents?.[0]?.label).toBe("step implement started");
+			expect(row?.recentEvents?.[0]?.stepId).toBe("implement");
+			expect(row?.recentEvents?.[0]?.participantId).toBe("impl");
+			expect(row?.recentEvents?.[0]?.agentId).toBe("claude");
+			// Stored timestamps become ages against the reader's clock (a sane upper
+			// bound guards a runaway clock); the timestamps themselves never cross.
+			expect(row?.recentEvents?.[0]?.ageMs).toBeGreaterThanOrEqual(5_000);
+			expect(row?.recentEvents?.[0]?.ageMs).toBeLessThan(60_000);
+			expect(row?.recentEvents?.[1]?.ageMs).toBeGreaterThanOrEqual(1_000);
+			expect(JSON.stringify(row?.recentEvents)).not.toContain('"ts"');
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("maps a background job's recentEvents tail onto the row", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const nowMs = Date.now();
+			const job: LoopJobRecord = {
+				policy: "loop",
+				runId: "bg-tail",
+				loopId: "bg-tail",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+				recentEvents: [
+					{
+						ts: nowMs - 3_000,
+						kind: "step.completed",
+						label: "step implement completed (1200ms)",
+						stepId: "implement",
+					},
+				],
+			};
+			new JobStore(jobsDir).create(job);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const row = live.background[0];
+			expect(row?.recentEvents).toHaveLength(1);
+			expect(row?.recentEvents?.[0]?.kind).toBe("step.completed");
+			expect(row?.recentEvents?.[0]?.label).toBe("step implement completed (1200ms)");
+			expect(row?.recentEvents?.[0]?.stepId).toBe("implement");
+			expect(row?.recentEvents?.[0]?.ageMs).toBeGreaterThanOrEqual(3_000);
+			expect(row?.recentEvents?.[0]?.ageMs).toBeLessThan(60_000);
+			expect(JSON.stringify(row?.recentEvents)).not.toContain('"ts"');
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("a hostile event tail loses extra keys and undatable entries but keeps safe ones", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const nowMs = Date.now();
+			// What a hand-edited or off-contract writer could put in the state files:
+			// payload-bearing extra keys, a future timestamp (no derivable age), and
+			// entries that are not summaries at all.
+			const hostile = [
+				{
+					ts: nowMs - 2_000,
+					kind: "adapter.event",
+					label: "assistant",
+					raw: "SENTINEL_RAW",
+					body: "SENTINEL_BODY",
+					prompt: "SENTINEL_PROMPT",
+					output: "SENTINEL_OUTPUT",
+					config: { envKeys: ["SENTINEL_ENV_KEY"] },
+				},
+				{ ts: nowMs + 60_000, kind: "step.started", label: "SENTINEL_FUTURE" },
+				{ kind: "step.started", label: "SENTINEL_NO_TS" },
+				{ ts: nowMs - 1_000, kind: "not.a.kind", label: "SENTINEL_BAD_KIND" },
+				"SENTINEL_NOT_AN_OBJECT",
+			] as unknown as LiveEventSummary[];
+			new ForegroundRegistry(fgDir).write(liveSnapshot({ events: hostile }));
+			const job: LoopJobRecord = {
+				policy: "loop",
+				runId: "bg-hostile",
+				loopId: "bg-hostile",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+				recentEvents: hostile,
+			};
+			new JobStore(jobsDir).create(job);
+
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			// Only the one well-formed, datable entry survives on each side.
+			expect(live.foreground[0]?.recentEvents).toHaveLength(1);
+			expect(live.foreground[0]?.recentEvents?.[0]?.label).toBe("assistant");
+			expect(live.background[0]?.recentEvents).toHaveLength(1);
+			expect(live.background[0]?.recentEvents?.[0]?.label).toBe("assistant");
+			const serialized = JSON.stringify(live);
+			for (const sentinel of [
+				"SENTINEL_RAW",
+				"SENTINEL_BODY",
+				"SENTINEL_PROMPT",
+				"SENTINEL_OUTPUT",
+				"SENTINEL_ENV_KEY",
+				"SENTINEL_FUTURE",
+				"SENTINEL_NO_TS",
+				"SENTINEL_BAD_KIND",
+				"SENTINEL_NOT_AN_OBJECT",
+			]) {
+				expect(serialized).not.toContain(sentinel);
+			}
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("an oversized event tail is capped to the newest MAX_LIVE_EVENTS entries", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const nowMs = Date.now();
+			const oversized: LiveEventSummary[] = Array.from(
+				{ length: MAX_LIVE_EVENTS + 10 },
+				(_, i) => ({
+					ts: nowMs - (MAX_LIVE_EVENTS + 10 - i) * 1_000,
+					kind: "adapter.event",
+					label: `evt-${i}`,
+				}),
+			);
+			new ForegroundRegistry(fgDir).write(liveSnapshot({ events: oversized }));
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const tail = live.foreground[0]?.recentEvents;
+			expect(tail).toHaveLength(MAX_LIVE_EVENTS);
+			// Newest entries kept: the 10 oldest fell off the front.
+			expect(tail?.[0]?.label).toBe("evt-10");
+			expect(tail?.[tail.length - 1]?.label).toBe(`evt-${MAX_LIVE_EVENTS + 9}`);
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("over-cap future-dated entries cannot crowd out older safe entries", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const nowMs = Date.now();
+			// Datable safe entries FIRST, then a full cap's worth of future-dated
+			// ones: a cap applied before the future filter would keep only the
+			// futures, then drop them all, emitting no tail despite the safe entries.
+			const safe: LiveEventSummary[] = Array.from({ length: 10 }, (_, i) => ({
+				ts: nowMs - 10_000 + i * 100,
+				kind: "adapter.event",
+				label: `safe-${i}`,
+			}));
+			const future: LiveEventSummary[] = Array.from({ length: MAX_LIVE_EVENTS }, (_, i) => ({
+				ts: nowMs + 60_000 + i,
+				kind: "adapter.event",
+				label: `future-${i}`,
+			}));
+			const mixed = [...safe, ...future];
+			new ForegroundRegistry(fgDir).write(liveSnapshot({ events: mixed }));
+			const job: LoopJobRecord = {
+				policy: "loop",
+				runId: "bg-skew",
+				loopId: "bg-skew",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+				recentEvents: mixed,
+			};
+			new JobStore(jobsDir).create(job);
+
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const expected = safe.map((e) => e.label);
+			expect(live.foreground[0]?.recentEvents?.map((e) => e.label)).toEqual(expected);
+			expect(live.background[0]?.recentEvents?.map((e) => e.label)).toEqual(expected);
+			expect(JSON.stringify(live)).not.toContain("future-");
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("rows with no event tail omit recentEvents entirely", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			new ForegroundRegistry(fgDir).write(liveSnapshot());
+			const job: LoopJobRecord = {
+				policy: "loop",
+				runId: "bg-no-tail",
+				loopId: "bg-no-tail",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+				// An explicitly empty tail must also be omitted, not emitted as [].
+				recentEvents: [],
+			};
+			new JobStore(jobsDir).create(job);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			expect(live.foreground[0]?.recentEvents).toBeUndefined();
+			expect(live.background[0]?.recentEvents).toBeUndefined();
+			expect(JSON.stringify(live)).not.toContain("recentEvents");
 		} finally {
 			rmSync(fgDir, { recursive: true, force: true });
 			rmSync(jobsDir, { recursive: true, force: true });

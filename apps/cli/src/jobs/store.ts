@@ -90,9 +90,16 @@ function isValidJobRecord(raw: unknown, expectedRunId?: string): raw is JobRecor
 // registry's parseSnapshot. A tail with nothing valid left is dropped entirely,
 // like a legacy record without the field. Sanitize, never reject: a corrupt
 // tail is not worth treating the whole job as invalid.
-function withSanitizedTail(record: JobRecord): JobRecord {
+//
+// `nowMs` is the reader's clock: read-only consumers pass it so future-dated
+// entries are dropped BEFORE the cap (they have no derivable age and must not
+// crowd out datable ones -- see sanitizeLiveEvents). The read-modify-write
+// paths (update/claim) pass none: their sanitized record is written back to
+// disk, and a future timestamp from a merely skewed writer must survive there,
+// not be destroyed by whichever reader happens to mutate next.
+function withSanitizedTail(record: JobRecord, nowMs?: number): JobRecord {
 	if (record.recentEvents === undefined) return record;
-	const events = sanitizeLiveEvents(record.recentEvents);
+	const events = sanitizeLiveEvents(record.recentEvents, nowMs);
 	return { ...record, recentEvents: events.length > 0 ? events : undefined };
 }
 
@@ -192,7 +199,9 @@ export class JobStore {
 
 	// All jobs, newest-created first. Skips any unreadable/corrupt file AND any
 	// stale pre-union record, so one bad file never breaks the operator overview.
-	list(): JobRecord[] {
+	// `nowMs` is the caller's reader clock for the event tail (see
+	// withSanitizedTail); omitted, the tail is shape-sanitized only.
+	list(nowMs?: number): JobRecord[] {
 		if (!existsSync(this.baseDir)) return [];
 		const jobs: JobRecord[] = [];
 		for (const name of readdirSync(this.baseDir)) {
@@ -202,7 +211,7 @@ export class JobStore {
 				// Pin the record to its filename: runId IS the file name, so a record
 				// whose runId disagrees with the file is corrupt and is skipped.
 				const id = name.slice(0, -".json".length);
-				if (isValidJobRecord(raw, id)) jobs.push(withSanitizedTail(raw));
+				if (isValidJobRecord(raw, id)) jobs.push(withSanitizedTail(raw, nowMs));
 			} catch {
 				// skip corrupt/mid-write file
 			}

@@ -193,8 +193,15 @@ export function defaultForegroundDir(): string {
 // optional fields are validated and RECONSTRUCTED field-by-field, so any extra keys
 // a file carries (e.g. a nested participant config with env keys) cannot leak
 // through the status surface. Pins the runId to the filename (the runId IS the file
-// name) so a renamed/mismatched file is rejected.
-function parseSnapshot(raw: unknown, expectedRunId: string): ForegroundSnapshot | undefined {
+// name) so a renamed/mismatched file is rejected. `nowMs` is the reader's clock for
+// the event tail: when given, future-dated entries are dropped before the tail's cap
+// (see sanitizeLiveEvents); pruneDead omits it because events play no part in pid
+// liveness.
+function parseSnapshot(
+	raw: unknown,
+	expectedRunId: string,
+	nowMs?: number,
+): ForegroundSnapshot | undefined {
 	if (raw === null || typeof raw !== "object") return undefined;
 	const r = raw as Record<string, unknown>;
 	if (typeof r.runId !== "string" || !SAFE_RUN_ID.test(r.runId) || r.runId !== expectedRunId)
@@ -231,8 +238,10 @@ function parseSnapshot(raw: unknown, expectedRunId: string): ForegroundSnapshot 
 	if (phases !== undefined) snapshot.phases = phases;
 	// Same omit-when-empty contract as phases/participants: sanitizeLiveEvents
 	// rebuilds each entry field-by-field (and re-applies the cap), so hostile or
-	// off-contract keys in a hand-edited file never reach a reader.
-	const events = sanitizeLiveEvents(r.events);
+	// off-contract keys in a hand-edited file never reach a reader. The reader's
+	// clock, when given, drops future-dated entries before the cap, so they can
+	// never crowd out datable ones.
+	const events = sanitizeLiveEvents(r.events, nowMs);
 	if (events.length > 0) snapshot.events = events;
 	const participants = sanitizeParticipants(r.participants);
 	if (participants !== undefined) snapshot.participants = participants;
@@ -330,7 +339,7 @@ export class ForegroundRegistry {
 			const id = name.slice(0, -".json".length);
 			try {
 				const raw: unknown = JSON.parse(readFileSync(join(this.baseDir, name), "utf-8"));
-				const snapshot = parseSnapshot(raw, id);
+				const snapshot = parseSnapshot(raw, id, nowMs);
 				if (snapshot === undefined) continue;
 				if (isStaleSnapshot(snapshot, nowMs, staleAfterMs)) continue;
 				live.push(snapshot);

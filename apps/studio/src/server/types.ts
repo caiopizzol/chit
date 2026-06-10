@@ -196,6 +196,26 @@ export interface LiveParticipant {
 	adapter: string;
 }
 
+// The event vocabulary of a live tail entry. Mirrors the host's LiveEventKind;
+// kept as a local union (like ConfigOriginSource / JobStateName) so the wire
+// contract stays explicit and free of CLI imports.
+export type LiveEventKind = "step.started" | "step.completed" | "step.failed" | "adapter.event";
+
+// One entry of a row's bounded live-event tail: a privacy-safe digest of a
+// runtime event (step boundary or adapter event TYPE). The label is built
+// host-side from structural facts only -- ids and event types, never a prompt,
+// output, error text, or raw adapter line -- so it is safe to render verbatim.
+// `ageMs` is derived against the reader's clock at snapshot time (stored
+// timestamps never cross the wire), same convention as the row-level ages.
+export interface LiveEventView {
+	ageMs: number;
+	kind: LiveEventKind;
+	label: string;
+	stepId?: string;
+	participantId?: string;
+	agentId?: string;
+}
+
 // One in-flight foreground loop iteration mirrored from the cross-process
 // registry. `source` is the literal "foreground" so a flattened list stays
 // self-describing alongside background rows.
@@ -226,6 +246,9 @@ export interface ForegroundLiveRow {
 	// only -- never model output or config. Omitted when nothing is derivable
 	// (e.g. the pre-phase "starting" spin-up). Foreground rows only.
 	phases?: Array<{ phase: string; status: "completed" | "active"; elapsedMs: number }>;
+	// The current iteration's bounded live-event tail, oldest first (kind/label/ids
+	// plus a reader-clock age -- see LiveEventView). Omitted when empty.
+	recentEvents?: LiveEventView[];
 	participants?: Record<string, LiveParticipant>;
 }
 
@@ -256,6 +279,10 @@ export interface BackgroundLiveRow {
 	elapsedMs?: number;
 	phaseElapsedMs?: number;
 	lastHeartbeatAgeMs?: number;
+	// The worker's bounded live-event tail, oldest first -- the background mirror
+	// of the foreground tail (kind/label/ids plus a reader-clock age, see
+	// LiveEventView). Omitted when empty.
+	recentEvents?: LiveEventView[];
 	participants?: Record<string, LiveParticipant>;
 }
 

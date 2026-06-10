@@ -53,6 +53,8 @@ export type {
 	LiveActivityRow,
 	LiveCancelRequest,
 	LiveCancelResult,
+	LiveEventKind,
+	LiveEventView,
 	LiveParticipant,
 	StudioConfigSource,
 	StudioDocument,
