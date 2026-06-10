@@ -770,8 +770,27 @@ describe("describePlan (read-only join)", () => {
 		expect(view.nextAction).toContain("chit_plan_advance");
 		expect(view.nextAction).toContain("apply");
 		expect(view.nextAction).toContain("step a");
+		// No authored commitMessage: the guidance quotes the deterministic fallback subject the
+		// confirmed apply will commit under, exactly as planStepCommitMessage computes it.
+		expect(view.nextAction).toContain('"plan step a: a"');
 		// Cleanup is refused at ready_for_apply (unapplied reviewable work), so it must NOT be suggested.
 		expect(view.nextAction).not.toContain("chit_plan_cleanup");
+	});
+
+	test("a review_ready step's nextAction quotes the reviewed commit subject the apply will use", () => {
+		// The operator confirms chit_plan_advance { apply: { confirm: true } } based on this text, so
+		// it must show the exact subject the apply commits under -- the plan-authored commitMessage.
+		const c0 = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [step("a", { commitMessage: "feat(auth): add users table" })],
+			}),
+		});
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		const view = describePlan(advancePlan(store, deps, "p1"), deps);
+		expect(view.status).toBe("ready_for_apply");
+		expect(view.nextAction).toContain('"feat(auth): add users table"');
 	});
 
 	test("a just-cancelled plan whose worker is still live does NOT suggest chit_plan_cleanup", () => {

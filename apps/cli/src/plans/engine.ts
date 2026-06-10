@@ -1052,7 +1052,12 @@ function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 	if (c.status === "ready_for_apply") {
 		const ready = c.steps.find((s) => s.status === "review_ready");
 		const which = ready ? ` (step ${ready.id})` : "";
-		return `a step is review_ready${which}: its run converged and its diff sits uncommitted in its worktree (chit_plan_status lists changedFiles). Review it, then apply it with chit_plan_advance { apply: { step_id, confirm: true } } -- a dry run (no confirm) reports what would land first. The apply commits the diff onto the integration branch, advances the tip, and unblocks the next dependent step.`;
+		// Surface the exact commit subject the confirmed apply will use, so the operator sees it
+		// before confirming -- it is bound by the approval hash, never a confirm-time override.
+		const commitClause = ready
+			? `The apply commits the diff onto the integration branch as "${planStepCommitMessage(ready)}", advances the tip, and unblocks the next dependent step.`
+			: `The apply commits the diff onto the integration branch, advances the tip, and unblocks the next dependent step.`;
+		return `a step is review_ready${which}: its run converged and its diff sits uncommitted in its worktree (chit_plan_status lists changedFiles). Review it, then apply it with chit_plan_advance { apply: { step_id, confirm: true } } -- a dry run (no confirm) reports what would land first. ${commitClause}`;
 	}
 	// running
 	if (anyReconcilable(c, deps)) {
