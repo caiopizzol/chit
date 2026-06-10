@@ -50,6 +50,32 @@ describe("canonicalApprovalPayload determinism", () => {
 		expect(changed).not.toBe(base);
 	});
 
+	test("adding or changing a step commitMessage changes the payload", () => {
+		const base = payloadFor(PLAN, BASE);
+		const withMessage = payloadFor(
+			{
+				...PLAN,
+				steps: [
+					{ ...PLAN.steps[0], commitMessage: "feat(core): scaffold the module" },
+					PLAN.steps[1],
+				],
+			},
+			BASE,
+		);
+		expect(withMessage).not.toBe(base);
+		const changedMessage = payloadFor(
+			{
+				...PLAN,
+				steps: [
+					{ ...PLAN.steps[0], commitMessage: "chore(core): scaffold the module" },
+					PLAN.steps[1],
+				],
+			},
+			BASE,
+		);
+		expect(changedMessage).not.toBe(withMessage);
+	});
+
 	test("a changed base ref or moved base sha changes the payload", () => {
 		const first = payloadFor(PLAN, { ref: "main", sha: "abc123" });
 		expect(payloadFor(PLAN, { ref: "release", sha: "abc123" })).not.toBe(first);

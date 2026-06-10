@@ -193,6 +193,7 @@ export function startPlan(store: PlanStore, deps: PlanEngineDeps, opts: StartPla
 			dependsOn: s.dependsOn,
 			status: "pending",
 		};
+		if (s.commitMessage !== undefined) step.commitMessage = s.commitMessage;
 		if (s.requiredChecks !== undefined) step.requiredChecks = s.requiredChecks;
 		if (s.manifestPath !== undefined) step.manifestPath = s.manifestPath;
 		if (s.maxIterations !== undefined) step.maxIterations = s.maxIterations;
@@ -274,10 +275,12 @@ export function cancelPlan(store: PlanStore, deps: PlanEngineDeps, planId: strin
 
 // --- gated apply: flow a review_ready step into the integration branch -----
 
-// The deterministic, concise commit message a step's apply produces on the integration branch.
-// One commit per applied step; the step id + title make the integration history readable.
+// The commit message a step's apply produces on the integration branch: the step's reviewed
+// commitMessage when the plan authored one (bound by the approval hash through the normalized
+// plan, so it is never a confirm-time override), else the deterministic fallback. One commit
+// per applied step; the step id + title keep the fallback history readable.
 export function planStepCommitMessage(step: PlanStepRecord): string {
-	return `plan step ${step.id}: ${step.title}`;
+	return step.commitMessage ?? `plan step ${step.id}: ${step.title}`;
 }
 
 export interface PlanApplyOutcome {
@@ -835,6 +838,10 @@ export interface PlanStepView {
 	title: string;
 	status: PlanStepStatus;
 	dependsOn: string[];
+	// The reviewed commit subject the gated apply uses for this step (from the approved plan);
+	// absent means the fallback `plan step <id>: <title>` is used. Surfaced so the operator sees
+	// the exact message before confirming the apply.
+	commitMessage?: string;
 	branch?: string;
 	worktreePath?: string;
 	run_id?: string; // the durable background run advancing this step (run_id == its job id)
@@ -931,6 +938,7 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 			title: s.title,
 			status: s.status,
 			dependsOn: s.dependsOn,
+			...(s.commitMessage !== undefined && { commitMessage: s.commitMessage }),
 			...(s.branch !== undefined && { branch: s.branch }),
 			...(s.worktreePath !== undefined && { worktreePath: s.worktreePath }),
 			...(s.runId !== undefined && { run_id: s.runId }),

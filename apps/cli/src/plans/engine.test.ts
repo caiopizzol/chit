@@ -367,6 +367,18 @@ describe("startPlan", () => {
 		expect(launched.requiredChecks).toEqual([{ command: "bun", args: ["run", "check"] }]);
 	});
 
+	test("records the step's reviewed commitMessage on the step record and view", () => {
+		const plan = chainPlan({
+			steps: [step("a", { commitMessage: "feat(auth): add users table" }), step("b")],
+		});
+		const c = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: plan });
+		expect(stepOf(c, "a").commitMessage).toBe("feat(auth): add users table");
+		expect(stepOf(c, "b").commitMessage).toBeUndefined();
+		const view = describePlan(c, deps);
+		expect(view.steps.find((s) => s.id === "a")?.commitMessage).toBe("feat(auth): add users table");
+		expect(view.steps.find((s) => s.id === "b")?.commitMessage).toBeUndefined();
+	});
+
 	test("a worktree/job launch failure fails only that step and keeps the plan record", () => {
 		const failingDeps: PlanEngineDeps = {
 			...deps,
@@ -1082,6 +1094,29 @@ describe("applyPlanStep (real git)", () => {
 		expect(readFileSync(join(integration, "base.txt"), "utf-8")).toContain("from-a");
 		// A clean tree: the apply landed as a commit, nothing left staged/unstaged.
 		expect(run(integration, ["status", "--porcelain"]).trim()).toBe("");
+	});
+
+	test("confirm commits under the step's reviewed commitMessage when the plan authored one", () => {
+		const h = realHarness();
+		const started = startPlan(h.store, h.deps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: chainPlan({
+				steps: [step("a", { commitMessage: "feat(auth): add users table" })],
+			}),
+		});
+		h.finish(stepOf(started, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(h.store, h.deps, "p");
+
+		const outcome = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		expect(outcome.stepApplied).toBe(true);
+		const integration = present(
+			present(h.store.get("p"), "stored plan").integrationWorktree,
+			"integration worktree",
+		);
+		expect(run(integration, ["log", "-1", "--pretty=%s"]).trim()).toBe(
+			"feat(auth): add users table",
+		);
 	});
 
 	test("a dependent launches only after the prior step is applied, cut from the commit that includes it", () => {

@@ -67,6 +67,7 @@ A plan is a JSON file, consistent with chit manifests. Conceptual structure:
       "title": "Add users table + migration",
       "body": "…the brief handed to the converge implementer…",
       "dependsOn": [],          // step ids; [] = depends on the plan base only
+      "commitMessage": "feat(auth): add users table and migration", // optional single-line commit subject for the gated apply; default `plan step <id>: <title>`
       "requiredChecks": [{ "command": "bun", "args": ["run", "check"] }],
       "manifestPath": "…",      // optional converge manifest override (else the bundled default)
       "maxIterations": 5,
@@ -146,8 +147,9 @@ Per step, in dependency order:
    does not perform, and it is the plan-runner's own work. After the apply
    succeeds, the plan-runner stages everything (`git add -A` in the integration
    worktree, to also pick up the unstaged untracked files) and **commits** one
-   commit per applied step on the integration branch (message references the step
-   id + its `run_id`/`audit_ref`). It records the resulting **commit SHA** on the
+   commit per applied step on the integration branch (the step's reviewed
+   `commitMessage` when the plan authored one, else `plan step <id>: <title>`).
+   It records the resulting **commit SHA** on the
    step's plan record. Only now has the tip advanced. Dependents whose
    dependencies are all committed become runnable and are cut from that recorded
    SHA - so "step 2 sees step 1" rests on a durable commit, not on staged changes

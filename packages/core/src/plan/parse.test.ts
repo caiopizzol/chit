@@ -91,6 +91,26 @@ describe("valid plans", () => {
 		expect(plan.steps[0]?.requiredChecks?.[0]).toEqual({ command: "make", args: [] });
 	});
 
+	test("a step commitMessage is preserved on the normalized step", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [
+				{ id: "s", title: "t", body: "b", commitMessage: "feat(auth): add users table" },
+				{ id: "s2", title: "t2", body: "b2" },
+			],
+		});
+		expect(plan.steps[0]?.commitMessage).toBe("feat(auth): add users table");
+		expect(plan.steps[1]?.commitMessage).toBeUndefined();
+	});
+
+	test("a step commitMessage is trimmed before approval", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [{ id: "s", title: "t", body: "b", commitMessage: "  feat(auth): add users table  " }],
+		});
+		expect(plan.steps[0]?.commitMessage).toBe("feat(auth): add users table");
+	});
+
 	test("duplicate dependsOn entries are de-duplicated", () => {
 		const plan = parsePlan({
 			...VALID_MINIMAL,
@@ -224,6 +244,41 @@ describe("invalid plans fail with useful errors", () => {
 			},
 			"steps.s.requiredChecks[0].cwd",
 			"unknown field",
+		);
+	});
+
+	test("empty commitMessage", () => {
+		expectPlanError(
+			{ ...VALID_MINIMAL, steps: [{ id: "s", title: "t", body: "b", commitMessage: "" }] },
+			"steps.s.commitMessage",
+			"non-blank string",
+		);
+	});
+
+	test("blank (whitespace-only) commitMessage", () => {
+		expectPlanError(
+			{ ...VALID_MINIMAL, steps: [{ id: "s", title: "t", body: "b", commitMessage: "   " }] },
+			"steps.s.commitMessage",
+			"non-blank string",
+		);
+	});
+
+	test("non-string commitMessage", () => {
+		expectPlanError(
+			{ ...VALID_MINIMAL, steps: [{ id: "s", title: "t", body: "b", commitMessage: 7 }] },
+			"steps.s.commitMessage",
+			"non-blank string",
+		);
+	});
+
+	test("multiline commitMessage", () => {
+		expectPlanError(
+			{
+				...VALID_MINIMAL,
+				steps: [{ id: "s", title: "t", body: "b", commitMessage: "feat: x\n\nbody text" }],
+			},
+			"steps.s.commitMessage",
+			"single line",
 		);
 	});
 

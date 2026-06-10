@@ -97,6 +97,9 @@ export interface PlanStepRecord {
 	title: string;
 	body: string; // the brief handed to the converge implementer
 	dependsOn: string[];
+	// The reviewed commit subject the gated apply uses on the integration branch (bound by
+	// the plan approval hash). Absent -> the fallback `plan step <id>: <title>`.
+	commitMessage?: string;
 	requiredChecks?: RequiredCheck[];
 	manifestPath?: string;
 	maxIterations?: number;

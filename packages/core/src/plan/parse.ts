@@ -31,6 +31,7 @@ const ALLOWED_STEP_KEYS = new Set([
 	"title",
 	"body",
 	"dependsOn",
+	"commitMessage",
 	"requiredChecks",
 	"manifestPath",
 	"maxIterations",
@@ -67,6 +68,16 @@ function reqPositiveInt(v: unknown, path: string): number {
 	if (typeof v !== "number" || !Number.isInteger(v) || v < 1)
 		throw new PlanError(path, "must be an integer >= 1");
 	return v;
+}
+
+// A step's commit message is the commit SUBJECT the gated apply uses on the integration
+// branch: one non-blank line. Multiline bodies are rejected (the subject is the whole
+// reviewed surface; a body would hide unreviewed text below the fold of every listing).
+function reqSingleLineString(v: unknown, path: string): string {
+	if (typeof v !== "string" || v.trim() === "")
+		throw new PlanError(path, "must be a non-blank string");
+	if (/[\r\n]/.test(v)) throw new PlanError(path, "must be a single line (no newlines)");
+	return v.trim();
 }
 
 // Parse a step's requiredChecks: an array of structured commands chit runs itself.
@@ -118,6 +129,8 @@ function parseStep(raw: unknown, index: number, ids: Set<string>): PlanStep {
 		dependsOn: parseDependsOn(raw.dependsOn, id),
 	};
 
+	if (raw.commitMessage !== undefined)
+		step.commitMessage = reqSingleLineString(raw.commitMessage, `steps.${id}.commitMessage`);
 	if (raw.requiredChecks !== undefined)
 		step.requiredChecks = parseRequiredChecks(raw.requiredChecks, `steps.${id}.requiredChecks`);
 	if (raw.manifestPath !== undefined)

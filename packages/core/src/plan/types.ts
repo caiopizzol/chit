@@ -16,13 +16,17 @@ export type PlanCleanupPolicy = "after_apply" | "manual";
 // One step in a plan. body is the brief handed to the converge implementer.
 // dependsOn names other step ids and means a CODE dependency: the named steps must be
 // applied and committed to the integration branch before this step launches. It is
-// normalized to [] when absent. The remaining fields are converge-run overrides,
-// preserved only when the author provides them.
+// normalized to [] when absent. commitMessage is the subject line the gated apply
+// commits this step under on the integration branch (single line, reviewed with the
+// plan -- the approval hash binds it); absent falls back to `plan step <id>: <title>`.
+// The remaining fields are converge-run overrides, preserved only when the author
+// provides them.
 export interface PlanStep {
 	id: string;
 	title: string;
 	body: string;
 	dependsOn: string[];
+	commitMessage?: string;
 	requiredChecks?: RequiredCheck[];
 	manifestPath?: string;
 	maxIterations?: number;
