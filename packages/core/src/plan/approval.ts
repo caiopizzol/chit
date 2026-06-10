@@ -14,6 +14,7 @@
 // every caller derives the identical hash from the identical approval artifact.
 
 import { canonicalJson } from "../canonical-json.ts";
+import type { ConfigOrigin } from "../config/types.ts";
 import type { ManifestBinding } from "../manifest/binding.ts";
 import type { NormalizedPlan } from "./types.ts";
 
@@ -25,6 +26,22 @@ export interface PlanApprovalBase {
 	sha: string;
 }
 
+// The resolved identity and runtime defaults of the config recipe a step selected,
+// bound per step id so a recipe redefined after approval (a different id meaning, a
+// changed default budget, a moved provenance layer) moves the hash and forces
+// re-approval. The recipe's resolved MANIFEST surface (path, source, content digest,
+// participant summary) is bound through the same per-step `manifests` record direct
+// manifestPath steps use -- a recipe is a reference to a manifest, never a second
+// execution vocabulary, so it must not grow a second binding shape either.
+export interface PlanApprovalRecipe {
+	id: string;
+	origin?: ConfigOrigin;
+	mode: "converge";
+	maxIterations?: number;
+	callTimeoutMs?: number;
+	description?: string;
+}
+
 // The exact thing a confirmed plan start would run: the normalized plan, the resolved base
 // commit, and the launch-time per-step iteration budget (when the operator set one). This is
 // what the approval hash binds, so nothing that decides the run can change unbound after
@@ -32,18 +49,22 @@ export interface PlanApprovalBase {
 // are distinct (and an absent budget keeps the same hash whether the caller omits the field
 // or passes undefined).
 // manifests binds, per step id, the EFFECTIVE execution surface of every step that
-// names a manifestPath: the manifest content digest (read from the git tree at the
-// approved base for a repo-relative path, or from the filesystem for an absolute
-// one) plus the safe participant execution summary. Binding only the path string
-// would let the file content or the resolved agents change between approval and
-// launch without moving the hash. Present only when at least one step names a
-// manifest, so manifest-free plans keep their hash.
+// names a manifestPath or resolves one through a recipe: the manifest content digest
+// (read from the git tree at the approved base for a repo-relative path, or from the
+// filesystem for an absolute one) plus the safe participant execution summary.
+// Binding only the path string would let the file content or the resolved agents
+// change between approval and launch without moving the hash. Present only when at
+// least one step binds a manifest, so manifest-free plans keep their hash.
+// recipes binds, per step id, the resolved recipe identity and its runtime defaults
+// for every recipe-backed step; together with the step's own hash-bound overrides in
+// `plan`, the EFFECTIVE budgets a launch computes are fully approval-bound.
 export interface PlanApprovalArtifact {
 	strategy: "plan";
 	base: PlanApprovalBase;
 	plan: NormalizedPlan;
 	maxIterations?: number;
 	manifests?: Record<string, ManifestBinding>;
+	recipes?: Record<string, PlanApprovalRecipe>;
 }
 
 export function buildPlanApprovalArtifact(
@@ -51,6 +72,7 @@ export function buildPlanApprovalArtifact(
 	base: PlanApprovalBase,
 	maxIterations?: number,
 	manifests?: Record<string, ManifestBinding>,
+	recipes?: Record<string, PlanApprovalRecipe>,
 ): PlanApprovalArtifact {
 	return {
 		strategy: "plan",
@@ -58,6 +80,7 @@ export function buildPlanApprovalArtifact(
 		plan,
 		...(maxIterations !== undefined && { maxIterations }),
 		...(manifests !== undefined && Object.keys(manifests).length > 0 && { manifests }),
+		...(recipes !== undefined && Object.keys(recipes).length > 0 && { recipes }),
 	};
 }
 

@@ -644,6 +644,80 @@ describe("launch-time manifest binding verification (the long-plan gate)", () =>
 		expect(stepOf(c, "a").error).toContain("no manifests/converge.json");
 	});
 
+	test("a recipe-backed step carries the resolved binding and is verified at launch too", () => {
+		// A recipe-backed step authors NO manifestPath; the gate resolves the recipe and
+		// passes its binding (manifests) + identity/defaults (recipes), and startPlan
+		// records the resolved manifest reference on the step. Launch-time drift
+		// verification must key off the APPROVED binding, exactly like a direct step.
+		deps.resolveManifestBinding = () => binding("sha256:CHANGED");
+		const c = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [step("a", { recipe: "deep-feature" }), step("b", { dependsOn: ["a"] })],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+			recipes: { a: { id: "deep-feature", mode: "converge", maxIterations: 4 } },
+		});
+		const a = stepOf(c, "a");
+		expect(a.recipe).toBe("deep-feature");
+		expect(a.manifestPath).toBe("manifests/converge.json"); // the recipe's RESOLVED reference
+		expect(a.status).toBe("needs_human");
+		expect(a.error).toContain("manifest content changed");
+		expect(jobs.launched).toHaveLength(0);
+	});
+
+	test("a matching recipe binding launches with the recipe defaults and approved digest", () => {
+		deps.resolveManifestBinding = () => binding("sha256:aaaa");
+		const c = startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [step("a", { recipe: "deep-feature" }), step("b", { dependsOn: ["a"] })],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+			recipes: {
+				a: { id: "deep-feature", mode: "converge", maxIterations: 4, callTimeoutMs: 1200000 },
+			},
+		});
+		expect(stepOf(c, "a").status).toBe("running");
+		const launched = present(jobs.launched[0], "launched a");
+		// The job runs the recipe's resolved manifest with the approved digest + participants...
+		expect(launched.manifestPath).toBe("manifests/converge.json");
+		expect(launched.manifestDigest).toBe("sha256:aaaa");
+		expect(launched.manifestParticipants).toEqual(c.manifests?.a?.participants);
+		// ...and the recipe's default budgets (the step declared none; the plan default is 3).
+		expect(launched.maxIterations).toBe(4);
+		expect(launched.callTimeoutMs).toBe(1200000);
+		// The view surfaces the recipe id beside the manifest surface for receipts.
+		const view = describePlan(c, deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(aView.recipe).toBe("deep-feature");
+		expect(aView.manifestDigest).toBe("sha256:aaaa");
+		expect(aView.callTimeoutMs).toBe(1200000);
+	});
+
+	test("step-level budgets beat the approved recipe defaults at launch", () => {
+		deps.resolveManifestBinding = () => binding("sha256:aaaa");
+		startPlan(store, deps, {
+			id: "p1",
+			cwd,
+			normalizedPlan: chainPlan({
+				steps: [step("a", { recipe: "deep-feature", maxIterations: 7, callTimeoutMs: 60000 })],
+			}),
+			manifests: { a: binding("sha256:aaaa") },
+			recipes: {
+				a: { id: "deep-feature", mode: "converge", maxIterations: 4, callTimeoutMs: 1200000 },
+			},
+		});
+		const launched = present(jobs.launched[0], "launched a");
+		expect(launched.maxIterations).toBe(7);
+		expect(launched.callTimeoutMs).toBe(60000);
+	});
+
 	test("no approved binding (legacy record) or no resolver -> launches as before", () => {
 		// Resolver wired but the record carries no binding: nothing to verify against.
 		deps.resolveManifestBinding = () => binding("sha256:zzzz");

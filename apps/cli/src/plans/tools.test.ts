@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type ManifestBinding, PlanError } from "@chit-run/core";
 import type { GitResult, GitRunner } from "../batches/worktree.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
+import type { ResolvedRecipe } from "../manifest/binding.ts";
 import type { LaunchPlanJobParams, PlanEngineDeps } from "./engine.ts";
 import { PlanStore } from "./store.ts";
 import { loadPlanInput, PlanApprovalRefused, runPlanStart } from "./tools.ts";
@@ -517,6 +518,168 @@ describe("runPlanStart: manifest binding (digest + participant summary in the ha
 		};
 		expect(() => runPlanStart({ plan: escaping }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
 			/escapes the repo/,
+		);
+		expect(h.launched).toHaveLength(0);
+	});
+});
+
+// --- recipe-backed steps at the gate: the approval hash binds what the recipe
+// resolved to (identity, defaults, manifest digest, participants), not the id string. ---
+
+function gateRecipe(over: Partial<ResolvedRecipe> = {}): ResolvedRecipe {
+	return {
+		id: "deep-feature",
+		origin: { source: "repo", path: "chit.config.json" },
+		mode: "converge",
+		binding: gateBinding("sha256:aaaa"),
+		maxIterations: 4,
+		callTimeoutMs: 1200000,
+		...over,
+	};
+}
+
+const RECIPE_PLAN = {
+	schema: 1,
+	title: "recipe demo",
+	steps: [
+		{ id: "a", title: "A", body: "do a", recipe: "deep-feature" },
+		{ id: "b", title: "B", body: "do b", dependsOn: ["a"] },
+	],
+};
+
+describe("runPlanStart: recipe-backed steps (resolved recipe in the hash)", () => {
+	test("the dry run resolves the recipe and previews its identity, defaults, and binding", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = (p) => {
+			// Resolution happens from the APPROVED base commit, like manifest bindings.
+			expect(p.recipeId).toBe("deep-feature");
+			expect(p.baseSha).toBe("sha-approved");
+			return gateRecipe();
+		};
+		const dry = runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		// The preview shows the resolved recipe for the recipe-backed step...
+		expect(present(dry.recipes, "recipes").a).toEqual({
+			id: "deep-feature",
+			origin: { source: "repo", path: "chit.config.json" },
+			mode: "converge",
+			maxIterations: 4,
+			callTimeoutMs: 1200000,
+		});
+		// ...and the recipe's manifest binding under the same step id (one binding shape).
+		expect(present(dry.manifests, "manifests").a?.manifestDigest).toBe("sha256:aaaa");
+		expect(dry.recipes?.b).toBeUndefined();
+		expect(dry.manifests?.b).toBeUndefined();
+	});
+
+	test("a recipe default changed after the dry run is refused at confirm", () => {
+		const h = makeHarness();
+		let maxIterations = 4;
+		h.deps.resolveRecipe = () => gateRecipe({ maxIterations });
+		const dry = runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		maxIterations = 9; // the recipe was redefined between dry run and confirm
+		expect(() =>
+			runPlanStart(
+				{ plan: RECIPE_PLAN, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a recipe whose manifest content changed after the dry run is refused at confirm", () => {
+		const h = makeHarness();
+		let digest = "sha256:aaaa";
+		h.deps.resolveRecipe = () => gateRecipe({ binding: gateBinding(digest) });
+		const dry = runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		digest = "sha256:bbbb"; // the vetted manifest moved under the recipe
+		expect(() =>
+			runPlanStart(
+				{ plan: RECIPE_PLAN, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a confirmed start persists the recipe + binding and launches with the recipe defaults", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () => gateRecipe();
+		const result = approveAndConfirm(h, { plan: RECIPE_PLAN }, () => "gen-id");
+		if (!result.launched) throw new Error("expected a launch");
+		const stored = present(h.store.get("gen-id"), "stored plan");
+		expect(stored.recipes?.a?.id).toBe("deep-feature");
+		expect(stored.manifests?.a?.manifestDigest).toBe("sha256:aaaa");
+		// The step record carries the recipe id AND the recipe's RESOLVED manifest reference.
+		const storedStep = present(
+			stored.steps.find((s) => s.id === "a"),
+			"stored step a",
+		);
+		expect(storedStep.recipe).toBe("deep-feature");
+		expect(storedStep.manifestPath).toBe("manifests/converge.json");
+		// The launched job runs the recipe's manifest with the approved digest, participant
+		// summary, and the recipe's default budgets (the step declared none).
+		const launched = present(h.launched[0], "launched a");
+		expect(launched.manifestPath).toBe("manifests/converge.json");
+		expect(launched.manifestDigest).toBe("sha256:aaaa");
+		expect(launched.manifestParticipants).toEqual(stored.manifests?.a?.participants);
+		expect(launched.maxIterations).toBe(4);
+		expect(launched.callTimeoutMs).toBe(1200000);
+		// The view stamps the recipe id and the resolved manifest surface for receipts.
+		const a = present(
+			result.view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		expect(a.recipe).toBe("deep-feature");
+		expect(a.manifestPath).toBe("manifests/converge.json");
+		expect(a.manifestDigest).toBe("sha256:aaaa");
+		expect(a.callTimeoutMs).toBe(1200000);
+	});
+
+	test("step-level budgets override the recipe defaults on the launched job", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () => gateRecipe();
+		const plan = {
+			...RECIPE_PLAN,
+			steps: [
+				{ ...RECIPE_PLAN.steps[0], maxIterations: 7, callTimeoutMs: 60000 },
+				RECIPE_PLAN.steps[1],
+			],
+		};
+		const result = approveAndConfirm(h, { plan }, () => "gen-id");
+		if (!result.launched) throw new Error("expected a launch");
+		const launched = present(h.launched[0], "launched a");
+		expect(launched.maxIterations).toBe(7);
+		expect(launched.callTimeoutMs).toBe(60000);
+	});
+
+	test("an unknown recipe is refused at the gate as a PlanError naming the step", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () => {
+			throw new Error('unknown recipe "deep-feature" (no recipes are configured)');
+		};
+		expect(() => runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
+			PlanError,
+		);
+		expect(() => runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
+			/steps\.a\.recipe.*unknown recipe/,
+		);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a recipe-naming plan with no recipe resolver wired is refused, never silently launched", () => {
+		const h = makeHarness();
+		// h.deps carries no resolveRecipe (the harness default).
+		expect(() => runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
+			/recipe resolution is not available/,
 		);
 		expect(h.launched).toHaveLength(0);
 	});

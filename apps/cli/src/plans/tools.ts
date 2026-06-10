@@ -14,6 +14,7 @@ import {
 	type NormalizedPlan,
 	type PlanApprovalArtifact,
 	type PlanApprovalBase,
+	type PlanApprovalRecipe,
 	PlanError,
 	parsePlan,
 } from "@chit-run/core";
@@ -111,10 +112,15 @@ export type PlanStartResult =
 			plan: NormalizedPlan;
 			base: PlanApprovalBase;
 			maxIterations?: number;
-			// The resolved manifest binding per step that names a manifestPath: content
-			// digest + safe participant execution summary, bound by the approval hash so
-			// the operator reviews the execution surface, not just a path string.
+			// The resolved manifest binding per step that names a manifestPath or selects a
+			// recipe: content digest + safe participant execution summary, bound by the
+			// approval hash so the operator reviews the execution surface, not just a path
+			// string (or a recipe id).
 			manifests?: Record<string, ManifestBinding>;
+			// The resolved recipe per recipe-backed step: id, provenance, mode, and runtime
+			// defaults, also hash-bound, so the preview shows exactly what every recipe
+			// resolved to before approval.
+			recipes?: Record<string, PlanApprovalRecipe>;
 			approvalHash: string;
 	  }
 	| { launched: true; view: PlanView; base: PlanApprovalBase; approvalHash: string };
@@ -155,13 +161,27 @@ export function runPlanStart(
 	const callerCheckout = repoToplevel(deps.git, cwd);
 	const sha = resolveBaseSha(deps.git, callerCheckout, ref);
 	const base: PlanApprovalBase = { ref, sha };
-	// Bind every step's manifest reference to its EFFECTIVE execution surface: content
-	// digest (read from the git tree at the approved base for a repo-relative path, the
-	// filesystem for an absolute one) + safe participant execution summary. Both the dry
-	// run and the confirm pass through here, so an edited manifest or a config change
+	// Bind every step's manifest reference (named directly, or resolved through its
+	// recipe) to its EFFECTIVE execution surface: content digest (read from the git
+	// tree at the approved base for a repo-relative path, the filesystem for an
+	// absolute one) + safe participant execution summary, plus the resolved recipe
+	// identity and defaults per recipe-backed step. Both the dry run and the confirm
+	// pass through here, so an edited manifest, a redefined recipe, or a config change
 	// that re-routes participants changes the hash and the confirm refuses.
-	const manifests = resolveStepManifests(normalizedPlan, base.sha, callerCheckout, cwd, deps);
-	const artifact = buildPlanApprovalArtifact(normalizedPlan, base, input.maxIterations, manifests);
+	const { manifests, recipes } = resolveStepBindings(
+		normalizedPlan,
+		base.sha,
+		callerCheckout,
+		cwd,
+		deps,
+	);
+	const artifact = buildPlanApprovalArtifact(
+		normalizedPlan,
+		base,
+		input.maxIterations,
+		manifests,
+		recipes,
+	);
 	const hash = planApprovalHash(artifact);
 
 	if (input.confirm !== true) {
@@ -172,6 +192,7 @@ export function runPlanStart(
 			base,
 			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
 			...(manifests !== undefined && { manifests }),
+			...(recipes !== undefined && { recipes }),
 			approvalHash: hash,
 		};
 	}
@@ -197,6 +218,7 @@ export function runPlanStart(
 			baseBranch: base.sha,
 			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
 			...(manifests !== undefined && { manifests }),
+			...(recipes !== undefined && { recipes }),
 		},
 		cwd,
 		store,
@@ -206,30 +228,65 @@ export function runPlanStart(
 	return { launched: true, view, base, approvalHash: hash };
 }
 
-// Resolve the manifest binding for every step that names a manifestPath, keyed by
-// step id. Returns undefined when nothing is bound: no step names a manifest, or
-// the deps carry no resolver (test harnesses; production always wires one). A
-// reference that cannot be resolved -- missing from the tree at the approved base,
-// a symlink object, a path escaping the repo, bad JSON, an unresolvable
-// participant -- throws PlanError naming the step, so a bad plan is refused at the
-// gate exactly like a structural validation failure.
-function resolveStepManifests(
+// Resolve the execution bindings for every step that names a manifestPath or selects
+// a recipe, keyed by step id. A direct manifestPath resolves to its manifest binding;
+// a recipe resolves to its identity + runtime defaults (recipes record) AND its
+// manifest binding (manifests record), so both kinds of step share one binding shape
+// for hashing, persistence, and launch-time re-verification. Records are undefined
+// when nothing is bound. A reference that cannot be resolved -- an unknown recipe,
+// missing from the tree at the approved base, a symlink object, a path escaping the
+// repo, bad JSON, an unresolvable participant -- throws PlanError naming the step, so
+// a bad plan is refused at the gate exactly like a structural validation failure. A
+// recipe-naming plan with no recipe resolver wired is refused too: silently launching
+// without the recipe's manifest would run an execution surface nobody reviewed.
+function resolveStepBindings(
 	plan: NormalizedPlan,
 	baseSha: string,
 	callerCheckout: string,
 	cwd: string,
 	deps: PlanEngineDeps,
-): Record<string, ManifestBinding> | undefined {
-	if (deps.resolveManifestBinding === undefined) return undefined;
-	const resolveBinding = deps.resolveManifestBinding;
+): {
+	manifests?: Record<string, ManifestBinding>;
+	recipes?: Record<string, PlanApprovalRecipe>;
+} {
 	const manifests: Record<string, ManifestBinding> = {};
+	const recipes: Record<string, PlanApprovalRecipe> = {};
 	for (const step of plan.steps) {
-		if (step.manifestPath === undefined) continue;
+		if (step.recipe !== undefined) {
+			if (deps.resolveRecipe === undefined) {
+				throw new PlanError(
+					`steps.${step.id}.recipe`,
+					"recipe resolution is not available in this context; a recipe-backed step cannot be reviewed or launched without resolving the recipe",
+				);
+			}
+			try {
+				const resolved = deps.resolveRecipe({
+					recipeId: step.recipe,
+					baseSha,
+					gitCwd: callerCheckout,
+					configCwd: cwd,
+				});
+				manifests[step.id] = resolved.binding;
+				recipes[step.id] = {
+					id: resolved.id,
+					...(resolved.origin !== undefined && { origin: resolved.origin }),
+					mode: resolved.mode,
+					...(resolved.maxIterations !== undefined && { maxIterations: resolved.maxIterations }),
+					...(resolved.callTimeoutMs !== undefined && { callTimeoutMs: resolved.callTimeoutMs }),
+					...(resolved.description !== undefined && { description: resolved.description }),
+				};
+			} catch (e) {
+				if (e instanceof PlanError) throw e;
+				throw new PlanError(`steps.${step.id}.recipe`, (e as Error).message);
+			}
+			continue;
+		}
+		if (step.manifestPath === undefined || deps.resolveManifestBinding === undefined) continue;
 		try {
 			// Normalize first (rejects repo escapes; relative paths in a plan are repo-root
 			// relative, matching where the step worktree later resolves them).
 			const ref = normalizeManifestReference(step.manifestPath, callerCheckout, callerCheckout);
-			manifests[step.id] = resolveBinding({
+			manifests[step.id] = deps.resolveManifestBinding({
 				manifestPath: ref.manifestPath,
 				baseSha,
 				gitCwd: callerCheckout,
@@ -239,7 +296,10 @@ function resolveStepManifests(
 			throw new PlanError(`steps.${step.id}.manifestPath`, (e as Error).message);
 		}
 	}
-	return Object.keys(manifests).length > 0 ? manifests : undefined;
+	return {
+		...(Object.keys(manifests).length > 0 && { manifests }),
+		...(Object.keys(recipes).length > 0 && { recipes }),
+	};
 }
 
 // Launch an ALREADY-parsed, approved plan through the exact startPlan engine path. runPlanStart
@@ -252,6 +312,7 @@ export function launchNormalizedPlan(
 		baseBranch?: string;
 		maxIterations?: number;
 		manifests?: Record<string, ManifestBinding>;
+		recipes?: Record<string, PlanApprovalRecipe>;
 	},
 	cwd: string,
 	store: PlanStore,
@@ -266,6 +327,7 @@ export function launchNormalizedPlan(
 		...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
 		...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
 		...(input.manifests !== undefined && { manifests: input.manifests }),
+		...(input.recipes !== undefined && { recipes: input.recipes }),
 	});
 	return describePlan(started, deps);
 }

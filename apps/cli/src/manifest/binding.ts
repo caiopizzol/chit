@@ -260,13 +260,13 @@ export function readJobManifest(p: {
 	return { ok: true, raw, path, digest };
 }
 
-// --- recipe resolution substrate (config-visible only until Phase 3) --------
+// --- recipe resolution substrate -------------------------------------------
 
 // A config recipe resolved to its effective execution surface: identity +
 // provenance + mode + runtime defaults + the manifest binding (digest + safe
-// participant summary). This is the substrate plan-step / batch-task `recipe`
-// consumption (Phase 3/4) will bind into approvals; nothing consumes it at launch
-// yet -- recipes stay config-visible only.
+// participant summary). Plan-step `recipe` (Phase 3) binds this into the plan
+// approval artifact at the chit_plan_start gate; batch-task consumption (Phase 4)
+// is still to come.
 export interface ResolvedRecipe {
 	id: string;
 	origin?: ConfigOrigin;
@@ -276,6 +276,24 @@ export interface ResolvedRecipe {
 	callTimeoutMs?: number;
 	description?: string;
 }
+
+// What a recipe resolution needs from its call site, mirroring
+// ManifestBindingRequest: the recipe id, the commit the run executes from (the
+// git-tree read point for a repo-relative recipe manifest), any checkout of the
+// repo for object reads, and the checkout config layering resolves from.
+export interface RecipeResolutionRequest {
+	recipeId: string;
+	baseSha: string;
+	gitCwd: string;
+	configCwd: string;
+}
+
+// The injectable dep shape the plan gate uses to resolve a step's recipe,
+// mirroring ResolveManifestBinding: the real implementation loads fresh config per
+// call, so a recipe redefined between dry run and confirm surfaces as a hash
+// mismatch instead of being pinned away. Throws ManifestBindingError when the
+// recipe or its manifest cannot be resolved.
+export type ResolveRecipe = (p: RecipeResolutionRequest) => ResolvedRecipe;
 
 // Resolve a recipe id against the effective config: look it up, normalize its
 // manifest reference (repo recipes are parser-confined to repo-relative paths;

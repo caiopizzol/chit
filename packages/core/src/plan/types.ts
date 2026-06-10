@@ -19,8 +19,12 @@ export type PlanCleanupPolicy = "after_apply" | "manual";
 // normalized to [] when absent. commitMessage is the subject line the gated apply
 // commits this step under on the integration branch (single line, reviewed with the
 // plan -- the approval hash binds it); absent falls back to `plan step <id>: <title>`.
-// The remaining fields are converge-run overrides, preserved only when the author
-// provides them.
+// recipe names a vetted config recipe by id: the recipe supplies the manifest and the
+// default runtime budgets, so a planner selects from a closed menu instead of writing
+// paths. recipe and manifestPath are mutually exclusive (manifestPath stays available
+// for manual expert use). The remaining fields are converge-run overrides, preserved
+// only when the author provides them; when a recipe is named, a step-level
+// maxIterations/callTimeoutMs overrides that recipe's default.
 export interface PlanStep {
 	id: string;
 	title: string;
@@ -28,6 +32,7 @@ export interface PlanStep {
 	dependsOn: string[];
 	commitMessage?: string;
 	requiredChecks?: RequiredCheck[];
+	recipe?: string;
 	manifestPath?: string;
 	maxIterations?: number;
 	callTimeoutMs?: number;

@@ -98,8 +98,10 @@ import { pickRequiredChecks, resolveRunRequiredChecks } from "../../loops/requir
 import {
 	ManifestBindingError,
 	type ResolveManifestBinding,
+	type ResolveRecipe,
 	readJobManifest,
 	resolveManifestBindingWith,
+	resolveRecipe,
 } from "../../manifest/binding.ts";
 import {
 	advancePlan,
@@ -204,6 +206,24 @@ const resolveManifestBindingReal: ResolveManifestBinding = (p) => {
 		throw new ManifestBindingError(`could not load config: ${(e as Error).message}`);
 	}
 	return resolveManifestBindingWith(p, { git: realGit, config });
+};
+
+// The real recipe resolver the plan gate uses for recipe-backed steps: the same
+// fresh-config-per-call lifecycle as resolveManifestBindingReal, so a recipe
+// redefined between dry run and confirm moves the approval hash instead of being
+// pinned away.
+const resolveRecipeReal: ResolveRecipe = (p) => {
+	let config: ReturnType<typeof loadConfig>;
+	try {
+		config = getConfig(p.configCwd);
+	} catch (e) {
+		throw new ManifestBindingError(`could not load config: ${(e as Error).message}`);
+	}
+	return resolveRecipe(p.recipeId, config, {
+		git: realGit,
+		repoRoot: p.gitCwd,
+		baseSha: p.baseSha,
+	});
 };
 
 // Exported so a test can connect a client over an in-memory transport and assert the
@@ -2934,6 +2954,7 @@ const planDeps: PlanEngineDeps = {
 		return { jobId: r.jobId, loopId: r.loopId };
 	},
 	resolveManifestBinding: resolveManifestBindingReal,
+	resolveRecipe: resolveRecipeReal,
 	getJob: (id) => jobStore.get(id),
 	cancelJob: (id) => {
 		requestJobCancel(jobStore, id);
@@ -3015,7 +3036,7 @@ server.registerTool(
 	"chit_plan_start",
 	{
 		description:
-			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). Universally gated by approval: with confirm omitted or false it is a DRY RUN that parses the plan, resolves the base ref to a commit SHA, returns the normalized plan plus base plus an approvalHash, and creates NOTHING (no plan record, worktree, job, or branch). With confirm:true it re-parses, re-resolves the base, recomputes the hash over the plan, base, and max_iterations, and REFUSES unless your approval_hash matches, so a plan, base, or budget edited after approval cannot start on an old hash. On a match it launches the first runnable step from the approved commit SHA (pinned even if the ref moved) and returns the plan_id plus the plan view. Then drive it with chit_plan_status (read-only), chit_plan_advance (reconcile + launch, or apply a review_ready step into the integration branch with an apply payload), and chit_plan_cleanup once the plan is done. A step settles review_ready and pauses for the operator's gated apply; dependents wait until it is applied and committed.",
+			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). A step may select a vetted config recipe by id (`recipe`), which resolves at the gate to that recipe's manifest (content digest + participant summary) and default budgets; `recipe` and `manifestPath` are mutually exclusive. Universally gated by approval: with confirm omitted or false it is a DRY RUN that parses the plan, resolves the base ref to a commit SHA, resolves every step's recipe and manifest binding, returns the normalized plan plus base plus an approvalHash, and creates NOTHING (no plan record, worktree, job, or branch). With confirm:true it re-parses, re-resolves the base, recipes, and manifest bindings, recomputes the hash over the approved execution surface, and REFUSES unless your approval_hash matches, so a plan, base, budget, recipe, manifest, or participant config edited after approval cannot start on an old hash. On a match it launches the first runnable step from the approved commit SHA (pinned even if the ref moved) and returns the plan_id plus the plan view. Then drive it with chit_plan_status (read-only), chit_plan_advance (reconcile + launch, or apply a review_ready step into the integration branch with an apply payload), and chit_plan_cleanup once the plan is done. A step settles review_ready and pauses for the operator's gated apply; dependents wait until it is applied and committed.",
 		inputSchema: {
 			plan: z
 				.union([z.string(), z.record(z.string(), z.unknown())])
@@ -3090,11 +3111,12 @@ server.registerTool(
 					base: result.base,
 					...(result.maxIterations !== undefined && { maxIterations: result.maxIterations }),
 					...(result.manifests !== undefined && { manifests: result.manifests }),
+					...(result.recipes !== undefined && { recipes: result.recipes }),
 					approvalHash: result.approvalHash,
 					nextAction:
 						"Dry run: nothing was launched and no plan record, worktree, job, or branch was created. " +
-						"Review the plan, base, and any resolved manifest bindings above, then call chit_plan_start again with the SAME plan, " +
-						`confirm:true, and approval_hash:${result.approvalHash}. Editing the plan, base, max_iterations, a referenced manifest's content, or the config that resolves its participants changes the hash and the start is refused.`,
+						"Review the plan, base, any resolved recipes, and any resolved manifest bindings above, then call chit_plan_start again with the SAME plan, " +
+						`confirm:true, and approval_hash:${result.approvalHash}. Editing the plan, base, max_iterations, a referenced manifest's content, a selected recipe's definition, or the config that resolves its participants changes the hash and the start is refused.`,
 				});
 			}
 			// Confirmed, hash-matched start: the plan view (leading with plan_id), plus the base and

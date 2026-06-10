@@ -22,6 +22,7 @@ import type {
 	ManifestBinding,
 	NormalizedPlan,
 	PlanApplyPolicy,
+	PlanApprovalRecipe,
 	RequiredCheck,
 } from "@chit-run/core";
 import { describeManifestBindingDrift } from "@chit-run/core";
@@ -37,7 +38,7 @@ import {
 } from "../batches/worktree.ts";
 import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
-import type { ResolveManifestBinding } from "../manifest/binding.ts";
+import type { ResolveManifestBinding, ResolveRecipe } from "../manifest/binding.ts";
 import { derivePlanStatus, selectNextStep } from "./schedule.ts";
 import type { PlanStore } from "./store.ts";
 import type { Plan, PlanStatus, PlanStepRecord, PlanStepStatus } from "./types.ts";
@@ -160,6 +161,14 @@ export interface PlanEngineDeps {
 	// is made visible instead of pinned away. Throws ManifestBindingError when the
 	// reference can no longer be resolved (treated as drift).
 	resolveManifestBinding?: ResolveManifestBinding;
+	// Resolve a step's config recipe to its effective execution surface (identity,
+	// provenance, runtime defaults, and the manifest binding) at the chit_plan_start
+	// gate, so the approval hash binds what the recipe RESOLVES TO, not the id string.
+	// Optional for the same reason resolveManifestBinding is (test harnesses;
+	// production always wires it); a recipe-naming plan is REFUSED at the gate when it
+	// is absent -- silently launching without the recipe's manifest would run an
+	// execution surface nobody reviewed.
+	resolveRecipe?: ResolveRecipe;
 	// Best-effort removal of the plan's now-empty worktree ROOT (~/worktrees/chit/<planId>) after
 	// every child worktree under it is retired (real: removeEmptyDir). The plan layout nests the
 	// integration worktree beside a steps/ dir, so no single removeWorktree call can drop the root --
@@ -184,8 +193,11 @@ export interface StartPlanOptions {
 	maxIterations?: number; // per-step default when a step declares none
 	// The APPROVED manifest bindings (keyed by step id) from the gate's dry run, persisted
 	// on the plan record so every later step launch re-verifies against exactly what was
-	// approved.
+	// approved. For a recipe-backed step this is the recipe's RESOLVED binding.
 	manifests?: Record<string, ManifestBinding>;
+	// The APPROVED recipe identity + runtime defaults per recipe-backed step (keyed by
+	// step id), persisted so launches read the approved defaults, never the live config.
+	recipes?: Record<string, PlanApprovalRecipe>;
 }
 
 // Create the plan, its integration worktree, persist the record, and launch the first
@@ -222,6 +234,15 @@ export function startPlan(store: PlanStore, deps: PlanEngineDeps, opts: StartPla
 		};
 		if (s.commitMessage !== undefined) step.commitMessage = s.commitMessage;
 		if (s.requiredChecks !== undefined) step.requiredChecks = s.requiredChecks;
+		if (s.recipe !== undefined) {
+			step.recipe = s.recipe;
+			// A recipe-backed step records the recipe's RESOLVED manifest reference (from the
+			// approved binding the gate produced) as its own manifestPath, so launch, drift
+			// re-verification, and receipts read one reference shape for recipe-backed and
+			// direct-manifest steps alike. The parser guarantees s.manifestPath is unset here.
+			const bound = opts.manifests?.[s.id];
+			if (bound !== undefined) step.manifestPath = bound.manifestPath;
+		}
 		if (s.manifestPath !== undefined) step.manifestPath = s.manifestPath;
 		if (s.maxIterations !== undefined) step.maxIterations = s.maxIterations;
 		if (s.callTimeoutMs !== undefined) step.callTimeoutMs = s.callTimeoutMs;
@@ -250,6 +271,8 @@ export function startPlan(store: PlanStore, deps: PlanEngineDeps, opts: StartPla
 		integrationTipSha: baseSha,
 		...(opts.manifests !== undefined &&
 			Object.keys(opts.manifests).length > 0 && { manifests: opts.manifests }),
+		...(opts.recipes !== undefined &&
+			Object.keys(opts.recipes).length > 0 && { recipes: opts.recipes }),
 		steps,
 		status: "running",
 		createdAt: now,
@@ -838,7 +861,14 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 			// Globally-unique loop id: the worker's loop LOCK is global by loop id, so a bare step id
 			// like "schema" would collide with the same step id in another plan. The plan id namespaces it.
 			const loopId = `${c.id}-${next.id}`;
-			const stepMaxIterations = next.maxIterations ?? defaultMaxIterations;
+			// Effective budgets: a step-level override (hash-bound through the normalized plan)
+			// beats the step's APPROVED recipe defaults (hash-bound through the recipes record),
+			// which beat the plan-wide default. Both sources were reviewed, so the launch never
+			// reads a budget the approval did not bind.
+			const recipeDefaults = c.recipes?.[next.id];
+			const stepMaxIterations =
+				next.maxIterations ?? recipeDefaults?.maxIterations ?? defaultMaxIterations;
+			const stepCallTimeoutMs = next.callTimeoutMs ?? recipeDefaults?.callTimeoutMs;
 			const { jobId } = deps.launchJob({
 				cwd: worktreePath,
 				scope: `plan-${c.id}-${next.id}`,
@@ -865,7 +895,7 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 					manifestParticipants: c.manifests[next.id]?.participants,
 				}),
 				...(next.requiredChecks !== undefined && { requiredChecks: next.requiredChecks }),
-				...(next.callTimeoutMs !== undefined && { callTimeoutMs: next.callTimeoutMs }),
+				...(stepCallTimeoutMs !== undefined && { callTimeoutMs: stepCallTimeoutMs }),
 			});
 			next.runId = jobId;
 			next.status = "running";
@@ -882,20 +912,21 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 }
 
 // Why the step's CURRENT manifest binding no longer matches the approved one, or
-// undefined when it matches (or there is nothing to verify: no manifestPath, no
-// approved binding on the record, or no resolver wired). The reference is
-// re-resolved from `base` -- the commit the step worktree is about to be cut from
-// -- through the SAME resolver shape the gate used, so an earlier step's manifest
-// edit, a moved file, or a config change that re-routes participants all surface
-// here. A resolution failure (manifest gone, now a symlink, config broken) is
-// drift too: what was approved can no longer be read the approved way.
+// undefined when it matches (or there is nothing to verify: no approved binding on
+// the record, or no resolver wired). Keyed off the APPROVED binding, not the step's
+// authored fields, so a recipe-backed step (whose binding the recipe resolved) is
+// verified exactly like a direct-manifestPath step. The reference is re-resolved
+// from `base` -- the commit the step worktree is about to be cut from -- through
+// the SAME resolver shape the gate used, so an earlier step's manifest edit, a
+// moved file, or a config change that re-routes participants all surface here. A
+// resolution failure (manifest gone, now a symlink, config broken) is drift too:
+// what was approved can no longer be read the approved way.
 function stepManifestDrift(
 	c: Plan,
 	step: PlanStepRecord,
 	base: string,
 	deps: PlanEngineDeps,
 ): string | undefined {
-	if (step.manifestPath === undefined) return undefined;
 	const approved = c.manifests?.[step.id];
 	if (approved === undefined || deps.resolveManifestBinding === undefined) return undefined;
 	try {
@@ -929,6 +960,10 @@ export interface PlanStepView {
 	worktreePath?: string;
 	run_id?: string; // the durable background run advancing this step (run_id == its job id)
 	baseSha?: string; // the integration commit this step's worktree was cut from
+	// The config recipe id the step selected (when it did), so a receipt answers which
+	// vetted recipe ran; the recipe's resolved manifest reference appears as
+	// manifestPath/manifestDigest below, identical to a direct-manifest step.
+	recipe?: string;
 	// The step's manifest reference and its APPROVED content digest (from the plan
 	// record's bound manifests), so a receipt answers which execution surface was
 	// approved and run. Participant provenance is `participants` below.
@@ -1032,13 +1067,17 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 			...(s.runId !== undefined && { run_id: s.runId }),
 			...(s.baseSha !== undefined && { baseSha: s.baseSha }),
 			...(s.appliedCommitSha !== undefined && { appliedCommitSha: s.appliedCommitSha }),
+			...(s.recipe !== undefined && { recipe: s.recipe }),
 			...(s.manifestPath !== undefined && { manifestPath: s.manifestPath }),
 			...(c.manifests?.[s.id]?.manifestDigest !== undefined && {
 				manifestDigest: c.manifests[s.id]?.manifestDigest,
 			}),
-			// The effective per-call budget for this step, surfaced like the batch task view does, so
-			// status shows the active value without the caller re-deriving it.
-			...(s.callTimeoutMs !== undefined && { callTimeoutMs: s.callTimeoutMs }),
+			// The effective per-call budget for this step (a step override beats the approved
+			// recipe default), surfaced like the batch task view does, so status shows the
+			// active value without the caller re-deriving it.
+			...((s.callTimeoutMs ?? c.recipes?.[s.id]?.callTimeoutMs) !== undefined && {
+				callTimeoutMs: s.callTimeoutMs ?? c.recipes?.[s.id]?.callTimeoutMs,
+			}),
 		};
 		if (s.status === "running" && s.runId) {
 			const job = deps.getJob(s.runId);

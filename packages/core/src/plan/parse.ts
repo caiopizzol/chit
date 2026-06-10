@@ -33,6 +33,7 @@ const ALLOWED_STEP_KEYS = new Set([
 	"dependsOn",
 	"commitMessage",
 	"requiredChecks",
+	"recipe",
 	"manifestPath",
 	"maxIterations",
 	"callTimeoutMs",
@@ -44,6 +45,10 @@ const ALLOWED_REQUIRED_CHECK_KEYS = new Set(["command", "args", "name", "timeout
 
 // The plan id is a kebab-case slug, matching the manifest top-level id convention.
 const PLAN_ID_RE = /^[a-z][a-z0-9-]*$/;
+// A step's recipe reference must be a config recipe id, which the config parser pins to
+// the same kebab-case convention. Rejecting non-slugs here keeps a path (or any other
+// synthesized value) from ever reading as a recipe reference.
+const RECIPE_ID_RE = /^[a-z][a-z0-9-]*$/;
 // Step ids match the batch task-id convention (they are the same concept: a unit of
 // work in a declared graph). Slightly looser than the plan id, allowing leading
 // digits and underscores, exactly as planTasks accepts.
@@ -133,6 +138,23 @@ function parseStep(raw: unknown, index: number, ids: Set<string>): PlanStep {
 		step.commitMessage = reqSingleLineString(raw.commitMessage, `steps.${id}.commitMessage`);
 	if (raw.requiredChecks !== undefined)
 		step.requiredChecks = parseRequiredChecks(raw.requiredChecks, `steps.${id}.requiredChecks`);
+	// recipe and manifestPath are mutually exclusive: a recipe RESOLVES to a vetted
+	// manifest, so a step naming both would carry two competing execution references
+	// and the launch could not know which one was reviewed.
+	if (raw.recipe !== undefined && raw.manifestPath !== undefined)
+		throw new PlanError(
+			`steps.${id}.recipe`,
+			"recipe and manifestPath are mutually exclusive (the recipe supplies the manifest)",
+		);
+	if (raw.recipe !== undefined) {
+		const recipe = reqNonEmptyString(raw.recipe, `steps.${id}.recipe`);
+		if (!RECIPE_ID_RE.test(recipe))
+			throw new PlanError(
+				`steps.${id}.recipe`,
+				"must be a config recipe id (kebab-case: lowercase letters, digits, hyphens; starts with a letter)",
+			);
+		step.recipe = recipe;
+	}
 	if (raw.manifestPath !== undefined)
 		step.manifestPath = reqNonEmptyString(raw.manifestPath, `steps.${id}.manifestPath`);
 	if (raw.maxIterations !== undefined)

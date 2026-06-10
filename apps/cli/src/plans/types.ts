@@ -5,6 +5,7 @@ import type {
 	LoopVerdict,
 	ManifestBinding,
 	PlanApplyPolicy,
+	PlanApprovalRecipe,
 	PlanCleanupPolicy,
 	RequiredCheck,
 	Verification,
@@ -102,6 +103,12 @@ export interface PlanStepRecord {
 	// the plan approval hash). Absent -> the fallback `plan step <id>: <title>`.
 	commitMessage?: string;
 	requiredChecks?: RequiredCheck[];
+	// The config recipe id the step selected (when it did). The recipe's resolved
+	// identity + defaults live on the plan record's `recipes`; its resolved manifest
+	// reference is recorded as this step's manifestPath at plan start, so launch,
+	// re-verification, and receipts read one manifest reference shape for recipe-backed
+	// and direct-manifest steps alike.
+	recipe?: string;
 	manifestPath?: string;
 	maxIterations?: number;
 	callTimeoutMs?: number;
@@ -181,6 +188,12 @@ export interface Plan {
 	// -- confirm-time verification alone is not enough for a long plan. Absent on a
 	// manifest-free plan and on records that predate the binding.
 	manifests?: Record<string, ManifestBinding>;
+	// The APPROVED recipe identity + runtime defaults per recipe-backed step (keyed by
+	// step id), exactly what the approval hash bound. The launch reads the recipe's
+	// default budgets from here (a step-level override wins); the recipe's manifest
+	// binding sits in `manifests` under the same step id. Absent on a recipe-free plan
+	// and on records that predate recipes.
+	recipes?: Record<string, PlanApprovalRecipe>;
 	steps: PlanStepRecord[];
 	status: PlanStatus;
 	createdAt: string; // ISO 8601

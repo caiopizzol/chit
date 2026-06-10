@@ -111,6 +111,37 @@ describe("valid plans", () => {
 		expect(plan.steps[0]?.commitMessage).toBe("feat(auth): add users table");
 	});
 
+	test("a step recipe id is preserved on the normalized step", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [
+				{ id: "s", title: "t", body: "b", recipe: "deep-feature" },
+				{ id: "s2", title: "t2", body: "b2" },
+			],
+		});
+		expect(plan.steps[0]?.recipe).toBe("deep-feature");
+		expect(plan.steps[1]?.recipe).toBeUndefined();
+	});
+
+	test("a recipe-backed step may still override the runtime budgets", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [
+				{
+					id: "s",
+					title: "t",
+					body: "b",
+					recipe: "deep-feature",
+					maxIterations: 5,
+					callTimeoutMs: 900000,
+				},
+			],
+		});
+		expect(plan.steps[0]?.recipe).toBe("deep-feature");
+		expect(plan.steps[0]?.maxIterations).toBe(5);
+		expect(plan.steps[0]?.callTimeoutMs).toBe(900000);
+	});
+
 	test("duplicate dependsOn entries are de-duplicated", () => {
 		const plan = parsePlan({
 			...VALID_MINIMAL,
@@ -300,5 +331,48 @@ describe("invalid plans fail with useful errors", () => {
 
 	test("bad plan id slug", () => {
 		expectPlanError({ ...VALID_MINIMAL, id: "Add Auth" }, "id", "kebab-case");
+	});
+
+	test("a step naming both recipe and manifestPath is rejected", () => {
+		expectPlanError(
+			{
+				...VALID_MINIMAL,
+				steps: [
+					{
+						id: "s",
+						title: "t",
+						body: "b",
+						recipe: "deep-feature",
+						manifestPath: "manifests/converge.json",
+					},
+				],
+			},
+			"steps.s.recipe",
+			"mutually exclusive",
+		);
+	});
+
+	test("non-string recipe", () => {
+		expectPlanError(
+			{ ...VALID_MINIMAL, steps: [{ id: "s", title: "t", body: "b", recipe: 7 }] },
+			"steps.s.recipe",
+			"non-empty string",
+		);
+	});
+
+	test("a recipe that is not a kebab-case id is rejected (a path cannot pose as a recipe)", () => {
+		expectPlanError(
+			{
+				...VALID_MINIMAL,
+				steps: [{ id: "s", title: "t", body: "b", recipe: "manifests/converge.json" }],
+			},
+			"steps.s.recipe",
+			"kebab-case",
+		);
+		expectPlanError(
+			{ ...VALID_MINIMAL, steps: [{ id: "s", title: "t", body: "b", recipe: "Deep-Feature" }] },
+			"steps.s.recipe",
+			"kebab-case",
+		);
 	});
 });

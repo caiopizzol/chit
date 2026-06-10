@@ -4,6 +4,7 @@ import {
 	buildPlanApprovalArtifact,
 	canonicalApprovalPayload,
 	type PlanApprovalBase,
+	type PlanApprovalRecipe,
 } from "./approval.ts";
 import { parsePlan } from "./parse.ts";
 
@@ -131,6 +132,59 @@ describe("canonicalApprovalPayload determinism", () => {
 		expect(
 			canonicalApprovalPayload(buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, {})),
 		).toBe(none);
+	});
+
+	// The per-step recipes record binds the resolved recipe identity + runtime
+	// defaults, so a recipe redefined after the dry run (a different default budget,
+	// a different provenance layer, even a reworded description the operator
+	// reviewed) moves the hash and the confirm refuses.
+	const RECIPE: PlanApprovalRecipe = {
+		id: "deep-feature",
+		origin: { source: "repo", path: "chit.config.json" },
+		mode: "converge",
+		maxIterations: 3,
+		callTimeoutMs: 1200000,
+	};
+
+	test("binding a step recipe changes the payload; an empty map does not", () => {
+		const none = payloadFor(PLAN, BASE);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, undefined, { impl: RECIPE }),
+			),
+		).not.toBe(none);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, undefined, {}),
+			),
+		).toBe(none);
+	});
+
+	test("a changed recipe id, default budget, or provenance changes the payload", () => {
+		const bound = canonicalApprovalPayload(
+			buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, undefined, { impl: RECIPE }),
+		);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, undefined, {
+					impl: { ...RECIPE, id: "quick-fix" },
+				}),
+			),
+		).not.toBe(bound);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, undefined, {
+					impl: { ...RECIPE, maxIterations: 9 },
+				}),
+			),
+		).not.toBe(bound);
+		expect(
+			canonicalApprovalPayload(
+				buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, undefined, {
+					impl: { ...RECIPE, origin: { source: "global" } },
+				}),
+			),
+		).not.toBe(bound);
 	});
 
 	test("a changed manifest digest or participant summary changes the payload", () => {
