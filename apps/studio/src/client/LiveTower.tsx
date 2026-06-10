@@ -21,6 +21,7 @@ import {
 	concisePhase,
 	detailAges,
 	eventTail,
+	executionChips,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
@@ -76,6 +77,7 @@ function AgentBlocks({ row }: { row: LiveActivityRow }) {
 						<span className="agent-role">{v.role}</span>
 						<span className="agent-id">{v.agentId}</span>
 						<span className="agent-adapter">{v.adapter}</span>
+						{v.model && <span className="agent-model">{v.model}</span>}
 						{v.phaseElapsed && <span className="agent-phase-elapsed">{v.phaseElapsed}</span>}
 					</div>
 				</Fragment>
@@ -258,6 +260,26 @@ function ActionStrip({ row, refresh }: { row: LiveActivityRow; refresh: () => vo
 	);
 }
 
+// The selected run's execution identity: a compact strip of what it runs --
+// recipe, bound manifest, content digest. Background loops launched from a
+// recipe / digest-bound approval carry this; every other row renders nothing, so
+// the default selected-run answer stays calm. Not a receipt -- identity chips
+// only, with the full path/digest on hover.
+function ExecutionIdentity({ row }: { row: LiveActivityRow }) {
+	const chips = executionChips(row);
+	if (chips.length === 0) return null;
+	return (
+		<div className="live-exec">
+			{chips.map((c) => (
+				<span className="live-exec-chip" key={c.key} title={c.title ?? c.value}>
+					<span className="live-exec-label">{c.label}</span>
+					<span className="live-exec-value">{c.value}</span>
+				</span>
+			))}
+		</div>
+	);
+}
+
 function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => void }) {
 	if (!row) {
 		return <p className="live-muted live-detail-empty">Select a live run to inspect it.</p>;
@@ -276,6 +298,7 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 			</div>
 			<ActionStrip key={rowKey(row)} row={row} refresh={refresh} />
 			<p className="live-detail-scope">{row.scope}</p>
+			<ExecutionIdentity row={row} />
 			{row.task && <TaskDisclosure task={row.taskFull ?? row.task} />}
 			<div className="live-ages">
 				{detailAges(row).map(([label, ms]) => (

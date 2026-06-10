@@ -100,6 +100,18 @@ export interface AgentBlockView {
 	// Set only when the live block's phase has consumed enough of its call-timeout
 	// budget to warrant the warm tint (budgetWarmth). Never set on idle blocks.
 	warm?: boolean;
+	// The safe model identity from the participant snapshot, when the host carried
+	// it: the formatted "model · effort" label answering which model is running.
+	// Absent when the snapshot reported no model (foreground rows, older records).
+	model?: string;
+}
+
+// The compact model line for an agent block: the model id, with reasoningEffort
+// appended when present. Undefined when no model is known, so the block omits the
+// line rather than drawing an empty one.
+export function modelLabel(p: { model?: string; reasoningEffort?: string }): string | undefined {
+	if (!p.model) return undefined;
+	return p.reasoningEffort ? `${p.model} · ${p.reasoningEffort}` : p.model;
 }
 
 export function agentBlockViews(row: LiveActivityRow): AgentBlockView[] {
@@ -112,6 +124,7 @@ export function agentBlockViews(row: LiveActivityRow): AgentBlockView[] {
 		agentId: p.agentId,
 		adapter: p.adapter,
 		live: active !== "other" && participantRole(role) === active,
+		...(modelLabel(p) !== undefined && { model: modelLabel(p) }),
 	}));
 	if (active === "checks" && !views.some((v) => v.live)) {
 		views.push({
@@ -145,6 +158,77 @@ export function headPhaseElapsed(row: LiveActivityRow): string | undefined {
 	if (row.phaseElapsedMs === undefined) return undefined;
 	if (agentBlockViews(row).some((v) => v.live)) return undefined;
 	return formatAge(row.phaseElapsedMs);
+}
+
+// --- Execution identity shaping (pure helpers) ---
+
+// Shorten a content digest for a calm chip: keep the algorithm prefix (e.g.
+// "sha256:") and clip the hex to a short, still-recognizable head. A digest with
+// no prefix is clipped whole; one already short enough is returned untouched. The
+// full digest is never needed in the rail -- this is a glance, not a verifier.
+const DIGEST_HEX_HEAD = 10;
+
+export function shortDigest(digest: string): string {
+	const trimmed = digest.trim();
+	const colon = trimmed.indexOf(":");
+	if (colon >= 0) {
+		const prefix = trimmed.slice(0, colon + 1);
+		const hex = trimmed.slice(colon + 1);
+		return hex.length > DIGEST_HEX_HEAD ? `${prefix}${hex.slice(0, DIGEST_HEX_HEAD)}…` : trimmed;
+	}
+	return trimmed.length > DIGEST_HEX_HEAD ? `${trimmed.slice(0, DIGEST_HEX_HEAD)}…` : trimmed;
+}
+
+// The last path segment of a manifest path, for a compact chip. The full path
+// rides the chip's title (LiveTower) so nothing is hidden; this is just the calm
+// label. A path with no separator returns unchanged.
+export function manifestName(path: string): string {
+	const parts = path.split("/").filter((s) => s.length > 0);
+	return parts.length > 0 ? (parts[parts.length - 1] as string) : path;
+}
+
+// One chip of the selected run's execution identity strip: a short label, the
+// compact display value, and the full value for a hover title (the path/digest
+// that the value abbreviates). Pure and ordered: recipe, then manifest, then
+// digest, so the strip reads "which recipe · which manifest · which bytes".
+export interface ExecutionChip {
+	key: string;
+	label: string;
+	value: string;
+	// The unabbreviated value, when the display value is a shortened form (manifest
+	// path, digest). Absent when value is already complete (the recipe id).
+	title?: string;
+}
+
+// The execution identity chips for a row, empty when the row carries none
+// (foreground rows, direct background runs with no recipe/manifest binding, older
+// servers) so the detail renders nothing. Recipe origin is folded into the recipe
+// chip value as a parenthetical layer, keeping the strip to one chip per fact.
+export function executionChips(row: LiveActivityRow): ExecutionChip[] {
+	if (row.source !== "background" || !row.execution) return [];
+	const ex = row.execution;
+	const chips: ExecutionChip[] = [];
+	if (ex.recipe) {
+		const origin = ex.recipe.origin ? ` (${ex.recipe.origin})` : "";
+		chips.push({ key: "recipe", label: "recipe", value: `${ex.recipe.id}${origin}` });
+	}
+	if (ex.manifestPath) {
+		chips.push({
+			key: "manifest",
+			label: "manifest",
+			value: manifestName(ex.manifestPath),
+			title: ex.manifestPath,
+		});
+	}
+	if (ex.manifestDigest) {
+		chips.push({
+			key: "digest",
+			label: "digest",
+			value: shortDigest(ex.manifestDigest),
+			title: ex.manifestDigest,
+		});
+	}
+	return chips;
 }
 
 // A compact iteration label from the structured counters the hosts now report

@@ -28,7 +28,7 @@ The local server is part of the threat model. A launch token is generated at boo
 
 Studio polls `GET /api/live` while the page is open, lightly and on a self-scheduled timer. That snapshot is the only thing the browser sees. The data is produced by the host (the CLI), which owns the Chit state readers; a standalone Studio with no host shows an empty tower rather than an error.
 
-Every row is a glance summary, safe to hand a browser: run ids, a bounded scope and task one-liner, phase or lifecycle display, ages derived against the reader's clock, the agent and adapter participants, a compact status line, and a safe worktree path only when one is already present. A row never carries prompts, model output, review prose, config or environment values, or audit blobs. Studio does not read private state files in the browser, and it does not stream model output.
+Every row is a glance summary, safe to hand a browser: run ids, a bounded scope and task one-liner, phase or lifecycle display, ages derived against the reader's clock, agent and adapter participants with model and reasoning effort when known, recipe identity, manifest path and digest when bound, a compact status line, and a safe worktree path only when one is already present. A row never carries prompts, model output, review prose, environment keys or values, permissions, manifest contents, audit blobs, or raw participant config. Studio does not read private state files in the browser, and it does not stream model output.
 
 ## Run actions
 

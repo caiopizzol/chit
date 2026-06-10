@@ -22,14 +22,18 @@ import {
 	diffActivity,
 	EVENT_TAIL_DRAW_LIMIT,
 	eventTail,
+	executionChips,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
 	iterationLabel,
 	liveBody,
+	manifestName,
+	modelLabel,
 	phaseLabel,
 	phaseTimeline,
 	rowKey,
+	shortDigest,
 } from "./live.ts";
 
 function fg(over: Partial<ForegroundLiveRow> = {}): ForegroundLiveRow {
@@ -268,6 +272,92 @@ describe("agentBlockViews", () => {
 		const checks = views.find((v) => v.role === "checks");
 		expect(checks?.live).toBe(true);
 		expect(checks?.warm).toBeUndefined();
+	});
+
+	test("a block carries the safe model identity when the participant reports it", () => {
+		const withModel = {
+			impl: { agentId: "claude", adapter: "claude-cli", model: "claude-opus-4-8" },
+			rev: { agentId: "codex", adapter: "codex-cli", model: "gpt-5", reasoningEffort: "high" },
+		};
+		const views = agentBlockViews(fg({ phase: "implementing", participants: withModel }));
+		expect(views[0].model).toBe("claude-opus-4-8");
+		// reasoningEffort folds into the model label.
+		expect(views[1].model).toBe("gpt-5 · high");
+	});
+
+	test("a participant with no model leaves the block without a model line", () => {
+		const views = agentBlockViews(fg({ phase: "implementing", participants }));
+		expect(views[0].model).toBeUndefined();
+	});
+});
+
+describe("modelLabel", () => {
+	test("model alone, model with effort, and no model", () => {
+		expect(modelLabel({ model: "claude-opus-4-8" })).toBe("claude-opus-4-8");
+		expect(modelLabel({ model: "gpt-5", reasoningEffort: "high" })).toBe("gpt-5 · high");
+		expect(modelLabel({})).toBeUndefined();
+		expect(modelLabel({ reasoningEffort: "high" })).toBeUndefined();
+	});
+});
+
+describe("shortDigest", () => {
+	test("keeps the algorithm prefix and clips the hex head", () => {
+		expect(shortDigest("sha256:0123456789abcdef0123456789abcdef")).toBe("sha256:0123456789…");
+	});
+
+	test("a short or prefix-less digest is left intact (or clipped whole)", () => {
+		expect(shortDigest("sha256:abcd")).toBe("sha256:abcd");
+		expect(shortDigest("0123456789abcdef")).toBe("0123456789…");
+		expect(shortDigest("abcd")).toBe("abcd");
+		expect(shortDigest("  sha256:abcd  ")).toBe("sha256:abcd");
+	});
+});
+
+describe("manifestName", () => {
+	test("returns the last path segment", () => {
+		expect(manifestName("/repo/chits/converge.json")).toBe("converge.json");
+		expect(manifestName("converge.json")).toBe("converge.json");
+		expect(manifestName("/repo/chits/")).toBe("chits");
+	});
+});
+
+describe("executionChips", () => {
+	test("foreground rows and rows with no execution identity yield no chips", () => {
+		expect(executionChips(fg())).toEqual([]);
+		expect(executionChips(bg())).toEqual([]);
+		expect(executionChips(bg({ execution: {} }))).toEqual([]);
+	});
+
+	test("recipe, manifest, and digest become ordered chips with full values on title", () => {
+		const chips = executionChips(
+			bg({
+				execution: {
+					recipe: { id: "deep-converge", origin: "repo", mode: "converge" },
+					manifestPath: "/repo/chits/converge.json",
+					manifestDigest: "sha256:0123456789abcdef0123456789abcdef",
+				},
+			}),
+		);
+		expect(chips).toEqual([
+			{ key: "recipe", label: "recipe", value: "deep-converge (repo)" },
+			{
+				key: "manifest",
+				label: "manifest",
+				value: "converge.json",
+				title: "/repo/chits/converge.json",
+			},
+			{
+				key: "digest",
+				label: "digest",
+				value: "sha256:0123456789…",
+				title: "sha256:0123456789abcdef0123456789abcdef",
+			},
+		]);
+	});
+
+	test("a recipe with no origin omits the parenthetical layer", () => {
+		const chips = executionChips(bg({ execution: { recipe: { id: "quick", mode: "converge" } } }));
+		expect(chips).toEqual([{ key: "recipe", label: "recipe", value: "quick" }]);
 	});
 });
 

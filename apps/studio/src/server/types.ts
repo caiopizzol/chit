@@ -191,9 +191,38 @@ export interface LoopSummary {
 // The one safe participant pair the rail/detail shows: which agent ran and via
 // which adapter. The full provenance (permissions, config, env keys) is
 // deliberately omitted -- it lives in the audit run and the richer status views.
+// `model` and `reasoningEffort` are the only config fields that cross: they
+// answer "which model is running" and are present only when the persisted
+// snapshot carried them. Env keys and the rest of the config stay out.
 export interface LiveParticipant {
 	agentId: string;
 	adapter: string;
+	model?: string;
+	reasoningEffort?: string;
+}
+
+// The recipe identity of a live run, rebuilt field-by-field from the run's
+// RecipeReceipt (never spread) so only the safe naming/budget facts cross: which
+// named recipe and where it was defined, plus the loop budgets it carried. The
+// receipt's origin PATH is dropped -- only the layer (builtin/global/repo) crosses.
+export interface LiveRecipeIdentity {
+	id: string;
+	origin?: ConfigOriginSource;
+	mode: "converge";
+	maxIterations?: number;
+	callTimeoutMs?: number;
+}
+
+// The execution surface of a live run: which recipe and bound manifest it runs.
+// A privacy-safe identity strip, not a receipt -- recipe id/origin/budgets plus
+// the manifest path and content digest the run was bound to. No prompts, model
+// outputs, config values, or env. Present only when the host actually knows these
+// (a background loop launched from a recipe / digest-bound approval); a row
+// without execution identity omits the field and the detail renders nothing.
+export interface LiveExecutionIdentity {
+	recipe?: LiveRecipeIdentity;
+	manifestPath?: string;
+	manifestDigest?: string;
 }
 
 // The event vocabulary of a live tail entry. Mirrors the host's LiveEventKind;
@@ -284,6 +313,10 @@ export interface BackgroundLiveRow {
 	// LiveEventView). Omitted when empty.
 	recentEvents?: LiveEventView[];
 	participants?: Record<string, LiveParticipant>;
+	// The run's execution surface: recipe + bound manifest identity. Background
+	// loops only -- foreground snapshots cannot know a recipe or manifest digest, so
+	// they never carry it. Omitted when the run has no execution identity.
+	execution?: LiveExecutionIdentity;
 }
 
 export type LiveActivityRow = ForegroundLiveRow | BackgroundLiveRow;

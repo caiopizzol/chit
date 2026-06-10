@@ -892,6 +892,7 @@ type ForegroundLiveRow = import("@chit-run/studio/server").ForegroundLiveRow;
 type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
 type LiveParticipant = import("@chit-run/studio/server").LiveParticipant;
 type LiveEventView = import("@chit-run/studio/server").LiveEventView;
+type LiveExecutionIdentity = import("@chit-run/studio/server").LiveExecutionIdentity;
 
 // Live-activity source injected into Studio so GET /api/live reflects current Chit
 // state without @chit-run/studio importing CLI internals (the CLI owns the state
@@ -1088,6 +1089,7 @@ function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
 	// duration baked in -- the reader composes that from the derived ages).
 	const statusLine = job.phase ? `${display} · ${job.phase}` : display;
 	const participants = liveParticipants(job);
+	const execution = executionIdentity(job);
 	const recentEvents = liveEventViews(job.recentEvents, nowMs);
 	return {
 		source: "background",
@@ -1115,20 +1117,56 @@ function backgroundRow(job: JobRecord, nowMs: number): BackgroundLiveRow {
 		}),
 		...(recentEvents !== undefined && { recentEvents }),
 		...(participants !== undefined && { participants }),
+		...(execution !== undefined && { execution }),
 	};
 }
 
-// Reduce a loop job's persisted participant provenance to the agent+adapter pair
-// the rail shows. The stored snapshot carries permissions/config/envKeys; those
-// are model/config detail and MUST NOT cross this surface, so only the two safe
-// ids are copied through. A one-shot job has no participant provenance.
+// Reduce a loop job's persisted participant provenance to the safe identity the
+// rail shows: the agent+adapter pair plus the model/reasoningEffort the agent
+// runs with. The stored snapshot's config also carries envKeys and the rest of
+// the participant config; those are config detail and MUST NOT cross this
+// surface, so only model + reasoningEffort are copied from config (when present).
+// Permissions and enforcement flags stay out entirely. A one-shot job has no
+// participant provenance.
 function liveParticipants(job: JobRecord): Record<string, LiveParticipant> | undefined {
 	if (job.policy !== "loop" || job.participants === undefined) return undefined;
 	const out: Record<string, LiveParticipant> = {};
 	for (const [id, p] of Object.entries(job.participants)) {
-		out[id] = { agentId: p.agentId, adapter: p.adapter };
+		out[id] = {
+			agentId: p.agentId,
+			adapter: p.adapter,
+			...(p.config.model !== undefined && { model: p.config.model }),
+			...(p.config.reasoningEffort !== undefined && { reasoningEffort: p.config.reasoningEffort }),
+		};
 	}
 	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// The execution surface of a background loop run, rebuilt field-by-field for the
+// wire: the run's recipe identity (id/origin layer/budgets, never the origin
+// path) and the manifest path + content digest it was bound to. Direct runs with
+// no recipe and no digest binding yield nothing, so the row omits the field. A
+// one-shot job has no recipe/digest binding. PRIVACY: identity facts only -- no
+// manifest CONTENTS, prompts, config values, or env cross here.
+function executionIdentity(job: JobRecord): LiveExecutionIdentity | undefined {
+	if (job.policy !== "loop") return undefined;
+	const identity: LiveExecutionIdentity = {};
+	if (job.recipe !== undefined) {
+		identity.recipe = {
+			id: job.recipe.id,
+			mode: job.recipe.mode,
+			...(job.recipe.origin !== undefined && { origin: job.recipe.origin.source }),
+			...(job.recipe.maxIterations !== undefined && { maxIterations: job.recipe.maxIterations }),
+			...(job.recipe.callTimeoutMs !== undefined && { callTimeoutMs: job.recipe.callTimeoutMs }),
+		};
+	}
+	if (job.manifestPath !== undefined) identity.manifestPath = job.manifestPath;
+	if (job.manifestDigest !== undefined) identity.manifestDigest = job.manifestDigest;
+	return identity.recipe !== undefined ||
+		identity.manifestPath !== undefined ||
+		identity.manifestDigest !== undefined
+		? identity
+		: undefined;
 }
 
 // Where the Studio client bundle lives in a published install: next to the

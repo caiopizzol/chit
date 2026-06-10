@@ -632,14 +632,16 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 		try {
 			const jobStore = new JobStore(jobsDir);
 			// The persisted snapshot carries permissions/config/envKeys; the live row
-			// must surface ONLY agentId + adapter. Sentinels below must not appear.
+			// surfaces only the safe identity (agentId + adapter + model). The leak
+			// sentinels below -- permission, env key, and the rest of config -- must not
+			// appear. (The dedicated execution-identity test covers model crossing.)
 			const provenance = {
 				agentId: "codex",
 				adapter: "codex-exec",
 				session: "stateless",
 				permissions: { filesystem: "SENTINEL_PERMISSION" },
 				enforcesReadOnly: true,
-				config: { model: "SENTINEL_MODEL", envKeys: ["SENTINEL_ENV_KEY"] },
+				config: { model: "codex-medium", strictMcp: true, envKeys: ["SENTINEL_ENV_KEY"] },
 			} as unknown as AuditParticipantSnapshot;
 			const job: LoopJobRecord = {
 				policy: "loop",
@@ -680,20 +682,151 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			expect(row?.iterationsCompleted).toBe(1);
 			expect(row?.maxIterations).toBe(3);
 			expect(row?.callTimeoutMs).toBe(600_000);
-			expect(row?.participants).toEqual({ rev: { agentId: "codex", adapter: "codex-exec" } });
+			expect(row?.participants).toEqual({
+				rev: { agentId: "codex", adapter: "codex-exec", model: "codex-medium" },
+			});
 
-			// No provenance sentinel may cross the live surface.
+			// No leak sentinel (permission, env key, strictMcp, the config envelope) may
+			// cross the live surface; model is the one safe config field that does.
 			const serialized = JSON.stringify(live);
 			for (const sentinel of [
 				"SENTINEL_PERMISSION",
-				"SENTINEL_MODEL",
 				"SENTINEL_ENV_KEY",
+				"strictMcp",
 				"permissions",
 				"config",
 				"envKeys",
 			]) {
 				expect(serialized).not.toContain(sentinel);
 			}
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("exposes recipe/manifest execution identity and safe model identity, never config/env", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const jobStore = new JobStore(jobsDir);
+			// The snapshot carries the full participant config (model + reasoningEffort,
+			// PLUS env keys and other config). Only model + reasoningEffort may cross.
+			const provenance = {
+				agentId: "claude-code",
+				adapter: "claude-cli",
+				session: "stateless",
+				permissions: { filesystem: "SENTINEL_PERMISSION" },
+				enforcesReadOnly: true,
+				config: {
+					model: "claude-opus-4-8",
+					reasoningEffort: "high",
+					strictMcp: true,
+					envKeys: ["SENTINEL_ENV_KEY"],
+				},
+			} as unknown as AuditParticipantSnapshot;
+			const job: LoopJobRecord = {
+				policy: "loop",
+				runId: "bg-exec",
+				loopId: "bg-exec",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc-exec",
+				task: "converge the parser",
+				// Recipe + digest-bound manifest: the execution surface the row exposes.
+				manifestPath: "/repo/chits/converge.json",
+				manifestDigest: "sha256:0123456789abcdef0123456789abcdef",
+				recipe: {
+					id: "deep-converge",
+					mode: "converge",
+					origin: { source: "repo", path: "/repo/.chit/config.json" },
+					maxIterations: 8,
+					callTimeoutMs: 900_000,
+				},
+				maxIterations: 8,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+				phase: "implementing",
+				phaseStartedAt: new Date().toISOString(),
+				participants: { impl: provenance },
+			};
+			jobStore.create(job);
+
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const row = live.background[0];
+			// Safe model identity rides the participant; env/config sentinels do not.
+			expect(row?.participants).toEqual({
+				impl: {
+					agentId: "claude-code",
+					adapter: "claude-cli",
+					model: "claude-opus-4-8",
+					reasoningEffort: "high",
+				},
+			});
+			// Execution identity: recipe id/origin LAYER/budgets and manifest path/digest.
+			// The origin PATH is dropped -- only the layer crosses.
+			expect(row?.execution).toEqual({
+				recipe: {
+					id: "deep-converge",
+					mode: "converge",
+					origin: "repo",
+					maxIterations: 8,
+					callTimeoutMs: 900_000,
+				},
+				manifestPath: "/repo/chits/converge.json",
+				manifestDigest: "sha256:0123456789abcdef0123456789abcdef",
+			});
+
+			// No config/env/permission detail and no origin path may cross the surface.
+			const serialized = JSON.stringify(live);
+			for (const sentinel of [
+				"SENTINEL_PERMISSION",
+				"SENTINEL_ENV_KEY",
+				"strictMcp",
+				"envKeys",
+				"permissions",
+				"config",
+				"/repo/.chit/config.json",
+			]) {
+				expect(serialized).not.toContain(sentinel);
+			}
+		} finally {
+			rmSync(fgDir, { recursive: true, force: true });
+			rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	test("a direct loop run with no recipe or digest binding omits execution identity", () => {
+		const fgDir = mkdtempSync(join(tmpdir(), "chit-live-fg-"));
+		const jobsDir = mkdtempSync(join(tmpdir(), "chit-live-jobs-"));
+		try {
+			const job: LoopJobRecord = {
+				policy: "loop",
+				runId: "bg-direct",
+				loopId: "bg-direct",
+				repoKey: "k",
+				cwd: "/repo",
+				scope: "sc",
+				task: "t",
+				maxIterations: 3,
+				allowUnenforced: false,
+				iterationsCompleted: 0,
+				auditRefs: [],
+				state: "running",
+				createdAt: new Date().toISOString(),
+				pid: process.pid,
+				lastHeartbeatAt: new Date().toISOString(),
+			};
+			new JobStore(jobsDir).create(job);
+			const live = buildStudioLiveSource({ foregroundDir: fgDir, jobsDir }).live();
+			const row = live.background[0];
+			expect(row?.execution).toBeUndefined();
+			expect(JSON.stringify(row)).not.toContain("execution");
 		} finally {
 			rmSync(fgDir, { recursive: true, force: true });
 			rmSync(jobsDir, { recursive: true, force: true });
