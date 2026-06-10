@@ -6,6 +6,7 @@ import type {
 	Verification,
 	VerificationSource,
 } from "@chit-run/core";
+import type { LiveEventSummary } from "../runtime/live-events.ts";
 
 // A background run: a detached worker executing one run to completion. The job
 // record is the durable source of truth for the JOB (lifecycle, worker identity,
@@ -77,6 +78,17 @@ export interface BaseJobRecord {
 	// When the current phase began (ISO 8601), set on every phase change and
 	// cleared with `phase` at a terminal state.
 	phaseStartedAt?: string;
+
+	// The newest live-event summaries from the worker's in-flight run, the
+	// background mirror of the foreground snapshot's `events` tail. PRIVACY:
+	// LiveEventSummary digests only -- kind/label/ids, never payloads (no prompt,
+	// output, error text, or raw adapter line; the summaries are built by
+	// live-events.ts from structural facts). Bounded (MAX_LIVE_EVENTS) and
+	// piggybacked on writes the worker already makes (phase changes, heartbeats,
+	// iteration bookkeeping), never persisted per adapter event. Cleared with
+	// `phase` at a terminal state -- terminal jobs do not appear in the live
+	// tower. Absent on legacy records.
+	recentEvents?: LiveEventSummary[];
 
 	// Cancellation intent, persisted BEFORE any signal so the reason survives a
 	// worker restart or stale detection.

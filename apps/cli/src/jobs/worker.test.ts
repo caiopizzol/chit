@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoopVerdict, RequiredCheck } from "@chit-run/core";
 import type { ConvergeExecute } from "../cli/converge.ts";
 import * as convergeMod from "../cli/converge.ts";
 import { readLoop, startLoop } from "../loops/log-store.ts";
+import { MAX_LIVE_EVENTS } from "../runtime/live-events.ts";
 import { JobStore } from "./store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "./types.ts";
 import { type JobWorkerDeps, runJobWorker } from "./worker.ts";
@@ -605,6 +606,163 @@ describe("background one-shot worker", () => {
 		await runJobWorker("os1", dep); // second sees non-queued, never runs
 		expect(runs).toBe(1);
 		expect(store.get("os1")?.state).toBe("completed");
+	});
+});
+
+// The persisted live-event tail: populated from trace + adapter events, written
+// only on existing writes (phase changes, heartbeats, iteration bookkeeping),
+// capped, and cleared at a terminal state. Mid-run assertions read the store
+// from INSIDE the fake execute, since the worker always settles terminal (which
+// clears the tail) before runJobWorker returns.
+describe("background live event tail", () => {
+	// A successful run whose review carries the given verdict (fakeExecute's shape),
+	// for executes that emit live events through ctx before settling.
+	function reviewResult(verdict: LoopVerdict) {
+		const review = `looks fine\n\`\`\`json\n${JSON.stringify({
+			verdict,
+			findingCount: 0,
+			checks: [{ command: "tests", status: "passed" }],
+			checksRun: "tests",
+			risk: "none",
+		})}\n\`\`\``;
+		return {
+			ok: true as const,
+			output: "## converge iteration",
+			outputs: { implement: "did the slice", review },
+			trace: [],
+			auditRunId: "run-1",
+		};
+	}
+
+	test("trace + adapter events populate the tail; persistence rides existing writes, never per adapter event", async () => {
+		seedJob();
+		let afterAdapterEvent: unknown;
+		let afterTrace: unknown;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctx?.onAdapterEvent?.({
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "claude",
+				type: "tool_use",
+			});
+			afterAdapterEvent = store.get("j1")?.recentEvents;
+			ctx?.onTrace?.({
+				type: "step.started",
+				stepId: "implement",
+				kind: "call",
+				prompt: "SECRET-PROMPT",
+			});
+			afterTrace = store.get("j1")?.recentEvents;
+			return reviewResult("proceed");
+		};
+		await runJobWorker("j1", runDeps(execute));
+		// An adapter event alone stays in memory -- no per-event disk write.
+		expect(afterAdapterEvent).toBeUndefined();
+		// The implement step.started rides the existing phase write, flushing the
+		// whole tail (the adapter event included, in arrival order).
+		expect(afterTrace).toEqual([
+			expect.objectContaining({ kind: "adapter.event", label: "tool_use", stepId: "implement" }),
+			expect.objectContaining({ kind: "step.started", stepId: "implement" }),
+		]);
+		// Summaries are structural facts only; the trace payload never lands on disk.
+		expect(JSON.stringify(afterTrace)).not.toContain("SECRET-PROMPT");
+	});
+
+	test("the tail keeps only the newest MAX_LIVE_EVENTS", async () => {
+		seedJob();
+		let persisted: unknown;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			for (let n = 1; n <= MAX_LIVE_EVENTS + 5; n++) {
+				ctx?.onAdapterEvent?.({
+					stepId: "implement",
+					participantId: "impl",
+					agentId: "claude",
+					type: `evt-${n}`,
+				});
+			}
+			ctx?.onTrace?.({ type: "step.started", stepId: "review", kind: "call" });
+			persisted = store.get("j1")?.recentEvents;
+			return reviewResult("proceed");
+		};
+		await runJobWorker("j1", runDeps(execute));
+		const tail = persisted as Array<{ label: string; kind: string }>;
+		expect(tail).toHaveLength(MAX_LIVE_EVENTS);
+		// 55 adapter events + 1 trace appended; the oldest 6 rolled off.
+		expect(tail[0]?.label).toBe("evt-7");
+		expect(tail.at(-1)).toMatchObject({ kind: "step.started" });
+	});
+
+	test("the tail persists on iteration bookkeeping and rolls across iterations", async () => {
+		seedJob();
+		let iter = 0;
+		let seenAtIterationTwoStart: unknown;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			iter++;
+			// Iteration 2 begins AFTER iteration 1's recording write and iteration 2's
+			// own bookkeeping write; both carry the tail, so iteration 1's event is
+			// already durable here even though no phase/heartbeat write followed it.
+			if (iter === 2) seenAtIterationTwoStart = store.get("j1")?.recentEvents;
+			ctx?.onAdapterEvent?.({
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "claude",
+				type: `iter-${iter}`,
+			});
+			return reviewResult(iter === 1 ? "revise" : "proceed");
+		};
+		await runJobWorker("j1", runDeps(execute));
+		expect(seenAtIterationTwoStart).toEqual([
+			expect.objectContaining({ kind: "adapter.event", label: "iter-1" }),
+		]);
+	});
+
+	test("a terminal write clears the tail (terminal jobs are not in the live tower)", async () => {
+		seedJob();
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctx?.onTrace?.({ type: "step.started", stepId: "implement", kind: "call" });
+			return reviewResult("proceed");
+		};
+		await runJobWorker("j1", runDeps(execute));
+		const job = store.get("j1");
+		expect(job?.state).toBe("completed");
+		expect(job?.recentEvents).toBeUndefined();
+		// Cleared in the durable FILE, not just the read view.
+		const onDisk = readFileSync(join(stateDir, "chit", "jobs", "j1.json"), "utf-8");
+		expect(onDisk).not.toContain("recentEvents");
+	});
+
+	test("a legacy record never gains the field when no events arrive", async () => {
+		seedJob(); // seeded without recentEvents, like every pre-field record
+		let midRun: unknown;
+		const execute: ConvergeExecute = async () => {
+			midRun = store.get("j1");
+			return reviewResult("proceed");
+		};
+		await runJobWorker("j1", runDeps(execute));
+		// No events -> tailPatch stays empty -> no write ever introduces the field.
+		expect(midRun !== undefined && "recentEvents" in (midRun as object)).toBe(false);
+		expect(store.get("j1")?.recentEvents).toBeUndefined();
+	});
+
+	test("one-shot: trace events feed the tail and the heartbeat flushes it", async () => {
+		seedOneShot();
+		let persisted: unknown;
+		await runJobWorker("os1", {
+			jobStore: store,
+			runOnce: async (_job, opts) => {
+				opts.onTrace?.({ type: "step.started", stepId: "build", kind: "call" });
+				// A one-shot run has no phase transitions mid-run; only the heartbeat
+				// (10ms here) can flush the tail while the manifest runs.
+				await new Promise((r) => setTimeout(r, 100));
+				persisted = store.get("os1")?.recentEvents;
+				return { ok: true, auditRunId: "aud-1" };
+			},
+			installSignalHandlers: false,
+			heartbeatMs: 10,
+			now: () => 1000,
+		});
+		expect(persisted).toEqual([expect.objectContaining({ kind: "step.started", stepId: "build" })]);
+		expect(store.get("os1")?.recentEvents).toBeUndefined(); // cleared at terminal
 	});
 });
 

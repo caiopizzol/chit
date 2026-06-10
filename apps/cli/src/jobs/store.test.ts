@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JobStore, JobStoreError } from "./store.ts";
@@ -114,5 +114,56 @@ describe("JobStore", () => {
 	test("loopLockPath is under the jobs locks dir and id-validated", () => {
 		expect(store.loopLockPath("L1")).toBe(join(dir, "locks", "L1.lock"));
 		expect(() => store.loopLockPath("../evil")).toThrow(JobStoreError);
+	});
+});
+
+// The job file is a trust boundary and recentEvents flows on to display
+// surfaces, so every read rebuilds the tail through sanitizeLiveEvents (the
+// background mirror of the foreground registry's parseSnapshot).
+describe("JobStore recentEvents sanitization", () => {
+	// Plant a tail straight into the file, as a foreign writer or hand-edit would.
+	function plantTail(runId: string, recentEvents: unknown): void {
+		const raw = JSON.parse(readFileSync(join(dir, `${runId}.json`), "utf-8"));
+		raw.recentEvents = recentEvents;
+		writeFileSync(join(dir, `${runId}.json`), JSON.stringify(raw));
+	}
+
+	test("get/list rebuild entries field-by-field and drop malformed ones", () => {
+		store.create(rec("j1"));
+		plantTail("j1", [
+			// extra keys (a payload smuggled beside valid fields) must be dropped
+			{ ts: 1, kind: "adapter.event", label: "tool_use", stepId: "implement", raw: "SECRET" },
+			{ kind: "step.started", label: "no ts" }, // malformed: dropped
+			"not an object", // malformed: dropped
+		]);
+		const job = store.get("j1");
+		expect(job?.recentEvents).toEqual([
+			{ ts: 1, kind: "adapter.event", label: "tool_use", stepId: "implement" },
+		]);
+		expect(JSON.stringify(job)).not.toContain("SECRET");
+		expect(JSON.stringify(store.list())).not.toContain("SECRET");
+	});
+
+	test("a tail with nothing valid reads as absent, like a legacy record", () => {
+		store.create(rec("j1"));
+		plantTail("j1", "bogus");
+		expect(store.get("j1")?.recentEvents).toBeUndefined();
+		store.create(rec("j2"));
+		plantTail("j2", [{ totally: "wrong" }]);
+		expect(store.get("j2")?.recentEvents).toBeUndefined();
+	});
+
+	test("update sanitizes before mutate, so `...current` cannot carry hostile entries forward", () => {
+		store.create(rec("j1"));
+		plantTail("j1", [{ ts: 1, kind: "adapter.event", label: "ok", raw: "SECRET" }]);
+		store.update("j1", (c) => ({ ...c, state: "running" }));
+		expect(readFileSync(join(dir, "j1.json"), "utf-8")).not.toContain("SECRET");
+		expect(store.get("j1")?.recentEvents).toEqual([{ ts: 1, kind: "adapter.event", label: "ok" }]);
+	});
+
+	test("a legacy record without the field round-trips without gaining it", () => {
+		store.create(rec("j1"));
+		store.update("j1", (c) => ({ ...c, state: "running" }));
+		expect(readFileSync(join(dir, "j1.json"), "utf-8")).not.toContain("recentEvents");
 	});
 });

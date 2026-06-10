@@ -34,6 +34,12 @@ import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
 import { loadConfig } from "../config/load.ts";
 import { stopLoop } from "../loops/log-store.ts";
 import { type RunOnceResult, runManifestOnce, validateOneShotAuth } from "../runs/run-once.ts";
+import {
+	appendLiveEvent,
+	type LiveEventSummary,
+	summarizeAdapterEvent,
+	summarizeTraceEvent,
+} from "../runtime/live-events.ts";
 import type { TraceEvent } from "../runtime/types.ts";
 import { acquireLock, LockError, type LockOptions, releaseLock } from "./lock.ts";
 import type { JobStore } from "./store.ts";
@@ -178,14 +184,28 @@ function transitionToRunning(
 	store.update(jobId, runningPatch(now, workerToken));
 }
 
+// The persisted copy of the worker's in-memory live-event tail, spread into
+// writes the worker ALREADY makes (phase changes, heartbeats, iteration
+// bookkeeping) -- never a write of its own: adapter events can arrive many
+// times a second, and mirroring each one would turn the tail into a per-event
+// disk write. The entries are LiveEventSummary digests (kind/label/ids only,
+// never payloads -- see live-events.ts). Copied per write so the persisted
+// record never aliases the live array the callbacks keep appending to; empty
+// means "leave the record's field as it was" (nothing to add, and the worker
+// owns the field, so there is nothing stale to overwrite).
+function tailPatch(tail: LiveEventSummary[]): { recentEvents?: LiveEventSummary[] } {
+	return tail.length > 0 ? { recentEvents: tail.map((e) => ({ ...e })) } : {};
+}
+
 // A phase setter bound to one job: records the phase, refreshes the heartbeat, and
 // resets the phase clock only on a real transition (so a repeated phase, e.g. the
 // pre-iteration write plus the implement step.started trace, does not keep
-// restarting the age).
+// restarting the age). Each write also carries the current live-event tail.
 function makeSetPhase(
 	store: JobStore,
 	jobId: string,
 	now: () => number,
+	tail: LiveEventSummary[],
 ): (phase: JobPhase) => void {
 	return (phase) => {
 		try {
@@ -194,6 +214,7 @@ function makeSetPhase(
 				phase,
 				...(c.phase !== phase && { phaseStartedAt: iso(now()) }),
 				lastHeartbeatAt: iso(now()),
+				...tailPatch(tail),
 			}));
 		} catch {
 			// best effort; a lost job file surfaces elsewhere
@@ -231,15 +252,19 @@ function installCancellation(
 	};
 }
 
+// Each heartbeat also flushes the live-event tail: between phase transitions
+// (one adapter call can run for minutes) this is what keeps the persisted tail
+// fresh without per-event writes.
 function startHeartbeat(
 	store: JobStore,
 	jobId: string,
 	now: () => number,
 	heartbeatMs: number,
+	tail: LiveEventSummary[],
 ): ReturnType<typeof setInterval> {
 	return setInterval(() => {
 		try {
-			store.update(jobId, (c) => ({ ...c, lastHeartbeatAt: iso(now()) }));
+			store.update(jobId, (c) => ({ ...c, lastHeartbeatAt: iso(now()), ...tailPatch(tail) }));
 		} catch {
 			// best effort
 		}
@@ -255,7 +280,10 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 	const resolveExecute = deps.resolveExecute ?? defaultResolveExecute;
 
 	const workerToken = crypto.randomUUID();
-	const setPhase = makeSetPhase(store, jobId, now);
+	// The run's rolling live-event tail, fed by the trace/adapter-event callbacks
+	// below and persisted only via tailPatch on existing writes.
+	const recentEvents: LiveEventSummary[] = [];
+	const setPhase = makeSetPhase(store, jobId, now, recentEvents);
 	const { controller, cleanup } = installCancellation(setPhase, deps.installSignalHandlers);
 
 	let loopLock: ReturnType<typeof acquireLock> | undefined;
@@ -311,7 +339,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 			throw e;
 		}
 
-		heartbeat = startHeartbeat(store, jobId, now, heartbeatMs);
+		heartbeat = startHeartbeat(store, jobId, now, heartbeatMs, recentEvents);
 
 		let priorReview = "";
 		for (let i = 1; i <= job.maxIterations; i++) {
@@ -329,6 +357,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 				phase: "implementing",
 				...(c.phase !== "implementing" && { phaseStartedAt: iso(now()) }),
 				lastHeartbeatAt: iso(now()),
+				...tailPatch(recentEvents),
 			}));
 
 			let iter: Awaited<ReturnType<typeof runConvergeIteration>>;
@@ -348,13 +377,23 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 						requiredChecks: job.requiredChecks ?? resolved.loopSteps.requiredChecks,
 					}),
 					signal: controller.signal,
+					// Tail first, then the phase mark: a step.started that opens a phase is
+					// already in the tail when setPhase persists the record.
 					onTrace: (e: TraceEvent) => {
+						appendLiveEvent(recentEvents, summarizeTraceEvent(e, now()));
 						const phase = phaseOfStepStart(
 							e,
 							resolved.loopSteps.implementStep,
 							resolved.loopSteps.reviewStep,
 						);
 						if (phase) setPhase(phase);
+					},
+					// Intra-call adapter events feed the in-memory tail ONLY (no write of
+					// their own): they arrive too often to persist per event; the next phase
+					// write or heartbeat flushes the tail. The skeleton already strips the
+					// raw payload; summarizeAdapterEvent keeps type + ids only.
+					onAdapterEvent: (e) => {
+						appendLiveEvent(recentEvents, summarizeAdapterEvent(e.type, e, now()));
 					},
 				});
 			} catch (e) {
@@ -401,6 +440,7 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 				lastVerificationSource: iter.verificationSource,
 				auditRefs: iter.auditRunId ? [...c.auditRefs, iter.auditRunId] : c.auditRefs,
 				lastHeartbeatAt: iso(now()),
+				...tailPatch(recentEvents),
 			}));
 
 			if (iter.stopStatus) {
@@ -443,7 +483,11 @@ async function runOneShotJob(
 	const runOnce = deps.runOnce ?? defaultRunOnce;
 
 	const workerToken = crypto.randomUUID();
-	const setPhase = makeSetPhase(store, jobId, now);
+	// The run's rolling live-event tail. A one-shot run has no adapter-event hook
+	// (runManifestOnce exposes onTrace only), so step boundaries are its events;
+	// the heartbeat is what flushes them mid-run.
+	const recentEvents: LiveEventSummary[] = [];
+	const setPhase = makeSetPhase(store, jobId, now, recentEvents);
 	const { controller, cleanup } = installCancellation(setPhase, deps.installSignalHandlers);
 	// Intent-first cancellation: honor a persisted cancel even if no signal was
 	// delivered (signal loss, or a runner that does not observe the abort), so a
@@ -467,11 +511,14 @@ async function runOneShotJob(
 		// A one-shot run is a single DAG pass: one "running" phase (no implement/
 		// review/recording cycle) and no loop lock (there is no loop to serialize).
 		setPhase("running");
-		heartbeat = startHeartbeat(store, jobId, now, heartbeatMs);
+		heartbeat = startHeartbeat(store, jobId, now, heartbeatMs, recentEvents);
 
 		let result: RunOnceResult;
 		try {
-			result = await runOnce(job, { signal: controller.signal });
+			result = await runOnce(job, {
+				signal: controller.signal,
+				onTrace: (e) => appendLiveEvent(recentEvents, summarizeTraceEvent(e, now())),
+			});
 		} catch (e) {
 			// A throw can be the abort propagating; an intent-first cancel wins over
 			// reporting failed.
@@ -565,6 +612,8 @@ function stopLoopSafely(
 
 // Write the terminal job state with endedAt and clear the live phase (and its
 // clock): a terminal job is in no phase, so phaseElapsedMs should not be derived.
+// The live-event tail is cleared with it: terminal jobs do not appear in the
+// live tower, and the durable history lives in the loop log / audit store.
 function finish(
 	store: JobStore,
 	jobId: string,
@@ -578,6 +627,7 @@ function finish(
 		endedAt: iso(now()),
 		phase: undefined,
 		phaseStartedAt: undefined,
+		recentEvents: undefined,
 		lastHeartbeatAt: iso(now()),
 		...(extra.stopStatus !== undefined && { stopStatus: extra.stopStatus }),
 		...(extra.failure !== undefined && { failure: extra.failure }),

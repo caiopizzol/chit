@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { sanitizeLiveEvents } from "../runtime/live-events.ts";
 import { withFileLock } from "./lock.ts";
 import type { JobRecord } from "./types.ts";
 
@@ -80,6 +81,21 @@ function isValidJobRecord(raw: unknown, expectedRunId?: string): raw is JobRecor
 	);
 }
 
+// recentEvents is the one job-record field whose entries flow on to display
+// surfaces (the live tower, status views), and the file is a trust boundary: it
+// may have been written by another worker version or hand-edited. Rebuild the
+// tail field-by-field through sanitizeLiveEvents (off-contract keys -- raw,
+// prompt, output, ... -- and malformed entries are dropped, the cap re-applied),
+// so no reader ever sees an off-contract tail; this mirrors the foreground
+// registry's parseSnapshot. A tail with nothing valid left is dropped entirely,
+// like a legacy record without the field. Sanitize, never reject: a corrupt
+// tail is not worth treating the whole job as invalid.
+function withSanitizedTail(record: JobRecord): JobRecord {
+	if (record.recentEvents === undefined) return record;
+	const events = sanitizeLiveEvents(record.recentEvents);
+	return { ...record, recentEvents: events.length > 0 ? events : undefined };
+}
+
 // Jobs live under ~/.local/state/chit/jobs (XDG-aware), with loop locks beside
 // them under jobs/locks. Mirrors the audit and loops state dirs.
 export function defaultJobsDir(): string {
@@ -127,7 +143,7 @@ export class JobStore {
 		if (!existsSync(path)) return undefined;
 		try {
 			const raw: unknown = JSON.parse(readFileSync(path, "utf-8"));
-			return isValidJobRecord(raw, runId) ? raw : undefined;
+			return isValidJobRecord(raw, runId) ? withSanitizedTail(raw) : undefined;
 		} catch {
 			return undefined;
 		}
@@ -143,7 +159,9 @@ export class JobStore {
 			const raw: unknown = JSON.parse(readFileSync(path, "utf-8"));
 			if (!isValidJobRecord(raw, runId))
 				throw new JobStoreError(`run ${JSON.stringify(runId)} is not a valid record`);
-			const next = mutate(raw);
+			// Sanitize BEFORE mutate: the usual `...current` copy in a mutator must not
+			// carry a hand-edited file's off-contract tail entries forward.
+			const next = mutate(withSanitizedTail(raw));
 			writeAtomic(path, next);
 			return next;
 		});
@@ -167,7 +185,7 @@ export class JobStore {
 				return false;
 			}
 			if (!isValidJobRecord(raw, runId) || raw.state !== "queued") return false;
-			writeAtomic(path, mutate(raw));
+			writeAtomic(path, mutate(withSanitizedTail(raw)));
 			return true;
 		});
 	}
@@ -184,7 +202,7 @@ export class JobStore {
 				// Pin the record to its filename: runId IS the file name, so a record
 				// whose runId disagrees with the file is corrupt and is skipped.
 				const id = name.slice(0, -".json".length);
-				if (isValidJobRecord(raw, id)) jobs.push(raw);
+				if (isValidJobRecord(raw, id)) jobs.push(withSanitizedTail(raw));
 			} catch {
 				// skip corrupt/mid-write file
 			}
