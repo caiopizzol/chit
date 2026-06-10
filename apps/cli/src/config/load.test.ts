@@ -204,6 +204,82 @@ describe("loadConfig: repo config (chit.config.json)", () => {
 		);
 	});
 
+	test("a repo config may define recipes with repo-relative manifest paths", () => {
+		writeFileSync(
+			join(plainCwd, REPO_CONFIG_FILENAME),
+			JSON.stringify({
+				recipes: { "deep-review": { mode: "converge", manifestPath: "manifests/review.json" } },
+			}),
+		);
+		const c = loadConfig(join(dir, "config.json"), { cwd: plainCwd });
+		expect(c.recipes["deep-review"]?.manifestPath).toBe("manifests/review.json");
+		expect(c.provenance?.recipes["deep-review"]?.source).toBe("repo");
+	});
+
+	test("a repo recipe with an absolute manifestPath is rejected (trust boundary)", () => {
+		writeFileSync(
+			join(plainCwd, REPO_CONFIG_FILENAME),
+			JSON.stringify({
+				recipes: { sneaky: { mode: "converge", manifestPath: "/etc/evil.json" } },
+			}),
+		);
+		expect(() => loadConfig(join(dir, "config.json"), { cwd: plainCwd })).toThrow(
+			/repo-relative.*trust boundary/,
+		);
+	});
+
+	test("a repo recipe with `..` traversal is rejected (trust boundary)", () => {
+		writeFileSync(
+			join(plainCwd, REPO_CONFIG_FILENAME),
+			JSON.stringify({
+				recipes: { sneaky: { mode: "converge", manifestPath: "../outside.json" } },
+			}),
+		);
+		expect(() => loadConfig(join(dir, "config.json"), { cwd: plainCwd })).toThrow(
+			/may not contain ".."/,
+		);
+	});
+
+	test("a global recipe may use an absolute manifestPath (operator input)", () => {
+		const globalPath = join(dir, "config.json");
+		writeFileSync(
+			globalPath,
+			JSON.stringify({
+				recipes: { vetted: { mode: "converge", manifestPath: "/vetted/review.json" } },
+			}),
+		);
+		const c = loadConfig(globalPath, { cwd: plainCwd });
+		expect(c.recipes.vetted?.manifestPath).toBe("/vetted/review.json");
+		expect(c.provenance?.recipes.vetted?.source).toBe("global");
+	});
+
+	test("a repo recipe replaces a global recipe whole", () => {
+		const globalPath = join(dir, "config.json");
+		writeFileSync(
+			globalPath,
+			JSON.stringify({
+				recipes: {
+					"deep-review": {
+						mode: "converge",
+						manifestPath: "/vetted/review.json",
+						maxIterations: 9,
+					},
+				},
+			}),
+		);
+		writeFileSync(
+			join(plainCwd, REPO_CONFIG_FILENAME),
+			JSON.stringify({
+				recipes: { "deep-review": { mode: "converge", manifestPath: "manifests/review.json" } },
+			}),
+		);
+		const c = loadConfig(globalPath, { cwd: plainCwd });
+		expect(c.recipes["deep-review"]?.manifestPath).toBe("manifests/review.json");
+		// Whole-entity replacement: the global maxIterations does not survive.
+		expect(c.recipes["deep-review"]?.maxIterations).toBeUndefined();
+		expect(c.provenance?.recipes["deep-review"]?.source).toBe("repo");
+	});
+
 	test("invalid JSON in the repo config throws a ConfigError naming the repo path", () => {
 		writeFileSync(join(plainCwd, REPO_CONFIG_FILENAME), "{ not json");
 		let caught: unknown;

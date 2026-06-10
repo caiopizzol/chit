@@ -303,6 +303,245 @@ describe("parseConfigLayers", () => {
 	});
 });
 
+// Recipes: named, vetted references to a manifest plus safe runtime defaults.
+// They do not redeclare participants, prompts, checks, or approval policy; the
+// unknown-field rejection is what enforces that (there is nothing to smuggle).
+describe("parseConfig: recipes", () => {
+	test("a minimal recipe (mode + manifestPath) is valid", () => {
+		const c = parseConfig({
+			recipes: { "deep-review": { mode: "converge", manifestPath: "manifests/review.json" } },
+		});
+		const r = c.recipes["deep-review"];
+		expect(r).toEqual({ mode: "converge", manifestPath: "manifests/review.json" });
+	});
+
+	test("optional runtime defaults are carried through", () => {
+		const c = parseConfig({
+			recipes: {
+				"deep-review": {
+					mode: "converge",
+					manifestPath: "manifests/review.json",
+					maxIterations: 5,
+					callTimeoutMs: 600000,
+					description: "Vetted review loop.",
+				},
+			},
+		});
+		const r = c.recipes["deep-review"];
+		expect(r?.maxIterations).toBe(5);
+		expect(r?.callTimeoutMs).toBe(600000);
+		expect(r?.description).toBe("Vetted review loop.");
+	});
+
+	test("no recipes section -> empty recipes", () => {
+		expect(parseConfig(undefined).recipes).toEqual({});
+		expect(parseConfig({ agents: {} }).recipes).toEqual({});
+	});
+
+	test("an unknown recipe field is a ConfigError", () => {
+		expect(() =>
+			parseConfig({
+				recipes: { r: { mode: "converge", manifestPath: "m.json", color: "blue" } },
+			}),
+		).toThrow(/unknown field "color"/);
+	});
+
+	test("a recipe cannot declare approval policy (rejected as an unknown field)", () => {
+		// The trust boundary for recipes: v1 has no approval field at all, so any
+		// attempt to declare one fails loudly in EVERY layer.
+		expect(() =>
+			parseConfig({
+				recipes: { r: { mode: "converge", manifestPath: "m.json", approval: "auto" } },
+			}),
+		).toThrow(/unknown field "approval"/);
+	});
+
+	test("a recipe cannot redeclare participants (rejected as an unknown field)", () => {
+		expect(() =>
+			parseConfig({
+				recipes: { r: { mode: "converge", manifestPath: "m.json", participants: {} } },
+			}),
+		).toThrow(/unknown field "participants"/);
+	});
+
+	test("a non-kebab recipe id is a ConfigError", () => {
+		expect(() =>
+			parseConfig({ recipes: { DeepReview: { mode: "converge", manifestPath: "m.json" } } }),
+		).toThrow(/kebab/);
+	});
+
+	test("a recipe that is not an object is a ConfigError", () => {
+		expect(() => parseConfig({ recipes: { r: "just a string" } })).toThrow(ConfigError);
+	});
+
+	test("a non-object recipes section is a ConfigError", () => {
+		expect(() => parseConfig({ recipes: [] })).toThrow(ConfigError);
+	});
+
+	test("a missing mode is a ConfigError", () => {
+		expect(() => parseConfig({ recipes: { r: { manifestPath: "m.json" } } })).toThrow(/mode/);
+	});
+
+	test("a mode other than converge is a ConfigError (v1)", () => {
+		expect(() =>
+			parseConfig({ recipes: { r: { mode: "pipeline", manifestPath: "m.json" } } }),
+		).toThrow(/mode/);
+	});
+
+	test("a missing manifestPath is a ConfigError", () => {
+		expect(() => parseConfig({ recipes: { r: { mode: "converge" } } })).toThrow(/manifestPath/);
+	});
+
+	test("an empty manifestPath is a ConfigError", () => {
+		expect(() => parseConfig({ recipes: { r: { mode: "converge", manifestPath: "" } } })).toThrow(
+			/manifestPath/,
+		);
+	});
+
+	test("maxIterations must be a positive integer when present", () => {
+		for (const v of [0, -1, 2.5, "3"]) {
+			expect(() =>
+				parseConfig({
+					recipes: { r: { mode: "converge", manifestPath: "m.json", maxIterations: v } },
+				}),
+			).toThrow(/maxIterations.*positive integer/);
+		}
+	});
+
+	test("callTimeoutMs must be a positive integer when present", () => {
+		for (const v of [0, -500, 1.5, "600000"]) {
+			expect(() =>
+				parseConfig({
+					recipes: { r: { mode: "converge", manifestPath: "m.json", callTimeoutMs: v } },
+				}),
+			).toThrow(/callTimeoutMs.*positive integer/);
+		}
+	});
+
+	test("a non-string description is a ConfigError", () => {
+		expect(() =>
+			parseConfig({
+				recipes: { r: { mode: "converge", manifestPath: "m.json", description: 7 } },
+			}),
+		).toThrow(/description/);
+	});
+});
+
+// Recipe layering and the repo manifestPath trust boundary. The global layer is
+// operator input (absolute paths allowed); the repo layer is project input (the
+// referenced manifest must stay inside the repo, checked lexically).
+describe("parseConfigLayers: recipes", () => {
+	const GLOBAL = "/home/u/.config/chit/config.json";
+	const REPO = "/repo/chit.config.json";
+
+	function layers(global: unknown, repo: unknown): ConfigLayer[] {
+		const out: ConfigLayer[] = [];
+		if (global !== undefined) out.push({ raw: global, path: GLOBAL, source: "global" });
+		if (repo !== undefined) out.push({ raw: repo, path: REPO, source: "repo" });
+		return out;
+	}
+
+	test("no layers -> no recipes, empty recipe provenance", () => {
+		const c = parseConfigLayers([]);
+		expect(c.recipes).toEqual({});
+		expect(c.provenance?.recipes).toEqual({});
+	});
+
+	test("a repo recipe replaces a global recipe WHOLE (no field merging)", () => {
+		const c = parseConfigLayers(
+			layers(
+				{
+					recipes: {
+						"deep-review": {
+							mode: "converge",
+							manifestPath: "/vetted/review.json",
+							maxIterations: 9,
+							description: "global recipe",
+						},
+					},
+				},
+				{
+					recipes: {
+						"deep-review": { mode: "converge", manifestPath: "manifests/review.json" },
+					},
+				},
+			),
+		);
+		const r = c.recipes["deep-review"];
+		expect(r?.manifestPath).toBe("manifests/review.json");
+		// Whole-entity replacement: the global maxIterations and description do NOT survive.
+		expect(r?.maxIterations).toBeUndefined();
+		expect(r?.description).toBeUndefined();
+		expect(c.provenance?.recipes["deep-review"]).toEqual({ source: "repo", path: REPO });
+	});
+
+	test("recipes NOT redefined by the repo layer keep their global origin", () => {
+		const c = parseConfigLayers(
+			layers(
+				{ recipes: { "global-recipe": { mode: "converge", manifestPath: "/vetted/g.json" } } },
+				{ recipes: { "repo-recipe": { mode: "converge", manifestPath: "manifests/r.json" } } },
+			),
+		);
+		expect(c.provenance?.recipes["global-recipe"]).toEqual({ source: "global", path: GLOBAL });
+		expect(c.provenance?.recipes["repo-recipe"]).toEqual({ source: "repo", path: REPO });
+	});
+
+	test("a global recipe may use an absolute manifestPath", () => {
+		const c = parseConfigLayers(
+			layers(
+				{ recipes: { r: { mode: "converge", manifestPath: "/vetted/review.json" } } },
+				undefined,
+			),
+		);
+		expect(c.recipes.r?.manifestPath).toBe("/vetted/review.json");
+	});
+
+	test("a repo recipe with an absolute manifestPath is rejected (trust boundary)", () => {
+		expect(() =>
+			parseConfigLayers(
+				layers(undefined, { recipes: { r: { mode: "converge", manifestPath: "/etc/evil.json" } } }),
+			),
+		).toThrow(/repo-relative.*trust boundary/);
+	});
+
+	test("a repo recipe with a Windows-style absolute manifestPath is rejected", () => {
+		expect(() =>
+			parseConfigLayers(
+				layers(undefined, {
+					recipes: { r: { mode: "converge", manifestPath: "C:\\evil\\m.json" } },
+				}),
+			),
+		).toThrow(/repo-relative.*trust boundary/);
+	});
+
+	test("a repo recipe with `..` traversal is rejected (trust boundary)", () => {
+		expect(() =>
+			parseConfigLayers(
+				layers(undefined, {
+					recipes: { r: { mode: "converge", manifestPath: "../outside/m.json" } },
+				}),
+			),
+		).toThrow(/may not contain ".."/);
+		expect(() =>
+			parseConfigLayers(
+				layers(undefined, {
+					recipes: { r: { mode: "converge", manifestPath: "manifests/../../m.json" } },
+				}),
+			),
+		).toThrow(/may not contain ".."/);
+	});
+
+	test("a repo recipe with a repo-relative manifestPath is accepted", () => {
+		const c = parseConfigLayers(
+			layers(undefined, {
+				recipes: { r: { mode: "converge", manifestPath: "manifests/review.json" } },
+			}),
+		);
+		expect(c.recipes.r?.manifestPath).toBe("manifests/review.json");
+		expect(c.provenance?.recipes.r).toEqual({ source: "repo", path: REPO });
+	});
+});
+
 describe("parseConfig: profiles are no longer accepted", () => {
 	test("a `profiles` section is rejected as an unknown top-level field", () => {
 		expect(() =>

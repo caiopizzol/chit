@@ -30,6 +30,7 @@ function probeWith(okPrefixes: string[]): Probe {
 const CONFIG = {
 	registry: { agents: { claude: {}, codex: {} } },
 	roles: {},
+	recipes: {},
 } as unknown as NormalizedConfig;
 
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
@@ -68,6 +69,7 @@ describe("runChecks", () => {
 		const layered = {
 			registry: { agents: { claude: {}, codex: {}, "codex-deep": {} } },
 			roles: {},
+			recipes: {},
 			configPath: "/home/u/.config/chit/config.json",
 			repoConfigPath: "/repo/chit.config.json",
 			provenance: {
@@ -77,12 +79,51 @@ describe("runChecks", () => {
 					"codex-deep": { source: "repo", path: "/repo/chit.config.json" },
 				},
 				roles: {},
+				recipes: {},
 			},
 		} as unknown as NormalizedConfig;
 		const detail = byName(runChecks(deps({ loadReg: () => layered })), "agents").detail;
 		expect(detail).toContain("codex-deep (repo)");
 		expect(detail).toContain("from /home/u/.config/chit/config.json");
 		expect(detail).toContain("+ repo /repo/chit.config.json");
+	});
+
+	test("no recipes row when the config defines none", () => {
+		const checks = runChecks(deps());
+		expect(checks.find((c) => c.name === "recipes")).toBeUndefined();
+	});
+
+	test("recipes row lists each recipe with its origin", () => {
+		const withRecipes = {
+			...CONFIG,
+			recipes: {
+				"deep-review": { mode: "converge", manifestPath: "/vetted/review.json" },
+				"repo-fix": { mode: "converge", manifestPath: "manifests/fix.json" },
+			},
+			provenance: {
+				agents: {},
+				roles: {},
+				recipes: {
+					"deep-review": { source: "global", path: "/home/u/.config/chit/config.json" },
+					"repo-fix": { source: "repo", path: "/repo/chit.config.json" },
+				},
+			},
+		} as unknown as NormalizedConfig;
+		const c = byName(runChecks(deps({ loadReg: () => withRecipes })), "recipes");
+		expect(c.status).toBe("pass");
+		expect(c.detail).toBe("deep-review (global), repo-fix (repo)");
+	});
+
+	test("no recipes row when the config fails to load (agents row reports it)", () => {
+		const checks = runChecks(
+			deps({
+				loadReg: () => {
+					throw new ConfigError("/x/config.json", "invalid JSON");
+				},
+			}),
+		);
+		expect(checks.find((c) => c.name === "recipes")).toBeUndefined();
+		expect(byName(checks, "agents").status).toBe("fail");
 	});
 
 	test("bun missing is a hard failure", () => {

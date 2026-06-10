@@ -2,8 +2,9 @@
 //   1. the global config at ~/.config/chit/config.json (or an explicit path),
 //   2. the repo config at <git top-level>/chit.config.json (cwd outside git).
 // Both are parsed by the browser-safe core layering engine; later layers replace
-// user-defined agents/roles whole, built-ins stay non-redefinable, and the repo
-// layer is treated as untrusted project input (env/strictMcp rejected in core).
+// user-defined agents/roles/recipes whole, built-ins stay non-redefinable, and
+// the repo layer is treated as untrusted project input (env/strictMcp rejected,
+// recipe manifestPath confined to the repo - both enforced in core).
 //
 // The repo file deliberately lives at the repo ROOT, visible and diffable, NOT
 // under .chit/: converge drops .chit/** from changedFiles (workspace.ts), so a

@@ -13,17 +13,23 @@ An agent is an invocable participant: Codex CLI, Claude CLI, or anything else re
 
 A role is a reusable participant profile, defined in the `roles` section of the same config file: instructions (the persona), a session policy, permissions, and optionally a default agent. A participant can reference a role by name instead of spelling those fields out, and override any of them. A role with no default agent is model-agnostic: the chit that references it supplies the agent. Roles keep a shared persona and its governance in one place, so the same reviewer profile is declared once and reused across chits instead of copied into each one.
 
+## Recipes
+
+A recipe is a named reference to a manifest you have vetted, defined in the `recipes` section of the same config file. It carries a `mode` (only `converge` today), a `manifestPath` pointing at the manifest, and optional runtime defaults: `maxIterations`, `callTimeoutMs`, and a `description`. That is the whole surface. A recipe never redeclares participants, prompts, checks, or approval policy; all of that stays in the manifest it points at. Recipes are references, not a second place to write routines.
+
+Today recipes are config only: define them, layer them, and read them back in `chit doctor`. Nothing runs from a recipe yet.
+
 ## Config layering
 
 Config is read in layers. Later layers win:
 
 1. **Built-ins** - the `codex` and `claude` agents. Always present. No layer can redefine them.
-2. **Global config** - `~/.config/chit/config.json`. Your agents and roles, on your machine.
-3. **Repo config** - `chit.config.json` at the repo root (the git top-level, or the working directory outside git). The project's agents and roles, committed and shared with the repo.
+2. **Global config** - `~/.config/chit/config.json`. Your agents, roles, and recipes, on your machine.
+3. **Repo config** - `chit.config.json` at the repo root (the git top-level, or the working directory outside git). The project's agents, roles, and recipes, committed and shared with the repo.
 
-A later layer replaces an agent or role by id, whole. There is no field merging: the effective definition is exactly one file's definition. `chit doctor` reports which layer defined each agent and which config files were read.
+A later layer replaces an agent, role, or recipe by id, whole. There is no field merging: the effective definition is exactly one file's definition. `chit doctor` reports which layer defined each agent and recipe, and which config files were read.
 
-Repo config is project input, not operator input, so it stays inside a trust boundary: `env` and `strictMcp` are rejected in `chit.config.json` with a hard error. Set those in the global config instead.
+Repo config is project input, not operator input, so it stays inside a trust boundary: `env` and `strictMcp` are rejected in `chit.config.json` with a hard error. Set those in the global config instead. A repo recipe's `manifestPath` must stay inside the repo: absolute paths and `..` are rejected with a hard error. The global config may point a recipe anywhere on your machine.
 
 The file lives at the repo root on purpose: visible, diffable, and reviewed like any other file in the repo.
 

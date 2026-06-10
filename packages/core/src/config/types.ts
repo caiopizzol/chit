@@ -2,11 +2,12 @@ import type { NormalizedRegistry } from "../agents/types.ts";
 import type { FilesystemPermission, SessionPolicy } from "../manifest/types.ts";
 
 // chit's user config: agents (model profiles) + roles (reusable behavior +
-// governance), in one file (~/.config/chit/config.json). Parsed in core (this
-// module is browser-safe: structure validation, no node:fs); the node-side loader
-// reads the file. A manifest does NOT live here; a manifest's participants
-// reference these roles, and resolution (registry + roles aware) happens at the
-// run boundary, not in manifest parse.
+// governance) + recipes (vetted manifest references), in one file
+// (~/.config/chit/config.json). Parsed in core (this module is browser-safe:
+// structure validation, no node:fs); the node-side loader reads the file. A
+// manifest does NOT live here; a manifest's participants reference these roles,
+// and resolution (registry + roles aware) happens at the run boundary, not in
+// manifest parse.
 
 export class ConfigError extends Error {
 	constructor(
@@ -30,6 +31,19 @@ export interface NormalizedRole {
 	permissions: { filesystem: FilesystemPermission };
 }
 
+// A recipe: a named, vetted REFERENCE to an execution manifest, plus safe
+// runtime defaults. Deliberately thin: it does NOT redeclare participants,
+// prompts, checks, reviewer wiring, or approval policy; all of that lives in the
+// manifest it points at. Recipes are references, not a second execution
+// language. v1 supports only the converge mode.
+export interface NormalizedRecipe {
+	mode: "converge";
+	manifestPath: string;
+	maxIterations?: number;
+	callTimeoutMs?: number;
+	description?: string;
+}
+
 // Config layers a user can write. Built-ins are a third, implicit origin below
 // both. Later layers win: global sits over built-ins, repo sits over global.
 export type ConfigLayerSource = "global" | "repo";
@@ -45,15 +59,18 @@ export interface ConfigOrigin {
 export interface ConfigProvenance {
 	agents: Record<string, ConfigOrigin>;
 	roles: Record<string, ConfigOrigin>;
+	recipes: Record<string, ConfigOrigin>;
 }
 
 // The whole config: the agent registry (built-ins merged with the file's agents),
-// and the named roles. `roles` is empty when the file declares none. configPath /
-// repoConfigPath are the global and repo files that were actually read; provenance
-// records, per effective agent and role, which layer defined it.
+// the named roles, and the named recipes. `roles` / `recipes` are empty when the
+// file declares none. configPath / repoConfigPath are the global and repo files
+// that were actually read; provenance records, per effective agent, role, and
+// recipe, which layer defined it.
 export interface NormalizedConfig {
 	registry: NormalizedRegistry;
 	roles: Record<string, NormalizedRole>;
+	recipes: Record<string, NormalizedRecipe>;
 	configPath?: string;
 	repoConfigPath?: string;
 	provenance?: ConfigProvenance;

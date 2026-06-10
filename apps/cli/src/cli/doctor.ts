@@ -76,9 +76,9 @@ export interface DoctorDeps {
 	probe: Probe;
 	cwd: string;
 	auditDir: string;
-	// Load the full config (agents + roles). Returns NormalizedConfig so the check
-	// can report the resolved config path (registry.configPath is not set by the
-	// config parser; the path lives on the config).
+	// Load the full config (agents + roles + recipes). Returns NormalizedConfig so
+	// the check can report the resolved config path (registry.configPath is not set
+	// by the config parser; the path lives on the config).
 	loadReg: () => NormalizedConfig;
 	bunVersion: string | undefined;
 	// Read the Codex config.toml as text, or undefined when the file is absent.
@@ -201,6 +201,28 @@ function checkRegistry(deps: DoctorDeps): Check {
 	return { name: "agents", status: "pass", detail: `${ids || "none"} (${source})` };
 }
 
+// Recipes row: shown only when the config defines at least one recipe (most
+// setups have none, and a permanent "none" row is noise - same treatment as the
+// codex tool timeout check). A config that fails to load is already reported as
+// a failure by the agents row, so this check stays silent instead of duplicating.
+function checkRecipes(deps: DoctorDeps): Check | null {
+	let config: NormalizedConfig;
+	try {
+		config = deps.loadReg();
+	} catch {
+		return null;
+	}
+	const ids = Object.keys(config.recipes ?? {}).sort();
+	if (ids.length === 0) return null;
+	const detail = ids
+		.map((id) => {
+			const origin = config.provenance?.recipes[id];
+			return origin ? `${id} (${origin.source})` : id;
+		})
+		.join(", ");
+	return { name: "recipes", status: "pass", detail };
+}
+
 // A given agent CLI: present on PATH (we can check) vs authenticated (we cannot,
 // cheaply). Absence is a warning, not a failure: a user may only use one agent.
 function checkAgentCli(deps: DoctorDeps, bin: string): Check {
@@ -306,6 +328,8 @@ export function runChecks(deps: DoctorDeps): Check[] {
 		checkAuditDir(deps),
 		checkGitRepo(deps),
 	];
+	const recipes = checkRecipes(deps);
+	if (recipes) checks.push(recipes);
 	const codex = checkCodexToolTimeout(deps);
 	if (codex) checks.push(codex);
 	return checks;
