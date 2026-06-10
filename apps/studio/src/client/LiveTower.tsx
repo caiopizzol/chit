@@ -20,6 +20,7 @@ import {
 	cancelPending,
 	concisePhase,
 	detailAges,
+	eventTail,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
@@ -162,6 +163,27 @@ function PhaseTimeline({ row }: { row: LiveActivityRow }) {
 	);
 }
 
+// The selected run's recent-event tail: its last few runtime events as quiet
+// one-liners (age + host-built safe label). A glance at "what is it doing right
+// now", not a transcript panel -- rows without a tail render nothing.
+function RecentActivity({ row }: { row: LiveActivityRow }) {
+	const entries = eventTail(row);
+	if (entries.length === 0) return null;
+	return (
+		<section className="live-events">
+			<h4 className="live-events-head">recent activity</h4>
+			<ol className="live-events-list">
+				{entries.map((e) => (
+					<li key={e.key} className="live-event">
+						<span className="live-event-age">{e.age}</span>
+						<span className="live-event-label">{e.label}</span>
+					</li>
+				))}
+			</ol>
+		</section>
+	);
+}
+
 function TaskDisclosure({ task }: { task: string }) {
 	return (
 		<details className="live-detail-task">
@@ -265,6 +287,7 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 			</div>
 			<PhaseTimeline row={row} />
 			<AgentBlocks row={row} />
+			<RecentActivity row={row} />
 			{row.worktreePath && (
 				<p className="live-worktree">
 					<span className="live-worktree-label">worktree</span>

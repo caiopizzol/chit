@@ -3,7 +3,12 @@
 // feeds the console. No React, no timer, no network - just data in, data out.
 
 import { describe, expect, test } from "bun:test";
-import type { BackgroundLiveRow, ForegroundLiveRow, LiveActivity } from "../server/types.ts";
+import type {
+	BackgroundLiveRow,
+	ForegroundLiveRow,
+	LiveActivity,
+	LiveEventView,
+} from "../server/types.ts";
 import type { LiveCancelOutcome } from "./api.ts";
 import {
 	activeRole,
@@ -15,6 +20,8 @@ import {
 	concisePhase,
 	detailAges,
 	diffActivity,
+	EVENT_TAIL_DRAW_LIMIT,
+	eventTail,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
@@ -363,6 +370,58 @@ describe("phaseTimeline", () => {
 
 	test("background rows never carry a timeline", () => {
 		expect(phaseTimeline(bg())).toEqual([]);
+	});
+});
+
+describe("eventTail", () => {
+	function ev(over: Partial<LiveEventView> = {}): LiveEventView {
+		return { ageMs: 5_000, kind: "adapter.event", label: "impl item", ...over };
+	}
+
+	test("an absent or empty tail yields no entries", () => {
+		expect(eventTail(fg({ recentEvents: undefined }))).toEqual([]);
+		expect(eventTail(bg({ recentEvents: [] }))).toEqual([]);
+	});
+
+	test("maps events oldest-first with formatted ages and verbatim labels", () => {
+		const row = fg({
+			recentEvents: [
+				ev({ ageMs: 65_000, kind: "step.started", label: "step impl started" }),
+				ev({ ageMs: 12_000, kind: "step.completed", label: "step impl completed (3000ms)" }),
+			],
+		});
+		expect(eventTail(row)).toEqual([
+			{ key: "0-step.started", age: "1m 5s", label: "step impl started", kind: "step.started" },
+			{
+				key: "1-step.completed",
+				age: "12s",
+				label: "step impl completed (3000ms)",
+				kind: "step.completed",
+			},
+		]);
+	});
+
+	test("draws only the newest entries when the tail exceeds the bound", () => {
+		const events = Array.from({ length: EVENT_TAIL_DRAW_LIMIT + 4 }, (_, i) =>
+			ev({ label: `event ${i}` }),
+		);
+		const drawn = eventTail(fg({ recentEvents: events }));
+		expect(drawn).toHaveLength(EVENT_TAIL_DRAW_LIMIT);
+		expect(drawn[0].label).toBe("event 4");
+		expect(drawn[drawn.length - 1].label).toBe(`event ${EVENT_TAIL_DRAW_LIMIT + 3}`);
+	});
+
+	test("keys stay stable as the tail appends, and stay unique when labels repeat", () => {
+		const events = [ev({ label: "impl item" }), ev({ label: "impl item" })];
+		const before = eventTail(fg({ recentEvents: events }));
+		expect(new Set(before.map((e) => e.key)).size).toBe(2);
+		const after = eventTail(fg({ recentEvents: [...events, ev({ label: "impl item" })] }));
+		expect(after.slice(0, 2).map((e) => e.key)).toEqual(before.map((e) => e.key));
+	});
+
+	test("an underivable age renders the placeholder, never a fabricated zero", () => {
+		const drawn = eventTail(fg({ recentEvents: [ev({ ageMs: Number.NaN }), ev({ ageMs: -1 })] }));
+		expect(drawn.map((e) => e.age)).toEqual(["-", "-"]);
 	});
 });
 

@@ -5,7 +5,7 @@
 // hook (useLive) owns the network, the timer, and the wall-clock stamp; this
 // module only transforms data it is handed.
 
-import type { LiveActivity, LiveActivityRow } from "../server/types.ts";
+import type { LiveActivity, LiveActivityRow, LiveEventKind } from "../server/types.ts";
 import type { LiveCancelOutcome } from "./api.ts";
 
 // Stable identity for a live row across polls. The source tag is part of the
@@ -184,6 +184,39 @@ export function phaseTimeline(row: LiveActivityRow): PhaseTimelineEntry[] {
 		phase: p.phase,
 		elapsed: formatAge(p.elapsedMs),
 		active: p.status === "active",
+	}));
+}
+
+// One drawable line of the selected run's recent-event tail: a formatted age
+// plus the host-built privacy-safe label, ready to render verbatim.
+export interface EventTailEntry {
+	// Stable render identity. The tail is append-only on the wire (the host
+	// evicts from the front only past its 50-entry cap -- MAX_LIVE_EVENTS), so
+	// the absolute wire position plus the kind is a sound key even when a label
+	// repeats; an entry keeps its key as newer events append.
+	key: string;
+	age: string;
+	label: string;
+	kind: LiveEventKind;
+}
+
+// How many tail entries the detail draws. The wire tail is already bounded
+// host-side; this is the smaller "what is it doing right now" slice -- the
+// newest few lines, not a transcript.
+export const EVENT_TAIL_DRAW_LIMIT = 8;
+
+// The bounded drawable tail for a row, oldest first (the wire order), so the
+// section reads top-to-bottom toward the newest event. Empty when the row
+// carries no tail (background one-shots before their first event, older
+// servers) so the detail renders nothing rather than an empty frame.
+export function eventTail(row: LiveActivityRow): EventTailEntry[] {
+	const events = row.recentEvents ?? [];
+	const start = Math.max(0, events.length - EVENT_TAIL_DRAW_LIMIT);
+	return events.slice(start).map((e, i) => ({
+		key: `${start + i}-${e.kind}`,
+		age: formatAge(e.ageMs),
+		label: e.label,
+		kind: e.kind,
 	}));
 }
 

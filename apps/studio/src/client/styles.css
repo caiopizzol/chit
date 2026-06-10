@@ -1680,6 +1680,50 @@ header.app .config-btn {
 	width: 34px;
 	text-align: center;
 }
+/* Recent-event tail: the selected run's last few runtime events as quiet
+   one-liners (age + safe label). Same calm mono idiom as the worktree label
+   and the phase timeline -- no panel chrome, no scrolling, no color coding. */
+.live-events {
+	margin: 0 0 18px;
+}
+.live-events-head {
+	margin: 0 0 6px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	font-weight: 400;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--faded);
+}
+.live-events-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.live-event {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11.5px;
+	line-height: 1.6;
+}
+.live-event-age {
+	flex: 0 0 auto;
+	min-width: 44px;
+	text-align: right;
+	color: var(--faded);
+}
+.live-event-label {
+	color: var(--carbon);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .live-worktree {
 	display: flex;
 	flex-direction: column;
