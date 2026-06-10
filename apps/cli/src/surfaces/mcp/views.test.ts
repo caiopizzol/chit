@@ -666,6 +666,7 @@ describe("loopRunView activity: the in-flight snapshot for chit_status (is it st
 					phaseStartedAtMs: NOW - 30_000,
 					lastActivityAtMs: NOW - 5_000,
 					phases: [],
+					events: [],
 				},
 			}),
 			NOW,
@@ -709,7 +710,7 @@ describe("loopRunView activity: the in-flight snapshot for chit_status (is it st
 				iteration: 0,
 				active: new AbortController(),
 				startedAtMs: NOW - 2_000,
-				activity: { iteration: 1, lastActivityAtMs: NOW - 2_000, phases: [] }, // no phase recorded yet
+				activity: { iteration: 1, lastActivityAtMs: NOW - 2_000, phases: [], events: [] }, // no phase recorded yet
 			}),
 			NOW,
 		) as Record<string, unknown>;
@@ -738,6 +739,7 @@ describe("loopRunView activity: the in-flight snapshot for chit_status (is it st
 				phaseStartedAtMs: NOW - 3_000,
 				lastActivityAtMs: NOW - 2_000,
 				phases: [],
+				events: [],
 			},
 		});
 		expect(cancelConverge(session, NOW).state).toBe("cancelling");

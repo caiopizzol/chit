@@ -33,6 +33,12 @@ import {
 	stopReasonFor,
 } from "../../cli/converge.ts";
 import { readLoop, startLoop, stopLoop } from "../../loops/log-store.ts";
+import {
+	appendLiveEvent,
+	type LiveEventSummary,
+	summarizeAdapterEvent,
+	summarizeTraceEvent,
+} from "../../runtime/live-events.ts";
 import type { TraceEvent } from "../../runtime/types.ts";
 
 export class ConvergeEngineError extends Error {}
@@ -69,6 +75,12 @@ export interface LoopActivity {
 	// never spans iterations. Names and wall-clock marks only -- a timing timeline,
 	// not an output channel.
 	phases: Array<{ phase: LoopPhase; startedAtMs: number; endedAtMs: number }>;
+	// The current iteration's bounded live-event tail: summarized step boundaries and
+	// intra-call adapter events (kind/label/ids only, never payloads -- the summaries
+	// are built by live-events.ts from structural facts, so the raw prompt/output/
+	// error never enters this array). Newest MAX_LIVE_EVENTS kept (appendLiveEvent).
+	// Starts empty with each iteration's fresh snapshot, like `phases`.
+	events: LiveEventSummary[];
 }
 
 // In-memory state for one MCP-driven converge loop. Never the source of truth
@@ -330,6 +342,19 @@ function markActivityPhase(session: ConvergeSession, phase: LoopPhase, atMs = Da
 	notifyActivity(session);
 }
 
+// Append a summarized event to the in-flight iteration's bounded tail WITHOUT
+// firing the activity observer: adapter events can arrive many times a second,
+// and mirroring each one to the cross-process registry would turn the tail into
+// a per-event disk write. The tail rides out on the next phase transition's
+// notify or the supervisor's periodic heartbeat re-sync instead. A no-op once
+// the iteration settled and cleared the snapshot (same guard as
+// markActivityPhase), so a late event never resurrects a settled run.
+function appendActivityEvent(session: ConvergeSession, event: LiveEventSummary): void {
+	const a = session.activity;
+	if (a === undefined) return;
+	appendLiveEvent(a.events, event);
+}
+
 // Run exactly ONE implement->review iteration for this session, blocking until
 // it settles. `signal`, when provided, is folded into the iteration's abort, so
 // a client cancel (Esc) or chit_converge_cancel kills the in-flight adapter call.
@@ -370,7 +395,7 @@ export async function runNextIteration(
 	// step starts; the onTrace / onChecksStart marks below advance it. The initial
 	// lastActivityAtMs is the iteration's start, so the activity age reads "time since it began"
 	// during the brief spin-up before any phase.
-	session.activity = { iteration, lastActivityAtMs: Date.now(), phases: [] };
+	session.activity = { iteration, lastActivityAtMs: Date.now(), phases: [], events: [] };
 	// Mirror the freshly-opened snapshot (phase still unknown -> "starting") to the
 	// cross-process registry, in lockstep with setting `activity`.
 	notifyActivity(session);
@@ -407,9 +432,19 @@ export async function runNextIteration(
 				// must advance even when the caller passes no heartbeat. phaseOfStepStart
 				// returns undefined for non-phase events, leaving the snapshot untouched.
 				onTrace: (e) => {
+					// Tail first, then the phase mark: a step.started that opens a phase is
+					// already in the tail when markActivityPhase notifies the registry mirror.
+					appendActivityEvent(session, summarizeTraceEvent(e, Date.now()));
 					const phase = phaseOfStepStart(e, session.implementStep, session.reviewStep);
 					if (phase) markActivityPhase(session, phase);
 					opts?.onTrace?.(e);
+				},
+				// Intra-call adapter events feed the in-memory tail ONLY (no observer fire):
+				// they arrive too often to mirror per event; the next phase transition or
+				// the supervisor's heartbeat flushes the tail. The skeleton already strips
+				// the raw payload; summarizeAdapterEvent keeps type + ids only.
+				onAdapterEvent: (e) => {
+					appendActivityEvent(session, summarizeAdapterEvent(e.type, e, Date.now()));
 				},
 				onChecksStart: () => {
 					markActivityPhase(session, "running required checks");

@@ -37,7 +37,9 @@
 // the run's iteration budget (maxIterations) and per-call timeout (callTimeoutMs,
 // counters/numbers only), timestamps to derive elapsed/phase/last-activity, the
 // current iteration's completed-phase timeline (phase names + timestamps only),
-// the executing participants (agent + adapter only), and a compact statusLine.
+// its bounded live-event tail (LiveEventSummary digests: kind/label/ids, never
+// payloads), the executing participants (agent + adapter only), and a compact
+// statusLine.
 // The optional taskFull is the user-authored task for Studio's explicit prompt
 // disclosure. Snapshots NEVER carry model outputs, review prose, config/env
 // values, or audit blobs.
@@ -56,6 +58,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pidAlive } from "../../jobs/health.ts";
 import { repoKey as repoKeyOf } from "../../loops/location.ts";
+import { type LiveEventSummary, sanitizeLiveEvents } from "../../runtime/live-events.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 
 // The phases a foreground iteration moves through. "starting" is the brief spin-up
@@ -154,6 +157,13 @@ export interface ForegroundSnapshot {
 	// iteration has no completed phase yet; reset with each iteration's fresh
 	// snapshot. Phase names and timestamps only -- never an output channel.
 	phases?: Array<{ phase: string; startedAt: string; endedAt: string }>;
+	// The current iteration's bounded live-event tail: summarized step boundaries
+	// and adapter event types (kind/label/ids only -- see LiveEventSummary; the
+	// summaries carry no payloads by construction). Omitted while empty; reset with
+	// each iteration's fresh snapshot, like `phases`. Reconstructed through
+	// sanitizeLiveEvents on read, so a hand-edited file's extra keys (raw, body,
+	// prompt, ...) never cross this surface.
+	events?: LiveEventSummary[];
 	// The latest activity mark (ISO 8601), for last-activity age.
 	lastActivityAt: string;
 	// When THIS snapshot was written (ISO 8601), the freshness marker the reader's
@@ -219,6 +229,11 @@ function parseSnapshot(raw: unknown, expectedRunId: string): ForegroundSnapshot 
 	if (typeof r.callTimeoutMs === "number") snapshot.callTimeoutMs = r.callTimeoutMs;
 	const phases = sanitizePhases(r.phases);
 	if (phases !== undefined) snapshot.phases = phases;
+	// Same omit-when-empty contract as phases/participants: sanitizeLiveEvents
+	// rebuilds each entry field-by-field (and re-applies the cap), so hostile or
+	// off-contract keys in a hand-edited file never reach a reader.
+	const events = sanitizeLiveEvents(r.events);
+	if (events.length > 0) snapshot.events = events;
 	const participants = sanitizeParticipants(r.participants);
 	if (participants !== undefined) snapshot.participants = participants;
 	return snapshot;
@@ -400,6 +415,10 @@ export class ForegroundRegistry {
 					endedAt: new Date(p.endedAtMs).toISOString(),
 				})),
 			}),
+			// The current iteration's bounded live-event tail, copied so the on-disk
+			// snapshot never aliases the live array the engine keeps appending to.
+			// Already summaries (no payloads, capped); omitted while empty, like phases.
+			...(a.events.length > 0 && { events: a.events.map((e) => ({ ...e })) }),
 			lastActivityAt: new Date(a.lastActivityAtMs).toISOString(),
 			updatedAt: new Date(nowMs).toISOString(),
 			...(compactParticipants(session.participants) && {

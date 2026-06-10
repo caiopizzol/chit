@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type LiveEventSummary, MAX_LIVE_EVENTS } from "../../runtime/live-events.ts";
 import type { ConvergeSession } from "./converge-engine.ts";
 import {
 	FOREGROUND_STALE_AFTER_MS,
@@ -220,6 +221,76 @@ describe("ForegroundRegistry store", () => {
 		expect(live.find((s) => s.runId === "tl-empty")?.phases).toBeUndefined();
 	});
 
+	test("a live-event tail round-trips through write/list", () => {
+		const reg = new ForegroundRegistry(dir);
+		const events: LiveEventSummary[] = [
+			{
+				ts: NOW - 9_000,
+				kind: "step.started",
+				label: "step implement started",
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "claude",
+			},
+			{ ts: NOW - 8_000, kind: "adapter.event", label: "message", stepId: "implement" },
+		];
+		reg.write(snapshot("tailed", { events }));
+		const live = reg.list(NOW);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.events).toEqual(events);
+	});
+
+	test("hostile raw/body keys in a handwritten tail are stripped; malformed entries dropped", () => {
+		// A hand-edited / off-contract file may smuggle payload keys into a tail entry.
+		// The reader rebuilds each entry field-by-field (sanitizeLiveEvents), so only the
+		// LiveEventSummary fields survive and broken entries vanish.
+		writeFileSync(
+			join(dir, "evil.json"),
+			JSON.stringify({
+				...snapshot("evil"),
+				events: [
+					{
+						ts: NOW - 5_000,
+						kind: "adapter.event",
+						label: "message",
+						raw: "SENTINEL_RAW_PAYLOAD",
+						body: { prompt: "SENTINEL_PROMPT" },
+					},
+					{ ts: "not-a-number", kind: "adapter.event", label: "x" }, // wrong-typed ts
+					{ ts: NOW, kind: "not-a-kind", label: "x" }, // unknown kind
+					{ ts: NOW, kind: "adapter.event" }, // missing label
+					"junk", // not an object
+				],
+			}),
+		);
+		writeFileSync(
+			join(dir, "evil-empty.json"),
+			JSON.stringify({ ...snapshot("evil-empty"), events: ["junk"] }),
+		);
+		const live = new ForegroundRegistry(dir).list(NOW);
+		const tailed = live.find((s) => s.runId === "evil");
+		expect(tailed?.events).toEqual([{ ts: NOW - 5_000, kind: "adapter.event", label: "message" }]);
+		const json = JSON.stringify(live);
+		expect(json).not.toContain("SENTINEL_RAW_PAYLOAD");
+		expect(json).not.toContain("SENTINEL_PROMPT");
+		// Nothing valid remained: the field is omitted, never emitted empty.
+		expect(live.find((s) => s.runId === "evil-empty")?.events).toBeUndefined();
+	});
+
+	test("an over-long handwritten tail is re-capped on read (newest MAX_LIVE_EVENTS kept)", () => {
+		const events = Array.from({ length: MAX_LIVE_EVENTS + 10 }, (_, i) => ({
+			ts: NOW - 60_000 + i * 100,
+			kind: "adapter.event",
+			label: `event ${i}`,
+		}));
+		writeFileSync(join(dir, "overflow.json"), JSON.stringify({ ...snapshot("overflow"), events }));
+		const live = new ForegroundRegistry(dir).list(NOW);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.events).toHaveLength(MAX_LIVE_EVENTS);
+		expect(live[0]?.events?.[0]?.label).toBe("event 10"); // the oldest 10 were dropped
+		expect(live[0]?.events?.at(-1)?.label).toBe(`event ${MAX_LIVE_EVENTS + 9}`);
+	});
+
 	test("a heartbeat re-sync advances updatedAt but preserves lastActivityAt", () => {
 		// The server beats the registry while an iteration runs so a long phase stays live.
 		// A beat must move only the freshness marker (updatedAt), never the real activity mark
@@ -314,6 +385,7 @@ function fakeSession(over: Partial<ConvergeSession> = {}): ConvergeSession {
 			phaseStartedAtMs: NOW - 5_000,
 			lastActivityAtMs: NOW - 5_000,
 			phases: [],
+			events: [],
 		},
 		...over,
 	} as unknown as ConvergeSession;
@@ -354,7 +426,7 @@ describe("ForegroundRegistry session sync", () => {
 
 	test("the phase is 'starting' before the first phase is known", () => {
 		const snap = new ForegroundRegistry(dir).snapshotFor(
-			fakeSession({ activity: { iteration: 1, lastActivityAtMs: NOW, phases: [] } }),
+			fakeSession({ activity: { iteration: 1, lastActivityAtMs: NOW, phases: [], events: [] } }),
 			NOW,
 		);
 		expect(snap?.phase).toBe("starting");
@@ -386,6 +458,7 @@ describe("ForegroundRegistry session sync", () => {
 					phaseStartedAtMs: NOW - 5_000,
 					lastActivityAtMs: NOW - 5_000,
 					phases: [{ phase: "implementing", startedAtMs: NOW - 25_000, endedAtMs: NOW - 5_000 }],
+					events: [],
 				},
 			}),
 			NOW,
@@ -410,18 +483,77 @@ describe("ForegroundRegistry session sync", () => {
 				phaseStartedAtMs: NOW - 5_000,
 				lastActivityAtMs: NOW - 5_000,
 				phases: [{ phase: "implementing", startedAtMs: NOW - 25_000, endedAtMs: NOW - 5_000 }],
+				events: [],
 			},
 		});
 		reg.sync(session, NOW);
 		expect(reg.list(NOW)[0]?.phases).toHaveLength(1);
 		// The engine opens iteration 3 with a fresh activity snapshot (empty history),
 		// as runNextIteration does; the mirrored file must drop the old timeline.
-		session.activity = { iteration: 3, lastActivityAtMs: NOW + 1_000, phases: [] };
+		session.activity = { iteration: 3, lastActivityAtMs: NOW + 1_000, phases: [], events: [] };
 		reg.sync(session, NOW + 1_000);
 		const live = reg.list(NOW + 1_000);
 		expect(live).toHaveLength(1);
 		expect(live[0]?.iteration).toBe(3);
 		expect(live[0]?.phases).toBeUndefined();
+	});
+
+	test("snapshotFor mirrors the activity's event tail; omitted while empty", () => {
+		const reg = new ForegroundRegistry(dir);
+		// The fixture's tail is empty (the iteration just started): omitted, never
+		// written empty -- same contract as phases.
+		const empty = reg.snapshotFor(fakeSession(), NOW);
+		expect(empty?.events).toBeUndefined();
+		expect(JSON.stringify(empty)).not.toContain('"events"');
+		const event: LiveEventSummary = {
+			ts: NOW - 1_000,
+			kind: "adapter.event",
+			label: "message",
+			stepId: "implement",
+			participantId: "impl",
+			agentId: "claude",
+		};
+		const snap = reg.snapshotFor(
+			fakeSession({
+				activity: {
+					iteration: 2,
+					phase: "implementing",
+					phaseStartedAtMs: NOW - 2_000,
+					lastActivityAtMs: NOW - 1_000,
+					phases: [],
+					events: [event],
+				},
+			}),
+			NOW,
+		);
+		expect(snap?.events).toEqual([event]);
+	});
+
+	test("sync resets the on-disk tail for a fresh iteration and clears it on settle", () => {
+		const reg = new ForegroundRegistry(dir);
+		const session = fakeSession({
+			activity: {
+				iteration: 2,
+				phase: "reviewing",
+				phaseStartedAtMs: NOW - 5_000,
+				lastActivityAtMs: NOW - 5_000,
+				phases: [],
+				events: [{ ts: NOW - 6_000, kind: "adapter.event", label: "message", stepId: "implement" }],
+			},
+		});
+		reg.sync(session, NOW);
+		expect(reg.list(NOW)[0]?.events).toHaveLength(1);
+		// The engine opens iteration 3 with a fresh activity snapshot (empty tail, like
+		// the empty phase history); the mirrored file must drop the old tail.
+		session.activity = { iteration: 3, lastActivityAtMs: NOW + 1_000, phases: [], events: [] };
+		reg.sync(session, NOW + 1_000);
+		const live = reg.list(NOW + 1_000);
+		expect(live).toHaveLength(1);
+		expect(live[0]?.events).toBeUndefined();
+		// Settle clears the activity; sync removes the file, taking the tail with it.
+		session.activity = undefined;
+		reg.sync(session, NOW + 2_000);
+		expect(reg.list(NOW + 2_000)).toEqual([]);
 	});
 
 	test("sync writes while active and removes once settled", () => {

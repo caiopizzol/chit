@@ -10,9 +10,11 @@ import {
 } from "@chit-run/core";
 import type { ConvergeExecute } from "../../cli/converge.ts";
 import { readLoop } from "../../loops/log-store.ts";
+import { type LiveEventSummary, MAX_LIVE_EVENTS } from "../../runtime/live-events.ts";
 import type { TraceEvent } from "../../runtime/types.ts";
 import {
 	ConvergeEngineError,
+	type ConvergeSession,
 	cancelConverge,
 	describeConverge,
 	type LoopActivity,
@@ -1049,6 +1051,147 @@ describe("runNextIteration: onActivityChange observer (registry mirror hook)", (
 		};
 		const r = await runNextIteration(session);
 		expect(r.kind).toBe("iteration"); // the loop converged despite the observer throwing
+		expect(session.terminalStatus).toBe("converged");
+	});
+});
+
+describe("runNextIteration: live-event tail (activity.events)", () => {
+	// Each iteration's activity carries a bounded tail of SUMMARIZED events: step
+	// boundaries from onTrace plus intra-call adapter skeletons via the engine's own
+	// onAdapterEvent. Summaries are built from structural facts only, so the trace's
+	// prompt/output payloads must never land in the tail.
+	test("trace and adapter events land as summaries; payloads never do; cleared on settle", async () => {
+		let tail: LiveEventSummary[] | undefined;
+		let session: ConvergeSession;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			ctx?.onTrace?.({
+				type: "step.started",
+				stepId: "implement",
+				kind: "call",
+				prompt: "SECRET PROMPT",
+			});
+			ctx?.onAdapterEvent?.({
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "claude",
+				type: "message",
+			});
+			ctx?.onTrace?.({
+				type: "step.completed",
+				stepId: "implement",
+				output: "SECRET OUTPUT",
+				durationMs: 5,
+			});
+			tail = session.activity?.events.map((e) => ({ ...e }));
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [],
+			};
+		};
+		session = start(execute);
+		await runNextIteration(session);
+		expect(tail?.map((e) => e.kind)).toEqual(["step.started", "adapter.event", "step.completed"]);
+		const adapter = tail?.[1];
+		expect(adapter?.label).toBe("message"); // the event TYPE is the label, never the payload
+		expect(adapter?.stepId).toBe("implement");
+		expect(adapter?.participantId).toBe("impl");
+		expect(adapter?.agentId).toBe("claude");
+		const json = JSON.stringify(tail);
+		expect(json).not.toContain("SECRET PROMPT");
+		expect(json).not.toContain("SECRET OUTPUT");
+		expect(session.activity).toBeUndefined(); // settle cleared the snapshot, tail included
+	});
+
+	test("adapter events update the in-memory tail only -- the activity observer does not fire per event", async () => {
+		// Adapter events can arrive many times a second, so the engine must not mirror
+		// each one to the registry; the next phase transition or the supervisor's
+		// heartbeat flushes the tail instead.
+		let firesDuringAdapterEvents = -1;
+		let fires = 0;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			const before = fires;
+			ctx?.onAdapterEvent?.({
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "a",
+				type: "tok",
+			});
+			ctx?.onAdapterEvent?.({
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "a",
+				type: "tok",
+			});
+			firesDuringAdapterEvents = fires - before;
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [],
+			};
+		};
+		const session = start(execute);
+		session.onActivityChange = () => {
+			fires++;
+		};
+		await runNextIteration(session);
+		expect(firesDuringAdapterEvents).toBe(0); // in-memory only, no per-event mirror
+		expect(fires).toBeGreaterThan(0); // iteration start + settle still notified
+	});
+
+	test("the tail is capped at MAX_LIVE_EVENTS, dropping the oldest", async () => {
+		let len = -1;
+		let first: string | undefined;
+		let last: string | undefined;
+		let session: ConvergeSession;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			for (let i = 0; i < MAX_LIVE_EVENTS + 5; i++) {
+				ctx?.onAdapterEvent?.({
+					stepId: "implement",
+					participantId: "impl",
+					agentId: "a",
+					type: `event-${i}`,
+				});
+			}
+			len = session.activity?.events.length ?? -1;
+			first = session.activity?.events[0]?.label;
+			last = session.activity?.events.at(-1)?.label;
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [],
+			};
+		};
+		session = start(execute);
+		await runNextIteration(session);
+		expect(len).toBe(MAX_LIVE_EVENTS);
+		expect(first).toBe("event-5"); // the oldest 5 were dropped
+		expect(last).toBe(`event-${MAX_LIVE_EVENTS + 4}`);
+	});
+
+	test("a new iteration opens with an empty tail (per-iteration reset)", async () => {
+		const tailAtStart: number[] = [];
+		let session: ConvergeSession;
+		let i = 0;
+		const reviews = [reviewJson("revise"), reviewJson("proceed")];
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			tailAtStart.push(session.activity?.events.length ?? -1);
+			ctx?.onAdapterEvent?.({
+				stepId: "implement",
+				participantId: "impl",
+				agentId: "a",
+				type: "message",
+			});
+			const review = reviews[i++] ?? "";
+			return { ok: true, output: "", outputs: { implement: "x", review }, trace: [] };
+		};
+		session = start(execute);
+		await runNextIteration(session); // round 1: revise (loop stays open), tail accumulated
+		await runNextIteration(session); // round 2: proceed
+		expect(tailAtStart).toEqual([0, 0]); // each round started a fresh tail
 		expect(session.terminalStatus).toBe("converged");
 	});
 });
