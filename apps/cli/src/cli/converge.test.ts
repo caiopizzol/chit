@@ -25,6 +25,7 @@ import { DEFAULT_CHECK_TIMEOUT_MS } from "../loops/required-checks.ts";
 import type { AdapterMap, TraceEvent } from "../runtime/types.ts";
 import { FileSessionStore } from "../sessions/store.ts";
 import {
+	type AdapterEventSkeleton,
 	buildExecute,
 	type ConvergeExecute,
 	type ConvergeIO,
@@ -1146,6 +1147,31 @@ describe("runConvergeIteration (single-iteration primitive)", () => {
 		});
 		expect(ctxSeen?.signal).toBeUndefined();
 	});
+
+	test("forwards ctx.onAdapterEvent to execute so a driver can observe event skeletons", async () => {
+		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT8" });
+		const observer = (_e: AdapterEventSkeleton) => {};
+		let seen: ((e: AdapterEventSkeleton) => void) | undefined;
+		const execute: ConvergeExecute = async (_inputs, ctx) => {
+			seen = ctx?.onAdapterEvent;
+			return {
+				ok: true,
+				output: "",
+				outputs: { implement: "x", review: reviewJson("proceed") },
+				trace: [],
+			};
+		};
+		await runConvergeIteration({
+			cwd,
+			loopId,
+			iteration: 1,
+			task: "t",
+			prior_review: "",
+			execute,
+			onAdapterEvent: observer,
+		});
+		expect(seen).toBe(observer);
+	});
 });
 
 describe("converge: makeAuditedExecute (audit wiring)", () => {
@@ -1251,6 +1277,93 @@ describe("converge: makeAuditedExecute (audit wiring)", () => {
 		const runs = auditStore.listRuns();
 		expect(runs).not.toContain("OLD"); // pruned by the default 30-day maxAge
 		expect(runs).toContain(result.auditRunId as string); // the just-written run is kept
+	});
+
+	// Fake adapters that stream one intra-call event WITH a raw body before
+	// returning, the shape a real CLI adapter emits via req.onEvent.
+	const emittingAdapters = (): AdapterMap => ({
+		codex: {
+			call: async (r) => {
+				r.onEvent?.({ type: "item.completed", raw: '{"secret":"full raw body"}' });
+				return { output: `OK:${r.stepId}` };
+			},
+		},
+	});
+
+	test("onAdapterEvent observes safe skeletons: ids + type only, never raw", async () => {
+		const auditStore = new AuditStore(join(cwd, "audit"));
+		const execute = makeAuditedExecute(
+			mini,
+			emittingAdapters(),
+			emptyRegistry,
+			"s",
+			cwd,
+			new FileSessionStore(join(cwd, "sess")),
+			auditStore,
+		);
+		const seen: AdapterEventSkeleton[] = [];
+		const result = await execute(
+			{ task: "x", prior_review: "" },
+			{ loopId: "L1", iteration: 1, onAdapterEvent: (e) => seen.push(e) },
+		);
+		expect(result.ok).toBe(true);
+		expect(seen).toEqual([
+			{ stepId: "implement", participantId: "worker", agentId: "codex", type: "item.completed" },
+		]);
+		// The contract under test: the observer never sees the raw payload.
+		for (const e of seen) expect("raw" in e).toBe(false);
+	});
+
+	test("onAdapterEvent composes with the audit onEvent: adapter.event is still recorded", async () => {
+		const auditStore = new AuditStore(join(cwd, "audit"));
+		const execute = makeAuditedExecute(
+			mini,
+			emittingAdapters(),
+			emptyRegistry,
+			"s",
+			cwd,
+			new FileSessionStore(join(cwd, "sess")),
+			auditStore,
+		);
+		const seen: AdapterEventSkeleton[] = [];
+		const result = await execute(
+			{ task: "x", prior_review: "" },
+			{ loopId: "L1", iteration: 1, onAdapterEvent: (e) => seen.push(e) },
+		);
+		expect(result.auditRunId).toBeDefined();
+		// The full event (raw blobbed) still reached the recorder through the
+		// composed onEvent chain, so observing never degrades the audit trail.
+		const events = auditStore.readEvents(result.auditRunId as string);
+		expect(events.some((e) => e.type === "adapter.event")).toBe(true);
+		expect(seen).toHaveLength(1);
+	});
+
+	test("a throwing onAdapterEvent observer never breaks the run or the audit", async () => {
+		const auditStore = new AuditStore(join(cwd, "audit"));
+		const execute = makeAuditedExecute(
+			mini,
+			emittingAdapters(),
+			emptyRegistry,
+			"s",
+			cwd,
+			new FileSessionStore(join(cwd, "sess")),
+			auditStore,
+		);
+		const result = await execute(
+			{ task: "x", prior_review: "" },
+			{
+				loopId: "L1",
+				iteration: 1,
+				onAdapterEvent: () => {
+					throw new Error("observer boom");
+				},
+			},
+		);
+		expect(result.ok).toBe(true);
+		expect(result.auditRunId).toBeDefined();
+		// The event still flowed past the broken observer to the audit recorder.
+		const events = auditStore.readEvents(result.auditRunId as string);
+		expect(events.some((e) => e.type === "adapter.event")).toBe(true);
 	});
 });
 

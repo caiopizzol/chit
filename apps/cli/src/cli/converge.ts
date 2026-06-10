@@ -50,7 +50,7 @@ import {
 	runRequiredChecks,
 } from "../loops/required-checks.ts";
 import { executeManifest } from "../runtime/execute.ts";
-import type { AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
+import type { AdapterEvent, AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
 import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import type { SessionStore } from "../sessions/types.ts";
@@ -107,6 +107,18 @@ export function resolveLoopPolicy(manifest: ResolvedManifest): LoopSteps {
 	return { implementStep: IMPLEMENT_STEP_ID, reviewStep: REVIEW_STEP_ID };
 }
 
+// The safe skeleton of one intra-call adapter event: which step/participant/
+// agent emitted it and the raw event's type, NEVER the raw payload. The raw
+// line can carry prompts, outputs, and tool arguments, so a live observer
+// (a driver tailing event activity) gets identity + type only; the full raw
+// body stays where it is access-controlled, in the audit transcript.
+export interface AdapterEventSkeleton {
+	stepId: string;
+	participantId: string;
+	agentId: string;
+	type: string;
+}
+
 // implementSummary in the log is a digest, not the full transcript. Cap it so
 // a long Claude summary does not bloat the .jsonl record.
 const IMPLEMENT_SUMMARY_CAP = 2000;
@@ -137,6 +149,11 @@ export type ConvergeExecute = (
 		// Live per-step trace, in addition to the audit recorder. The background
 		// worker uses it to surface the current phase (implementing/reviewing).
 		onTrace?: (event: TraceEvent) => void;
+		// Live per-adapter-event skeletons (ids + event type only, never the raw
+		// payload), in addition to the audit recorder, so a driver can show
+		// fine-grained activity between step boundaries. Best-effort: a throwing
+		// observer never breaks the run.
+		onAdapterEvent?: (event: AdapterEventSkeleton) => void;
 	},
 ) => Promise<RunResult & { auditRunId?: string }>;
 
@@ -405,6 +422,9 @@ export interface ConvergeIterationContext {
 	// When present, threaded to execute so a driver (the background worker) can
 	// observe per-step progress and surface the current phase.
 	onTrace?: (event: TraceEvent) => void;
+	// When present, threaded to execute so a driver can observe safe per-event
+	// skeletons (ids + event type, never the raw payload) between step boundaries.
+	onAdapterEvent?: (event: AdapterEventSkeleton) => void;
 	// When present, invoked immediately BEFORE chit runs the required checks, and
 	// ONLY when there are checks to run, so a foreground driver can surface a
 	// "running required checks" phase. Guarded: a throwing callback never breaks
@@ -497,6 +517,7 @@ export async function runConvergeIteration(
 				iteration: ctx.iteration,
 				...(ctx.signal && { signal: ctx.signal }),
 				...(ctx.onTrace && { onTrace: ctx.onTrace }),
+				...(ctx.onAdapterEvent && { onAdapterEvent: ctx.onAdapterEvent }),
 			},
 		);
 	} catch (e) {
@@ -930,6 +951,41 @@ export function prepareConvergeExecute(
 	};
 }
 
+// Wrap an AdapterMap so each intra-call adapter event also notifies `observe`
+// with the SAFE skeleton only (step/participant/agent ids + the event type,
+// never event.raw). Composes req.onEvent: any existing handler (the audit
+// wrapper's recorder, when this sits beneath it) still receives the full
+// event, so observing adds a tap without changing what audit records. The
+// observer is guarded: a throwing observer never breaks the adapter call.
+export function wrapAdaptersWithEventObserver(
+	adapters: AdapterMap,
+	observe: (event: AdapterEventSkeleton) => void,
+): AdapterMap {
+	const out: AdapterMap = {};
+	for (const [agentId, adapter] of Object.entries(adapters)) {
+		out[agentId] = {
+			call(req) {
+				const existing = req.onEvent;
+				const onEvent = (event: AdapterEvent) => {
+					try {
+						observe({
+							stepId: req.stepId,
+							participantId: req.participantId,
+							agentId: req.agentId,
+							type: event.type,
+						});
+					} catch {
+						// Observation is best-effort; the event still reaches `existing`.
+					}
+					existing?.(event);
+				};
+				return adapter.call({ ...req, onEvent });
+			},
+		};
+	}
+	return out;
+}
+
 // Wrap a base adapter map into a converge execute that records each manifest run
 // to the audit store (run/step/adapter-call events + prompt/output blobs +
 // usage). Exported so the audit wiring is testable with fake adapters and an
@@ -959,8 +1015,14 @@ export function makeAuditedExecute(
 			participants: resolveParticipantSnapshots(manifest, registry),
 		});
 		recorder.runStarted();
+		// The observer wrapper sits BENEATH the audit wrapper, so the full event
+		// (with raw) still flows to the recorder via the composed onEvent while
+		// the observer sees only the skeleton.
+		const observed = ctx?.onAdapterEvent
+			? wrapAdaptersWithEventObserver(baseAdapters, ctx.onAdapterEvent)
+			: baseAdapters;
 		const adapters = wrapAdaptersWithSessions(
-			wrapAdaptersWithAudit(baseAdapters, recorder),
+			wrapAdaptersWithAudit(observed, recorder),
 			manifest,
 			registry,
 			scope,
