@@ -4,7 +4,12 @@
 // label on every row; the meta lines show only deviations from defaults so the
 // common case stays one quiet line per entry.
 
-import type { ConfigOriginSource, EffectiveAgentView, EffectiveRoleView } from "../server/types.ts";
+import type {
+	ConfigOriginSource,
+	EffectiveAgentView,
+	EffectiveRecipeView,
+	EffectiveRoleView,
+} from "../server/types.ts";
 
 const ORIGIN_ORDER: ConfigOriginSource[] = ["builtin", "global", "repo"];
 
@@ -52,6 +57,18 @@ export function agentMeta(agent: EffectiveAgentView): string {
 // One meta line per role: default agent (or "any agent"), session, filesystem.
 export function roleMeta(role: EffectiveRoleView): string {
 	return [role.agent ?? "any agent", role.session, role.filesystem].join(" · ");
+}
+
+// One compact meta line per recipe: the mode and the manifest it runs, then the
+// loop knobs only when set. The mode and path are self-describing, so no labels
+// are stamped on them; max iterations and call timeout get a short prefix so the
+// numbers read unambiguously. callTimeoutMs reuses formatTimeout (the same unit
+// the agent lines use).
+export function recipeMeta(recipe: EffectiveRecipeView): string {
+	const parts: string[] = [recipe.mode, recipe.manifestPath];
+	if (recipe.maxIterations !== undefined) parts.push(`max ${recipe.maxIterations}`);
+	if (recipe.callTimeoutMs !== undefined) parts.push(`call ${formatTimeout(recipe.callTimeoutMs)}`);
+	return parts.join(" · ");
 }
 
 // The instructions footnote: the bounded preview plus a length hint when the

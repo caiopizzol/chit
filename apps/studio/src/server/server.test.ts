@@ -1006,6 +1006,7 @@ describe("GET /api/config", () => {
 			expect(body.agents.map((a) => a.id)).toEqual(["claude", "codex"]);
 			expect(body.agents.every((a) => a.origin === "builtin")).toBe(true);
 			expect(body.roles).toEqual([]);
+			expect(body.recipes).toEqual([]);
 			expect(body.configPath).toBeUndefined();
 			expect(body.repoConfigPath).toBeUndefined();
 		} finally {
@@ -1042,6 +1043,39 @@ describe("GET /api/config", () => {
 			expect(text).not.toContain("hush-hush-value");
 			const body = JSON.parse(text) as EffectiveConfigView;
 			expect(body.agents.find((a) => a.id === "custom")?.envKeys).toEqual(["API_KEY"]);
+		} finally {
+			teardown(s);
+		}
+	});
+
+	test("recipes cross the wire with origin and the contracted fields only", async () => {
+		const source = stubConfigSource({
+			recipes: {
+				deep: {
+					mode: "converge",
+					manifestPath: "/flows/deep.json",
+					maxIterations: 5,
+					callTimeoutMs: 1_200_000,
+					description: "deep converge preset",
+				},
+			},
+		});
+		const s = setup({ configSource: source });
+		try {
+			const res = await req(s.app, "/api/config", { token: s.token });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as EffectiveConfigView;
+			expect(body.recipes).toEqual([
+				{
+					id: "deep",
+					origin: "global",
+					mode: "converge",
+					manifestPath: "/flows/deep.json",
+					maxIterations: 5,
+					callTimeoutMs: 1_200_000,
+					description: "deep converge preset",
+				},
+			]);
 		} finally {
 			teardown(s);
 		}

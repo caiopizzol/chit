@@ -335,8 +335,8 @@ export interface StudioLiveActions {
 }
 
 // GET /api/config. A read-only view of the EFFECTIVE config for the Studio
-// target repo: which agents and roles Chit would use there, and where each
-// definition came from. Produced by mapping the host's NormalizedConfig through
+// target repo: which agents, roles, and recipes Chit would use there, and where
+// each definition came from. Produced by mapping the host's NormalizedConfig through
 // effectiveConfigView (config.ts), which owns the redaction: env VALUES never
 // cross this surface (key names only), and role instructions are cut to a
 // bounded preview so a huge persona never ships by default. The config is
@@ -378,6 +378,21 @@ export interface EffectiveRoleView {
 	instructionsLength: number;
 }
 
+// A recipe is a named, reusable converge preset: a manifest to run plus the
+// loop knobs a run would inherit. Field-by-field rebuilt server-side (never
+// spread from NormalizedRecipe) so the wire view stays an explicit contract.
+export interface EffectiveRecipeView {
+	id: string;
+	origin: ConfigOriginSource;
+	// Only "converge" exists today; kept as an explicit literal like the other
+	// wire unions so the contract states its vocabulary.
+	mode: "converge";
+	manifestPath: string;
+	maxIterations?: number;
+	callTimeoutMs?: number;
+	description?: string;
+}
+
 export interface EffectiveConfigView {
 	// The global / repo config files that were actually read; absent when the
 	// file does not exist (defaults-only config has neither).
@@ -385,6 +400,7 @@ export interface EffectiveConfigView {
 	repoConfigPath?: string;
 	agents: EffectiveAgentView[];
 	roles: EffectiveRoleView[];
+	recipes: EffectiveRecipeView[];
 }
 
 // Host-injected config reader, same injection pattern as lifecycle/liveSource:

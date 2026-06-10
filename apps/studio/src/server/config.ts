@@ -10,12 +10,14 @@ import type {
 	ConfigOrigin,
 	NormalizedAgent,
 	NormalizedConfig,
+	NormalizedRecipe,
 	NormalizedRole,
 } from "@chit-run/core";
 import type {
 	ConfigOriginSource,
 	EffectiveAgentView,
 	EffectiveConfigView,
+	EffectiveRecipeView,
 	EffectiveRoleView,
 } from "./types.ts";
 
@@ -86,6 +88,27 @@ function roleView(id: string, role: NormalizedRole, origin: ConfigOriginSource):
 	return view;
 }
 
+// Field-by-field rebuild (no object spread) so only the contracted fields cross
+// the wire: id + origin, the converge mode, the manifest path, and the optional
+// loop knobs. Recipes carry no env or instruction bodies, so there is nothing to
+// redact here beyond keeping the shape explicit.
+function recipeView(
+	id: string,
+	recipe: NormalizedRecipe,
+	origin: ConfigOriginSource,
+): EffectiveRecipeView {
+	const view: EffectiveRecipeView = {
+		id,
+		origin,
+		mode: recipe.mode,
+		manifestPath: recipe.manifestPath,
+	};
+	if (recipe.maxIterations !== undefined) view.maxIterations = recipe.maxIterations;
+	if (recipe.callTimeoutMs !== undefined) view.callTimeoutMs = recipe.callTimeoutMs;
+	if (recipe.description !== undefined) view.description = recipe.description;
+	return view;
+}
+
 export function effectiveConfigView(config: NormalizedConfig): EffectiveConfigView {
 	const agents = Object.values(config.registry.agents)
 		.map((a) =>
@@ -95,7 +118,12 @@ export function effectiveConfigView(config: NormalizedConfig): EffectiveConfigVi
 	const roles = Object.entries(config.roles)
 		.map(([id, r]) => roleView(id, r, originOf(config.provenance?.roles[id], "global")))
 		.sort(byOriginThenId);
-	const view: EffectiveConfigView = { agents, roles };
+	// Recipes only ever come from a user layer (global/repo), so "global" is the
+	// same defensive fallback roles use when provenance is somehow absent.
+	const recipes = Object.entries(config.recipes)
+		.map(([id, r]) => recipeView(id, r, originOf(config.provenance?.recipes[id], "global")))
+		.sort(byOriginThenId);
+	const view: EffectiveConfigView = { agents, roles, recipes };
 	if (config.configPath !== undefined) view.configPath = config.configPath;
 	if (config.repoConfigPath !== undefined) view.repoConfigPath = config.repoConfigPath;
 	return view;

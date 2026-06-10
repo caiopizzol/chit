@@ -150,6 +150,64 @@ describe("effectiveConfigView", () => {
 	});
 });
 
+describe("effectiveConfigView recipes", () => {
+	test("defaults-only config has no recipes", () => {
+		expect(effectiveConfigView(parseConfig(undefined)).recipes).toEqual([]);
+	});
+
+	test("orders recipes by layer (global, repo) then id, with provenance origin", () => {
+		const config = layered(
+			{
+				recipes: {
+					"g-two": { mode: "converge", manifestPath: "/flows/two.json" },
+					"g-one": { mode: "converge", manifestPath: "/flows/one.json" },
+				},
+			},
+			{ recipes: { "r-one": { mode: "converge", manifestPath: "flows/repo.json" } } },
+		);
+		const view = effectiveConfigView(config);
+		expect(view.recipes.map((r) => `${r.origin}:${r.id}`)).toEqual([
+			"global:g-one",
+			"global:g-two",
+			"repo:r-one",
+		]);
+	});
+
+	test("carries mode, manifest path, and the optional loop knobs when set", () => {
+		const config = layered({
+			recipes: {
+				deep: {
+					mode: "converge",
+					manifestPath: "/flows/deep.json",
+					maxIterations: 5,
+					callTimeoutMs: 1_200_000,
+					description: "deep converge preset",
+				},
+			},
+		});
+		const recipe = effectiveConfigView(config).recipes.find((r) => r.id === "deep");
+		expect(recipe).toEqual({
+			id: "deep",
+			origin: "global",
+			mode: "converge",
+			manifestPath: "/flows/deep.json",
+			maxIterations: 5,
+			callTimeoutMs: 1_200_000,
+			description: "deep converge preset",
+		});
+	});
+
+	test("a recipe with no optional knobs carries only the contracted fields", () => {
+		const config = layered({
+			recipes: { bare: { mode: "converge", manifestPath: "/flows/bare.json" } },
+		});
+		const recipe = effectiveConfigView(config).recipes.find((r) => r.id === "bare");
+		// Field-by-field rebuild: absent optionals stay absent, never spread in as
+		// undefined keys.
+		expect(Object.keys(recipe ?? {}).sort()).toEqual(["id", "manifestPath", "mode", "origin"]);
+	});
+});
+
 describe("instructionsPreview", () => {
 	test("collapses whitespace and keeps short instructions whole", () => {
 		expect(instructionsPreview("  Be \n\n concise.\t Always. ")).toBe("Be concise. Always.");

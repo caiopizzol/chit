@@ -164,6 +164,7 @@ describe("fetchEffectiveConfig", () => {
 			},
 		],
 		roles: [],
+		recipes: [],
 	};
 
 	test("GETs /api/config with the bearer token and maps a 200 to ok", async () => {

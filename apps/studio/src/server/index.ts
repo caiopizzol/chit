@@ -45,6 +45,7 @@ export type {
 	DocumentDetail,
 	EffectiveAgentView,
 	EffectiveConfigView,
+	EffectiveRecipeView,
 	EffectiveRoleView,
 	ForegroundLiveRow,
 	InstalledSummary,

@@ -3,17 +3,26 @@
 // silent), and the instructions footnote.
 
 import { describe, expect, test } from "bun:test";
-import type { EffectiveAgentView, EffectiveRoleView } from "../server/types.ts";
+import type {
+	EffectiveAgentView,
+	EffectiveRecipeView,
+	EffectiveRoleView,
+} from "../server/types.ts";
 import {
 	agentMeta,
 	formatTimeout,
 	groupByOrigin,
 	instructionsNote,
+	recipeMeta,
 	roleMeta,
 } from "./configView.ts";
 
 function agent(over: Partial<EffectiveAgentView> & { id: string }): EffectiveAgentView {
 	return { adapter: "codex-exec", origin: "builtin", ...over };
+}
+
+function recipe(over: Partial<EffectiveRecipeView> & { id: string }): EffectiveRecipeView {
+	return { origin: "global", mode: "converge", manifestPath: "/flows/main.json", ...over };
 }
 
 function role(over: Partial<EffectiveRoleView> & { id: string }): EffectiveRoleView {
@@ -87,6 +96,17 @@ describe("roleMeta", () => {
 
 	test("a model-agnostic role reads as any agent", () => {
 		expect(roleMeta(role({ id: "impl" }))).toBe("any agent · stateless · read_only");
+	});
+});
+
+describe("recipeMeta", () => {
+	test("a bare recipe reads as just mode and manifest path", () => {
+		expect(recipeMeta(recipe({ id: "bare" }))).toBe("converge · /flows/main.json");
+	});
+
+	test("appends max iterations and call timeout when set", () => {
+		const meta = recipeMeta(recipe({ id: "deep", maxIterations: 5, callTimeoutMs: 1_200_000 }));
+		expect(meta).toBe("converge · /flows/main.json · max 5 · call 20m");
 	});
 });
 

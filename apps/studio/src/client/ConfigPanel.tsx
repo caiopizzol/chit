@@ -1,6 +1,6 @@
 // Read-only effective-config drawer, opened from the Live Tower's top bar. It
-// answers one question concisely: in this repo, which agents and roles will
-// Chit use, and where did each definition come from? It fetches GET /api/config
+// answers one question concisely: in this repo, which agents, roles, and recipes
+// will Chit use, and where did each definition come from? It fetches GET /api/config
 // on every open (the server re-reads disk per request, so an open always shows
 // current state) and renders entries grouped by origin -- builtin / global /
 // repo, labeled once per group. Strictly a viewer: no editing, no writes; env
@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import type { EffectiveConfigView } from "../server/types.ts";
 import { type EffectiveConfigOutcome, fetchEffectiveConfig } from "./api.ts";
-import { agentMeta, groupByOrigin, instructionsNote, roleMeta } from "./configView.ts";
+import { agentMeta, groupByOrigin, instructionsNote, recipeMeta, roleMeta } from "./configView.ts";
 
 type PanelState = { kind: "loading" } | EffectiveConfigOutcome;
 
@@ -87,6 +87,37 @@ function Roles({ config }: { config: EffectiveConfigView }) {
 	);
 }
 
+function Recipes({ config }: { config: EffectiveConfigView }) {
+	return (
+		<section className="config-section">
+			<h3 className="live-col-head">
+				Recipes
+				<span className="live-count">{config.recipes.length}</span>
+			</h3>
+			{config.recipes.length === 0 ? (
+				<p className="live-muted">No recipes defined.</p>
+			) : (
+				groupByOrigin(config.recipes).map((group) => (
+					<div key={group.origin}>
+						<h4 className={`config-origin config-origin--${group.origin}`}>{group.origin}</h4>
+						<ul className="config-list">
+							{group.items.map((recipe) => (
+								<li key={recipe.id} className="config-item">
+									<div className="config-item-head">
+										<code className="config-id">{recipe.id}</code>
+									</div>
+									<p className="config-meta">{recipeMeta(recipe)}</p>
+									{recipe.description && <p className="config-desc">{recipe.description}</p>}
+								</li>
+							))}
+						</ul>
+					</div>
+				))
+			)}
+		</section>
+	);
+}
+
 function Body({ state }: { state: PanelState }) {
 	switch (state.kind) {
 		case "loading":
@@ -103,6 +134,7 @@ function Body({ state }: { state: PanelState }) {
 					<Sources config={state.config} />
 					<Agents config={state.config} />
 					<Roles config={state.config} />
+					<Recipes config={state.config} />
 				</>
 			);
 	}
