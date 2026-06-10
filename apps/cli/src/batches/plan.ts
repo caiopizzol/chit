@@ -15,6 +15,18 @@ import type { BatchTask } from "./types.ts";
 export class PlanError extends Error {}
 
 const SAFE_TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const RECIPE_ID_RE = /^[a-z][a-z0-9-]*$/;
+
+// A recipe reference must be a config recipe id, which the config parser pins to
+// kebab-case -- so a path-ish or synthesized value never reads as a recipe reference.
+// Shared by the per-task check below and the batch-level check at the gate (tools.ts).
+export function assertRecipeId(recipe: string, context: string): void {
+	if (!RECIPE_ID_RE.test(recipe)) {
+		throw new PlanError(
+			`${context}: recipe must be a config recipe id (kebab-case: lowercase letters, digits, hyphens; starts with a letter)`,
+		);
+	}
+}
 
 // Normalize a claimed path to a canonical repo-relative form (see
 // normalizeClaimedPath in @chit-run/core: the one shared implementation, so batch
@@ -38,7 +50,12 @@ export interface TaskInput {
 	dependencies?: string[];
 	claimedPaths?: string[];
 	allowPathOverlap?: boolean;
+	// A vetted config recipe id for this task; the recipe supplies the converge manifest
+	// and default budgets. Mutually exclusive with manifestPath.
+	recipe?: string;
 	manifestPath?: string;
+	// Per-task iteration budget. Overrides recipe and batch defaults for this task.
+	maxIterations?: number;
 	// Per-task chit-executed verification (overrides batch + manifest for this task).
 	requiredChecks?: RequiredCheck[];
 	// Per-task call-timeout override (ms); overrides the batch-level value for this task.
@@ -61,6 +78,18 @@ export function planTasks(inputs: TaskInput[]): BatchTask[] {
 		ids.add(t.id);
 		if (!t.title?.trim()) throw new PlanError(`task ${JSON.stringify(t.id)}: title is required`);
 		if (!t.body?.trim()) throw new PlanError(`task ${JSON.stringify(t.id)}: body is required`);
+		if (t.recipe !== undefined && t.manifestPath !== undefined) {
+			throw new PlanError(
+				`task ${JSON.stringify(t.id)}: recipe and manifestPath are mutually exclusive (the recipe supplies the manifest)`,
+			);
+		}
+		if (t.recipe !== undefined) assertRecipeId(t.recipe, `task ${JSON.stringify(t.id)}`);
+		if (
+			t.maxIterations !== undefined &&
+			(!Number.isInteger(t.maxIterations) || t.maxIterations < 1)
+		) {
+			throw new PlanError(`task ${JSON.stringify(t.id)}: maxIterations must be an integer >= 1`);
+		}
 	}
 
 	for (const t of inputs) {
@@ -94,7 +123,9 @@ export function planTasks(inputs: TaskInput[]): BatchTask[] {
 			claimedPaths: (t.claimedPaths ?? []).map((c) => normalizeClaim(c, t.id)),
 		};
 		if (t.allowPathOverlap) task.allowPathOverlap = true;
+		if (t.recipe !== undefined) task.recipe = t.recipe;
 		if (t.manifestPath !== undefined) task.manifestPath = t.manifestPath;
+		if (t.maxIterations !== undefined) task.maxIterations = t.maxIterations;
 		if (t.requiredChecks !== undefined) task.requiredChecks = t.requiredChecks;
 		if (t.callTimeoutMs !== undefined) task.callTimeoutMs = t.callTimeoutMs;
 		return task;

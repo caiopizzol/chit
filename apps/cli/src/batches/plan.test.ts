@@ -70,6 +70,29 @@ describe("planTasks", () => {
 		const [t] = planTasks([input({ requiredChecks: checks })]);
 		expect(t?.requiredChecks).toEqual(checks);
 	});
+
+	test("carries through recipe and maxIterations", () => {
+		const [t] = planTasks([input({ recipe: "deep-feature", maxIterations: 5 })]);
+		expect(t?.recipe).toBe("deep-feature");
+		expect(t?.maxIterations).toBe(5);
+	});
+
+	test("rejects recipe together with manifestPath (the recipe supplies the manifest)", () => {
+		expect(() => planTasks([input({ recipe: "deep-feature", manifestPath: "/m.json" })])).toThrow(
+			/mutually exclusive/,
+		);
+	});
+
+	test("rejects a non-kebab-case recipe reference (config recipe id rules)", () => {
+		// A path-ish or synthesized value must never read as a recipe reference.
+		expect(() => planTasks([input({ recipe: "manifests/own.json" })])).toThrow(/config recipe id/);
+		expect(() => planTasks([input({ recipe: "Deep-Feature" })])).toThrow(/config recipe id/);
+	});
+
+	test("rejects an invalid task-level maxIterations", () => {
+		expect(() => planTasks([input({ maxIterations: 0 })])).toThrow(/maxIterations/);
+		expect(() => planTasks([input({ maxIterations: 1.5 })])).toThrow(/maxIterations/);
+	});
 });
 
 describe("normalizeClaim", () => {

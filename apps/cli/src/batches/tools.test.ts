@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ManifestBinding } from "@chit-run/core";
+import { loadConfig } from "../config/load.ts";
 import type { LoopJobRecord } from "../jobs/types.ts";
+import {
+	type ResolvedRecipe,
+	resolveManifestBindingWith,
+	resolveRecipe,
+} from "../manifest/binding.ts";
 import type { BatchEngineDeps, LaunchJobParams } from "./engine.ts";
 import { PlanError, type TaskInput } from "./plan.ts";
 import { BatchStore } from "./store.ts";
 import { BatchApprovalRefused, type BatchStartInput, runBatchStart } from "./tools.ts";
+import type { GitResult, GitRunner } from "./worktree.ts";
 
 let stateDir: string;
 let savedXdg: string | undefined;
@@ -33,6 +41,23 @@ const ok = (stdout = ""): { code: number; stdout: string; stderr: string } => ({
 	stdout,
 	stderr: "",
 });
+
+function shellGit(args: string[], cwd: string): GitResult {
+	try {
+		return {
+			code: 0,
+			stdout: execFileSync("git", args, { cwd, encoding: "utf-8" }),
+			stderr: "",
+		};
+	} catch (e) {
+		const err = e as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
+		return {
+			code: err.status ?? 1,
+			stdout: String(err.stdout ?? ""),
+			stderr: String(err.stderr ?? ""),
+		};
+	}
+}
 
 // A plain main-repo checkout: --git-common-dir is <cwd>/.git, so mainRepoOfWorktree
 // resolves repo back to cwd (repo === callerCheckout for a non-linked launch). A symbolic
@@ -498,5 +523,455 @@ describe("runBatchStart: manifest binding (digest + participant summary in the h
 			),
 		).toThrow(PlanError);
 		expect(h.launched).toHaveLength(0);
+	});
+});
+
+// --- recipe selections at the gate: the approval hash binds what each recipe
+// resolved to (identity, defaults, manifest digest, participants), not the id string. ---
+
+function gateRecipe(over: Partial<ResolvedRecipe> = {}): ResolvedRecipe {
+	return {
+		id: "deep-feature",
+		origin: { source: "repo", path: "chit.config.json" },
+		mode: "converge",
+		binding: gateBinding("manifests/converge.json", "sha256:aaaa"),
+		maxIterations: 4,
+		callTimeoutMs: 1200000,
+		...over,
+	};
+}
+
+describe("runBatchStart: recipe selections (resolved recipes in the hash)", () => {
+	test("the dry run resolves task + batch recipes and previews receipts next to bindings", () => {
+		const h = makeHarness();
+		const requested: Array<{ recipeId: string; baseSha: string }> = [];
+		h.deps.resolveRecipe = (p) => {
+			requested.push({ recipeId: p.recipeId, baseSha: p.baseSha });
+			return p.recipeId === "deep-feature"
+				? gateRecipe()
+				: gateRecipe({
+						id: p.recipeId,
+						binding: gateBinding("manifests/quick.json", "sha256:bbbb"),
+						maxIterations: 2,
+					});
+		};
+		const result = runBatchStart(
+			{
+				tasks: [
+					{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"], recipe: "quick-fix" },
+					{ id: "b", title: "B", body: "do b", claimedPaths: ["src/b"] },
+				],
+				recipe: "deep-feature",
+			},
+			h.cwd,
+			h.store,
+			h.deps,
+			noLaunch,
+		);
+		if (result.launched) throw new Error("expected a dry run");
+		// Every recipe resolves from the APPROVED base commit, like manifest bindings.
+		for (const r of requested) expect(r.baseSha).toBe("sha-approved");
+		// The receipts carry identity + provenance + defaults; the manifest content
+		// surface lives in the bindings under the SAME batch/task slot.
+		expect(result.recipe).toBe("deep-feature");
+		expect(result.recipes?.batch).toEqual({
+			id: "deep-feature",
+			origin: { source: "repo", path: "chit.config.json" },
+			mode: "converge",
+			maxIterations: 4,
+			callTimeoutMs: 1200000,
+		});
+		expect(result.recipes?.tasks?.a?.id).toBe("quick-fix");
+		expect(result.recipes?.tasks?.b).toBeUndefined();
+		expect(result.manifests?.batch?.manifestDigest).toBe("sha256:aaaa");
+		expect(result.manifests?.tasks?.a?.manifestDigest).toBe("sha256:bbbb");
+		// Effective batch budgets fold the batch recipe's defaults (nothing explicit given).
+		expect(result.maxIterations).toBe(4);
+		expect(result.callTimeoutMs).toBe(1200000);
+	});
+
+	test("explicit batch knobs beat the batch recipe's defaults in the effective values", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () => gateRecipe();
+		const result = runBatchStart(
+			{ tasks: TASKS, recipe: "deep-feature", maxIterations: 9, callTimeoutMs: 5000 },
+			h.cwd,
+			h.store,
+			h.deps,
+			noLaunch,
+		);
+		if (result.launched) throw new Error("expected a dry run");
+		expect(result.maxIterations).toBe(9);
+		expect(result.callTimeoutMs).toBe(5000);
+	});
+
+	test("a batch-level recipe and manifest_path together are refused before any resolution", () => {
+		const h = makeHarness();
+		expect(() =>
+			runBatchStart(
+				{ tasks: TASKS, recipe: "deep-feature", manifestPath: "manifests/own.json" },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(/mutually exclusive/);
+	});
+
+	test("a non-kebab-case batch-level recipe is refused (config recipe id rules)", () => {
+		const h = makeHarness();
+		expect(() =>
+			runBatchStart(
+				{ tasks: TASKS, recipe: "manifests/own.json" },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(/config recipe id/);
+	});
+
+	test("an unknown recipe is refused at the gate as a PlanError naming the surface", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () => {
+			throw new Error('unknown recipe "ghost" (no recipes are configured)');
+		};
+		expect(() =>
+			runBatchStart(
+				{
+					tasks: [{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"], recipe: "ghost" }],
+				},
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(PlanError);
+		expect(() =>
+			runBatchStart(
+				{
+					tasks: [{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"], recipe: "ghost" }],
+				},
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(/task "a" recipe: unknown recipe/);
+	});
+
+	test("a recipe-naming batch with no recipe resolver wired is refused, not silently launched", () => {
+		const h = makeHarness(); // makeHarness wires no resolveRecipe
+		expect(() =>
+			runBatchStart({ tasks: TASKS, recipe: "deep-feature" }, h.cwd, h.store, h.deps, noLaunch),
+		).toThrow(/recipe resolution is not available/);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a recipe default changed after the dry run is refused at confirm", () => {
+		const h = makeHarness();
+		let maxIterations = 4;
+		h.deps.resolveRecipe = () => gateRecipe({ maxIterations });
+		const input: BatchStartInput = { tasks: TASKS, recipe: "deep-feature" };
+		const dry = runBatchStart(input, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		maxIterations = 9; // the recipe was redefined between dry run and confirm
+		expect(() =>
+			runBatchStart(
+				{ ...input, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(BatchApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a recipe whose manifest content changed after the dry run is refused at confirm", () => {
+		const h = makeHarness();
+		let digest = "sha256:aaaa";
+		h.deps.resolveRecipe = () =>
+			gateRecipe({ binding: gateBinding("manifests/converge.json", digest) });
+		const input: BatchStartInput = { tasks: TASKS, recipe: "deep-feature" };
+		const dry = runBatchStart(input, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		digest = "sha256:bbbb"; // the vetted manifest moved under the recipe
+		expect(() =>
+			runBatchStart(
+				{ ...input, confirm: true, approvalHash: dry.approvalHash },
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(BatchApprovalRefused);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a confirmed start persists recipes + bindings and launches with the recipe wiring", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = (p) =>
+			p.recipeId === "deep-feature"
+				? gateRecipe()
+				: gateRecipe({
+						id: p.recipeId,
+						binding: gateBinding("manifests/quick.json", "sha256:bbbb"),
+						maxIterations: 2,
+						callTimeoutMs: 60000,
+					});
+		const input: BatchStartInput = {
+			tasks: [
+				{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"], recipe: "quick-fix" },
+				// b uses the batch recipe's manifest + defaults, but its own explicit budget wins.
+				{ id: "b", title: "B", body: "do b", claimedPaths: ["src/b"], maxIterations: 7 },
+			],
+			recipe: "deep-feature",
+			maxParallel: 2,
+		};
+		const dry = runBatchStart(input, h.cwd, h.store, h.deps, noLaunch);
+		if (dry.launched) throw new Error("expected a dry run");
+		const confirmed = runBatchStart(
+			{ ...input, confirm: true, approvalHash: dry.approvalHash },
+			h.cwd,
+			h.store,
+			h.deps,
+			() => "batch-id",
+		);
+		if (!confirmed.launched) throw new Error("expected a launch");
+		// Persistence: the record carries the receipts, the batch recipe id, the
+		// effective budget, and each recipe's STAMPED resolved manifest reference.
+		const stored = present(h.store.get("batch-id"), "stored batch");
+		expect(stored.recipe).toBe("deep-feature");
+		expect(stored.maxIterations).toBe(4); // the batch recipe's default (nothing explicit)
+		expect(stored.recipes?.batch?.id).toBe("deep-feature");
+		expect(stored.recipes?.tasks?.a?.id).toBe("quick-fix");
+		expect(stored.manifestPath).toBe("manifests/converge.json"); // stamped from the batch recipe
+		const storedA = present(
+			stored.tasks.find((t) => t.id === "a"),
+			"stored task a",
+		);
+		expect(storedA.recipe).toBe("quick-fix");
+		expect(storedA.manifestPath).toBe("manifests/quick.json"); // stamped from its recipe
+		// Launch wiring: both tasks launched (independent claims, maxParallel 2). Task a
+		// runs its recipe's manifest, digest, receipt, and defaults.
+		expect(h.launched).toHaveLength(2);
+		const launchedA = present(
+			h.launched.find((l) => l.scope.endsWith("-a")),
+			"launched a",
+		);
+		expect(launchedA.manifestPath).toBe("manifests/quick.json");
+		expect(launchedA.manifestDigest).toBe("sha256:bbbb");
+		expect(launchedA.recipe?.id).toBe("quick-fix");
+		expect(launchedA.maxIterations).toBe(2); // its recipe's default
+		expect(launchedA.callTimeoutMs).toBe(60000);
+		// Task b runs the batch recipe's manifest, but its explicit budget beats the
+		// recipe-derived batch default.
+		const launchedB = present(
+			h.launched.find((l) => l.scope.endsWith("-b")),
+			"launched b",
+		);
+		expect(launchedB.manifestPath).toBe("manifests/converge.json");
+		expect(launchedB.manifestDigest).toBe("sha256:aaaa");
+		expect(launchedB.recipe?.id).toBe("deep-feature");
+		expect(launchedB.maxIterations).toBe(7);
+		expect(launchedB.callTimeoutMs).toBe(1200000); // the batch recipe's default
+		// The view surfaces the recipe id + approved digest per task (no prompt text).
+		const viewA = present(
+			confirmed.view.tasks.find((t) => t.id === "a"),
+			"task a view",
+		);
+		expect(viewA.recipe).toBe("quick-fix");
+		expect(viewA.manifestDigest).toBe("sha256:bbbb");
+		const viewB = present(
+			confirmed.view.tasks.find((t) => t.id === "b"),
+			"task b view",
+		);
+		expect(viewB.recipe).toBe("deep-feature");
+		expect(viewB.manifestDigest).toBe("sha256:aaaa");
+	});
+
+	test("a direct-manifest task next to a recipe task binds and launches independently", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () => gateRecipe();
+		h.deps.resolveManifestBinding = (p) => gateBinding(p.manifestPath, "sha256:direct");
+		const result = runBatchStart(
+			{
+				tasks: [
+					{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"], recipe: "deep-feature" },
+					{
+						id: "b",
+						title: "B",
+						body: "do b",
+						claimedPaths: ["src/b"],
+						manifestPath: "manifests/own.json",
+					},
+				],
+			},
+			h.cwd,
+			h.store,
+			h.deps,
+			noLaunch,
+		);
+		if (result.launched) throw new Error("expected a dry run");
+		// The recipe task binds its recipe's manifest; the direct task binds its own
+		// reference; no batch-level recipe -> no batch receipt or binding.
+		expect(result.recipes?.tasks?.a?.id).toBe("deep-feature");
+		expect(result.recipes?.tasks?.b).toBeUndefined();
+		expect(result.manifests?.tasks?.a?.manifestDigest).toBe("sha256:aaaa");
+		expect(result.manifests?.tasks?.b?.manifestDigest).toBe("sha256:direct");
+		expect(result.recipes?.batch).toBeUndefined();
+		expect(result.manifests?.batch).toBeUndefined();
+	});
+
+	test("a real repo chit.config.json recipe menu resolves through the dry-run and confirm path", () => {
+		const repo = realpathSync(mkdtempSync(join(tmpdir(), "chit-batch-recipe-menu-")));
+		const git: GitRunner = (args, cwd = repo) => shellGit(args, cwd);
+		const savedConfigHome = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = join(repo, ".empty-config");
+		try {
+			expect(shellGit(["init", "-b", "main"], repo).code).toBe(0);
+			expect(shellGit(["config", "user.email", "test@example.com"], repo).code).toBe(0);
+			expect(shellGit(["config", "user.name", "Test User"], repo).code).toBe(0);
+			mkdirSync(join(repo, "manifests"), { recursive: true });
+			writeFileSync(
+				join(repo, "manifests", "converge.json"),
+				JSON.stringify({
+					schema: 1,
+					id: "batch-dogfood-loop",
+					description: "batch recipe menu dogfood loop",
+					inputs: {
+						task: { type: "string" },
+						prior_review: { type: "string", optional: true },
+					},
+					participants: {
+						implementer: {
+							agent: "claude",
+							instructions: "implement",
+							session: "stateless",
+							permissions: { filesystem: "write" },
+						},
+						reviewer: {
+							agent: "codex",
+							instructions: "review",
+							session: "stateless",
+							permissions: { filesystem: "read_only" },
+						},
+					},
+					steps: {
+						implement: { call: "implementer", prompt: "{{ inputs.task }}" },
+						review: { call: "reviewer", prompt: "{{ steps.implement.output }}" },
+						out: { format: "{{ steps.review.output }}" },
+					},
+					output: "out",
+					policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+				}),
+			);
+			expect(shellGit(["add", "manifests/converge.json"], repo).code).toBe(0);
+			expect(shellGit(["commit", "-m", "test: add manifest"], repo).code).toBe(0);
+			writeFileSync(
+				join(repo, "chit.config.json"),
+				JSON.stringify({
+					recipes: {
+						"batch-dogfood-loop": {
+							mode: "converge",
+							manifestPath: "manifests/converge.json",
+							maxIterations: 2,
+							callTimeoutMs: 60000,
+							description: "Run the temp repo batch dogfood loop",
+						},
+					},
+				}),
+			);
+
+			const jobs = new Map<string, LoopJobRecord>();
+			const launched: LaunchJobParams[] = [];
+			const deps: BatchEngineDeps = {
+				git,
+				createWorktree: (_repo, batchId, taskId) => ({
+					worktreePath: `/tmp/${batchId}/${taskId}`,
+					branch: `chit-batch/${batchId}/${taskId}`,
+				}),
+				launchJob: (p) => {
+					launched.push(p);
+					const jobId = "job-1";
+					jobs.set(jobId, {
+						runId: jobId,
+						policy: "loop",
+						loopId: p.loopId,
+						repoKey: "k",
+						cwd: p.cwd,
+						...p.worktree,
+						scope: p.scope,
+						task: p.task,
+						maxIterations: p.maxIterations,
+						allowUnenforced: false,
+						state: "queued",
+						createdAt: "t",
+						iterationsCompleted: 0,
+						auditRefs: [],
+						...(p.manifestPath !== undefined && { manifestPath: p.manifestPath }),
+						...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
+						...(p.manifestParticipants !== undefined && {
+							manifestParticipants: p.manifestParticipants,
+						}),
+						...(p.recipe !== undefined && { recipe: p.recipe }),
+					});
+					return { jobId, loopId: p.loopId };
+				},
+				getJob: (id) => jobs.get(id),
+				cancelJob: () => {},
+				isStale: () => false,
+				loopDetail: () => ({ changedFiles: [], workspaceWarnings: [] }),
+				resolveManifestBinding: (p) => {
+					const config = loadConfig(undefined, { cwd: p.configCwd });
+					return resolveManifestBindingWith(p, { git, config });
+				},
+				resolveRecipe: (p) => {
+					const config = loadConfig(undefined, { cwd: p.configCwd });
+					return resolveRecipe(p.recipeId, config, {
+						git,
+						repoRoot: p.gitCwd,
+						baseSha: p.baseSha,
+					});
+				},
+				now: () => 1000,
+			};
+			const store = new BatchStore(repo);
+			const input: BatchStartInput = {
+				tasks: [{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"] }],
+				recipe: "batch-dogfood-loop",
+			};
+
+			const dry = runBatchStart(input, repo, store, deps, noLaunch);
+			if (dry.launched) throw new Error("expected a dry run");
+			expect(dry.recipes?.batch).toMatchObject({
+				id: "batch-dogfood-loop",
+				mode: "converge",
+				maxIterations: 2,
+				callTimeoutMs: 60000,
+			});
+			expect(dry.manifests?.batch?.manifestPath).toBe("manifests/converge.json");
+			expect(dry.manifests?.batch?.manifestDigest).toMatch(/^sha256:/);
+
+			const confirmed = runBatchStart(
+				{ ...input, confirm: true, approvalHash: dry.approvalHash },
+				repo,
+				store,
+				deps,
+				() => "recipe-menu-batch",
+			);
+			if (!confirmed.launched) throw new Error("expected launch");
+			const launchedTask = present(launched[0], "launched recipe task");
+			expect(launchedTask.recipe).toEqual(dry.recipes?.batch);
+			expect(launchedTask.manifestPath).toBe("manifests/converge.json");
+			expect(launchedTask.manifestDigest).toBe(dry.manifests?.batch?.manifestDigest);
+			expect(launchedTask.maxIterations).toBe(2);
+			expect(launchedTask.callTimeoutMs).toBe(60000);
+		} finally {
+			if (savedConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = savedConfigHome;
+			rmSync(repo, { recursive: true, force: true });
+		}
 	});
 });

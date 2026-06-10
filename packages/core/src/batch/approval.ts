@@ -2,12 +2,14 @@
 // run first: it resolves the base ref to a concrete commit, normalizes the reviewed task
 // graph, and returns an approval hash. A human reviews exactly that, and a confirmed start
 // must run EXACTLY what was reviewed. To bind the approval to the work, we hash the
-// canonical batch artifact -- the resolved base commit, the normalized task graph, and the
+// canonical batch artifact -- the resolved base commit, the normalized task graph, the
 // batch-level execution knobs (maxParallel, the optional iteration budget, the default
-// manifest, the chit-executed checks, and the call timeout). Anything that decides what the
-// batch runs is bound, so a base, task, or knob changed after approval cannot ride an old
-// hash into execution: the confirmed start re-resolves, re-normalizes, recomputes the hash,
-// and refuses if it differs from the one the operator approved.
+// recipe or manifest, the chit-executed checks, and the call timeout), plus what every
+// recipe selection and manifest reference RESOLVED TO (recipe receipts and manifest
+// bindings). Anything that decides what the batch runs is bound, so a base, task, knob,
+// recipe, or manifest changed after approval cannot ride an old hash into execution: the
+// confirmed start re-resolves, re-normalizes, recomputes the hash, and refuses if it
+// differs from the one the operator approved.
 //
 // This module is browser-safe (no node imports). It builds the canonical PAYLOAD only via
 // the shared canonicalJson; the actual digest is computed in the CLI/MCP layer (node
@@ -16,6 +18,7 @@
 // BY the run, so binding them would make the hash unstable against its own execution.
 
 import { canonicalJson } from "../canonical-json.ts";
+import type { RecipeReceipt } from "../config/types.ts";
 import type { ManifestBinding } from "../manifest/binding.ts";
 import type { RequiredCheck } from "../manifest/types.ts";
 
@@ -39,7 +42,9 @@ export interface BatchApprovalTaskInput {
 	dependencies: string[];
 	claimedPaths: string[];
 	allowPathOverlap?: boolean;
+	recipe?: string;
 	manifestPath?: string;
+	maxIterations?: number;
 	requiredChecks?: RequiredCheck[];
 	callTimeoutMs?: number;
 }
@@ -54,7 +59,9 @@ export interface BatchApprovalTask {
 	dependencies: string[];
 	claimedPaths: string[];
 	allowPathOverlap?: boolean;
+	recipe?: string;
 	manifestPath?: string;
+	maxIterations?: number;
 	requiredChecks?: RequiredCheck[];
 	callTimeoutMs?: number;
 }
@@ -74,16 +81,26 @@ export interface BatchManifestBindings {
 	tasks?: Record<string, ManifestBinding>;
 }
 
+// The resolved recipe identity + runtime defaults the operator approved. The
+// recipe's resolved manifest binding uses BatchManifestBindings under the same
+// batch/task slot, so recipe support does not grow a second manifest vocabulary.
+export interface BatchRecipeBindings {
+	batch?: RecipeReceipt;
+	tasks?: Record<string, RecipeReceipt>;
+}
+
 export interface BatchApprovalArtifact {
 	strategy: "batch";
 	base: BatchApprovalBase;
 	tasks: BatchApprovalTask[];
 	maxParallel: number;
 	maxIterations?: number;
+	recipe?: string;
 	manifestPath?: string;
 	requiredChecks?: RequiredCheck[];
 	callTimeoutMs?: number;
 	manifests?: BatchManifestBindings;
+	recipes?: BatchRecipeBindings;
 }
 
 export interface BatchApprovalInput {
@@ -91,10 +108,12 @@ export interface BatchApprovalInput {
 	tasks: readonly BatchApprovalTaskInput[];
 	maxParallel: number;
 	maxIterations?: number;
+	recipe?: string;
 	manifestPath?: string;
 	requiredChecks?: RequiredCheck[];
 	callTimeoutMs?: number;
 	manifests?: BatchManifestBindings;
+	recipes?: BatchRecipeBindings;
 }
 
 // Normalize one task to its execution-deciding core: keep id/title/body, sort the two set
@@ -109,7 +128,9 @@ function normalizeTask(task: BatchApprovalTaskInput): BatchApprovalTask {
 		dependencies: [...task.dependencies].sort(),
 		claimedPaths: [...task.claimedPaths].sort(),
 		...(task.allowPathOverlap === true && { allowPathOverlap: true }),
+		...(task.recipe !== undefined && { recipe: task.recipe }),
 		...(task.manifestPath !== undefined && { manifestPath: task.manifestPath }),
+		...(task.maxIterations !== undefined && { maxIterations: task.maxIterations }),
 		...(task.requiredChecks !== undefined && { requiredChecks: task.requiredChecks }),
 		...(task.callTimeoutMs !== undefined && { callTimeoutMs: task.callTimeoutMs }),
 	};
@@ -122,10 +143,12 @@ export function buildBatchApprovalArtifact(input: BatchApprovalInput): BatchAppr
 		tasks: input.tasks.map(normalizeTask),
 		maxParallel: input.maxParallel,
 		...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+		...(input.recipe !== undefined && { recipe: input.recipe }),
 		...(input.manifestPath !== undefined && { manifestPath: input.manifestPath }),
 		...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
 		...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
 		...(hasBindings(input.manifests) && { manifests: input.manifests }),
+		...(hasRecipes(input.recipes) && { recipes: input.recipes }),
 	};
 }
 
@@ -134,6 +157,12 @@ export function buildBatchApprovalArtifact(input: BatchApprovalInput): BatchAppr
 function hasBindings(m: BatchManifestBindings | undefined): boolean {
 	if (m === undefined) return false;
 	return m.batch !== undefined || Object.keys(m.tasks ?? {}).length > 0;
+}
+
+// Same rule for recipe receipts: a recipe-free batch keeps its hash.
+function hasRecipes(r: BatchRecipeBindings | undefined): boolean {
+	if (r === undefined) return false;
+	return r.batch !== undefined || Object.keys(r.tasks ?? {}).length > 0;
 }
 
 // The exact payload string the CLI/MCP layer hashes to produce a batch's approval hash.

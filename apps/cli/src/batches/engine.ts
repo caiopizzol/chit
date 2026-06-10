@@ -11,15 +11,17 @@
 
 import type {
 	BatchManifestBindings,
+	BatchRecipeBindings,
 	BoundParticipantSummary,
 	ManifestBinding,
+	RecipeReceipt,
 	RequiredCheck,
 } from "@chit-run/core";
 import { describeManifestBindingDrift } from "@chit-run/core";
 import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
 import { pickRequiredChecks } from "../loops/required-checks.ts";
-import type { ResolveManifestBinding } from "../manifest/binding.ts";
+import type { ResolveManifestBinding, ResolveRecipe } from "../manifest/binding.ts";
 import { planTasks, resolveManifestPath, type TaskInput } from "./plan.ts";
 import { deriveBatchStatus, isBlocked, isStartable, selectRunnable } from "./schedule.ts";
 import type { BatchStore } from "./store.ts";
@@ -55,6 +57,11 @@ export interface LaunchJobParams {
 	// The APPROVED participant execution summary for the same manifest binding. Forwarded
 	// to the worker so config drift after enqueue cannot silently change the agent/model surface.
 	manifestParticipants?: Record<string, BoundParticipantSummary>;
+	// The APPROVED recipe receipt that applies to this task (its own selection, else the
+	// batch-level default). Forwarded so the loop header and audit receipts stamp which
+	// vetted recipe ran (identity + defaults only; the manifest binding above stays the
+	// execution surface).
+	recipe?: RecipeReceipt;
 	maxIterations: number;
 	// The task's effective override (task ?? batch checks); launchJob resolves it
 	// against the manifest's checks at the snapshot boundary.
@@ -118,6 +125,13 @@ export interface BatchEngineDeps {
 	// no approved bindings has nothing to verify against either). The real
 	// implementation loads fresh config per call, matching the worker's lifecycle.
 	resolveManifestBinding?: ResolveManifestBinding;
+	// Resolve a task's (or the batch-level) config recipe to its effective execution
+	// surface at the chit_batch_start gate, so the approval hash binds what the recipe
+	// RESOLVES TO, not the id string. Optional for the same reason resolveManifestBinding
+	// is (test harnesses; production always wires it); a recipe-naming batch is REFUSED
+	// at the gate when it is absent -- silently launching without the recipe's manifest
+	// would run an execution surface nobody reviewed. Mirrors PlanEngineDeps.resolveRecipe.
+	resolveRecipe?: ResolveRecipe;
 	// Remove a task's worktree + branch (real: removeTaskWorktree with realGit).
 	// Injected so cleanup is testable without touching real git/fs. Only called by
 	// cleanupBatch, only for terminal tasks, only under an explicit confirm.
@@ -141,6 +155,10 @@ export interface StartBatchOptions {
 	tasks: TaskInput[];
 	maxParallel: number;
 	baseBranch?: string; // default: the repo's current HEAD
+	// Batch-level config recipe id (a default for tasks without their own recipe or
+	// manifestPath). The gate resolves it; its binding arrives via `manifests.batch`
+	// and its receipt via `recipes.batch`.
+	recipe?: string;
 	manifestPath?: string; // batch-level default converge manifest
 	maxIterations?: number;
 	// Batch-level chit-executed verification, applied to any task without its own.
@@ -150,6 +168,9 @@ export interface StartBatchOptions {
 	// The APPROVED manifest bindings from the gate's dry run, persisted on the batch
 	// record so every task launch re-verifies against exactly what was approved.
 	manifests?: BatchManifestBindings;
+	// The APPROVED recipe receipts from the gate's dry run (batch default + per-task
+	// selections), persisted so launches read the approved defaults, never live config.
+	recipes?: BatchRecipeBindings;
 }
 
 // Create the batch, persist it, and launch the initial runnable wave.
@@ -159,6 +180,22 @@ export function startBatch(
 	opts: StartBatchOptions,
 ): Batch {
 	const tasks = planTasks(opts.tasks); // throws PlanError on a bad graph
+	// A recipe-backed task records its recipe's RESOLVED manifest reference (from the
+	// approved binding the gate produced) as its own manifestPath, so launch, drift
+	// re-verification, and receipts read one reference shape for recipe-backed and
+	// direct-manifest tasks alike (planTasks guarantees recipe and an AUTHORED
+	// manifestPath never coexist). Mirrors the plan engine's step records.
+	for (const t of tasks) {
+		if (t.recipe === undefined) continue;
+		const bound = opts.manifests?.tasks?.[t.id];
+		if (bound !== undefined) t.manifestPath = bound.manifestPath;
+	}
+	// Same stamping for a batch-level recipe: its resolved manifest reference becomes
+	// the batch-level default manifest (the gate enforces recipe/manifest_path mutual
+	// exclusivity, so nothing is overwritten here).
+	const batchManifestPath =
+		opts.manifestPath ??
+		(opts.recipe !== undefined ? opts.manifests?.batch?.manifestPath : undefined);
 	// Split the durable cleanup anchor from the launching checkout, mirroring the single-run
 	// prepareRunWorkspace. `repo` is the main repo that owns the shared .git (survives the
 	// launching linked worktree being removed before cleanup); `callerCheckout` is the checkout
@@ -183,10 +220,15 @@ export function startBatch(
 		baseBranch,
 		baseSha,
 		maxParallel,
-		...(opts.manifestPath !== undefined && { manifestPath: opts.manifestPath }),
+		// Persist the EFFECTIVE budget so every later wave (advanceBatch) launches with the
+		// approved value, not the advance-time default.
+		maxIterations,
+		...(opts.recipe !== undefined && { recipe: opts.recipe }),
+		...(batchManifestPath !== undefined && { manifestPath: batchManifestPath }),
 		...(opts.requiredChecks !== undefined && { requiredChecks: opts.requiredChecks }),
 		...(opts.callTimeoutMs !== undefined && { callTimeoutMs: opts.callTimeoutMs }),
 		...(opts.manifests !== undefined && { manifests: opts.manifests }),
+		...(opts.recipes !== undefined && { recipes: opts.recipes }),
 		status: "planning",
 		tasks,
 		createdAt: now,
@@ -499,9 +541,19 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 			// Per-task effective override: task checks beat batch checks (closest wins).
 			// launchJob resolves this against the manifest's checks at the snapshot boundary.
 			const taskChecks = pickRequiredChecks(t.requiredChecks, c.requiredChecks);
-			// Scalar override -> first-defined-wins is just `??` (no "declared empty" case
-			// like requiredChecks' [], so no pick* helper is needed): task beats batch.
-			const taskCallTimeoutMs = t.callTimeoutMs ?? c.callTimeoutMs;
+			// Scalar budgets, first-defined-wins: an explicit task value beats the task
+			// recipe's APPROVED default, which beats the batch-level effective value (the
+			// gate already folded the batch recipe's default into c.callTimeoutMs /
+			// c.maxIterations, so an explicit batch override beats a batch recipe default
+			// by construction). Every source here was hash-bound at approval.
+			const recipeDefaults = taskRecipeDefaults(c, t);
+			const taskCallTimeoutMs = t.callTimeoutMs ?? recipeDefaults?.callTimeoutMs ?? c.callTimeoutMs;
+			const taskMaxIterations =
+				t.maxIterations ?? recipeDefaults?.maxIterations ?? c.maxIterations ?? maxIterations;
+			// The receipt the run is stamped with: the task's own selection, else the
+			// batch-level default when it applies (so loop headers and audit receipts
+			// answer which vetted recipe ran).
+			const taskRecipe = taskApprovedRecipe(c, t);
 			const { jobId } = deps.launchJob({
 				cwd: worktreePath,
 				scope: `batch-${c.id}-${t.id}`,
@@ -532,9 +584,10 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 				...(taskApprovedBinding(c, t)?.participants !== undefined && {
 					manifestParticipants: taskApprovedBinding(c, t)?.participants,
 				}),
+				...(taskRecipe !== undefined && { recipe: taskRecipe }),
 				...(taskChecks && { requiredChecks: taskChecks }),
 				...(taskCallTimeoutMs !== undefined && { callTimeoutMs: taskCallTimeoutMs }),
-				maxIterations,
+				maxIterations: taskMaxIterations,
 			});
 			t.jobId = jobId;
 			t.status = "running";
@@ -558,6 +611,25 @@ function launchWave(c: Batch, deps: BatchEngineDeps, maxIterations: number): Bat
 function taskApprovedBinding(c: Batch, t: BatchTask): ManifestBinding | undefined {
 	if (t.manifestPath !== undefined) return c.manifests?.tasks?.[t.id];
 	return c.manifests?.batch;
+}
+
+// The APPROVED recipe receipt that applies to a task: its own selection (t.recipe is
+// checked FIRST: a recipe-backed task also carries its recipe's stamped manifestPath),
+// else the batch-level default for a task with no manifest reference of its own
+// (matching the batch recipe's scope: a default for tasks without their own recipe or
+// manifestPath). Undefined for a direct-manifest task and on records predating recipes.
+function taskApprovedRecipe(c: Batch, t: BatchTask): RecipeReceipt | undefined {
+	if (t.recipe !== undefined) return c.recipes?.tasks?.[t.id];
+	if (t.manifestPath !== undefined) return undefined;
+	return c.recipes?.batch;
+}
+
+// The recipe defaults that participate in this task's budget precedence: ONLY the
+// task's own recipe's. The batch recipe's defaults are deliberately excluded -- the
+// gate folds them into the batch-level effective knobs (explicit input first), so
+// applying them here would let a batch recipe default beat an explicit batch override.
+function taskRecipeDefaults(c: Batch, t: BatchTask): RecipeReceipt | undefined {
+	return t.recipe !== undefined ? c.recipes?.tasks?.[t.id] : undefined;
 }
 
 // Why the task's CURRENT manifest binding no longer matches the approved one, or
@@ -603,9 +675,14 @@ export interface BatchTaskView {
 	auditRefs?: string[];
 	// Uncommitted work in a FAILED task's worktree that changedFiles missed (see TaskResult).
 	partialWork?: TaskResult["partialWork"];
-	// The EFFECTIVE per-call timeout (ms) this task runs under (task ?? batch override),
-	// surfaced so the operator can see the active budget. Absent -> agent config / default.
+	// The EFFECTIVE per-call timeout (ms) this task runs under (task ?? task recipe ??
+	// batch), surfaced so the operator can see the active budget. Absent -> agent
+	// config / default.
 	callTimeoutMs?: number;
+	// The config recipe id that applies to this task (its own selection, else the
+	// batch-level default when it applies), so a batch view answers which vetted recipe
+	// each task runs -- id only, never prompts, env values, or manifest content.
+	recipe?: string;
 	// The APPROVED manifest content digest for the task's effective manifest reference
 	// (task override, else the batch default), so a receipt answers which execution
 	// surface was approved and run. Participant provenance is `participants` below.
@@ -674,10 +751,18 @@ export function describeBatch(c: Batch, deps: BatchEngineDeps): BatchView {
 			...(t.branch !== undefined && { branch: t.branch }),
 			...(t.worktreePath !== undefined && { worktreePath: t.worktreePath }),
 			...(t.jobId !== undefined && { run_id: t.jobId }),
-			// The effective budget for this task (task override beats batch), so status shows
-			// the active value without the caller re-deriving the precedence.
-			...((t.callTimeoutMs ?? c.callTimeoutMs) !== undefined && {
-				callTimeoutMs: t.callTimeoutMs ?? c.callTimeoutMs,
+			// The effective budget for this task (task override beats its recipe default,
+			// which beats the batch value), so status shows the active value without the
+			// caller re-deriving the precedence. Same chain as launchWave's.
+			...((t.callTimeoutMs ?? taskRecipeDefaults(c, t)?.callTimeoutMs ?? c.callTimeoutMs) !==
+				undefined && {
+				callTimeoutMs:
+					t.callTimeoutMs ?? taskRecipeDefaults(c, t)?.callTimeoutMs ?? c.callTimeoutMs,
+			}),
+			// The vetted recipe this task runs (own selection, else the applicable batch
+			// default): id from the approved receipt, falling back to the authored id.
+			...((taskApprovedRecipe(c, t)?.id ?? t.recipe) !== undefined && {
+				recipe: taskApprovedRecipe(c, t)?.id ?? t.recipe,
 			}),
 			...(taskApprovedBinding(c, t) !== undefined && {
 				manifestDigest: taskApprovedBinding(c, t)?.manifestDigest,

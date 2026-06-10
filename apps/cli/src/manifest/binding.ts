@@ -264,9 +264,9 @@ export function readJobManifest(p: {
 
 // A config recipe resolved to its effective execution surface: identity +
 // provenance + mode + runtime defaults + the manifest binding (digest + safe
-// participant summary). Plan-step `recipe` (Phase 3) binds this into the plan
-// approval artifact at the chit_plan_start gate; batch-task consumption (Phase 4)
-// is still to come.
+// participant summary). Plan-step `recipe` binds this into the plan approval
+// artifact at the chit_plan_start gate; batch-level and batch-task `recipe` bind
+// it the same way at the chit_batch_start gate.
 export interface ResolvedRecipe {
 	id: string;
 	origin?: ConfigOrigin;
@@ -288,7 +288,7 @@ export interface RecipeResolutionRequest {
 	configCwd: string;
 }
 
-// The injectable dep shape the plan gate uses to resolve a step's recipe,
+// The injectable dep shape the plan and batch gates use to resolve a recipe,
 // mirroring ResolveManifestBinding: the real implementation loads fresh config per
 // call, so a recipe redefined between dry run and confirm surfaces as a hash
 // mismatch instead of being pinned away. Throws ManifestBindingError when the

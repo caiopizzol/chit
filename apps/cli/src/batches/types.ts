@@ -1,6 +1,7 @@
 import type {
 	AuditParticipantSnapshot,
 	BatchManifestBindings,
+	BatchRecipeBindings,
 	LoopStopStatus,
 	LoopVerdict,
 	RequiredCheck,
@@ -109,19 +110,29 @@ export interface BatchTask {
 	// tasks with overlapping claims are never run concurrently (the scheduler
 	// serializes them). Required: empty is allowed ONLY with allowPathOverlap.
 	claimedPaths: string[];
-	// Opt-in to running with no/again-overlapping path claims. An empty claimedPaths
+	// Opt-in to running with no/overlapping path claims. An empty claimedPaths
 	// is rejected at start unless this is set; when set, the task is treated as
 	// overlapping everything (it runs alone, never concurrent with another task).
 	allowPathOverlap?: boolean;
+	// The config recipe this task selected (a vetted manifest reference + safe runtime
+	// defaults). Mutually exclusive with an AUTHORED manifestPath; startBatch stamps the
+	// recipe's RESOLVED manifest reference onto manifestPath below, so launch, drift
+	// re-verification, and receipts read one reference shape for recipe-backed and
+	// direct-manifest tasks alike (mirroring the plan step record).
+	recipe?: string;
 	// Per-task converge manifest override: absolute, or repo-root-relative (then read
 	// from the task worktree's checkout of the batch base). Resolution order:
 	// task.manifestPath -> batch.manifestPath -> the bundled default converge manifest.
 	manifestPath?: string;
+	// Per-task iteration budget. Precedence (closest wins): task -> the task recipe's
+	// default -> the batch-level budget (which already folds the batch recipe's default).
+	maxIterations?: number;
 	// Per-task chit-executed verification commands. Precedence (closest declared wins,
 	// never a merge): task -> batch -> the manifest policy's requiredChecks.
 	requiredChecks?: RequiredCheck[];
-	// Per-task call-timeout override (ms). Precedence (closest wins): task -> batch ->
-	// the agents' configured callTimeoutMs (or the adapter default).
+	// Per-task call-timeout override (ms). Precedence (closest wins): task -> the task
+	// recipe's default -> batch -> the agents' configured callTimeoutMs (or the
+	// adapter default).
 	callTimeoutMs?: number;
 	// Filled in once the worktree is created and the job is launched.
 	worktreePath?: string; // absolute, recorded so nothing recomputes it
@@ -152,6 +163,15 @@ export interface Batch {
 	baseBranch: string; // the ref task branches/worktrees are created from
 	baseSha: string; // resolved at start, so every task worktree shares one base
 	maxParallel: number;
+	// The EFFECTIVE per-task iteration budget the gate bound (explicit input, else the
+	// batch recipe's default, else the engine default), persisted so every later wave
+	// launches with the approved budget. Optional: records that predate the field fall
+	// back to the advance-time default.
+	maxIterations?: number;
+	// The batch-level config recipe id (a default for every task without its own recipe
+	// or manifestPath). When set, startBatch stamps the recipe's RESOLVED manifest
+	// reference onto manifestPath below, so the launch path reads one reference shape.
+	recipe?: string;
 	// Batch-level default converge manifest (absolute, or repo-root-relative), applied
 	// to any task without its own manifestPath. Undefined -> the bundled default.
 	manifestPath?: string;
@@ -161,6 +181,11 @@ export interface Batch {
 	// to run the task when it no longer matches. Absent on a binding-free batch and on
 	// records that predate the binding.
 	manifests?: BatchManifestBindings;
+	// The APPROVED recipe receipts (batch-level default + per-task selections) from the
+	// gate's dry run: identity, provenance, and runtime defaults. The recipes' resolved
+	// manifest bindings live in `manifests` under the same batch/task slot -- one
+	// binding shape, never a second manifest vocabulary.
+	recipes?: BatchRecipeBindings;
 	// Batch-level chit-executed verification, applied to any task without its own
 	// requiredChecks (a task's override wins; the manifest policy's are the fallback).
 	requiredChecks?: RequiredCheck[];

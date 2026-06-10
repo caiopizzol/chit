@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ManifestBinding, RequiredCheck } from "@chit-run/core";
+import type { ManifestBinding, RecipeReceipt, RequiredCheck } from "@chit-run/core";
 import type { LoopJobRecord } from "../jobs/types.ts";
 import {
 	advanceBatch,
@@ -31,7 +31,9 @@ class FakeJobs {
 		manifestPath?: string;
 		manifestDigest?: string;
 		manifestParticipants?: LaunchJobParams["manifestParticipants"];
+		recipe?: LaunchJobParams["recipe"];
 		scope: string;
+		maxIterations: number;
 		requiredChecks?: RequiredCheck[];
 		callTimeoutMs?: number;
 		worktree: LaunchJobParams["worktree"];
@@ -72,7 +74,9 @@ class FakeJobs {
 			manifestPath: p.manifestPath,
 			manifestDigest: p.manifestDigest,
 			manifestParticipants: p.manifestParticipants,
+			recipe: p.recipe,
 			scope: p.scope,
+			maxIterations: p.maxIterations,
 			requiredChecks: p.requiredChecks,
 			callTimeoutMs: p.callTimeoutMs,
 			worktree: p.worktree,
@@ -1243,5 +1247,129 @@ describe("launch-time manifest binding verification (batch tasks)", () => {
 			manifests: { batch: engineBinding("manifests/default.json", "sha256:aaaa") },
 		});
 		expect(taskOf(c2, "a").status).toBe("running");
+	});
+});
+
+// --- recipe-backed tasks: stamping, launch wiring, budgets, drift, views -------
+
+function engineReceipt(over: Partial<RecipeReceipt> = {}): RecipeReceipt {
+	return {
+		id: "deep-feature",
+		origin: { source: "repo", path: "chit.config.json" },
+		mode: "converge",
+		maxIterations: 4,
+		callTimeoutMs: 1200000,
+		...over,
+	};
+}
+
+describe("recipe-backed batch tasks (approved receipts reach the launch)", () => {
+	test("startBatch stamps recipe-resolved manifest references and persists the receipts", () => {
+		const c = startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [task("a", { recipe: "quick-fix" }), task("b")],
+			maxParallel: 2,
+			recipe: "deep-feature",
+			// The gate's effective batch knobs (the batch recipe's defaults folded in):
+			// the engine reads these, never the batch receipt's defaults directly.
+			maxIterations: 4,
+			callTimeoutMs: 1200000,
+			manifests: {
+				batch: engineBinding("manifests/converge.json", "sha256:aaaa"),
+				tasks: { a: engineBinding("manifests/quick.json", "sha256:bbbb") },
+			},
+			recipes: {
+				batch: engineReceipt(),
+				tasks: { a: engineReceipt({ id: "quick-fix", maxIterations: 2, callTimeoutMs: 60000 }) },
+			},
+		});
+		// The record reads one manifest reference shape for both kinds of task.
+		expect(c.recipe).toBe("deep-feature");
+		expect(c.manifestPath).toBe("manifests/converge.json");
+		expect(c.maxIterations).toBe(4);
+		expect(taskOf(c, "a").manifestPath).toBe("manifests/quick.json");
+		expect(taskOf(c, "b").manifestPath).toBeUndefined(); // falls back to the batch default
+		// Launches carry the applicable receipt + the recipe's budgets.
+		const a = present(
+			jobs.launched.find((l) => l.scope.endsWith("-a")),
+			"launched a",
+		);
+		expect(a.manifestPath).toBe("manifests/quick.json");
+		expect(a.manifestDigest).toBe("sha256:bbbb");
+		expect(a.recipe?.id).toBe("quick-fix");
+		expect(a.maxIterations).toBe(2);
+		expect(a.callTimeoutMs).toBe(60000);
+		const b = present(
+			jobs.launched.find((l) => l.scope.endsWith("-b")),
+			"launched b",
+		);
+		expect(b.manifestPath).toBe("manifests/converge.json");
+		expect(b.manifestDigest).toBe("sha256:aaaa");
+		expect(b.recipe?.id).toBe("deep-feature");
+		expect(b.maxIterations).toBe(4); // the batch-level effective budget
+		expect(b.callTimeoutMs).toBe(1200000);
+		// The view surfaces each task's recipe id + approved digest + effective timeout.
+		const v = describeBatch(c, deps);
+		const va = present(
+			v.tasks.find((t) => t.id === "a"),
+			"view a",
+		);
+		expect(va.recipe).toBe("quick-fix");
+		expect(va.manifestDigest).toBe("sha256:bbbb");
+		expect(va.callTimeoutMs).toBe(60000);
+		const vb = present(
+			v.tasks.find((t) => t.id === "b"),
+			"view b",
+		);
+		expect(vb.recipe).toBe("deep-feature");
+		expect(vb.manifestDigest).toBe("sha256:aaaa");
+	});
+
+	test("an explicit task budget beats its recipe default; the persisted budget survives an advance", () => {
+		startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [
+				task("a", { recipe: "quick-fix", maxIterations: 7 }),
+				task("b", { dependencies: ["a"] }),
+			],
+			maxParallel: 1,
+			recipe: "deep-feature",
+			maxIterations: 4,
+			manifests: {
+				batch: engineBinding("manifests/converge.json", "sha256:aaaa"),
+				tasks: { a: engineBinding("manifests/quick.json", "sha256:bbbb") },
+			},
+			recipes: {
+				batch: engineReceipt(),
+				tasks: { a: engineReceipt({ id: "quick-fix", maxIterations: 2 }) },
+			},
+		});
+		const a = present(jobs.launched[0], "launched a");
+		expect(a.maxIterations).toBe(7); // explicit task value beats the recipe's 2
+		// Settle a, then advance with the DEFAULT advance budget (3): the dependent
+		// launches with the PERSISTED approved batch budget (4), not the advance default.
+		jobs.finish(a.jobId, { stopStatus: "converged" });
+		advanceBatch(store, deps, "b1");
+		const b = present(jobs.launched[1], "launched b");
+		expect(b.maxIterations).toBe(4);
+		expect(b.recipe?.id).toBe("deep-feature");
+	});
+
+	test("drift under a recipe's resolved manifest refuses the task like a direct reference", () => {
+		deps.resolveManifestBinding = () => engineBinding("manifests/quick.json", "sha256:CHANGED");
+		const c = startBatch(store, deps, {
+			id: "b1",
+			cwd,
+			tasks: [task("a", { recipe: "quick-fix" })],
+			maxParallel: 2,
+			manifests: { tasks: { a: engineBinding("manifests/quick.json", "sha256:bbbb") } },
+			recipes: { tasks: { a: engineReceipt({ id: "quick-fix" }) } },
+		});
+		const a = taskOf(c, "a");
+		expect(a.status).toBe("failed");
+		expect(a.error).toContain("manifest execution drift");
+		expect(jobs.launched).toHaveLength(0);
 	});
 });

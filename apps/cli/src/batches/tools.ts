@@ -9,23 +9,26 @@ import {
 	type BatchApprovalArtifact,
 	type BatchApprovalBase,
 	type BatchManifestBindings,
+	type BatchRecipeBindings,
 	buildBatchApprovalArtifact,
 	canonicalBatchApprovalPayload,
 	type ManifestBinding,
+	type RecipeReceipt,
 	type RequiredCheck,
 } from "@chit-run/core";
-import { normalizeManifestReference } from "../manifest/binding.ts";
+import { normalizeManifestReference, type ResolvedRecipe } from "../manifest/binding.ts";
 import { type BatchEngineDeps, type BatchView, describeBatch, startBatch } from "./engine.ts";
-import { PlanError, planTasks, type TaskInput } from "./plan.ts";
+import { assertRecipeId, PlanError, planTasks, type TaskInput } from "./plan.ts";
 import type { BatchStore } from "./store.ts";
 import { type BatchTask, MAX_PARALLEL_CAP } from "./types.ts";
 import { repoToplevel, resolveBaseSha } from "./worktree.ts";
 
 // The effective batch knobs the gate binds and startBatch executes with when the caller
 // omits them. maxParallel mirrors the chit_batch_start schema default; maxIterations
-// mirrors both the schema default and the engine's DEFAULT_MAX_ITERATIONS. The gate always
-// passes the resolved value through to startBatch, so the engine's own `?? default` is a
-// no-op and the artifact's bound knob can never diverge from what actually runs.
+// mirrors the engine's DEFAULT_MAX_ITERATIONS (the schema leaves max_iterations optional
+// so a batch recipe's default can apply: explicit input > batch recipe > this). The gate
+// always passes the resolved value through to startBatch, so the engine's own `?? default`
+// is a no-op and the artifact's bound knob can never diverge from what actually runs.
 const DEFAULT_MAX_PARALLEL = 2;
 const DEFAULT_MAX_ITERATIONS = 3;
 
@@ -52,6 +55,10 @@ export interface BatchStartInput {
 	tasks: TaskInput[];
 	maxParallel?: number;
 	baseBranch?: string;
+	// Batch-level config recipe id: a vetted manifest reference + safe runtime defaults,
+	// applied to every task without its own recipe or manifestPath. Mutually exclusive
+	// with manifestPath (the recipe supplies the manifest).
+	recipe?: string;
 	manifestPath?: string;
 	maxIterations?: number;
 	requiredChecks?: RequiredCheck[];
@@ -89,6 +96,7 @@ export type BatchStartResult =
 			base: BatchApprovalBase;
 			maxParallel: number;
 			maxIterations: number;
+			recipe?: string;
 			manifestPath?: string;
 			requiredChecks?: RequiredCheck[];
 			callTimeoutMs?: number;
@@ -96,6 +104,10 @@ export type BatchStartResult =
 			// digest + safe participant execution summary, bound by the approval hash so
 			// the operator reviews the execution surface, not just a path string.
 			manifests?: BatchManifestBindings;
+			// The resolved recipe receipts (batch default + per-task selections): identity,
+			// provenance, and runtime defaults, also hash-bound, so the preview shows exactly
+			// what every recipe resolved to before approval (next to its manifest binding).
+			recipes?: BatchRecipeBindings;
 			approvalHash: string;
 	  }
 	| { launched: true; view: BatchView; base: BatchApprovalBase; approvalHash: string };
@@ -104,7 +116,8 @@ export type BatchStartResult =
 // so it is testable without resolving a real repo or spawning the detached converge workers
 // the real deps launch. It is universally gated:
 //   - confirm omitted/false -> DRY RUN: normalize the task graph, resolve the base ref to a
-//     concrete commit, resolve manifest paths, apply the launch-time knob defaults/caps, build
+//     concrete commit, resolve manifest paths and recipe selections (each recipe to its
+//     receipt + manifest binding), apply the launch-time knob defaults/caps, build
 //     the approval artifact, and return launched:false with the normalized tasks, base, knobs,
 //     and hash. It creates NO batch record, worktree, job, or branch -- it only reads git to
 //     resolve the base commit, which is part of what the operator approves.
@@ -121,6 +134,15 @@ export function runBatchStart(
 	deps: BatchEngineDeps,
 	genId: () => string,
 ): BatchStartResult {
+	// Batch-level recipe vs manifest_path: same mutual exclusivity as the per-task rule
+	// planTasks enforces (the recipe supplies the manifest), checked BEFORE any git read.
+	if (input.recipe !== undefined && input.manifestPath !== undefined) {
+		throw new PlanError(
+			"recipe and manifest_path are mutually exclusive (the recipe supplies the manifest)",
+		);
+	}
+	if (input.recipe !== undefined) assertRecipeId(input.recipe, "recipe");
+
 	// Normalize manifest references up front so the dry-run artifact and the confirmed
 	// launch bind/run the SAME identity: absolute paths stay themselves; relative paths
 	// become repo-root relative (rejecting repo escapes) and are read from the git tree
@@ -156,14 +178,18 @@ export function runBatchStart(
 	const sha = resolveBaseSha(deps.git, callerCheckout, ref);
 	const base: BatchApprovalBase = { ref, sha };
 
-	// Bind every manifest reference to its EFFECTIVE execution surface: content digest
-	// (from the git tree at the approved base for a repo-relative path, the filesystem
-	// for an absolute one) + safe participant execution summary. Both the dry run and
-	// the confirm pass through here, so an edited manifest or a config change that
-	// re-routes participants changes the hash and the confirm refuses.
-	const manifests = resolveBatchManifests(
+	// Bind every manifest reference AND recipe selection to its EFFECTIVE execution
+	// surface: a manifest reference binds content digest (from the git tree at the
+	// approved base for a repo-relative path, the filesystem for an absolute one) + safe
+	// participant execution summary; a recipe binds its receipt (identity, provenance,
+	// runtime defaults) AND its resolved manifest binding under the same batch/task
+	// slot, so both kinds share one binding shape. Both the dry run and the confirm
+	// pass through here, so an edited manifest, a redefined recipe, or a config change
+	// that re-routes participants changes the hash and the confirm refuses.
+	const { manifests, recipes } = resolveBatchBindings(
 		normalizedTasks,
 		batchManifest,
+		input.recipe,
 		base.sha,
 		callerCheckout,
 		cwd,
@@ -171,12 +197,17 @@ export function runBatchStart(
 	);
 
 	// Apply the SAME defaults/caps startBatch will execute with, and bind those effective values
-	// (not the raw inputs) so the operator approves what actually runs.
+	// (not the raw inputs) so the operator approves what actually runs. An explicit batch
+	// override beats the batch recipe's default; the engine default is the last fallback.
+	// Task-level precedence (task value > task recipe default > these) is applied at launch
+	// from the same hash-bound sources.
 	const maxParallel = Math.max(
 		1,
 		Math.min(input.maxParallel ?? DEFAULT_MAX_PARALLEL, MAX_PARALLEL_CAP),
 	);
-	const maxIterations = input.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+	const maxIterations =
+		input.maxIterations ?? recipes?.batch?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+	const callTimeoutMs = input.callTimeoutMs ?? recipes?.batch?.callTimeoutMs;
 
 	const artifact = buildBatchApprovalArtifact({
 		base,
@@ -185,10 +216,12 @@ export function runBatchStart(
 		tasks: normalizedTasks,
 		maxParallel,
 		maxIterations,
+		...(input.recipe !== undefined && { recipe: input.recipe }),
 		...(batchManifest !== undefined && { manifestPath: batchManifest }),
 		...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
-		...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+		...(callTimeoutMs !== undefined && { callTimeoutMs }),
 		...(manifests !== undefined && { manifests }),
+		...(recipes !== undefined && { recipes }),
 	});
 	const hash = batchApprovalHash(artifact);
 
@@ -200,10 +233,12 @@ export function runBatchStart(
 			base,
 			maxParallel,
 			maxIterations,
+			...(input.recipe !== undefined && { recipe: input.recipe }),
 			...(batchManifest !== undefined && { manifestPath: batchManifest }),
 			...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
-			...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+			...(callTimeoutMs !== undefined && { callTimeoutMs }),
 			...(manifests !== undefined && { manifests }),
+			...(recipes !== undefined && { recipes }),
 			approvalHash: hash,
 		};
 	}
@@ -230,47 +265,116 @@ export function runBatchStart(
 		// already matched the sha, so every task worktree branches from exactly what was approved.
 		baseBranch: base.sha,
 		maxIterations,
+		...(input.recipe !== undefined && { recipe: input.recipe }),
 		...(batchManifest !== undefined && { manifestPath: batchManifest }),
 		...(input.requiredChecks !== undefined && { requiredChecks: input.requiredChecks }),
-		...(input.callTimeoutMs !== undefined && { callTimeoutMs: input.callTimeoutMs }),
+		...(callTimeoutMs !== undefined && { callTimeoutMs }),
 		...(manifests !== undefined && { manifests }),
+		...(recipes !== undefined && { recipes }),
 	});
 	return { launched: true, view: describeBatch(batch, deps), base, approvalHash: hash };
 }
 
-// Resolve the binding for the batch-level default manifest and every per-task
-// override. Returns undefined when nothing is bound: no manifest references, or the
-// deps carry no resolver (test harnesses; production always wires one). A reference
-// that cannot be resolved -- missing from the tree at the approved base, a symlink
-// object, bad JSON, an unresolvable participant -- throws PlanError naming the
-// surface, so a bad batch is refused at the gate like a structural failure.
-function resolveBatchManifests(
+// Resolve the binding for the batch-level default manifest, every per-task override,
+// and every recipe selection (batch-level + per-task). A direct manifest reference
+// resolves to its manifest binding; a recipe resolves to its receipt (recipes record)
+// AND its manifest binding (manifests record) under the same batch/task slot, so both
+// kinds share one binding shape for hashing, persistence, and launch-time drift
+// re-verification. Records are undefined when nothing is bound. A reference that
+// cannot be resolved -- an unknown recipe, missing from the tree at the approved
+// base, a symlink object, bad JSON, an unresolvable participant -- throws PlanError
+// naming the surface, so a bad batch is refused at the gate like a structural
+// failure. Direct manifests are skipped when the deps carry no manifest resolver
+// (test harnesses; production always wires one), but a recipe-naming batch with no
+// recipe resolver wired is REFUSED: silently launching without the recipe's manifest
+// would run an execution surface nobody reviewed.
+function resolveBatchBindings(
 	tasks: BatchTask[],
 	batchManifest: string | undefined,
+	batchRecipe: string | undefined,
 	baseSha: string,
 	callerCheckout: string,
 	cwd: string,
 	deps: BatchEngineDeps,
-): BatchManifestBindings | undefined {
-	if (deps.resolveManifestBinding === undefined) return undefined;
-	const resolveBinding = deps.resolveManifestBinding;
-	const bind = (manifestPath: string, context: string): ManifestBinding => {
+): { manifests?: BatchManifestBindings; recipes?: BatchRecipeBindings } {
+	const bindRecipe = (recipeId: string, context: string): ResolvedRecipe => {
+		if (deps.resolveRecipe === undefined) {
+			throw new PlanError(
+				`${context}: recipe resolution is not available in this context; a recipe-backed batch cannot be reviewed or launched without resolving the recipe`,
+			);
+		}
+		try {
+			return deps.resolveRecipe({ recipeId, baseSha, gitCwd: callerCheckout, configCwd: cwd });
+		} catch (e) {
+			if (e instanceof PlanError) throw e;
+			throw new PlanError(`${context}: ${(e as Error).message}`);
+		}
+	};
+	const bindManifest = (manifestPath: string, context: string): ManifestBinding => {
+		const resolveBinding = deps.resolveManifestBinding;
+		if (resolveBinding === undefined) {
+			throw new PlanError(`${context}: manifest binding resolution is not available`);
+		}
 		try {
 			return resolveBinding({ manifestPath, baseSha, gitCwd: callerCheckout, configCwd: cwd });
 		} catch (e) {
 			throw new PlanError(`${context}: ${(e as Error).message}`);
 		}
 	};
+
 	const taskBindings: Record<string, ManifestBinding> = {};
+	const taskRecipes: Record<string, RecipeReceipt> = {};
 	for (const t of tasks) {
-		if (t.manifestPath === undefined) continue;
-		taskBindings[t.id] = bind(t.manifestPath, `task ${JSON.stringify(t.id)} manifestPath`);
+		if (t.recipe !== undefined) {
+			const resolved = bindRecipe(t.recipe, `task ${JSON.stringify(t.id)} recipe`);
+			taskBindings[t.id] = resolved.binding;
+			taskRecipes[t.id] = recipeReceiptOf(resolved);
+			continue;
+		}
+		if (t.manifestPath === undefined || deps.resolveManifestBinding === undefined) continue;
+		taskBindings[t.id] = bindManifest(t.manifestPath, `task ${JSON.stringify(t.id)} manifestPath`);
 	}
-	const batchBinding =
-		batchManifest !== undefined ? bind(batchManifest, "manifest_path") : undefined;
-	if (batchBinding === undefined && Object.keys(taskBindings).length === 0) return undefined;
+
+	let batchBinding: ManifestBinding | undefined;
+	let batchReceipt: RecipeReceipt | undefined;
+	if (batchRecipe !== undefined) {
+		const resolved = bindRecipe(batchRecipe, "recipe");
+		batchBinding = resolved.binding;
+		batchReceipt = recipeReceiptOf(resolved);
+	} else if (batchManifest !== undefined && deps.resolveManifestBinding !== undefined) {
+		batchBinding = bindManifest(batchManifest, "manifest_path");
+	}
+
+	const manifests: BatchManifestBindings | undefined =
+		batchBinding === undefined && Object.keys(taskBindings).length === 0
+			? undefined
+			: {
+					...(batchBinding !== undefined && { batch: batchBinding }),
+					...(Object.keys(taskBindings).length > 0 && { tasks: taskBindings }),
+				};
+	const recipes: BatchRecipeBindings | undefined =
+		batchReceipt === undefined && Object.keys(taskRecipes).length === 0
+			? undefined
+			: {
+					...(batchReceipt !== undefined && { batch: batchReceipt }),
+					...(Object.keys(taskRecipes).length > 0 && { tasks: taskRecipes }),
+				};
 	return {
-		...(batchBinding !== undefined && { batch: batchBinding }),
-		...(Object.keys(taskBindings).length > 0 && { tasks: taskBindings }),
+		...(manifests !== undefined && { manifests }),
+		...(recipes !== undefined && { recipes }),
+	};
+}
+
+// The hash-bound receipt of a resolved recipe: identity + provenance + runtime
+// defaults, WITHOUT the manifest binding (that is bound separately in the manifests
+// record -- reference, not duplicate). Mirrors the plan gate's recipe record shape.
+function recipeReceiptOf(resolved: ResolvedRecipe): RecipeReceipt {
+	return {
+		id: resolved.id,
+		...(resolved.origin !== undefined && { origin: resolved.origin }),
+		mode: resolved.mode,
+		...(resolved.maxIterations !== undefined && { maxIterations: resolved.maxIterations }),
+		...(resolved.callTimeoutMs !== undefined && { callTimeoutMs: resolved.callTimeoutMs }),
+		...(resolved.description !== undefined && { description: resolved.description }),
 	};
 }

@@ -2560,6 +2560,9 @@ let batchDeps: BatchEngineDeps = {
 			...(p.manifestParticipants !== undefined && {
 				manifestParticipants: p.manifestParticipants,
 			}),
+			// The approved recipe receipt (when the task runs one), so the loop header and
+			// audit receipts stamp which vetted recipe ran.
+			...(p.recipe !== undefined && { recipe: p.recipe }),
 			maxIterations: p.maxIterations,
 			...(p.requiredChecks && { requiredChecks: p.requiredChecks }),
 			...(p.callTimeoutMs !== undefined && { callTimeoutMs: p.callTimeoutMs }),
@@ -2570,6 +2573,7 @@ let batchDeps: BatchEngineDeps = {
 		return { jobId: r.jobId, loopId: r.loopId };
 	},
 	resolveManifestBinding: resolveManifestBindingReal,
+	resolveRecipe: resolveRecipeReal,
 	getJob: (id) => jobStore.get(id),
 	cancelJob: (id) => {
 		requestJobCancel(jobStore, id);
@@ -2629,11 +2633,25 @@ const batchTaskSchema = z.object({
 		.boolean()
 		.optional()
 		.describe("Opt-in to running with no/overlapping claims; the task then runs alone."),
+	recipe: z
+		.string()
+		.optional()
+		.describe(
+			"A vetted config recipe id (kebab-case, from the recipes in chit config) for this task. The recipe supplies the converge manifest and default budgets; the dry run shows what it resolves to and the approval hash binds it. Mutually exclusive with manifestPath; overrides the batch-level recipe for this task.",
+		),
 	manifestPath: z
 		.string()
 		.optional()
 		.describe(
-			"Per-task converge manifest override (absolute or relative to cwd). Omit to use the bundled default (write-capable Claude implementer + read-only Codex reviewer). To swap the pairing (e.g. a Codex implementer + Claude reviewer), point this at your own converge manifest; its participants can be inline, or reference reusable roles defined in ~/.config/chit/config.json.",
+			"Per-task converge manifest override (absolute or relative to cwd). Mutually exclusive with recipe. Omit both to use the batch-level recipe/manifest_path, else the bundled default (write-capable Claude implementer + read-only Codex reviewer). To swap the pairing (e.g. a Codex implementer + Claude reviewer), point this at your own converge manifest; its participants can be inline, or reference reusable roles defined in ~/.config/chit/config.json.",
+		),
+	maxIterations: z
+		.number()
+		.int()
+		.min(1)
+		.optional()
+		.describe(
+			"Per-task iteration budget; overrides the task recipe's default and the batch-level max_iterations for this task (closest wins).",
 		),
 	requiredChecks: z
 		.array(requiredCheckInputSchema)
@@ -2671,7 +2689,7 @@ server.registerTool(
 	"chit_batch_start",
 	{
 		description:
-			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Universally gated by approval: with confirm omitted or false it is a DRY RUN that normalizes and validates the task graph, resolves the base ref to a concrete commit SHA, returns the normalized tasks plus resolved base plus an approvalHash, and creates NOTHING (no batch record, worktree, job, or branch). With confirm:true it re-normalizes the graph, re-resolves the base, recomputes the hash over the tasks, base, and launch knobs, and REFUSES unless your approval_hash matches, so a task graph, base, or knob edited after approval cannot start on an old hash. On a match it launches the initial runnable wave (no-dependency tasks, up to max_parallel) from the approved commit SHA (pinned even if the ref moved) and returns the batch_id plus the batch view. Then drive it with chit_wait (it blocks until a job finishes or a task becomes runnable, instead of polling) followed by chit_batch_advance to launch the next wave, repeating until the batch is terminal. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: task.manifestPath > batch manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). To swap the pairing, point manifestPath at your own converge manifest (participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
+			"Start a batch: run several converge tasks in parallel, each in its own git worktree, as background jobs. This is the right tool for parallel work; for a single unattended task use chit_start with mode background instead. Universally gated by approval: with confirm omitted or false it is a DRY RUN that normalizes and validates the task graph, resolves the base ref to a concrete commit SHA, returns the normalized tasks plus resolved base plus an approvalHash, and creates NOTHING (no batch record, worktree, job, or branch). With confirm:true it re-normalizes the graph, re-resolves the base, recomputes the hash over the tasks, base, and launch knobs, and REFUSES unless your approval_hash matches, so a task graph, base, or knob edited after approval cannot start on an old hash. On a match it launches the initial runnable wave (no-dependency tasks, up to max_parallel) from the approved commit SHA (pinned even if the ref moved) and returns the batch_id plus the batch view. Then drive it with chit_wait (it blocks until a job finishes or a task becomes runnable, instead of polling) followed by chit_batch_advance to launch the next wave, repeating until the batch is terminal. No auto-merge: the output is reviewable worktree branches. Each task's worktree branches from the batch base (base_branch); a task's `dependencies` only GATE when it launches (after the deps reach review_ready) and do NOT merge the deps' changes into it, so a task never sees another task's diff. Manifest resolution per task: the task's recipe or manifestPath > the batch recipe or manifest_path > the bundled default converge manifest (a write-capable Claude implementer + read-only Codex reviewer). A recipe is a vetted config recipe id; the dry run resolves every recipe and manifest reference to its content digest and participant summary, and the approval hash binds them, so an edited recipe, manifest, or config refuses the start. To swap the pairing, select a recipe (or point manifestPath at your own converge manifest -- participants inline, or referencing reusable roles defined in ~/.config/chit/config.json).",
 		inputSchema: {
 			tasks: z
 				.array(batchTaskSchema)
@@ -2683,16 +2701,26 @@ server.registerTool(
 				.describe("Any path in the target repo (defaults to the server cwd)"),
 			max_parallel: z.number().int().min(1).default(2).describe("Max concurrent tasks. Default 2."),
 			base_branch: z.string().optional().describe("Ref task worktrees branch from. Default: HEAD."),
+			recipe: z
+				.string()
+				.optional()
+				.describe(
+					"Batch-level vetted config recipe id: supplies the default converge manifest and default budgets for every task without its own recipe or manifestPath. Mutually exclusive with manifest_path.",
+				),
 			manifest_path: z
 				.string()
 				.optional()
-				.describe("Batch-level default converge manifest (absolute or relative to cwd)."),
+				.describe(
+					"Batch-level default converge manifest (absolute or relative to cwd). Mutually exclusive with recipe.",
+				),
 			max_iterations: z
 				.number()
 				.int()
 				.min(1)
-				.default(3)
-				.describe("Per-task iteration budget. Default 3."),
+				.optional()
+				.describe(
+					"Per-task iteration budget. Default: the batch recipe's maxIterations when a recipe is set, else 3. A task's maxIterations (or its own recipe's default) overrides this for that task.",
+				),
 			required_checks: z
 				.array(requiredCheckInputSchema)
 				.optional()
@@ -2717,7 +2745,7 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe(
-					"The approvalHash from a prior chit_batch_start dry run of this exact task graph, base, and knobs (max_parallel, max_iterations, manifest_path, required_checks, call_timeout_ms). Required when confirm is true; the start is refused if it does not match the recomputed hash.",
+					"The approvalHash from a prior chit_batch_start dry run of this exact task graph, base, and knobs (max_parallel, max_iterations, recipe, manifest_path, required_checks, call_timeout_ms, plus every resolved recipe and manifest binding). Required when confirm is true; the start is refused if it does not match the recomputed hash.",
 				),
 		},
 	},
@@ -2726,6 +2754,7 @@ server.registerTool(
 		cwd,
 		max_parallel,
 		base_branch,
+		recipe,
 		manifest_path,
 		max_iterations,
 		required_checks,
@@ -2745,8 +2774,9 @@ server.registerTool(
 					tasks,
 					maxParallel: max_parallel,
 					...(base_branch !== undefined && { baseBranch: base_branch }),
+					...(recipe !== undefined && { recipe }),
 					...(manifest_path !== undefined && { manifestPath: manifest_path }),
-					maxIterations: max_iterations,
+					...(max_iterations !== undefined && { maxIterations: max_iterations }),
 					...(required_checks !== undefined && { requiredChecks: required_checks }),
 					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
 					...(confirm !== undefined && { confirm }),
@@ -2767,15 +2797,17 @@ server.registerTool(
 					base: result.base,
 					maxParallel: result.maxParallel,
 					maxIterations: result.maxIterations,
+					...(result.recipe !== undefined && { recipe: result.recipe }),
 					...(result.manifestPath !== undefined && { manifestPath: result.manifestPath }),
 					...(result.requiredChecks !== undefined && { requiredChecks: result.requiredChecks }),
 					...(result.callTimeoutMs !== undefined && { callTimeoutMs: result.callTimeoutMs }),
 					...(result.manifests !== undefined && { manifests: result.manifests }),
+					...(result.recipes !== undefined && { recipes: result.recipes }),
 					approvalHash: result.approvalHash,
 					nextAction:
 						"Dry run: nothing was launched and no batch record, worktree, job, or branch was created. " +
-						"Review the task graph, base, and any resolved manifest bindings above, then call chit_batch_start again with the SAME tasks, " +
-						`confirm:true, and approval_hash:${result.approvalHash}. Editing the tasks, base, knobs, a referenced manifest's content, or the config that resolves its participants changes the hash and the start is refused.`,
+						"Review the task graph, base, and any resolved recipes and manifest bindings above, then call chit_batch_start again with the SAME tasks, " +
+						`confirm:true, and approval_hash:${result.approvalHash}. Editing the tasks, base, knobs, a referenced recipe, a manifest's content, or the config that resolves its participants changes the hash and the start is refused.`,
 				});
 			}
 			// Confirmed, hash-matched start: the batch view (leading with batch_id), plus the base and

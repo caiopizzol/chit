@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { RecipeReceipt } from "../config/types.ts";
 import type { ManifestBinding } from "../manifest/binding.ts";
 import {
 	type BatchApprovalBase,
@@ -123,6 +124,7 @@ describe("canonicalBatchApprovalPayload determinism", () => {
 			...INPUT,
 			maxIterations: undefined,
 			manifestPath: undefined,
+			recipe: undefined,
 			requiredChecks: undefined,
 			callTimeoutMs: undefined,
 			tasks: [
@@ -133,7 +135,9 @@ describe("canonicalBatchApprovalPayload determinism", () => {
 					dependencies: [],
 					claimedPaths: ["x"],
 					allowPathOverlap: undefined,
+					recipe: undefined,
 					manifestPath: undefined,
+					maxIterations: undefined,
 					requiredChecks: undefined,
 					callTimeoutMs: undefined,
 				},
@@ -227,6 +231,25 @@ describe("canonicalBatchApprovalPayload determinism", () => {
 		);
 	});
 
+	test("the batch and task recipe ids are bound into the payload", () => {
+		expect(payloadFor({ ...INPUT, recipe: "deep-feature" })).not.toBe(payloadFor(INPUT));
+		expect(
+			payloadFor({
+				...INPUT,
+				tasks: [INPUT.tasks[0], { ...INPUT.tasks[1], recipe: "deep-feature" }],
+			}),
+		).not.toBe(payloadFor(INPUT));
+	});
+
+	test("a per-task maxIterations change is bound into the payload", () => {
+		expect(
+			payloadFor({
+				...INPUT,
+				tasks: [INPUT.tasks[0], { ...INPUT.tasks[1], maxIterations: 7 }],
+			}),
+		).not.toBe(payloadFor(INPUT));
+	});
+
 	test("the batch requiredChecks are bound into the payload", () => {
 		const first = payloadFor(INPUT);
 		expect(payloadFor({ ...INPUT, requiredChecks: [{ command: "bun", args: ["test"] }] })).not.toBe(
@@ -289,12 +312,42 @@ describe("canonicalBatchApprovalPayload determinism", () => {
 		},
 	};
 
+	const RECIPE: RecipeReceipt = {
+		id: "deep-feature",
+		mode: "converge",
+		origin: { source: "global", path: "/config/chit.json" },
+		maxIterations: 5,
+		callTimeoutMs: 1200000,
+		description: "Use the deep loop",
+	};
+
 	test("binding a batch or task manifest changes the payload; an empty binding does not", () => {
 		const none = payloadFor(INPUT);
 		expect(payloadFor({ ...INPUT, manifests: { batch: BINDING } })).not.toBe(none);
 		expect(payloadFor({ ...INPUT, manifests: { tasks: { a: BINDING } } })).not.toBe(none);
 		expect(payloadFor({ ...INPUT, manifests: {} })).toBe(none);
 		expect(payloadFor({ ...INPUT, manifests: { tasks: {} } })).toBe(none);
+	});
+
+	test("binding a batch or task recipe changes the payload; an empty recipe binding does not", () => {
+		const none = payloadFor(INPUT);
+		expect(payloadFor({ ...INPUT, recipes: { batch: RECIPE } })).not.toBe(none);
+		expect(payloadFor({ ...INPUT, recipes: { tasks: { a: RECIPE } } })).not.toBe(none);
+		expect(payloadFor({ ...INPUT, recipes: {} })).toBe(none);
+		expect(payloadFor({ ...INPUT, recipes: { tasks: {} } })).toBe(none);
+	});
+
+	test("a changed recipe default or provenance changes the payload", () => {
+		const bound = payloadFor({ ...INPUT, recipes: { batch: RECIPE } });
+		expect(payloadFor({ ...INPUT, recipes: { batch: { ...RECIPE, maxIterations: 9 } } })).not.toBe(
+			bound,
+		);
+		expect(
+			payloadFor({
+				...INPUT,
+				recipes: { batch: { ...RECIPE, origin: { source: "repo", path: "chit.config.json" } } },
+			}),
+		).not.toBe(bound);
 	});
 
 	test("a changed manifest digest or participant summary changes the payload", () => {
