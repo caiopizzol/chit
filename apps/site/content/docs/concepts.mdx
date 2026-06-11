@@ -17,7 +17,12 @@ A role is a reusable participant profile, defined in the `roles` section of the 
 
 A recipe is a named reference to a manifest you have vetted, defined in the `recipes` section of the same config file. It carries a `mode` (only `converge` today), a `manifestPath` pointing at the manifest, and optional runtime defaults: `maxIterations`, `callTimeoutMs`, and a `description`. That is the whole surface. A recipe never redeclares participants, prompts, checks, or approval policy; all of that stays in the manifest it points at. Recipes are references, not a second place to write routines.
 
-Today recipes are config only: define them, layer them, and read them back in `chit doctor`. Nothing runs from a recipe yet.
+Plans and batches can select recipes by id. A dry run resolves the recipe to its
+manifest, content digest, participant summary, and default budgets, then binds
+that resolved surface into the approval hash. A later recipe, manifest, or
+agent/model change forces re-approval or pauses the launch before a worker runs.
+Studio also shows recipes in the config drawer and shows the approved recipe plus
+bound manifest in a live run's topology.
 
 ## Config layering
 

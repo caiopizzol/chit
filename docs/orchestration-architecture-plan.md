@@ -2,10 +2,13 @@
 
 Status: internal architecture plan. Not a published site page.
 
-This note describes the path from today's Chit to a real orchestrator experience:
-the user defines trusted agents, roles, manifests, and recipes; a planning agent
-can propose which recipe to run; Chit previews the exact execution; the operator
-approves; Chit runs, verifies, records, and visualizes the loop.
+This note describes the path from today's Chit to a real orchestrator
+experience: the user defines trusted agents, roles, manifests, and recipes; a
+planning agent can propose which recipe to run; Chit previews the exact
+execution; the operator approves; Chit runs, verifies, records, and visualizes
+the loop. The recipe foundation is now shipped. The next missing layer is
+structured handoff data between plan steps, so one agent's findings can flow to
+the next step without the chat session becoming the runtime.
 
 The goal is not to compete with Claude Code, Codex, or any agent host. The goal is
 to be the thin runtime underneath them: the place where multi-agent routines are
@@ -27,12 +30,16 @@ part of that pattern:
 - plan and batch starts gated by approval hashes
 - receipts, traces, audit references, and Studio live visibility
 
-The missing layer is a small, explicit object that lets an operator say:
+The recipe layer now supplies the small, explicit object that lets an operator
+say:
 
 > For this class of work, use this planner, this execution manifest, these
 > budgets, these checks, and these approval gates.
 
-That object is a **recipe**.
+That object is a **recipe**. The remaining orchestration gap is dataflow: Chit
+can already flow code through a plan's integration branch, but it does not yet
+have a first-class way for step 1 to produce a structured result that step 2 can
+consume.
 
 ## Vocabulary to hold
 
@@ -47,6 +54,8 @@ That object is a **recipe**.
 - **Recipe**: a named, vetted reference to an execution manifest and safe runtime
   defaults. It does not redeclare the manifest's graph.
 - **Plan**: a reviewed sequence of steps. Each step may select a recipe.
+- **Handoff**: a bounded, structured artifact produced by one applied plan step
+  and consumed by a later step. Handoffs are for dataflow, not code diffs.
 - **Run receipt**: what actually ran: recipe, manifest, agents, models, checks,
   elapsed time, verdicts, artifacts, and audit references.
 
@@ -96,23 +105,30 @@ These are the local facts this plan builds on:
 
 - Config already has agents and roles, layered from built-ins to global config to
   repo `chit.config.json`.
+- Config also has recipes, layered the same way and visible in `chit doctor` and
+  Studio's effective config drawer.
 - Repo config is visible at the repo root and is intentionally not under `.chit/`.
 - Repo config already rejects trust-boundary agent fields such as `env` and
   `strictMcp`.
 - Built-in agent ids are stable anchors and cannot be redefined.
-- Later config layers replace user-defined agents and roles as whole entities,
-  with provenance.
+- Later config layers replace user-defined agents, roles, and recipes as whole
+  entities, with provenance.
 - Plans and batches already use dry-run by default and require `confirm:true`
   plus a matching approval hash to start.
-- Plan steps currently carry optional `manifestPath`, `maxIterations`, and
-  `callTimeoutMs`.
-- The current approval artifacts bind `manifestPath` as a string, not manifest
-  file content.
-- Worker launch paths read manifest files later. That makes content digest
-  binding necessary before recipes become a primary surface.
-- Worker launch paths also load config fresh. That is the right lifecycle
-  behavior, but it means a long plan must compare the current resolved
-  participant summary against the approved one before each step launches.
+- Plan steps and batch tasks may select a recipe by id, or use a direct
+  manifest path for manual expert use. Recipe and direct manifest path are
+  mutually exclusive at each selection point.
+- Approval artifacts bind resolved recipes, direct manifest references, manifest
+  content digests, resolved base commits, launch knobs, and participant
+  execution summaries.
+- Worker launch paths load config fresh and compare the current manifest digest
+  and participant summary with the approved binding before launch. Drift pauses
+  as `needs_human` instead of silently running.
+- Studio reads effective recipes and shows approved recipe plus bound manifest
+  identity in the selected live run topology.
+- Plan handoffs do not exist yet. Plans flow code by applying diffs into the
+  integration branch; they do not yet flow structured non-code results between
+  steps.
 - Converge currently has one verdict-gating reviewer. Multi-review can be
   advisory via a manifest today, but verdict-level co-review is engine work.
 
@@ -156,7 +172,7 @@ Rules:
 
 ## Recipe resolution
 
-Recipe resolution should happen at the same boundary as plan and batch dry-runs:
+Recipe resolution happens at the same boundary as plan and batch dry-runs:
 before anything mutates.
 
 For each selected recipe, resolve:
@@ -178,9 +194,9 @@ not a repo-authored recipe feature.
 
 ## Approval binding
 
-The current path-only binding is not enough for any manifest reference. The
-approval artifact for a plan or batch should bind the effective execution for
-both recipe-resolved manifests and direct expert `manifestPath` use:
+Path-only binding is not enough for any manifest reference. The shipped approval
+artifact for a plan or batch binds the effective execution for both
+recipe-resolved manifests and direct expert `manifestPath` use:
 
 ```jsonc
 {
@@ -211,7 +227,7 @@ both recipe-resolved manifests and direct expert `manifestPath` use:
 }
 ```
 
-The exact shape can be smaller, but the invariant cannot be weaker.
+The exact internal shape can change, but the invariant cannot be weaker.
 
 Required behavior:
 
@@ -254,7 +270,7 @@ file to a worker's checked-out file.
 
 ## Plan integration
 
-Add `recipe` to plan steps:
+Plan steps can select a recipe:
 
 ```jsonc
 {
@@ -267,7 +283,7 @@ Add `recipe` to plan steps:
 }
 ```
 
-Rules:
+Current rules:
 
 - `recipe` and `manifestPath` are mutually exclusive in planner-authored plans.
 - Direct `manifestPath` remains available for manual expert use, but planner
@@ -288,16 +304,18 @@ Planner prompt update:
 
 ## Batch integration
 
-Batch recipes should follow plan recipes, not lead them.
+Batch recipes shipped after plan recipes, for the same reason the plan path led:
+batch dependencies are launch gates only. They do not merge code between tasks.
+Recipe support in batch is useful for independent parallel work, but it does not
+solve sequential orchestration.
 
-Reason: batch dependencies are launch gates only. They do not merge code between
-tasks. Recipe support in batch is useful for independent parallel work, but it
-does not solve sequential orchestration.
-
-When added:
+Current behavior:
 
 - `chit_batch_start` tasks may name `recipe`.
-- `recipe` and `manifestPath` are mutually exclusive.
+- A batch may also name a batch-level `recipe` as the default for tasks without a
+  task-level recipe or manifest path.
+- Task-level `recipe` and `manifestPath` are mutually exclusive.
+- Batch-level `recipe` and `manifest_path` are mutually exclusive.
 - The batch approval artifact binds every task's resolved recipe and manifest
   digest.
 - The worker verifies each task's manifest digest before launch.
@@ -338,22 +356,18 @@ not a hidden convention.
 
 Studio should make orchestration understandable without becoming a wall of text.
 
-Near-term read-only surfaces:
+Shipped read-only surfaces:
 
-- effective config drawer already exists for agents and roles
-- add recipes to that drawer: id, mode, manifest path, origin, budgets
-- selected run detail shows recipe id and resolved agent/model blocks
-- recipe graph view shows orchestrator, implementer, reviewer, and Chit checks
+- effective config drawer for agents, roles, and recipes
+- selected run detail with approved recipe and bound manifest blocks
+- compact topology rendering that wires recipe to manifest to implementer,
+  reviewer, and Chit checks
 
-Do not build a recipe editor first. First make resolution visible.
+Resolution is now visible. Do not build a recipe editor until the read-only
+model has proved useful.
 
-Before adding a graph authoring surface, decide what happens to the old unmounted
-editor and React Flow machinery:
-
-- delete it if Studio is no longer a manifest editor
-- repurpose it for recipe and manifest visualization if it still fits
-
-Avoid carrying two graph stacks.
+The old unmounted editor and React Flow machinery have been removed. The live
+topology is now the graph surface, built without a second graph stack.
 
 ## Orchestrator experience
 
@@ -397,55 +411,35 @@ The first version should recommend. It should not launch.
 
 ## Implementation sequence
 
-### Phase 1: recipe config foundation
+### Phases 1-5: recipe foundation and visibility
 
-- Add `recipes` to config parsing and types.
-- Keep whole-entity replacement and provenance.
-- Reject repo recipe trust-boundary fields.
-- Require repo recipe paths to be repo-relative and contained in the repo.
-- Add `chit doctor` or config view output for effective recipes.
-- Add tests for layering, provenance, path containment, and forbidden fields.
+Shipped:
 
-### Phase 2: recipe resolution and digest binding
+- recipe config foundation with provenance and trust-boundary rejection
+- recipe resolution and manifest digest binding
+- plan-step `recipe`
+- batch task and batch-level `recipe`
+- Studio read-only recipe visibility and live topology
 
-- Implement recipe resolution for a given cwd.
-- Resolve manifest content and compute a digest.
-- Reject repo-relative manifest symlink escapes before any filesystem-backed read
-  by reading git blobs directly or realpath-verifying the resolved path stays
-  under the repo root.
-- Resolve manifest participants against current config and produce a safe
-  participant execution summary.
-- Extend plan and batch approval artifacts to bind resolved recipes, direct
-  manifest references, manifest digests, and participant execution summaries.
-- Re-verify manifest digests and participant summaries at each worker launch,
-  pausing as `needs_human` on drift.
-- Stamp recipe id, manifest digest, and participant summary in receipts.
+These phases closed the path-only approval hole and made recipes a real
+execution selection surface.
 
-This phase closes the path-only approval hole.
+### Phase 6: structured plan handoffs
 
-### Phase 3: plan step `recipe`
+Add the smallest dataflow primitive that fits the long-term shape:
 
-- Add `recipe` to `PlanStep`.
-- Reject `recipe` plus `manifestPath` together.
-- Resolve recipe defaults into the plan launch view.
-- Update `plan-author` to choose from recipes.
-- Update the human review rubric to include recipe checks.
-- Dogfood with a real plan that uses a recipe.
+- a plan step can declare a bounded structured handoff artifact
+- Chit validates and records the artifact after the step converges
+- the handoff becomes consumable only after the operator applies the step
+- dependent steps can explicitly consume accepted handoffs
+- status and receipts show handoff ids, digests, sizes, and validation results
+- full handoff content stays out of the live tower by default
 
-### Phase 4: batch task `recipe`
+This is the bridge from "Chit runs a sequence of code diffs" to "Chit moves
+structured work between agents without the chat session acting as glue."
+Detailed design: `docs/structured-plan-handoffs-design.md`.
 
-- Add `recipe` to batch tasks.
-- Apply the same approval binding and launch-time digest verification.
-- Keep docs explicit that batch dependencies do not merge code.
-
-### Phase 5: Studio read-only recipe visibility
-
-- Add recipes to the config drawer.
-- Add recipe id and resolved agent/model blocks to selected run detail.
-- Add compact recipe graph rendering for the selected run or recipe.
-- Keep launch/apply out of Studio.
-
-### Phase 6: recipe authoring
+### Phase 7: recipe authoring
 
 - Add Studio editing only after the read-only model proves useful.
 - Save to visible config files.
@@ -454,7 +448,7 @@ This phase closes the path-only approval hole.
 - Never expose env values.
 - Never allow repo-authored approval relaxation.
 
-### Phase 7: co-review and meta-loop experiments
+### Phase 8: co-review and meta-loop experiments
 
 - Try advisory multi-review manifests first.
 - Design verdict-level co-review only if advisory review is insufficient.
@@ -467,6 +461,8 @@ Chit has the orchestrator experience when:
 
 - a repo or user can define agents, roles, and recipes
 - a planner can select recipes from a closed menu
+- a step can emit a bounded structured handoff and a later step can consume it
+  without the chat session relaying or summarizing it
 - every launch preview shows the exact recipe, manifest digest, agents, models,
   permissions, checks, base, budgets, and approval hash
 - any change to the plan, base, recipe, manifest content, or resolved

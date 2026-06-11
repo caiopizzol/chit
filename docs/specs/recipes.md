@@ -1,8 +1,8 @@
 # Spec: Recipes as a config reference layer (v1)
 
-Status: Phase 1 (config surface), Phase 2 (manifest digest binding in
-approvals), and Phase 3 (plan-step `recipe`) shipped. Internal design note
-(not the published site).
+Status: Phases 1-5 shipped: config surface, manifest digest binding in
+approvals, plan-step `recipe`, batch `recipe`, and Studio read-only recipe
+visibility. Internal design note (not the published site).
 
 ## What shipped
 
@@ -93,11 +93,48 @@ The rules, all enforced:
   overrides the approved recipe defaults; absent, the recipe defaults flow
   into the launched converge job.
 
-## Explicit non-goals for this slice
+## Batch `recipe` (Phase 4)
+
+Batches can select recipes at either the batch level or the task level.
+
+Rules:
+
+- A batch-level `recipe` and batch-level `manifest_path` are mutually exclusive.
+- A task-level `recipe` and task-level `manifestPath` are mutually exclusive.
+- Per-task selection wins over the batch default.
+- Effective precedence is: task `recipe` / `manifestPath`, then batch `recipe` /
+  `manifest_path`, then the bundled default converge manifest.
+- Every selected recipe resolves through the same manifest binding record used
+  for direct manifest references: manifest path, manifest source, content
+  digest, and participant execution summary.
+- The batch approval hash binds the task graph, base commit, launch knobs,
+  resolved recipe receipts, and manifest bindings. A changed recipe, manifest,
+  or participant config refuses the confirmed start.
+- Worker launch re-verifies manifest digest and participant summary before each
+  task runs. Drift pauses the task for a human decision instead of silently
+  launching.
+
+Batch dependencies are still launch gates only. They do not merge code between
+tasks, with or without recipes.
+
+## Studio recipe visibility (Phase 5)
+
+Studio exposes recipes read-only in two places:
+
+- The effective config drawer lists recipes by origin, id, mode, manifest path,
+  optional budgets, and description.
+- The selected live run detail can show the approved recipe and bound manifest
+  as execution topology blocks before the agent blocks.
+
+Studio does not edit recipes yet. It also does not expose manifest contents,
+participant instructions, environment values, prompt bodies, model output, or
+audit blobs in the live tower.
+
+## Explicit non-goals for the shipped recipe arc
 
 Deferred, not forgotten. None of these exist yet:
 
-- Batch task `recipe` fields (Phase 4).
-- A Studio recipe UI (read-only visibility or editing).
 - Recipe editing of any kind.
 - Any approval-gate relaxation or auto-approval.
+- General structured handoffs between plan steps. Recipes select the loop to
+  run; they do not define dataflow between steps.
