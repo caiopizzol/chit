@@ -5,7 +5,8 @@
 	"description": "chit Studio. Local visual control tower for live Chit activity, launched by `chit studio`. Bun+Hono server (src/server/) plus a React client (src/client/) that reads GET /api/live.",
 	"type": "module",
 	"exports": {
-		"./server": "./src/server/index.ts"
+		"./server": "./src/server/index.ts",
+		"./config": "./src/server/config.ts"
 	},
 	"scripts": {
 		"build:client": "bun scripts/build-client.ts",

@@ -38,6 +38,10 @@ import {
 	type ResolvedManifest,
 	resolveManifest,
 } from "@chit-run/core";
+// The recipe-menu redaction: the SAME helper that backs Studio's GET /api/config
+// recipe view, imported via the /config subpath so the MCP server does not pull in
+// Studio's Hono server graph. One redaction shape, reused, never a second.
+import { effectiveRecipeViews } from "@chit-run/studio/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -290,6 +294,54 @@ function readySummary(run: Run) {
 			: { step: id, kind: "format" };
 	});
 }
+
+// --- config tools ----------------------------------------------------------
+//
+// Read the effective recipe menu for the target repo/session, so an orchestrator
+// can discover which named converge presets a run could launch (and where each was
+// defined) without reading chit.config.json or a manifest itself. Read-only and
+// redacted: config is loaded FRESH for the given cwd through the same layered path
+// every other tool uses (global + repo), and each recipe crosses the wire through
+// effectiveRecipeViews -- the same single redaction the Studio config view uses, so
+// only safe naming/budget facts leak (id, origin layer, mode, manifestPath, and the
+// optional loop knobs). Manifest contents, participant instructions, env values,
+// permissions, prompt bodies, audit blobs, and model output never appear here.
+
+server.registerTool(
+	"chit_recipes",
+	{
+		description:
+			"List the effective recipe menu for the target repo: each named converge preset Chit could launch here, with its origin layer (global/repo), bound manifest path, and any loop knobs (max_iterations, call timeout, description). Read-only and redacted -- no manifest contents, instructions, env, or prompts. Use a recipe id with chit_batch_start or chit_plan_start; for chit_start, use the recipe's manifestPath as manifest_path. Resolves layered global + repo config, read fresh per call.",
+		inputSchema: {
+			cwd: z
+				.string()
+				.optional()
+				.describe(
+					"Repo/working directory whose layered config (global + its chit.config.json) defines the menu. Defaults to the server process cwd.",
+				),
+		},
+	},
+	async ({ cwd }) => {
+		const runCwd = resolve(cwd ?? process.cwd());
+		try {
+			const config = getConfig(runCwd);
+			const view: {
+				recipes: ReturnType<typeof effectiveRecipeViews>;
+				configPath?: string;
+				repoConfigPath?: string;
+			} = { recipes: effectiveRecipeViews(config) };
+			// The config files actually read, same safe provenance the Studio config
+			// view exposes: absent when the layer's file does not exist.
+			if (config.configPath !== undefined) view.configPath = config.configPath;
+			if (config.repoConfigPath !== undefined) view.repoConfigPath = config.repoConfigPath;
+			return jsonResult(view);
+		} catch (e) {
+			// A malformed config is operator SIGNAL (fix the file), so surface the
+			// loader's message; safeMcpError still genericizes any raw filesystem path.
+			return errorResult(safeMcpError(e));
+		}
+	},
+);
 
 // --- audit tools ----------------------------------------------------------
 //

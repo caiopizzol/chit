@@ -151,6 +151,14 @@ Cancel a run by `run_id`, foreground or background. Input: `run_id`.
 
 A run that already finished is reported back unchanged.
 
+### chit_recipes
+
+List the effective recipe menu for the target repo. Inputs: `cwd?`.
+
+Returns `{ recipes, configPath?, repoConfigPath? }`, where each recipe is the redacted launch surface: `id`, `origin` (`global` or `repo`), `mode`, `manifestPath`, and optional loop knobs (`maxIterations`, `callTimeoutMs`, `description`). It loads layered config fresh for the given `cwd`, using the same global plus repo rules as the launch tools.
+
+This is read-only and redacted: it never returns manifest contents, participant instructions, prompts, env values, permissions, audit blobs, or model output. Use a returned recipe id with `chit_plan_start` or `chit_batch_start`. For a single `chit_start` run, use the recipe's `manifestPath` as `manifest_path`.
+
 ## Run a sequential plan
 
 A **plan** runs several loop tasks in order. Each step gets its own worktree, converges, then pauses as `review_ready`. You decide whether to apply that step into the plan's integration worktree. Only after a step is applied can a dependent step launch, and it launches from the integration tip, so it can see the code its dependency produced. Use a plan when later work needs earlier work's diff. Use a batch when tasks are independent and can run in parallel.

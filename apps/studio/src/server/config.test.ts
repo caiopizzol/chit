@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { type ConfigLayer, parseConfig, parseConfigLayers } from "@chit-run/core";
-import { effectiveConfigView, instructionsPreview } from "./config.ts";
+import { effectiveConfigView, effectiveRecipeViews, instructionsPreview } from "./config.ts";
 
 function layered(global?: unknown, repo?: unknown) {
 	const layers: ConfigLayer[] = [];
@@ -205,6 +205,52 @@ describe("effectiveConfigView recipes", () => {
 		// Field-by-field rebuild: absent optionals stay absent, never spread in as
 		// undefined keys.
 		expect(Object.keys(recipe ?? {}).sort()).toEqual(["id", "manifestPath", "mode", "origin"]);
+	});
+});
+
+describe("effectiveRecipeViews", () => {
+	test("is the same redacted recipe list effectiveConfigView produces", () => {
+		const config = layered(
+			{
+				recipes: {
+					deep: {
+						mode: "converge",
+						manifestPath: "/flows/deep.json",
+						maxIterations: 5,
+						callTimeoutMs: 1_200_000,
+						description: "deep converge preset",
+					},
+				},
+			},
+			{ recipes: { repo: { mode: "converge", manifestPath: "flows/repo.json" } } },
+		);
+		// The shared helper and the full config view must never diverge: one
+		// redaction shape, reused by both Studio and the MCP recipe tool.
+		expect(effectiveRecipeViews(config)).toEqual(effectiveConfigView(config).recipes);
+	});
+
+	test("redacts to the contracted fields with provenance origin, layer-then-id ordered", () => {
+		const config = layered(
+			{
+				recipes: {
+					"g-two": { mode: "converge", manifestPath: "/flows/two.json" },
+					"g-one": { mode: "converge", manifestPath: "/flows/one.json" },
+				},
+			},
+			{ recipes: { "r-one": { mode: "converge", manifestPath: "flows/repo.json" } } },
+		);
+		const recipes = effectiveRecipeViews(config);
+		expect(recipes.map((r) => `${r.origin}:${r.id}`)).toEqual([
+			"global:g-one",
+			"global:g-two",
+			"repo:r-one",
+		]);
+		// Origin is the layer only -- the defining file PATH never crosses per recipe.
+		for (const r of recipes) expect(r).not.toHaveProperty("path");
+	});
+
+	test("defaults-only config has an empty menu", () => {
+		expect(effectiveRecipeViews(parseConfig(undefined))).toEqual([]);
 	});
 });
 

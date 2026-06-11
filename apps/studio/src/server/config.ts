@@ -109,6 +109,18 @@ function recipeView(
 	return view;
 }
 
+// The redacted recipe menu, layer-then-id ordered. Pulled out of
+// effectiveConfigView so the same single redaction path can back surfaces that
+// only want recipes (the MCP chit_recipes tool) without reinventing the shape or
+// computing agent/role views. Recipes only ever come from a user layer
+// (global/repo), so "global" is the same defensive fallback roles use when
+// provenance is somehow absent.
+export function effectiveRecipeViews(config: NormalizedConfig): EffectiveRecipeView[] {
+	return Object.entries(config.recipes)
+		.map(([id, r]) => recipeView(id, r, originOf(config.provenance?.recipes[id], "global")))
+		.sort(byOriginThenId);
+}
+
 export function effectiveConfigView(config: NormalizedConfig): EffectiveConfigView {
 	const agents = Object.values(config.registry.agents)
 		.map((a) =>
@@ -118,11 +130,7 @@ export function effectiveConfigView(config: NormalizedConfig): EffectiveConfigVi
 	const roles = Object.entries(config.roles)
 		.map(([id, r]) => roleView(id, r, originOf(config.provenance?.roles[id], "global")))
 		.sort(byOriginThenId);
-	// Recipes only ever come from a user layer (global/repo), so "global" is the
-	// same defensive fallback roles use when provenance is somehow absent.
-	const recipes = Object.entries(config.recipes)
-		.map(([id, r]) => recipeView(id, r, originOf(config.provenance?.recipes[id], "global")))
-		.sort(byOriginThenId);
+	const recipes = effectiveRecipeViews(config);
 	const view: EffectiveConfigView = { agents, roles, recipes };
 	if (config.configPath !== undefined) view.configPath = config.configPath;
 	if (config.repoConfigPath !== undefined) view.repoConfigPath = config.repoConfigPath;
