@@ -22,9 +22,11 @@ import {
 } from "@chit-run/core";
 import type { PlanStartResult } from "../../plans/tools.ts";
 
-// The bundled planner manifest, resolved relative to this module so it points at the
-// curated example shipped in the repo (examples/plan-author.json), not a caller path.
-// The injected runner receives this path; binding to the specific manifest stays here.
+// The bundled planner manifest's canonical-example path, resolved relative to this module so
+// it points at the curated example in the source tree (examples/plan-author.json), not a caller
+// path. It is the manifest IDENTITY the injected runner receives; the production runner runs the
+// embedded twin (DEFAULT_PLAN_AUTHOR_MANIFEST, drift-guarded against this file) rather than
+// reading it, so the tool works from the published binary, which ships no examples/.
 export const PLAN_AUTHOR_MANIFEST_PATH = join(
 	import.meta.dir,
 	"..",
@@ -49,7 +51,8 @@ export class OrchestrateError extends Error {
 }
 
 export interface PlannerRunArgs {
-	// The bundled planner manifest to run (PLAN_AUTHOR_MANIFEST_PATH).
+	// The bundled planner manifest's identity (PLAN_AUTHOR_MANIFEST_PATH). The production runner
+	// runs the embedded twin keyed by this identity; a test runner keys its canned reply off it.
 	manifestPath: string;
 	goal: string;
 	context?: string;
@@ -67,7 +70,7 @@ export interface OrchestrateDeps {
 	// The production binding closes over the plan store, engine deps, and id generator;
 	// tests inject a fake returning a canned PlanStartResult.
 	dryRunPlan(
-		input: { plan: Record<string, unknown>; baseBranch?: string },
+		input: { plan: Record<string, unknown>; baseBranch?: string; maxIterations?: number },
 		cwd: string,
 	): PlanStartResult;
 }
@@ -76,6 +79,9 @@ export interface OrchestrateInput {
 	goal: string;
 	context?: string;
 	baseBranch?: string;
+	// The per-step iteration budget for a step that declares none, threaded into the dry run
+	// so the previewed approval hash binds it -- the operator's confirm must echo the same value.
+	maxIterations?: number;
 	cwd: string;
 }
 
@@ -138,6 +144,7 @@ export async function runOrchestrate(
 		{
 			plan: parsed as Record<string, unknown>,
 			...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
+			...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
 		},
 		input.cwd,
 	);
@@ -151,14 +158,17 @@ export async function runOrchestrate(
 		);
 	}
 
-	// When the caller overrode the base, the dry run hashed against THAT base, so the
-	// confirm must repeat it -- otherwise chit_plan_start re-resolves the plan's own base
-	// (or HEAD), recomputes a different hash, and refuses the start. Name it explicitly so
-	// following nextSteps verbatim confirms against the base that was actually previewed.
+	// When the caller overrode the base or the per-step iteration budget, the dry run hashed
+	// against THOSE values, so the confirm must repeat them -- otherwise chit_plan_start
+	// re-resolves the plan's own base (or HEAD) / default budget, recomputes a different hash,
+	// and refuses the start. Name them explicitly so following nextSteps verbatim confirms
+	// against exactly what was previewed.
+	const echoes = [
+		input.baseBranch !== undefined ? `base_branch:${input.baseBranch}` : undefined,
+		input.maxIterations !== undefined ? `max_iterations:${input.maxIterations}` : undefined,
+	].filter((v): v is string => v !== undefined);
 	const baseClause =
-		input.baseBranch !== undefined
-			? `, and base_branch:${input.baseBranch} (the same base this dry run used)`
-			: "";
+		echoes.length > 0 ? `, and ${echoes.join(", ")} (the same values this dry run used)` : "";
 
 	return {
 		plan,

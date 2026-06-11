@@ -49,11 +49,14 @@ function dryResult(
 function makeDeps(over: Partial<OrchestrateDeps> = {}): {
 	deps: OrchestrateDeps;
 	plannerCalls: PlannerRunArgs[];
-	dryCalls: Array<{ input: { plan: Record<string, unknown>; baseBranch?: string }; cwd: string }>;
+	dryCalls: Array<{
+		input: { plan: Record<string, unknown>; baseBranch?: string; maxIterations?: number };
+		cwd: string;
+	}>;
 } {
 	const plannerCalls: PlannerRunArgs[] = [];
 	const dryCalls: Array<{
-		input: { plan: Record<string, unknown>; baseBranch?: string };
+		input: { plan: Record<string, unknown>; baseBranch?: string; maxIterations?: number };
 		cwd: string;
 	}> = [];
 	const deps: OrchestrateDeps = {
@@ -119,6 +122,26 @@ describe("runOrchestrate", () => {
 		// No base override, so the instructions must not name a base_branch (there is none
 		// to repeat; chit_plan_start resolves the plan's own base / HEAD as the dry run did).
 		expect(result.nextSteps).not.toContain("base_branch");
+	});
+
+	test("threads max_iterations into the dry run and names it in the confirm instructions", async () => {
+		const { deps, dryCalls } = makeDeps();
+
+		const result = await runOrchestrate({ goal: "g", maxIterations: 5, cwd: "/repo" }, deps);
+
+		// The dry run hashed against this budget, so it must reach runPlanStart...
+		expect(dryCalls[0].input.maxIterations).toBe(5);
+		// ...and the confirm instructions must name it so the operator repeats it (else the hash differs).
+		expect(result.nextSteps).toContain("max_iterations:5");
+	});
+
+	test("omits max_iterations in the dry run and instructions when absent", async () => {
+		const { deps, dryCalls } = makeDeps();
+
+		const result = await runOrchestrate({ goal: "g", cwd: "/repo" }, deps);
+
+		expect("maxIterations" in dryCalls[0].input).toBe(false);
+		expect(result.nextSteps).not.toContain("max_iterations");
 	});
 
 	test("passes through resolved recipes and manifest bindings from the dry run", async () => {

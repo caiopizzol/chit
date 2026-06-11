@@ -88,6 +88,7 @@ import {
 	rejectCallTimeoutForOneShot,
 } from "../../cli/converge.ts";
 import { DEFAULT_CONVERGE_MANIFEST } from "../../cli/default-converge-manifest.ts";
+import { DEFAULT_PLAN_AUTHOR_MANIFEST } from "../../cli/default-plan-author-manifest.ts";
 import { loadConfig } from "../../config/load.ts";
 import { requestJobCancel } from "../../jobs/cancel.ts";
 import { formatDuration, isStale, jobTiming, pidAlive, runWaitState } from "../../jobs/health.ts";
@@ -134,7 +135,7 @@ import {
 	runPlanCleanup,
 	runPlanStart,
 } from "../../plans/tools.ts";
-import { validateOneShotAuth } from "../../runs/run-once.ts";
+import { runManifestOnce, validateOneShotAuth } from "../../runs/run-once.ts";
 import { prepareInputs } from "../../runtime/render.ts";
 import { type ResolvedRun, RunController } from "./controller.ts";
 import { ControllerStore } from "./controller-store.ts";
@@ -159,6 +160,7 @@ import {
 	startRun,
 } from "./engine.ts";
 import { FOREGROUND_HEARTBEAT_MS, ForegroundRegistry } from "./foreground-registry.ts";
+import { type OrchestrateDeps, OrchestrateError, runOrchestrate } from "./orchestrate.ts";
 import { describeServerVersion, RUNNING_VERSION, resolveOwnVersion } from "./server-version.ts";
 import {
 	buildStatus,
@@ -3630,6 +3632,134 @@ server.registerTool(
 			return jsonResult(runPlanCleanup({ planId: plan_id, confirm }, store, planDeps));
 		} catch (e) {
 			return planError(e);
+		}
+	},
+);
+
+// --- orchestrate tool ------------------------------------------------------
+//
+// chit_orchestrate turns a software goal into a REVIEWABLE plan + an approval hash, by
+// composing primitives that already exist: it runs the bundled planner manifest once and
+// dry-runs the plan through the SAME runPlanStart path chit_plan_start uses. It only ever
+// previews: it never confirms or launches a plan, so it creates no plan record, worktree,
+// job, or branch. The human reviews the result and runs chit_plan_start with confirm:true.
+
+// The production orchestrate deps, wired to the real one-shot engine + plan dry-run path.
+// runPlanner runs the EMBEDDED planner manifest (DEFAULT_PLAN_AUTHOR_MANIFEST, the drift-guarded
+// twin of examples/plan-author.json) through runManifestOnce -- embedded, not read from disk,
+// so the tool works from the published binary, which ships only dist/ (no examples/). dryRunPlan
+// calls runPlanStart with confirm omitted and the SAME planDeps chit_plan_start uses, so the
+// previewed base, recipes, manifest bindings, and approval hash are identical to what a real
+// confirm will recompute.
+const orchestrateDeps: OrchestrateDeps = {
+	// manifestPath is the canonical-example identity orchestrate threads (PLAN_AUTHOR_MANIFEST_PATH);
+	// production runs the embedded twin instead of reading it, so a packaged binary needs no file.
+	runPlanner: async ({ goal, context, cwd }) => {
+		let config: ReturnType<typeof getConfig>;
+		try {
+			config = getConfig(cwd);
+		} catch (e) {
+			throw new OrchestrateError(`could not load config: ${(e as Error).message}`);
+		}
+		let manifest: ResolvedManifest;
+		try {
+			manifest = resolveManifest(parseManifest(DEFAULT_PLAN_AUTHOR_MANIFEST), {
+				roles: config.roles,
+			});
+		} catch (e) {
+			throw new OrchestrateError(`could not load the planner manifest: ${(e as Error).message}`);
+		}
+		// The planner participant runs per_scope, so a one-shot run needs a scope; a fresh one
+		// per call isolates each planning run's session. allowUnenforced is false: the planner is
+		// read-only and its adapter must enforce that, exactly like a plan step.
+		const scope = `orchestrate-${crypto.randomUUID()}`;
+		const auth = validateOneShotAuth(manifest, config.registry, { scope, allowUnenforced: false });
+		if (!auth.ok) throw new OrchestrateError(auth.error);
+		const result = await runManifestOnce(manifest, {
+			inputs: { goal, ...(context !== undefined && { context }) },
+			registry: config.registry,
+			invocationCwd: cwd,
+			surface: "mcp",
+			scope,
+			audit: false,
+		});
+		if (!result.ok) throw new OrchestrateError(result.error ?? "the planner run failed");
+		if (result.output === undefined) {
+			throw new OrchestrateError("the planner run produced no output");
+		}
+		return result.output;
+	},
+	dryRunPlan: (input, cwd) => {
+		const { store, cwd: runCwd } = planStoreFor(cwd);
+		return runPlanStart(
+			{
+				plan: input.plan,
+				...(input.baseBranch !== undefined && { baseBranch: input.baseBranch }),
+				...(input.maxIterations !== undefined && { maxIterations: input.maxIterations }),
+			},
+			runCwd,
+			store,
+			planDeps,
+			() => crypto.randomUUID(),
+		);
+	},
+};
+
+server.registerTool(
+	"chit_orchestrate",
+	{
+		description:
+			"Turn a software goal into a REVIEWABLE sequential plan plus an approval hash, ready for chit_plan_start. A read-only planning agent inspects the repo and drafts a native plan (the shape chit_plan_start accepts), then this DRY-RUNS that plan through the same chit_plan_start path: it resolves the base ref to a commit, resolves every step's recipe and manifest binding, and computes the approval hash the operator echoes back to launch. It ALWAYS only previews -- it never confirms or launches a plan, so it creates NOTHING (no plan record, worktree, job, or branch). Provide a goal (required); optional context (operator notes: a base branch, vetted recipe ids, or a manifestPath override the planner may use), base_branch (the ref the integration branch is cut from; bound into the hash), and max_iterations (per-step iteration budget when a step declares none; also bound into the hash). Review the returned plan, base, recipes, and manifest bindings, then call chit_plan_start with the SAME plan, confirm:true, and the shown approval_hash (repeating base_branch / max_iterations if they were set). Editing the plan, base, budget, a manifest, or a recipe changes the hash and the start is refused.",
+		inputSchema: {
+			goal: z
+				.string()
+				.min(1)
+				.describe("The software goal to plan: what you want built, in plain language."),
+			context: z
+				.string()
+				.optional()
+				.describe(
+					"Optional operator notes the planner may use: a base branch, vetted recipe ids, or a vetted manifestPath override.",
+				),
+			base_branch: z
+				.string()
+				.optional()
+				.describe(
+					"Ref the integration branch would be cut from. Bound into the approval hash; repeat it on the chit_plan_start confirm. Default: the plan's baseBranch, else HEAD.",
+				),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe(
+					"Per-step iteration budget when a step declares none. Bound into the approval hash; repeat it on the chit_plan_start confirm. Default 3.",
+				),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo the planner inspects (defaults to the server cwd)."),
+		},
+	},
+	async ({ goal, context, base_branch, max_iterations, cwd }) => {
+		const runCwd = resolve(cwd ?? process.cwd());
+		try {
+			const result = await runOrchestrate(
+				{
+					goal,
+					...(context !== undefined && { context }),
+					...(base_branch !== undefined && { baseBranch: base_branch }),
+					...(max_iterations !== undefined && { maxIterations: max_iterations }),
+					cwd: runCwd,
+				},
+				orchestrateDeps,
+			);
+			return jsonResult(result);
+		} catch (e) {
+			// OrchestrateError (bad planner output / failed planner run) and a plan/git dry-run
+			// failure are both the caller's own and carry no local paths; safeMcpError still
+			// genericizes any raw filesystem path that escapes a store untyped.
+			return errorResult(safeMcpError(e));
 		}
 	},
 );
