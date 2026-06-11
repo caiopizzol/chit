@@ -1,0 +1,144 @@
+{
+	"version": 1,
+	"generatedAt": "2026-06-11",
+	"summary": "chit already records one append-only audit receipt per run (audit/runs/<runId>/events.jsonl plus content-addressed blobs/) and a per-run, body-free reader (apps/cli/src/audit/reader.ts: summarizeRun, sumUsage, safeReadEvents). The only gap is cross-run roll-up. Recommend a single pure function aggregateReceipts(store, opts) that folds existing RunSummary values into one metrics-only aggregate, reusing reader.ts, never opening blobs, surfaced as a read-only CLI subcommand next to 'chit audit list'.",
+	"dataSources": [
+		{
+			"name": "audit-receipts",
+			"path": "<stateDir>/audit/runs/<runId>/events.jsonl",
+			"format": "append-only JSONL, one AuditEvent per line",
+			"primary": true,
+			"note": "Closed discriminated union: run.started, step.started, adapter.call.started, adapter.event, adapter.call.completed, step.completed, step.failed, loop.iteration.recorded, run.completed. Every event has runId and ISO ts. This is the only source the v1 reader reads.",
+			"bodies": "<stateDir>/audit/runs/<runId>/blobs/<sha256> hold prompts/outputs; NEVER read by the reader"
+		},
+		{
+			"name": "loop-log",
+			"path": "<stateDir>/loops/<repoKey>/<loopId>.jsonl",
+			"format": "append-only JSONL: header, iteration records, stop record",
+			"primary": false,
+			"note": "Owns loop-stop status (converged/blocked/max-iterations/needs-decision/cancelled). A v1 non-goal to join; convergence verdicts are already in the audit loop.iteration.recorded event."
+		},
+		{
+			"name": "jobs",
+			"path": "<stateDir>/jobs/<runId>.json",
+			"format": "one JSON job record per run",
+			"primary": false,
+			"note": "Durable worker state; carries auditRefs[]. Not needed for the v1 aggregate."
+		}
+	],
+	"linkingKeys": {
+		"runId": "public id; on every AuditEvent, job record, and plan step",
+		"loopId": "internal loop-log key on loop jobs and loop headers",
+		"scope": "user-chosen label; potentially identifying, keep as filter input only",
+		"auditRef": "an iteration's audit run id; links loop iteration to its transcript"
+	},
+	"stateDir": "$XDG_STATE_HOME/chit (falls back to ~/.local/state/chit); resolved per layer by defaultAuditDir()/loopStateDir()/defaultJobsDir()",
+	"recommendedSurface": {
+		"kind": "read-only-cli-subcommand",
+		"placement": "apps/cli/src/cli/audit.ts, sibling of 'chit audit list'",
+		"entryPoint": "aggregateReceipts(store, opts?) -> ReceiptAggregate",
+		"reuses": [
+			"apps/cli/src/audit/reader.ts: summarizeRun",
+			"sumUsage",
+			"safeReadEvents",
+			"AuditStore.listRuns"
+		],
+		"noMcpToolInV1": true,
+		"noWritePath": true,
+		"algorithm": [
+			"Enumerate runs via store.listRuns(); it returns ids in ARBITRARY filesystem order, not sorted.",
+			"Per run: safeReadEvents() then summarizeRun(); never set includeBodies; never open blobs/.",
+			"Sort the resulting summaries by startedAt descending (newest first) BEFORE applying limit, exactly as listAudit does in reader.ts; do not rely on listRuns order for limit.",
+			"An empty/corrupt log folds in as a counted skip, not a throw.",
+			"Fold each RunSummary plus the run's loop.iteration.recorded events into accumulators."
+		],
+		"options": {
+			"since": "ISO lower bound on startedAt",
+			"until": "ISO upper bound on startedAt",
+			"surface": "filter to one AuditSurface (cli|mcp|converge)",
+			"scope": "filter to one scope (input only, never a grouped output dimension)",
+			"limit": "cap runs kept after sorting summaries by startedAt descending; listRuns order is arbitrary, so sort before slicing"
+		},
+		"outputShape": {
+			"runs": "number (total folded)",
+			"skipped": "number (unreadable/empty logs)",
+			"bySurface": "Record<surface, count>",
+			"byStatus": "Record<status, count> (ok|failed|cancelled|timeout|incomplete)",
+			"steps": "number (sum of stepCount)",
+			"failedSteps": "number (count of step.failed events)",
+			"usage": "summed AdapterUsage: inputTokens, outputTokens, cachedInputTokens, reasoningTokens, totalTokens, estimatedCostUsd",
+			"convergence": "verdict/decision counts (proceed|revise|block) and total findingCount from loop.iteration.recorded",
+			"timeRange": "{ earliest, latest } ISO startedAt observed"
+		}
+	},
+	"metrics": {
+		"note": "Aggregate-only corpus shape measured locally to size the reader; no bodies read. Values are approximate.",
+		"auditRuns": 809,
+		"surfaceBreakdown": { "converge": 796, "mcp": 13 },
+		"eventTypeCounts": {
+			"adapter.event": 253144,
+			"step.started": 1478,
+			"adapter.call.started": 1154,
+			"adapter.call.completed": 1151,
+			"step.completed": 995,
+			"run.started": 809,
+			"run.completed": 804,
+			"step.failed": 480
+		},
+		"completedAdapterCalls": 1151,
+		"usageTotals": {
+			"inputTokens": 308249050,
+			"outputTokens": 8756272,
+			"estimatedCostUsd": 772.62
+		},
+		"siblingLayerCounts": { "jobs": 209, "loops": 47828, "plans": 2, "sessions": 318 },
+		"designImplication": "adapter.event/blob content is ~200x the rest of the line count and must be skipped, not summarized; folding header+completion+loop-iteration per run is cheap. Token totals are large, so sums must be 64-bit-safe numbers and cost a single summed float."
+	},
+	"implementationFiles": [
+		{
+			"path": "apps/cli/src/audit/aggregate.ts",
+			"status": "new",
+			"purpose": "Pure aggregateReceipts fold over reader.ts; defines ReceiptAggregate and AggregateOptions."
+		},
+		{
+			"path": "apps/cli/src/cli/audit.ts",
+			"status": "modify",
+			"purpose": "Wire a new read-only subcommand that calls aggregateReceipts and prints a table, with a --json flag for the structured object."
+		},
+		{
+			"path": "apps/cli/src/audit/reader.ts",
+			"status": "reuse",
+			"purpose": "Source of summarizeRun, sumUsage, safeReadEvents, RunSummary; do not duplicate this logic."
+		}
+	],
+	"tests": [
+		{
+			"path": "apps/cli/src/audit/aggregate.test.ts",
+			"status": "new",
+			"cases": [
+				"empty store yields zeroed aggregate",
+				"mixed surfaces and statuses counted correctly",
+				"usage summed across runs (tokens and cost)",
+				"step.failed counted into failedSteps",
+				"verdict/decision counts from loop.iteration.recorded",
+				"since/until/surface/limit filters applied",
+				"a corrupt or empty events.jsonl is counted as skipped, not thrown",
+				"invariant: no blob/body is ever read (includeBodies never set)"
+			]
+		}
+	],
+	"risks": [
+		"adapter.event rows dominate line counts (~200x); reading them per run is fine but never aggregate or resolve their blobs.",
+		"Some runs are incomplete (run.started without run.completed: ~809 vs ~804 locally); treat incomplete as its own status, do not drop them.",
+		"Token totals reach hundreds of millions; keep numeric sums 64-bit-safe and cost a single float, no per-call arrays in output.",
+		"scope is a user-chosen label and may identify work; keep it an input filter, never a grouped output dimension in v1.",
+		"Corpus is local and single-user; counts here size the reader, they are not a product claim."
+	],
+	"privacyRules": [
+		"Never read audit/runs/<runId>/blobs/; never set includeBodies. inputBlob/outputBlob/rawBlob address prompts, model outputs, and raw adapter streams and must never be touched.",
+		"Emit only metrics and low-cardinality safe enums (surface, status, loop verdict) plus numeric sums.",
+		"Never emit cwd, commandArgs, manifestPath, session refs, or step.failed error strings: they can carry absolute paths or private data.",
+		"Tolerate corruption: a bad log is a counted skip, not a failure of the whole aggregate.",
+		"These same rules governed this handoff: no prompts, model outputs, absolute local paths, customer names, internal links, raw receipt bodies, or secret-like values are included."
+	]
+}
