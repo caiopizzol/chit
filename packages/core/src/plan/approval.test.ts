@@ -187,6 +187,91 @@ describe("canonicalApprovalPayload determinism", () => {
 		).not.toBe(bound);
 	});
 
+	// Handoff declarations and consume edges live inside the normalized plan, so they bind
+	// through the same plan hash: a producer that adds/changes a declared handoff, or a
+	// consumer that adds/changes a consume edge, must move the canonical payload.
+	const HANDOFF_PLAN = {
+		schema: 1 as const,
+		title: "Investigate then fix",
+		steps: [
+			{
+				id: "investigate",
+				title: "Find the failing surfaces",
+				body: "Investigate and produce a findings handoff.",
+				handoffs: { findings: { path: "findings.json", format: "json", maxBytes: 65536 } },
+			},
+			{
+				id: "implement",
+				title: "Fix the findings",
+				body: "Use the findings handoff.",
+				dependsOn: ["investigate"],
+				consumes: [{ step: "investigate", handoff: "findings", as: "findings" }],
+			},
+		],
+	};
+
+	test("a handoff declaration change moves the payload", () => {
+		const bound = payloadFor(HANDOFF_PLAN, BASE);
+		// a changed handoff path
+		const movedPath = payloadFor(
+			{
+				...HANDOFF_PLAN,
+				steps: [
+					{
+						...HANDOFF_PLAN.steps[0],
+						handoffs: { findings: { path: "out/findings.json", format: "json", maxBytes: 65536 } },
+					},
+					HANDOFF_PLAN.steps[1],
+				],
+			},
+			BASE,
+		);
+		expect(movedPath).not.toBe(bound);
+		// a changed maxBytes cap
+		const movedCap = payloadFor(
+			{
+				...HANDOFF_PLAN,
+				steps: [
+					{
+						...HANDOFF_PLAN.steps[0],
+						handoffs: { findings: { path: "findings.json", format: "json", maxBytes: 1024 } },
+					},
+					HANDOFF_PLAN.steps[1],
+				],
+			},
+			BASE,
+		);
+		expect(movedCap).not.toBe(bound);
+	});
+
+	test("a consume edge change moves the payload", () => {
+		const bound = payloadFor(HANDOFF_PLAN, BASE);
+		// a changed alias
+		const movedAlias = payloadFor(
+			{
+				...HANDOFF_PLAN,
+				steps: [
+					HANDOFF_PLAN.steps[0],
+					{
+						...HANDOFF_PLAN.steps[1],
+						consumes: [{ step: "investigate", handoff: "findings", as: "facts" }],
+					},
+				],
+			},
+			BASE,
+		);
+		expect(movedAlias).not.toBe(bound);
+		// a changed consumed-byte budget
+		const movedBudget = payloadFor(
+			{
+				...HANDOFF_PLAN,
+				steps: [HANDOFF_PLAN.steps[0], { ...HANDOFF_PLAN.steps[1], maxConsumedBytes: 4096 }],
+			},
+			BASE,
+		);
+		expect(movedBudget).not.toBe(bound);
+	});
+
 	test("a changed manifest digest or participant summary changes the payload", () => {
 		const bound = canonicalApprovalPayload(
 			buildPlanApprovalArtifact(parsePlan(PLAN), BASE, undefined, { impl: BINDING }),

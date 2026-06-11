@@ -376,3 +376,352 @@ describe("invalid plans fail with useful errors", () => {
 		);
 	});
 });
+
+// A producing step declares handoffs; a later step consumes them. The producer/consumer
+// pair below is reused by the valid-edge and approval tests.
+const HANDOFF_PLAN = {
+	schema: 1 as const,
+	title: "Investigate then fix",
+	steps: [
+		{
+			id: "investigate",
+			title: "Find the failing surfaces",
+			body: "Investigate and produce a findings handoff.",
+			handoffs: { findings: { path: "findings.json", format: "json", maxBytes: 65536 } },
+		},
+		{
+			id: "implement",
+			title: "Fix the findings",
+			body: "Use the findings handoff.",
+			dependsOn: ["investigate"],
+			consumes: [{ step: "investigate", handoff: "findings", as: "findings" }],
+		},
+	],
+};
+
+describe("valid handoff declarations and consume edges", () => {
+	test("a producer declares a handoff and a dependent consumes it", () => {
+		const plan = parsePlan(HANDOFF_PLAN);
+		expect(plan.steps[0]?.handoffs).toEqual({
+			findings: { path: "findings.json", format: "json", maxBytes: 65536 },
+		});
+		expect(plan.steps[1]?.consumes).toEqual([
+			{ step: "investigate", handoff: "findings", as: "findings" },
+		]);
+		// the per-step total budget defaults onto the consuming step only
+		expect(plan.steps[1]?.maxConsumedBytes).toBe(256 * 1024);
+		expect(plan.steps[0]?.maxConsumedBytes).toBeUndefined();
+	});
+
+	test("handoff maxBytes and format default when absent", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [{ id: "s", title: "t", body: "b", handoffs: { out: { path: "out.json" } } }],
+		});
+		expect(plan.steps[0]?.handoffs?.out).toEqual({
+			path: "out.json",
+			format: "json",
+			maxBytes: 64 * 1024,
+		});
+	});
+
+	test("a nested relative handoff path is accepted", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [{ id: "s", title: "t", body: "b", handoffs: { out: { path: "reports/out.json" } } }],
+		});
+		expect(plan.steps[0]?.handoffs?.out?.path).toBe("reports/out.json");
+	});
+
+	test("an author maxConsumedBytes overrides the default budget", () => {
+		const plan = parsePlan({
+			...HANDOFF_PLAN,
+			steps: [HANDOFF_PLAN.steps[0], { ...HANDOFF_PLAN.steps[1], maxConsumedBytes: 4096 }],
+		});
+		expect(plan.steps[1]?.maxConsumedBytes).toBe(4096);
+	});
+
+	test("an empty handoffs map and empty consumes array normalize to absent", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [{ id: "s", title: "t", body: "b", handoffs: {}, consumes: [] }],
+		});
+		expect(plan.steps[0]?.handoffs).toBeUndefined();
+		expect(plan.steps[0]?.consumes).toBeUndefined();
+		expect(plan.steps[0]?.maxConsumedBytes).toBeUndefined();
+	});
+});
+
+describe("invalid handoff declarations fail with useful errors", () => {
+	function handoffStep(decl: unknown): unknown {
+		return {
+			...VALID_MINIMAL,
+			steps: [{ id: "s", title: "t", body: "b", handoffs: { out: decl } }],
+		};
+	}
+
+	test("absolute path", () => {
+		expectPlanError(
+			handoffStep({ path: "/etc/passwd" }),
+			"steps.s.handoffs.out.path",
+			"not absolute",
+		);
+	});
+
+	test("backslash path", () => {
+		expectPlanError(
+			handoffStep({ path: "reports\\out.json" }),
+			"steps.s.handoffs.out.path",
+			"backslash",
+		);
+	});
+
+	test("Windows drive path", () => {
+		expectPlanError(handoffStep({ path: "C:/out.json" }), "steps.s.handoffs.out.path", "drive");
+	});
+
+	test("dotdot traversal segment", () => {
+		expectPlanError(
+			handoffStep({ path: "../escape.json" }),
+			"steps.s.handoffs.out.path",
+			"'.' or '..'",
+		);
+	});
+
+	test("dot segment", () => {
+		expectPlanError(
+			handoffStep({ path: "./out.json" }),
+			"steps.s.handoffs.out.path",
+			"'.' or '..'",
+		);
+	});
+
+	test("empty segment", () => {
+		expectPlanError(
+			handoffStep({ path: "reports//out.json" }),
+			"steps.s.handoffs.out.path",
+			"empty path segments",
+		);
+	});
+
+	test("path under .git", () => {
+		expectPlanError(handoffStep({ path: ".git/config" }), "steps.s.handoffs.out.path", ".git");
+		expectPlanError(
+			handoffStep({ path: "reports/.git/config" }),
+			"steps.s.handoffs.out.path",
+			".git",
+		);
+	});
+
+	test("non-json format", () => {
+		expectPlanError(
+			handoffStep({ path: "out.json", format: "yaml" }),
+			"steps.s.handoffs.out.format",
+			"json",
+		);
+	});
+
+	test("maxBytes must be a positive integer", () => {
+		expectPlanError(
+			handoffStep({ path: "out.json", maxBytes: 0 }),
+			"steps.s.handoffs.out.maxBytes",
+			"integer >= 1",
+		);
+	});
+
+	test("unknown handoff field", () => {
+		expectPlanError(
+			handoffStep({ path: "out.json", schema: "x" }),
+			"steps.s.handoffs.out.schema",
+			"unknown field",
+		);
+	});
+
+	test("bad handoff id slug", () => {
+		expectPlanError(
+			{
+				...VALID_MINIMAL,
+				steps: [{ id: "s", title: "t", body: "b", handoffs: { "bad id": { path: "out.json" } } }],
+			},
+			"steps.s.handoffs.bad id",
+			"safe slug",
+		);
+	});
+
+	test("maxConsumedBytes without consumes is rejected", () => {
+		expectPlanError(
+			{ ...VALID_MINIMAL, steps: [{ id: "s", title: "t", body: "b", maxConsumedBytes: 4096 }] },
+			"steps.s.maxConsumedBytes",
+			"only valid on a step that consumes",
+		);
+	});
+});
+
+describe("invalid consume edges fail with useful errors", () => {
+	function consumeStep(consumes: unknown, extra?: Record<string, unknown>): unknown {
+		return {
+			...VALID_MINIMAL,
+			steps: [
+				{
+					id: "investigate",
+					title: "t",
+					body: "b",
+					handoffs: { findings: { path: "findings.json" } },
+				},
+				{
+					id: "implement",
+					title: "t",
+					body: "b",
+					dependsOn: ["investigate"],
+					consumes,
+					...extra,
+				},
+			],
+		};
+	}
+
+	test("references an unknown producing step", () => {
+		expectPlanError(
+			consumeStep([{ step: "nope", handoff: "findings", as: "findings" }]),
+			"steps.implement.consumes[0].step",
+			'unknown step "nope"',
+		);
+	});
+
+	test("references a handoff the producer does not declare", () => {
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "ghost", as: "findings" }]),
+			"steps.implement.consumes[0].handoff",
+			'does not declare a handoff "ghost"',
+		);
+	});
+
+	test("an inherited prototype key is not a declared handoff (toString)", () => {
+		// "toString" passes the safe-slug check and is not a reserved name, so it reaches the
+		// declaration check. The producer declares only "findings", so an own-property lookup
+		// must reject it rather than matching Object.prototype.toString.
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "toString", as: "data" }]),
+			"steps.implement.consumes[0].handoff",
+			'does not declare a handoff "toString"',
+		);
+	});
+
+	test("a reserved-name handoff reference is rejected at parse (constructor)", () => {
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "constructor", as: "data" }]),
+			"steps.implement.consumes[0].handoff",
+			"must not be a reserved name",
+		);
+	});
+
+	test("a non-slug handoff reference is rejected", () => {
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "not a slug", as: "data" }]),
+			"steps.implement.consumes[0].handoff",
+			"safe slug",
+		);
+	});
+
+	test("a step cannot consume its own handoff", () => {
+		expectPlanError(
+			{
+				...VALID_MINIMAL,
+				steps: [
+					{
+						id: "s",
+						title: "t",
+						body: "b",
+						handoffs: { findings: { path: "findings.json" } },
+						consumes: [{ step: "s", handoff: "findings", as: "findings" }],
+					},
+				],
+			},
+			"steps.s.consumes[0].step",
+			"cannot consume its own handoff",
+		);
+	});
+
+	test("producer outside the dependsOn closure is rejected", () => {
+		// implement does NOT dependsOn investigate, so the handoff would bypass the code graph
+		expectPlanError(
+			{
+				...VALID_MINIMAL,
+				steps: [
+					{
+						id: "investigate",
+						title: "t",
+						body: "b",
+						handoffs: { findings: { path: "findings.json" } },
+					},
+					{
+						id: "implement",
+						title: "t",
+						body: "b",
+						consumes: [{ step: "investigate", handoff: "findings", as: "findings" }],
+					},
+				],
+			},
+			"steps.implement.consumes[0].step",
+			"dependsOn closure",
+		);
+	});
+
+	test("a transitive dependency satisfies the closure", () => {
+		const plan = parsePlan({
+			...VALID_MINIMAL,
+			steps: [
+				{
+					id: "investigate",
+					title: "t",
+					body: "b",
+					handoffs: { findings: { path: "findings.json" } },
+				},
+				{ id: "middle", title: "t", body: "b", dependsOn: ["investigate"] },
+				{
+					id: "implement",
+					title: "t",
+					body: "b",
+					dependsOn: ["middle"],
+					consumes: [{ step: "investigate", handoff: "findings", as: "findings" }],
+				},
+			],
+		});
+		expect(plan.steps[2]?.consumes?.[0]?.step).toBe("investigate");
+	});
+
+	test("duplicate aliases on one step are rejected", () => {
+		expectPlanError(
+			consumeStep([
+				{ step: "investigate", handoff: "findings", as: "findings" },
+				{ step: "investigate", handoff: "findings", as: "findings" },
+			]),
+			"steps.implement.consumes[1].as",
+			"duplicate consume alias",
+		);
+	});
+
+	test("a bad alias slug is rejected", () => {
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "findings", as: "bad alias" }]),
+			"steps.implement.consumes[0].as",
+			"safe slug",
+		);
+	});
+
+	test("unknown consume field", () => {
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "findings", as: "findings", extra: 1 }]),
+			"steps.implement.consumes[0].extra",
+			"unknown field",
+		);
+	});
+
+	test("missing consume alias", () => {
+		expectPlanError(
+			consumeStep([{ step: "investigate", handoff: "findings" }]),
+			"steps.implement.consumes[0].as",
+			"non-empty string",
+		);
+	});
+});

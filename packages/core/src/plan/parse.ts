@@ -5,7 +5,15 @@
 // node-side resolution (manifest paths, integration branch) layers on top.
 
 import type { RequiredCheck } from "../manifest/types.ts";
-import type { NormalizedPlan, PlanApplyPolicy, PlanCleanupPolicy, PlanStep } from "./types.ts";
+import type {
+	NormalizedPlan,
+	PlanApplyPolicy,
+	PlanCleanupPolicy,
+	PlanConsume,
+	PlanHandoff,
+	PlanHandoffFormat,
+	PlanStep,
+} from "./types.ts";
 
 export class PlanError extends Error {
 	constructor(
@@ -37,11 +45,21 @@ const ALLOWED_STEP_KEYS = new Set([
 	"manifestPath",
 	"maxIterations",
 	"callTimeoutMs",
+	"handoffs",
+	"consumes",
+	"maxConsumedBytes",
 ]);
 // Strict per-check allowlist mirroring the manifest RequiredCheck shape: command +
 // args + name + timeout only. No env, cwd, or shell strings -- a required check is a
 // process chit spawns, not a shell snippet. Kept identical so the two never drift.
 const ALLOWED_REQUIRED_CHECK_KEYS = new Set(["command", "args", "name", "timeoutMs"]);
+// A handoff declaration is path + format + size cap, nothing else. Schema (Phase 2+) is a
+// deliberate non-field in v1 (see the design note); rejecting unknown keys keeps a future
+// field from silently riding an old plan.
+const ALLOWED_HANDOFF_KEYS = new Set(["path", "format", "maxBytes"]);
+// A consume edge names the producer step, its handoff id, and the local alias. No size
+// field: the per-step budget lives on the consuming step (maxConsumedBytes), not per edge.
+const ALLOWED_CONSUME_KEYS = new Set(["step", "handoff", "as"]);
 
 // The plan id is a kebab-case slug, matching the manifest top-level id convention.
 const PLAN_ID_RE = /^[a-z][a-z0-9-]*$/;
@@ -59,6 +77,16 @@ const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
 const ALLOWED_APPLY: ReadonlySet<string> = new Set<PlanApplyPolicy>(["gated"]);
 const ALLOWED_CLEANUP: ReadonlySet<string> = new Set<PlanCleanupPolicy>(["after_apply", "manual"]);
+
+// Handoff ids and consume aliases use the SAME safe id class as step ids: they become map
+// keys and prompt-envelope labels, so the same prototype-pollution and slug guarantees apply.
+const HANDOFF_ID_RE = STEP_ID_RE;
+const ALLOWED_HANDOFF_FORMAT: ReadonlySet<string> = new Set<PlanHandoffFormat>(["json"]);
+// Conservative caps. 64 KiB per handoff is enough for findings/risk/contract lists without
+// inviting a step to dump a corpus; 256 KiB total keeps several accepted handoffs from
+// stacking into an oversized dependent prompt. Both are author-overridable.
+const DEFAULT_HANDOFF_MAX_BYTES = 64 * 1024;
+const DEFAULT_CONSUMED_BYTES_BUDGET = 256 * 1024;
 
 function isObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -162,6 +190,34 @@ function parseStep(raw: unknown, index: number, ids: Set<string>): PlanStep {
 	if (raw.callTimeoutMs !== undefined)
 		step.callTimeoutMs = reqPositiveInt(raw.callTimeoutMs, `steps.${id}.callTimeoutMs`);
 
+	if (raw.handoffs !== undefined) {
+		const handoffs = parseHandoffs(raw.handoffs, id);
+		// An empty map normalizes to absent so it binds identically to a step with no
+		// handoffs, keeping the approval hash stable.
+		if (Object.keys(handoffs).length > 0) step.handoffs = handoffs;
+	}
+
+	// consumes and its byte budget are coupled: the budget bounds the consumed prompt, so it
+	// is meaningful only when the step actually consumes. A budget set without consumes is a
+	// plan authoring mistake, not a silent no-op.
+	let consumes: PlanConsume[] | undefined;
+	if (raw.consumes !== undefined) {
+		const parsed = parseConsumes(raw.consumes, id);
+		if (parsed.length > 0) consumes = parsed;
+	}
+	if (consumes) {
+		step.consumes = consumes;
+		step.maxConsumedBytes =
+			raw.maxConsumedBytes === undefined
+				? DEFAULT_CONSUMED_BYTES_BUDGET
+				: reqPositiveInt(raw.maxConsumedBytes, `steps.${id}.maxConsumedBytes`);
+	} else if (raw.maxConsumedBytes !== undefined) {
+		throw new PlanError(
+			`steps.${id}.maxConsumedBytes`,
+			"is only valid on a step that consumes handoffs",
+		);
+	}
+
 	return step;
 }
 
@@ -180,6 +236,106 @@ function parseDependsOn(raw: unknown, stepId: string): string[] {
 			seen.add(id);
 			out.push(id);
 		}
+	});
+	return out;
+}
+
+// A handoff path is relative to the producing step's worktree root and must stay inside it.
+// Rejected: absolute (leading /), Windows backslash or drive forms (\, C:), empty/dot/dotdot
+// segments (no traversal or current-dir noise), and anything under .git. This is structural
+// containment only; actual file capture and digesting is Phase 2.
+function parseHandoffPath(raw: unknown, path: string): string {
+	const p = reqNonEmptyString(raw, path);
+	if (p.includes("\\"))
+		throw new PlanError(path, "must not contain a backslash (no Windows path separators)");
+	if (/^[A-Za-z]:/.test(p))
+		throw new PlanError(path, "must be a relative path (no Windows drive letter)");
+	if (p.startsWith("/")) throw new PlanError(path, "must be a relative path, not absolute");
+	const segments = p.split("/");
+	for (const seg of segments) {
+		if (seg === "") throw new PlanError(path, "must not contain empty path segments");
+		if (seg === "." || seg === "..")
+			throw new PlanError(path, "must not contain '.' or '..' path segments");
+	}
+	if (segments.includes(".git")) throw new PlanError(path, "must not be under .git");
+	return p;
+}
+
+// format is "json" in v1. Absent normalizes to "json" (the only legal value), so the
+// normalized declaration is always explicit; a present value other than "json" is rejected.
+function parseHandoffFormat(raw: unknown, path: string): PlanHandoffFormat {
+	if (raw === undefined) return "json";
+	if (typeof raw !== "string" || !ALLOWED_HANDOFF_FORMAT.has(raw))
+		throw new PlanError(path, `must be "json" (the only legal format in v1)`);
+	return raw as PlanHandoffFormat;
+}
+
+// handoffs is a map from handoff id to declaration. Ids use the step-id safe class (they
+// become map keys and prompt-envelope labels); each declaration is path + format + maxBytes,
+// maxBytes defaulting to a conservative cap when absent.
+function parseHandoffs(raw: unknown, stepId: string): Record<string, PlanHandoff> {
+	const base = `steps.${stepId}.handoffs`;
+	if (!isObject(raw))
+		throw new PlanError(base, "must be an object mapping handoff id to declaration");
+	const out: Record<string, PlanHandoff> = {};
+	for (const [hid, decl] of Object.entries(raw)) {
+		const at = `${base}.${hid}`;
+		if (!HANDOFF_ID_RE.test(hid))
+			throw new PlanError(at, "handoff id must be a safe slug ([A-Za-z0-9][A-Za-z0-9_-]*)");
+		if (RESERVED_IDS.has(hid)) throw new PlanError(at, "handoff id must not be a reserved name");
+		if (!isObject(decl)) throw new PlanError(at, "must be an object");
+		for (const k of Object.keys(decl)) {
+			if (!ALLOWED_HANDOFF_KEYS.has(k))
+				throw new PlanError(`${at}.${k}`, "unknown field (only path, format, maxBytes)");
+		}
+		out[hid] = {
+			path: parseHandoffPath(decl.path, `${at}.path`),
+			format: parseHandoffFormat(decl.format, `${at}.format`),
+			maxBytes:
+				decl.maxBytes === undefined
+					? DEFAULT_HANDOFF_MAX_BYTES
+					: reqPositiveInt(decl.maxBytes, `${at}.maxBytes`),
+		};
+	}
+	return out;
+}
+
+// consumes is an array of edges, each naming step + handoff + as. Structural validation
+// only here (shape, alias safety, alias uniqueness per consuming step); cross-step
+// references (producer exists, declares the handoff, sits in the dependsOn closure, is not
+// the step itself) need every step parsed and are checked in assertConsumes.
+function parseConsumes(raw: unknown, stepId: string): PlanConsume[] {
+	const base = `steps.${stepId}.consumes`;
+	if (!Array.isArray(raw)) throw new PlanError(base, "must be an array of consume edges");
+	const out: PlanConsume[] = [];
+	const aliases = new Set<string>();
+	raw.forEach((entry, i) => {
+		const at = `${base}[${i}]`;
+		if (!isObject(entry)) throw new PlanError(at, "must be an object");
+		for (const k of Object.keys(entry)) {
+			if (!ALLOWED_CONSUME_KEYS.has(k))
+				throw new PlanError(`${at}.${k}`, "unknown field (only step, handoff, as)");
+		}
+		const step = reqNonEmptyString(entry.step, `${at}.step`);
+		// The handoff reference must be a safe slug in the producer's id class: existence is
+		// checked later (assertConsumes), but rejecting a non-slug or reserved name here gives a
+		// clear error and never lets a prototype-key string read as a handoff reference.
+		const handoff = reqNonEmptyString(entry.handoff, `${at}.handoff`);
+		if (!HANDOFF_ID_RE.test(handoff))
+			throw new PlanError(
+				`${at}.handoff`,
+				"handoff must be a safe slug ([A-Za-z0-9][A-Za-z0-9_-]*)",
+			);
+		if (RESERVED_IDS.has(handoff))
+			throw new PlanError(`${at}.handoff`, "handoff must not be a reserved name");
+		const alias = reqNonEmptyString(entry.as, `${at}.as`);
+		if (!HANDOFF_ID_RE.test(alias))
+			throw new PlanError(`${at}.as`, "alias must be a safe slug ([A-Za-z0-9][A-Za-z0-9_-]*)");
+		if (RESERVED_IDS.has(alias))
+			throw new PlanError(`${at}.as`, "alias must not be a reserved name");
+		if (aliases.has(alias)) throw new PlanError(`${at}.as`, `duplicate consume alias "${alias}"`);
+		aliases.add(alias);
+		out.push({ step, handoff, as: alias });
 	});
 	return out;
 }
@@ -214,6 +370,56 @@ function assertGraph(steps: PlanStep[]): void {
 	for (const step of steps) visit(step.id, []);
 }
 
+// Validate consume edges against the whole step set. Runs AFTER assertGraph, so the graph is
+// known acyclic and the dependsOn closure terminates. For each edge: the producing step must
+// exist, the step may not consume its own handoff, the producer must declare that handoff id,
+// and the producer must be in the consuming step's transitive dependsOn closure -- so a data
+// dependency can never bypass the code-dependency graph. Closures are memoized per step.
+function assertConsumes(steps: PlanStep[]): void {
+	const byId = new Map(steps.map((s) => [s.id, s]));
+	const deps = new Map(steps.map((s) => [s.id, s.dependsOn]));
+	const closureCache = new Map<string, Set<string>>();
+	const closureOf = (id: string): Set<string> => {
+		const cached = closureCache.get(id);
+		if (cached) return cached;
+		const out = new Set<string>();
+		const stack = [...(deps.get(id) ?? [])];
+		while (stack.length > 0) {
+			const dep = stack.pop() as string;
+			if (out.has(dep)) continue;
+			out.add(dep);
+			for (const next of deps.get(dep) ?? []) stack.push(next);
+		}
+		closureCache.set(id, out);
+		return out;
+	};
+
+	for (const step of steps) {
+		if (!step.consumes) continue;
+		const closure = closureOf(step.id);
+		step.consumes.forEach((edge, i) => {
+			const at = `steps.${step.id}.consumes[${i}]`;
+			if (edge.step === step.id)
+				throw new PlanError(`${at}.step`, `step "${step.id}" cannot consume its own handoff`);
+			const producer = byId.get(edge.step);
+			if (!producer) throw new PlanError(`${at}.step`, `references unknown step "${edge.step}"`);
+			// Own-property check only: handoffs is a plain object, so a bare `[edge.handoff]`
+			// lookup would match inherited prototype keys ("toString", "constructor") and accept
+			// a handoff the producer never declared.
+			if (!producer.handoffs || !Object.hasOwn(producer.handoffs, edge.handoff))
+				throw new PlanError(
+					`${at}.handoff`,
+					`step "${edge.step}" does not declare a handoff "${edge.handoff}"`,
+				);
+			if (!closure.has(edge.step))
+				throw new PlanError(
+					`${at}.step`,
+					`step "${edge.step}" must be in the dependsOn closure of "${step.id}" to consume its handoff`,
+				);
+		});
+	}
+}
+
 export function parsePlan(raw: unknown): NormalizedPlan {
 	if (!isObject(raw)) throw new PlanError("$", "plan must be a JSON object");
 
@@ -231,6 +437,7 @@ export function parsePlan(raw: unknown): NormalizedPlan {
 	const ids = new Set<string>();
 	const steps = raw.steps.map((s, i) => parseStep(s, i, ids));
 	assertGraph(steps);
+	assertConsumes(steps);
 
 	const plan: NormalizedPlan = {
 		schema: 1,
