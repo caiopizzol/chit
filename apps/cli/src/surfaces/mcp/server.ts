@@ -28,6 +28,7 @@ import {
 	type BoundParticipantSummary,
 	buildLoopReceipt,
 	composeLoopStatusLine,
+	describeParticipantSummaryDrift,
 	type LoopRecord,
 	type LoopRunStatus,
 	type ManifestSpec,
@@ -75,6 +76,8 @@ import {
 	realGit,
 	removeEmptyDir,
 	removeTaskWorktree,
+	repoToplevel,
+	resolveBaseSha,
 	WorktreeError,
 } from "../../batches/worktree.ts";
 import {
@@ -101,11 +104,15 @@ import {
 } from "../../loops/log-store.ts";
 import { pickRequiredChecks, resolveRunRequiredChecks } from "../../loops/required-checks.ts";
 import {
+	digestManifestText,
 	ManifestBindingError,
 	type ResolveManifestBinding,
 	type ResolveRecipe,
+	readBoundManifestText,
 	readJobManifest,
+	recipeReceiptOf,
 	resolveManifestBindingWith,
+	resolveManifestParticipantSummary,
 	resolveRecipe,
 } from "../../manifest/binding.ts";
 import {
@@ -311,7 +318,7 @@ server.registerTool(
 	"chit_recipes",
 	{
 		description:
-			"List the effective recipe menu for the target repo: each named converge preset Chit could launch here, with its origin layer (global/repo), bound manifest path, and any loop knobs (max_iterations, call timeout, description). Read-only and redacted -- no manifest contents, instructions, env, or prompts. Use a recipe id with chit_batch_start or chit_plan_start; for chit_start, use the recipe's manifestPath as manifest_path. Resolves layered global + repo config, read fresh per call.",
+			"List the effective recipe menu for the target repo: each named converge preset Chit could launch here, with its origin layer (global/repo), bound manifest path, and any loop knobs (max_iterations, call timeout, description). Read-only and redacted -- no manifest contents, instructions, env, or prompts. Use a recipe id with chit_start, chit_batch_start, or chit_plan_start. Resolves layered global + repo config, read fresh per call.",
 		inputSchema: {
 			cwd: z
 				.string()
@@ -718,6 +725,13 @@ function launchConvergeJob(p: {
 	scope: string;
 	cwd: string; // absolute
 	manifestPath?: string; // absolute or relative to cwd; undefined -> bundled default
+	// The resolver-bound manifest BYTES for a recipe-backed run. When set, the manifest is
+	// NOT read from the filesystem at all (launch validation and the persisted job both use
+	// these bytes), so a recipe-backed run -- including an in_place one with no managed
+	// worktree -- never depends on the caller checkout's working-tree copy. manifestPath is
+	// then only the resolver-bound identity carried for surfacing. Undefined -> read the
+	// manifest from manifestPath/cwd as before.
+	manifestText?: string;
 	// The APPROVED manifest content digest from a digest-bound start (plan step / batch
 	// task): the read below must still match it, and it is persisted on the job so the
 	// detached worker re-verifies the bytes it reads. Undefined -> no digest binding.
@@ -753,7 +767,17 @@ function launchConvergeJob(p: {
 }): { ok: true; jobId: string; loopId: string; warnings: string[] } | { ok: false; error: string } {
 	let raw: unknown;
 	let manifestAbs: string | undefined;
-	if (p.manifestPath) {
+	if (p.manifestText !== undefined) {
+		// Recipe-backed run: use the resolver-bound bytes directly. No filesystem read, so an
+		// in_place run never touches the caller working tree; manifestPath is kept only as the
+		// surfaced identity. The bytes were already digest-verified at resolution.
+		try {
+			raw = JSON.parse(p.manifestText);
+		} catch (e) {
+			return { ok: false, error: `recipe manifest is not valid JSON: ${(e as Error).message}` };
+		}
+		manifestAbs = p.manifestPath;
+	} else if (p.manifestPath) {
 		// The guarded read: a relative (repo-relative) path is realpath-verified to stay
 		// under the run's cwd (no symlink escape), and a digest-bound launch must still
 		// match the approved bytes.
@@ -774,6 +798,24 @@ function launchConvergeJob(p: {
 		config = getConfig(configCwd);
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
+	}
+	if (p.manifestParticipants !== undefined) {
+		let currentParticipants: ReturnType<typeof resolveManifestParticipantSummary>;
+		try {
+			currentParticipants = resolveManifestParticipantSummary(raw, config);
+		} catch (e) {
+			return {
+				ok: false,
+				error: `could not resolve manifest participant summary: ${(e as Error).message}`,
+			};
+		}
+		const drift = describeParticipantSummaryDrift(p.manifestParticipants, currentParticipants);
+		if (drift !== undefined) {
+			return {
+				ok: false,
+				error: `manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; re-run the start.`,
+			};
+		}
 	}
 	const prep = prepareConvergeExecute(
 		raw,
@@ -842,6 +884,7 @@ function launchConvergeJob(p: {
 		scope: p.scope,
 		task: p.task,
 		...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
+		...(p.manifestText !== undefined && { manifestText: p.manifestText }),
 		...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
 		...(p.manifestParticipants !== undefined && { manifestParticipants: p.manifestParticipants }),
 		...(p.recipe !== undefined && { recipe: p.recipe }),
@@ -1086,6 +1129,9 @@ function describeJob(job: JobRecord) {
 			loopId: job.loopId,
 			scope: job.scope,
 			task: job.task,
+			// The vetted recipe this background run was launched from, when one backed it, so a
+			// status snapshot answers which preset ran even after the launching session is gone.
+			...(job.recipe !== undefined && { recipe: job.recipe.id }),
 			...(job.iteration !== undefined && { iteration: job.iteration }),
 			iterationsCompleted: job.iterationsCompleted,
 			...(job.lastVerdict !== undefined && { lastVerdict: job.lastVerdict }),
@@ -1285,6 +1331,9 @@ export function loopRunView(session: ConvergeSession, now: number = Date.now()) 
 		...workspaceView(session),
 		iterationsCompleted: session.iteration,
 		cancellable: !stopped,
+		// The vetted recipe this run was launched from, when chit_start was given one, so a
+		// status read answers which preset ran (the full receipt lives in the loop header + audit).
+		...(session.recipe !== undefined && { recipe: session.recipe.id }),
 		...(session.lastVerdict !== undefined && { lastVerdict: session.lastVerdict }),
 		...(session.lastVerification !== undefined && { lastVerification: session.lastVerification }),
 		...(session.lastVerificationSource !== undefined && {
@@ -1503,26 +1552,53 @@ export function resolveRunWorkspace(
 	return { workerLive: false };
 }
 
+// The built-in loop iteration budget when neither the tool input nor a recipe sets one.
+const DEFAULT_LOOP_MAX_ITERATIONS = 3;
+
+// The effective loop budgets for a start: an explicit tool input is the CLOSEST
+// override, then the recipe's approved default, then the built-in fallback. Mirrors
+// the batch gate's first-defined-wins precedence (explicit > recipe default > base),
+// so a recipe-backed chit_start budgets identically to a recipe-backed batch task.
+// callTimeoutMs has NO numeric fallback: absent, the agents' configured timeout (the
+// 15-min default) applies downstream, so it stays undefined rather than invented here.
+export function effectiveStartKnobs(
+	explicit: { maxIterations?: number; callTimeoutMs?: number },
+	recipe: { maxIterations?: number; callTimeoutMs?: number } | undefined,
+): { maxIterations: number; callTimeoutMs?: number } {
+	const maxIterations =
+		explicit.maxIterations ?? recipe?.maxIterations ?? DEFAULT_LOOP_MAX_ITERATIONS;
+	const callTimeoutMs = explicit.callTimeoutMs ?? recipe?.callTimeoutMs;
+	return { maxIterations, ...(callTimeoutMs !== undefined && { callTimeoutMs }) };
+}
+
 // Open a run: the single public entry point. The manifest's policy decides the
 // kind (one-shot DAG vs converge loop); `mode` decides where it runs. `task` (no
-// manifest) converges on a slice with the built-in loop manifest.
+// manifest) converges on a slice with the built-in loop manifest. A `recipe` names
+// a vetted converge preset: it supplies the manifest + default budgets and runs as a
+// loop, the same execution surface a recipe-backed plan step or batch task launches.
 server.registerTool(
 	"chit_start",
 	{
 		description:
-			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), or `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge). mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: chit_wait blocks until it finishes (don't poll), chit_status for a snapshot, chit_cancel to stop. For SEVERAL tasks in parallel, use chit_batch_start (it isolates each in its own git worktree).",
+			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge), or `recipe` to run a vetted converge preset from config (it supplies the manifest and default budgets; list them with chit_recipes). A recipe is converge-only, so a recipe-backed run is a loop run: it needs `task` and `scope` just like the built-in loop, and the resolved recipe is stamped through the run for status/trace/audit. mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: chit_wait blocks until it finishes (don't poll), chit_status for a snapshot, chit_cancel to stop. For SEVERAL tasks in parallel, use chit_batch_start (it isolates each in its own git worktree).",
 		inputSchema: {
 			task: z
 				.string()
 				.optional()
 				.describe(
-					"A slice to converge on, using the built-in loop manifest. A loop run requires it; omit when manifest_path names a one-shot manifest.",
+					"A slice to converge on, using the built-in loop manifest (or the recipe's manifest). A loop run requires it; omit when manifest_path names a one-shot manifest.",
 				),
 			manifest_path: z
 				.string()
 				.optional()
 				.describe(
-					"Path to a manifest .json (absolute or relative to cwd). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop.",
+					"Path to a manifest .json (absolute or relative to cwd). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop. Mutually exclusive with recipe.",
+				),
+			recipe: z
+				.string()
+				.optional()
+				.describe(
+					"A vetted config recipe id (kebab-case, from chit_recipes / chit config) to run. The recipe supplies the converge manifest and default max_iterations / call_timeout_ms; explicit max_iterations / call_timeout_ms below stay the closest override. Recipes are converge-only, so this is a loop run: pass `task` and `scope`. Mutually exclusive with manifest_path.",
 				),
 			mode: z
 				.enum(["foreground", "background"])
@@ -1551,8 +1627,10 @@ server.registerTool(
 				.number()
 				.int()
 				.min(1)
-				.default(3)
-				.describe("Loop iteration budget (loop runs only). Default 3."),
+				.optional()
+				.describe(
+					"Loop iteration budget (loop runs only). Closest override: beats a recipe's default. Default when neither is set: 3.",
+				),
 			allow_unenforced_permissions: z
 				.boolean()
 				.default(false)
@@ -1584,6 +1662,7 @@ server.registerTool(
 	async ({
 		task,
 		manifest_path,
+		recipe,
 		mode,
 		scope,
 		cwd,
@@ -1595,8 +1674,17 @@ server.registerTool(
 		in_place,
 		call_timeout_ms,
 	}) => {
-		if (!task && !manifest_path) {
-			return errorResult("provide `task` (to converge with the built-in loop) or `manifest_path`");
+		// A recipe supplies its own manifest, so the two manifest sources are mutually
+		// exclusive (the same rule a batch / plan step enforces between recipe and manifestPath).
+		if (recipe !== undefined && manifest_path !== undefined) {
+			return errorResult(
+				"`recipe` and `manifest_path` are mutually exclusive; a recipe supplies its own manifest",
+			);
+		}
+		if (!task && !manifest_path && recipe === undefined) {
+			return errorResult(
+				"provide `task` (to converge with the built-in loop), `manifest_path`, or `recipe`",
+			);
 		}
 		const runCwd = resolve(cwd ?? process.cwd());
 		// Read the manifest once to learn its policy; task-form uses the built-in loop
@@ -1606,7 +1694,74 @@ server.registerTool(
 		// foreground (reuses raw) and background (gets this absolute path) read the same file.
 		let raw: unknown;
 		let manifestAbs: string | undefined;
-		if (manifest_path) {
+		// Recipe-backed extras stamped through the run when `recipe` is set: the resolved
+		// receipt (identity + provenance + defaults), the manifest content digest, the safe
+		// participant summary, and the recipe's default budgets -- the SAME approval surface a
+		// recipe-backed plan step / batch task binds, resolved ONCE here and never re-resolved.
+		let recipeReceipt: RecipeReceipt | undefined;
+		let manifestDigest: string | undefined;
+		let manifestParticipants: Record<string, BoundParticipantSummary> | undefined;
+		let recipeDefaults: { maxIterations?: number; callTimeoutMs?: number } | undefined;
+		// The resolver-bound manifest IDENTITY for a recipe (repo-relative, or absolute for a
+		// global recipe), carried for surfacing, plus its resolver-bound BYTES. The bytes are
+		// what launch/job/worker actually execute, so a recipe-backed run -- foreground OR
+		// background, isolated OR in_place -- never re-reads the caller working tree.
+		let recipeManifestRef: string | undefined;
+		let recipeManifestText: string | undefined;
+		if (recipe !== undefined) {
+			// Resolve the recipe against the commit the run executes from (HEAD of the caller
+			// checkout, what the managed worktree is cut from) through the SAME fresh-config
+			// recipe resolver plan and batch use. gitCwd is the checkout's toplevel so a
+			// repo-relative recipe manifest normalizes from the repo root, not a subdir cwd.
+			let resolved: ReturnType<typeof resolveRecipeReal>;
+			let text: string;
+			try {
+				const callerCheckout = repoToplevel(realGit, runCwd);
+				const baseSha = resolveBaseSha(realGit, runCwd, "HEAD");
+				resolved = resolveRecipeReal({
+					recipeId: recipe,
+					baseSha,
+					gitCwd: callerCheckout,
+					configCwd: runCwd,
+				});
+				// Read the manifest from the SAME read point the resolver bound -- the git TREE at
+				// baseSha for a repo-relative recipe, the absolute file for a global one -- NOT the
+				// caller checkout's working tree. A dirty or deleted caller-side copy must not block
+				// a committed, valid recipe. These bytes are carried to the background worker too (as
+				// manifestText), so the detached run executes them verbatim and never re-reads the
+				// working tree, even for an in_place run with no managed worktree.
+				text = readBoundManifestText(
+					{ manifestPath: resolved.binding.manifestPath, source: resolved.binding.source },
+					{ git: realGit, gitCwd: callerCheckout, baseSha },
+				);
+			} catch (e) {
+				return errorResult(safeMcpError(e));
+			}
+			recipeReceipt = recipeReceiptOf(resolved);
+			manifestDigest = resolved.binding.manifestDigest;
+			manifestParticipants = resolved.binding.participants;
+			recipeDefaults = {
+				...(resolved.maxIterations !== undefined && { maxIterations: resolved.maxIterations }),
+				...(resolved.callTimeoutMs !== undefined && { callTimeoutMs: resolved.callTimeoutMs }),
+			};
+			recipeManifestRef = resolved.binding.manifestPath;
+			recipeManifestText = text;
+			// The bytes the resolver digested ARE the run's manifest; reuse them for the policy
+			// parse and the foreground prep below. Guard against drift between the resolver's read
+			// and this one (a global recipe's absolute file could change between two filesystem reads).
+			if (digestManifestText(text) !== manifestDigest) {
+				return errorResult(
+					`recipe ${JSON.stringify(recipe)} manifest changed during resolution; re-run the start`,
+				);
+			}
+			try {
+				raw = JSON.parse(text);
+			} catch (e) {
+				return errorResult(
+					`recipe ${JSON.stringify(recipe)} manifest is not valid JSON: ${(e as Error).message}`,
+				);
+			}
+		} else if (manifest_path) {
 			manifestAbs = resolveManifestPathAbsolute(manifest_path, runCwd);
 			try {
 				raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
@@ -1625,6 +1780,22 @@ server.registerTool(
 		} catch (e) {
 			return errorResult(`invalid manifest: ${(e as Error).message}`);
 		}
+		// Recipes are converge-only: a recipe whose manifest is one-shot is a config error,
+		// refused here rather than silently dispatched to the one-shot path (which rejects `task`).
+		if (recipe !== undefined && manifest.policy.kind !== "loop") {
+			return errorResult(
+				`recipe ${JSON.stringify(recipe)} resolves to a one-shot manifest, but recipes are converge-only (loop)`,
+			);
+		}
+		// Effective loop budgets: an explicit tool input beats the recipe's default beats the
+		// built-in fallback. Computed once and threaded into both modes below.
+		const knobs = effectiveStartKnobs(
+			{
+				...(max_iterations !== undefined && { maxIterations: max_iterations }),
+				...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
+			},
+			recipeDefaults,
+		);
 
 		// Resolve the run's effective verification: the run-level `required_checks`
 		// REPLACES the manifest policy's requiredChecks (never merges), and applies only
@@ -1696,12 +1867,23 @@ server.registerTool(
 					runId,
 					cwd: ws.cwd,
 					...(worktree && { worktree }),
-					// Absolute, resolved against the caller cwd (F2): bg must read the SAME manifest
-					// file as fg, not re-resolve a relative path against the worktree.
-					...(manifestAbs !== undefined && { manifestPath: manifestAbs }),
-					maxIterations: max_iterations,
+					// A direct manifest_path stays the absolute caller path (read from where the user
+					// pointed, F2). A recipe carries its resolver-bound IDENTITY (repo-relative, or a
+					// global recipe's absolute path) for surfacing, plus its resolver-bound BYTES, so
+					// the detached worker executes those bytes verbatim and never re-reads the caller
+					// working tree -- robust whether the run is isolated in a worktree or runs in_place.
+					...(recipeManifestRef !== undefined
+						? { manifestPath: recipeManifestRef, manifestText: recipeManifestText }
+						: manifestAbs !== undefined && { manifestPath: manifestAbs }),
+					// Recipe-backed run: stamp the approved digest + participant summary + receipt so
+					// the detached worker re-verifies the bytes it reads and status/trace/audit answer
+					// which vetted recipe ran -- the same fields a recipe-backed batch task carries.
+					...(manifestDigest !== undefined && { manifestDigest }),
+					...(manifestParticipants !== undefined && { manifestParticipants }),
+					...(recipeReceipt !== undefined && { recipe: recipeReceipt }),
+					maxIterations: knobs.maxIterations,
 					...(requiredChecks && { requiredChecks }),
-					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
+					...(knobs.callTimeoutMs !== undefined && { callTimeoutMs: knobs.callTimeoutMs }),
 					allowUnenforced: allow_unenforced_permissions,
 				});
 				if (!r.ok) {
@@ -1722,6 +1904,24 @@ server.registerTool(
 			// runConfig was set by ensureConfig above (planManagedWorkspace always loads
 			// config before opening a workspace); the fallback only satisfies the type.
 			runConfig ??= getConfig(runCwd);
+			if (manifestParticipants !== undefined) {
+				let currentParticipants: ReturnType<typeof resolveManifestParticipantSummary>;
+				try {
+					currentParticipants = resolveManifestParticipantSummary(raw, runConfig);
+				} catch (e) {
+					ws.cleanup?.();
+					return errorResult(
+						`could not resolve recipe participant summary: ${(e as Error).message}`,
+					);
+				}
+				const drift = describeParticipantSummaryDrift(manifestParticipants, currentParticipants);
+				if (drift !== undefined) {
+					ws.cleanup?.();
+					return errorResult(
+						`manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; re-run the start.`,
+					);
+				}
+			}
 			const prep = prepareConvergeExecute(
 				raw,
 				runConfig.registry,
@@ -1729,7 +1929,7 @@ server.registerTool(
 				ws.cwd, // agents implement/review IN the managed worktree (== runCwd when in_place)
 				allow_unenforced_permissions,
 				runConfig.roles,
-				call_timeout_ms, // per-run override -> applied to every participant's adapter
+				knobs.callTimeoutMs, // effective override (explicit > recipe default) -> every adapter
 			);
 			if (!prep.ok) {
 				ws.cleanup?.(); // setup failed before the loop opened: retire the empty worktree
@@ -1743,12 +1943,15 @@ server.registerTool(
 					...(worktree && { worktree }),
 					scope,
 					task,
-					maxIterations: max_iterations,
+					maxIterations: knobs.maxIterations,
+					// The approved recipe receipt (when a recipe backed this start), stamped into the
+					// loop header and each iteration's audit so a foreground run answers which recipe ran.
+					...(recipeReceipt !== undefined && { recipe: recipeReceipt }),
 					force: false,
 					execute: prep.execute,
 					// Run-level required_checks replace the manifest's for this run.
 					loopSteps: { ...prep.loopSteps, ...(requiredChecks && { requiredChecks }) },
-					...(call_timeout_ms !== undefined && { callTimeoutMs: call_timeout_ms }),
+					...(knobs.callTimeoutMs !== undefined && { callTimeoutMs: knobs.callTimeoutMs }),
 					// Provenance resolved at the chokepoint, carried on the session for status/trace.
 					participants: prep.participants,
 				});

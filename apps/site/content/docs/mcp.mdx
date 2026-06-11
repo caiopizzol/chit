@@ -70,7 +70,8 @@ All results are JSON in a single text block. Most embed a run view: `{ run_id, m
 Open a run and return its `run_id`. Inputs:
 
 - `task?` - a slice to converge on with the built-in loop. A loop run requires it; omit it when `manifest_path` names a one-shot manifest.
-- `manifest_path?` - a manifest `.json` (absolute, or relative to `cwd`). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop.
+- `manifest_path?` - a manifest `.json` (absolute, or relative to `cwd`). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop. Mutually exclusive with `recipe`.
+- `recipe?` - a vetted config recipe id from `chit_recipes`. Recipes are converge-only today: the recipe supplies the loop manifest plus default `max_iterations` / `call_timeout_ms`, and the run still needs `task` and `scope`. Mutually exclusive with `manifest_path`; explicit `max_iterations` and `call_timeout_ms` inputs override the recipe defaults.
 - `mode` - `foreground` (default) or `background`.
 - `scope?` - session scope id. Required for a loop run and for any `per_scope` manifest.
 - `cwd?` - repo / working dir (defaults to the server cwd; also where a loop log is written).
@@ -157,7 +158,7 @@ List the effective recipe menu for the target repo. Inputs: `cwd?`.
 
 Returns `{ recipes, configPath?, repoConfigPath? }`, where each recipe is the redacted launch surface: `id`, `origin` (`global` or `repo`), `mode`, `manifestPath`, and optional loop knobs (`maxIterations`, `callTimeoutMs`, `description`). It loads layered config fresh for the given `cwd`, using the same global plus repo rules as the launch tools.
 
-This is read-only and redacted: it never returns manifest contents, participant instructions, prompts, env values, permissions, audit blobs, or model output. Use a returned recipe id with `chit_plan_start` or `chit_batch_start`. For a single `chit_start` run, use the recipe's `manifestPath` as `manifest_path`.
+This is read-only and redacted: it never returns manifest contents, participant instructions, prompts, env values, permissions, audit blobs, or model output. Use a returned recipe id with `chit_start`, `chit_plan_start`, or `chit_batch_start`.
 
 ## Run a sequential plan
 

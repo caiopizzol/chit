@@ -16,7 +16,11 @@ import {
 	type RecipeReceipt,
 	type RequiredCheck,
 } from "@chit-run/core";
-import { normalizeManifestReference, type ResolvedRecipe } from "../manifest/binding.ts";
+import {
+	normalizeManifestReference,
+	type ResolvedRecipe,
+	recipeReceiptOf,
+} from "../manifest/binding.ts";
 import { type BatchEngineDeps, type BatchView, describeBatch, startBatch } from "./engine.ts";
 import { assertRecipeId, PlanError, planTasks, type TaskInput } from "./plan.ts";
 import type { BatchStore } from "./store.ts";
@@ -362,19 +366,5 @@ function resolveBatchBindings(
 	return {
 		...(manifests !== undefined && { manifests }),
 		...(recipes !== undefined && { recipes }),
-	};
-}
-
-// The hash-bound receipt of a resolved recipe: identity + provenance + runtime
-// defaults, WITHOUT the manifest binding (that is bound separately in the manifests
-// record -- reference, not duplicate). Mirrors the plan gate's recipe record shape.
-function recipeReceiptOf(resolved: ResolvedRecipe): RecipeReceipt {
-	return {
-		id: resolved.id,
-		...(resolved.origin !== undefined && { origin: resolved.origin }),
-		mode: resolved.mode,
-		...(resolved.maxIterations !== undefined && { maxIterations: resolved.maxIterations }),
-		...(resolved.callTimeoutMs !== undefined && { callTimeoutMs: resolved.callTimeoutMs }),
-		...(resolved.description !== undefined && { description: resolved.description }),
 	};
 }

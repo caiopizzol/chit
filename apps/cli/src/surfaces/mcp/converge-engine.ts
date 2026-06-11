@@ -19,6 +19,7 @@ import type {
 	LoopRecord,
 	LoopStopStatus,
 	LoopVerdict,
+	RecipeReceipt,
 	RequiredCheck,
 	Verification,
 	VerificationSource,
@@ -99,6 +100,11 @@ export interface ConvergeSession {
 	callerCheckout?: string; // the LAUNCHING checkout (chit_apply's default target)
 	task: string;
 	maxIterations: number;
+	// The approved/resolved config recipe this run was launched from, when chit_start
+	// was given a `recipe`. Stamped into the loop header (startLoop) and each iteration's
+	// audit (runConvergeIteration) so status/trace answer which vetted recipe ran. Absent
+	// for a bare task run or a direct manifest_path run.
+	recipe?: RecipeReceipt;
 	execute: ConvergeExecute;
 	// The implementer/reviewer step ids resolved from the manifest's loop policy,
 	// so each iteration reads the right outputs even for a non-default-named loop.
@@ -182,6 +188,9 @@ export interface StartConvergeOptions {
 	scope: string;
 	task: string;
 	maxIterations: number;
+	// The approved/resolved recipe receipt, when this run was launched from a recipe.
+	// Persisted in the loop header and stamped into each iteration's audit.
+	recipe?: RecipeReceipt;
 	loopId?: string;
 	force?: boolean;
 	// A chit-managed worktree this run executes in (cwd is already the worktree path).
@@ -217,6 +226,9 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		maxIterations: opts.maxIterations,
 		loopId: opts.loopId,
 		force: opts.force,
+		// Stamp the recipe into the durable loop header so a closed-session run still
+		// answers which vetted recipe it ran (the same field a background job persists).
+		...(opts.recipe !== undefined && { recipe: opts.recipe }),
 		...(opts.participants !== undefined && { participants: opts.participants }),
 		// Persist the managed-worktree metadata in the loop HEADER so a closed-session run is
 		// recoverable from its durable log (#100). repo here is the worktree's MAIN repo (recorded
@@ -244,6 +256,7 @@ export function startConvergeSession(opts: StartConvergeOptions): ConvergeSessio
 		}),
 		task: opts.task,
 		maxIterations: opts.maxIterations,
+		...(opts.recipe !== undefined && { recipe: opts.recipe }),
 		execute: opts.execute,
 		implementStep: opts.loopSteps?.implementStep ?? "implement",
 		reviewStep: opts.loopSteps?.reviewStep ?? "review",
@@ -419,6 +432,7 @@ export async function runNextIteration(
 				cwd: session.cwd,
 				loopId: session.loopId,
 				iteration,
+				...(session.recipe !== undefined && { recipe: session.recipe }),
 				task: session.task,
 				prior_review: session.priorReview,
 				execute: session.execute,

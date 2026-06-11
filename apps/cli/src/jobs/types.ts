@@ -106,8 +106,18 @@ export interface LoopJobRecord extends BaseJobRecord {
 	loopId: string; // the loop-log key (internal; never the public handle)
 	scope: string;
 	task: string; // the slice to converge on
-	// Absolute converge manifest path, or undefined for the embedded default.
+	// Absolute converge manifest path, or undefined for the embedded default. For a
+	// recipe-backed run it is the resolver-bound IDENTITY (repo-relative, or absolute for
+	// a global recipe) carried for surfacing only -- the worker reads manifestText, not
+	// this path, so the run never re-touches the caller working tree.
 	manifestPath?: string;
+	// The resolver-bound manifest BYTES for a recipe-backed run, captured at start from the
+	// read point the resolver bound (the git tree at the run's base commit, or a global
+	// recipe's file). The worker executes these EXACT bytes instead of re-reading the
+	// filesystem, so an in_place recipe run (no managed worktree) never depends on the
+	// caller checkout's working-tree copy, which may be dirty or deleted. Absent for
+	// non-recipe runs, which read manifestPath from their run cwd.
+	manifestText?: string;
 	// The APPROVED manifest content digest ("sha256:<hex>") when this run was launched
 	// from a digest-bound approval (a plan step or batch task). The worker re-reads the
 	// manifest in its own process and REFUSES to run when the bytes no longer match --

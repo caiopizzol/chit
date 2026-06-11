@@ -26,6 +26,7 @@ import {
 	type ManifestBindingSource,
 	type NormalizedConfig,
 	parseManifest,
+	type RecipeReceipt,
 	resolveManifest,
 	resolveParticipantSnapshots,
 } from "@chit-run/core";
@@ -331,5 +332,21 @@ export function resolveRecipe(
 		...(recipe.maxIterations !== undefined && { maxIterations: recipe.maxIterations }),
 		...(recipe.callTimeoutMs !== undefined && { callTimeoutMs: recipe.callTimeoutMs }),
 		...(recipe.description !== undefined && { description: recipe.description }),
+	};
+}
+
+// The hash-bound receipt of a resolved recipe: identity + provenance + runtime
+// defaults, WITHOUT the manifest binding (that is referenced separately in a
+// manifests record -- reference, not duplicate). Single-sources the
+// ResolvedRecipe -> RecipeReceipt mapping the plan gate, the batch gate, and a
+// recipe-backed chit_start all stamp.
+export function recipeReceiptOf(resolved: ResolvedRecipe): RecipeReceipt {
+	return {
+		id: resolved.id,
+		...(resolved.origin !== undefined && { origin: resolved.origin }),
+		mode: resolved.mode,
+		...(resolved.maxIterations !== undefined && { maxIterations: resolved.maxIterations }),
+		...(resolved.callTimeoutMs !== undefined && { callTimeoutMs: resolved.callTimeoutMs }),
+		...(resolved.description !== undefined && { description: resolved.description }),
 	};
 }

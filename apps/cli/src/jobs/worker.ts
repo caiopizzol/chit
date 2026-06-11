@@ -38,7 +38,11 @@ import {
 import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
 import { loadConfig } from "../config/load.ts";
 import { stopLoop } from "../loops/log-store.ts";
-import { readJobManifest, resolveManifestParticipantSummary } from "../manifest/binding.ts";
+import {
+	digestManifestText,
+	readJobManifest,
+	resolveManifestParticipantSummary,
+} from "../manifest/binding.ts";
 import { type RunOnceResult, runManifestOnce, validateOneShotAuth } from "../runs/run-once.ts";
 import {
 	appendLiveEvent,
@@ -98,9 +102,33 @@ function iso(ms: number): string {
 // a terminal verdict: the JOB completed (the stopStatus carries the nuance).
 // `cancelled` is the only stop that maps to a cancelled job; a broken manifest run
 // is handled on its own branch as `failed`.
-function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
+// Exported for a focused test of the manifest read point: a recipe-backed job carries
+// resolver-bound `manifestText`, and the worker must execute those bytes WITHOUT touching
+// the caller working tree (an in_place recipe run has no managed worktree).
+export function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	let raw: unknown;
-	if (job.manifestPath) {
+	if (job.manifestText !== undefined) {
+		// Recipe-backed run: execute the EXACT resolver-bound bytes captured at start (from the
+		// git tree at the run's base commit, or a global recipe's file), never the caller
+		// working tree. This keeps an in_place recipe run (no managed worktree) independent of a
+		// dirty or deleted working-tree copy.
+		// The persisted bytes still face the SAME approved-digest gate the filesystem branch
+		// enforces -- the last verification before execution -- so a job whose manifestText was
+		// tampered with (or whose stamped digest no longer matches the bytes) is refused exactly
+		// as a drifted on-disk manifest would be, rather than silently running unverified bytes.
+		const digest = digestManifestText(job.manifestText);
+		if (job.manifestDigest !== undefined && digest !== job.manifestDigest) {
+			return {
+				ok: false,
+				error: `recipe manifest no longer matches the approved content (approved ${job.manifestDigest}, found ${digest}); the execution surface changed after approval, so the run is refused -- re-run the dry run and re-approve`,
+			};
+		}
+		try {
+			raw = JSON.parse(job.manifestText);
+		} catch (e) {
+			return { ok: false, error: `recipe manifest is not valid JSON: ${(e as Error).message}` };
+		}
+	} else if (job.manifestPath) {
 		// The guarded read: a relative (repo-relative) path is realpath-verified to stay
 		// under the run's worktree (no symlink escape), and when the job carries an
 		// approved digest the bytes must still match it -- the last verification before

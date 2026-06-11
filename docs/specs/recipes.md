@@ -1,8 +1,9 @@
 # Spec: Recipes as a config reference layer (v1)
 
-Status: Phases 1-5 shipped: config surface, manifest digest binding in
-approvals, plan-step `recipe`, batch `recipe`, and Studio read-only recipe
-visibility. Internal design note (not the published site).
+Status: Phases 1-6 shipped: config surface, manifest digest binding in
+approvals, plan-step `recipe`, batch `recipe`, Studio read-only recipe
+visibility, and single-run `recipe` on `chit_start`. Internal design note (not
+the published site).
 
 ## What shipped
 
@@ -116,6 +117,39 @@ Rules:
 
 Batch dependencies are still launch gates only. They do not merge code between
 tasks, with or without recipes.
+
+## Single-run `recipe` (Phase 6)
+
+`chit_start` accepts a `recipe` id directly, so a single unattended run can use a
+vetted preset without an orchestrating plan or batch. The `chit_recipes` menu now
+points at `chit_start` alongside `chit_batch_start` and `chit_plan_start`.
+
+Rules:
+
+- `recipe` and `manifest_path` are mutually exclusive (a recipe supplies its own
+  manifest); the pair is refused before any resolution.
+- Recipes are converge-only, so a recipe-backed start is a loop run: it needs
+  `task` and `scope` exactly like a built-in-loop or loop-manifest start. A recipe
+  whose manifest resolves to a one-shot policy is refused.
+- The recipe resolves once, at start, through the SAME fresh-config recipe resolver
+  and layered-config path plan and batch use, against the commit the run executes
+  from (HEAD of the caller checkout, what the managed worktree is cut from). There
+  is no separate dry-run/confirm gate: the resolved binding IS the approved surface.
+- The recipe supplies the manifest and default `maxIterations`/`callTimeoutMs`; an
+  explicit `max_iterations`/`call_timeout_ms` tool input stays the closest override
+  (explicit > recipe default > built-in fallback, per knob), matching the batch
+  gate's precedence. `max_iterations` therefore lost its hard schema default of 3;
+  the fallback now applies only when neither input nor recipe sets it.
+- The resolved recipe receipt, manifest content digest, and participant execution
+  summary are stamped through the run wherever a recipe-backed plan step / batch
+  task already stamps them: the loop log header, the durable job record (background),
+  the in-memory session (foreground), and each iteration's audit. A background
+  worker re-verifies the digest against the bytes it reads before executing, so an
+  uncommitted edit to a vetted manifest is refused as drift. `chit_status` /
+  `chit_trace` surface which recipe ran (by id) for both modes.
+- Bare `task` runs, direct `manifest_path` runs, foreground/background dispatch,
+  `required_checks` replacement, and `in_place` are unchanged: the recipe path only
+  adds a third manifest source and the stamping the other surfaces already do.
 
 ## Studio recipe visibility (Phase 5)
 

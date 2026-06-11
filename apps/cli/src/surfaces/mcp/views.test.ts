@@ -255,6 +255,33 @@ describe("unified run views: run_id + unified vocabulary, no leakage", () => {
 		expectNoLeakage(v);
 	});
 
+	test("a recipe-backed foreground loop view surfaces which recipe ran (id only)", () => {
+		const v = loopRunView(
+			loopSession({
+				recipe: { id: "deep-feature", mode: "converge", maxIterations: 8 },
+			}),
+		) as Record<string, unknown>;
+		// The status read answers which vetted preset ran; only the id crosses the wire (the
+		// full receipt lives in the loop header + audit, not this compact view).
+		expect(v.recipe).toBe("deep-feature");
+		expectNoLeakage(v);
+	});
+
+	test("a recipe-backed background loop view surfaces which recipe ran (id only)", () => {
+		const v = backgroundRunView(
+			job({ runId: "bg-rx", recipe: { id: "quick-fix", mode: "converge", maxIterations: 2 } }),
+		) as Record<string, unknown>;
+		expect(v.recipe).toBe("quick-fix");
+		expectNoLeakage(v);
+	});
+
+	test("a bare (no-recipe) loop view omits the recipe field entirely", () => {
+		const fg = loopRunView(loopSession()) as Record<string, unknown>;
+		const bg = backgroundRunView(job()) as Record<string, unknown>;
+		expect(fg).not.toHaveProperty("recipe");
+		expect(bg).not.toHaveProperty("recipe");
+	});
+
 	test("a loop view surfaces the latest verification + source, and the nextAction branches on them", () => {
 		const v = loopRunView(
 			loopSession({

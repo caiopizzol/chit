@@ -115,9 +115,11 @@ These are the local facts this plan builds on:
   entities, with provenance.
 - Plans and batches already use dry-run by default and require `confirm:true`
   plus a matching approval hash to start.
-- Plan steps and batch tasks may select a recipe by id, or use a direct
-  manifest path for manual expert use. Recipe and direct manifest path are
-  mutually exclusive at each selection point.
+- Plan steps, batch tasks, and a single `chit_start` may select a recipe by id,
+  or use a direct manifest path for manual expert use. Recipe and direct manifest
+  path are mutually exclusive at each selection point. A recipe-backed
+  `chit_start` runs as a converge loop (recipes are converge-only) and stamps the
+  resolved receipt through the run the same way a recipe-backed step/task does.
 - Approval artifacts bind resolved recipes, direct manifest references, manifest
   content digests, resolved base commits, launch knobs, and participant
   execution summaries.

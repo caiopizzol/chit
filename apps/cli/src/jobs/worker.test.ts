@@ -10,7 +10,7 @@ import { digestManifestText } from "../manifest/binding.ts";
 import { MAX_LIVE_EVENTS } from "../runtime/live-events.ts";
 import { JobStore } from "./store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "./types.ts";
-import { type JobWorkerDeps, runJobWorker } from "./worker.ts";
+import { defaultResolveExecute, type JobWorkerDeps, runJobWorker } from "./worker.ts";
 
 let cwd: string;
 let stateDir: string;
@@ -921,5 +921,102 @@ describe("required checks via the background worker (chit-executed)", () => {
 		seedJob({ maxIterations: 1, requiredChecks: [] });
 		await runJobWorker("j1", depsWithChecks(fakeExecute([{ verdict: "proceed" }]), [FAIL]));
 		expect(firstIter()).toMatchObject({ verificationSource: "reviewer" });
+	});
+});
+
+// The background execution read point for a recipe-backed run: launchConvergeJob captured
+// the recipe manifest from the resolver-bound git tree and persisted the bytes as
+// manifestText. The worker must execute THOSE bytes and never re-read the caller working
+// tree, so an in_place recipe run (no managed worktree) survives a dirty or deleted
+// working-tree copy -- the background-mode counterpart of the foreground regression in
+// surfaces/mcp/recipe-start.test.ts.
+describe("background worker: recipe-backed manifestText read point", () => {
+	// A complete, read-only converge manifest referencing the built-in `codex` agent, so it
+	// resolves against the default registry without the temp cwd defining any agent.
+	const RECIPE_MANIFEST = JSON.stringify({
+		schema: 1,
+		id: "ro",
+		description: "read-only converge preset",
+		inputs: { task: { type: "string" }, prior_review: { type: "string", optional: true } },
+		participants: {
+			impl: {
+				agent: "codex",
+				instructions: "Implement.",
+				session: "per_scope",
+				permissions: { filesystem: "read_only" },
+			},
+			rev: {
+				agent: "codex",
+				instructions: "Review.",
+				session: "per_scope",
+				permissions: { filesystem: "read_only" },
+			},
+		},
+		steps: {
+			implement: { call: "impl", prompt: "{{ inputs.task }}" },
+			review: { call: "rev", prompt: "{{ steps.implement.output }}" },
+			out: { format: "{{ steps.review.output }}" },
+		},
+		output: "out",
+		policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+	});
+
+	function recipeJob(over: Partial<LoopJobRecord> = {}): LoopJobRecord {
+		return {
+			runId: "j1",
+			policy: "loop",
+			loopId: "j1",
+			repoKey: "k",
+			cwd, // a temp dir with no chit.config.json -> built-in registry (codex resolves)
+			scope: "s",
+			task: "t",
+			maxIterations: 2,
+			// Read-only participants under an adapter that may not enforce read_only are an
+			// enforcement gap; the recipe path allows it as a warning rather than blocking.
+			allowUnenforced: true,
+			state: "queued",
+			createdAt: "2026-06-01T10:00:00.000Z",
+			iterationsCompleted: 0,
+			auditRefs: [],
+			...over,
+		} as LoopJobRecord;
+	}
+
+	test("resolves from manifestText even when the manifestPath copy is missing", () => {
+		// manifestPath points at a path that does NOT exist on disk: with the OLD behavior the
+		// worker would readJobManifest it and fail ENOENT. The persisted bytes make it resolve.
+		const resolved = defaultResolveExecute(
+			recipeJob({
+				manifestText: RECIPE_MANIFEST,
+				manifestPath: join(cwd, "manifests", "gone.json"),
+				manifestDigest: digestManifestText(RECIPE_MANIFEST),
+			}),
+		);
+		expect(resolved.ok).toBe(true);
+	});
+
+	test("without manifestText, a missing manifestPath fails the read (proving manifestText is what saves it)", () => {
+		const resolved = defaultResolveExecute(
+			recipeJob({ manifestPath: join(cwd, "manifests", "gone.json") }),
+		);
+		expect(resolved.ok).toBe(false);
+		if (resolved.ok) throw new Error("expected failure");
+		expect(resolved.error).toContain("could not read manifest");
+	});
+
+	test("manifestText whose bytes do not match the stamped digest is refused (same gate as the filesystem branch)", () => {
+		// The persisted bytes face the approved-digest gate too: a manifestDigest that does not
+		// match the bytes (tampered record / drift) refuses the run before any execution, exactly
+		// as a drifted on-disk manifest does -- the byte path is not weaker than a digest-bound job.
+		const resolved = defaultResolveExecute(
+			recipeJob({
+				manifestText: RECIPE_MANIFEST,
+				manifestPath: join(cwd, "manifests", "gone.json"),
+				manifestDigest: "sha256:not-the-manifest",
+			}),
+		);
+		expect(resolved.ok).toBe(false);
+		if (resolved.ok) throw new Error("expected failure");
+		expect(resolved.error).toContain("no longer matches the approved content");
 	});
 });
