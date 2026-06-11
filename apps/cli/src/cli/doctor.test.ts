@@ -229,6 +229,7 @@ tool_timeout_sec = 30
 		expect(c?.status).toBe("warn");
 		expect(c?.detail).toContain("not set");
 		expect(c?.hint).toContain("1800");
+		expect(c?.hint).toContain("chit_orchestrate");
 	});
 
 	test("warns when tool_timeout_sec is below the floor", () => {
@@ -238,6 +239,7 @@ tool_timeout_sec = 30
 		expect(c?.status).toBe("warn");
 		expect(c?.detail).toContain("120s");
 		expect(c?.detail).toContain("below 900s");
+		expect(c?.hint).toContain("chit_orchestrate");
 	});
 
 	test("passes when tool_timeout_sec is sufficient", () => {

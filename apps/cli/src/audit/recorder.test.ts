@@ -130,6 +130,35 @@ describe("AuditRecorder", () => {
 		expect(ev).toMatchObject({ type: "step.failed", stepId: "s1", error: "boom", durationMs: 50 });
 	});
 
+	test("records the loop iteration row as an audit event", () => {
+		const rec = recorder();
+		rec.runStarted();
+		rec.loopIterationRecorded({
+			loopId: "L1",
+			n: 2,
+			verdict: "proceed",
+			decision: "revise",
+			findingCount: 1,
+			changedFiles: ["src/a.ts"],
+			checksRun: "bun test",
+			checkDurationMs: 321,
+		});
+
+		const ev = store.readEvents("R1").find((e) => e.type === "loop.iteration.recorded");
+		expect(ev).toMatchObject({
+			type: "loop.iteration.recorded",
+			runId: "R1",
+			loopId: "L1",
+			n: 2,
+			verdict: "proceed",
+			decision: "revise",
+			findingCount: 1,
+			changedFiles: ["src/a.ts"],
+			checksRun: "bun test",
+			checkDurationMs: 321,
+		});
+	});
+
 	test("audit is best-effort: a failing store is swallowed and surfaced on lastError", () => {
 		const broken = {
 			openRun() {

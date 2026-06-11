@@ -25,6 +25,7 @@ import {
 	findUnknownAgents,
 	formatEnforcementGaps,
 	type LoopCheck,
+	type LoopIterationRecordedEvent,
 	type LoopStopStatus,
 	type LoopVerdict,
 	type NormalizedConfig,
@@ -134,6 +135,13 @@ const IMPLEMENT_SUMMARY_CAP = 2000;
 // block is absent/invalid, or present but without a usable checksRun.
 const CHECKS_RUN_FALLBACK = "unreported";
 
+type LoopIterationAuditFields = Omit<LoopIterationRecordedEvent, "type" | "runId" | "ts">;
+
+interface ConvergeAuditLink {
+	auditRunId?: string;
+	recordLoopIteration?: (event: LoopIterationAuditFields) => void;
+}
+
 // The injectable execution boundary: one convergence iteration's manifest run.
 // The default (buildExecute) runs the real adapter-backed manifest; tests pass
 // a fake returning canned outputs so the loop logic runs without spawning
@@ -167,7 +175,7 @@ export type ConvergeExecute = (
 		// has run, without changing the converge manifest vocabulary.
 		promptAugment?: PromptAugmenter;
 	},
-) => Promise<RunResult & { auditRunId?: string }>;
+) => Promise<RunResult & ConvergeAuditLink>;
 
 export interface ConvergeLoopOptions {
 	cwd: string;
@@ -524,7 +532,7 @@ export class ConvergeExecuteError extends Error {
 export async function runConvergeIteration(
 	ctx: ConvergeIterationContext,
 ): Promise<ConvergeIterationResult> {
-	let result: RunResult & { auditRunId?: string };
+	let result: RunResult & ConvergeAuditLink;
 	try {
 		result = await ctx.execute(
 			{ task: ctx.task, prior_review: ctx.prior_review },
@@ -563,6 +571,7 @@ export async function runConvergeIteration(
 	const review = parseReview(reviewText);
 	const usage = sumTraceUsage(result.trace);
 	const { changedFiles, workspaceWarnings } = gitWorkspace(ctx.cwd);
+	const checkDurationMs = reviewDurationMs(result.trace, reviewStep);
 
 	// Decide the iteration. Reviewer-sourced by default; when the reviewer returns
 	// proceed AND the loop declares requiredChecks, chit runs them itself and their
@@ -570,7 +579,7 @@ export async function runConvergeIteration(
 	// decideIteration for the full matrix.
 	const outcome = await decideIteration(review, reviewText, ctx);
 
-	appendIteration(ctx.cwd, ctx.loopId, {
+	const appended = appendIteration(ctx.cwd, ctx.loopId, {
 		implementSummary: capSummary(result.outputs[implementStep] ?? ""),
 		changedFiles,
 		workspaceWarnings,
@@ -588,12 +597,26 @@ export async function runConvergeIteration(
 		// failed is recorded as a revise (chit sent it back).
 		decision: outcome.decision,
 		// The check (review) step's own duration, not the whole-run wall time.
-		checkDurationMs: reviewDurationMs(result.trace, reviewStep),
+		checkDurationMs,
 		// Total token/cost across the run's calls (implement + review).
 		...(usage && { usage }),
 		// Link to the audit transcript for this iteration's run, when audited.
 		...(result.auditRunId && { auditRef: result.auditRunId }),
 	});
+	try {
+		result.recordLoopIteration?.({
+			loopId: ctx.loopId,
+			n: appended.n,
+			verdict: review.verdict,
+			decision: outcome.decision,
+			findingCount: review.findingCount,
+			changedFiles,
+			checksRun: review.checksRun,
+			checkDurationMs,
+		});
+	} catch {
+		// Audit is observational. A bad custom hook must not turn a recorded iteration into failure.
+	}
 
 	return {
 		ok: true,
@@ -1063,7 +1086,13 @@ export function makeAuditedExecute(
 			recorder.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
 			recorder.prune(); // opportunistic retention; never prunes this run
 			// Link only when the whole audit run was written cleanly.
-			return recorder.lastError === undefined ? { ...result, auditRunId: runId } : result;
+			return recorder.lastError === undefined
+				? {
+						...result,
+						auditRunId: runId,
+						recordLoopIteration: (event) => recorder.loopIterationRecorded(event),
+					}
+				: result;
 		} catch (e) {
 			recorder.runCompleted("failed", Date.now() - startedAt);
 			recorder.prune();

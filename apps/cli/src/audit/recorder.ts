@@ -17,6 +17,7 @@ import type {
 	AdapterEventEvent,
 	AuditParticipantSnapshot,
 	AuditSurface,
+	LoopIterationRecordedEvent,
 	RecipeReceipt,
 	RunStartedEvent,
 	RunStatus,
@@ -166,6 +167,24 @@ export class AuditRecorder {
 				stepId,
 				error,
 				durationMs,
+			});
+		});
+	}
+
+	loopIterationRecorded(event: Omit<LoopIterationRecordedEvent, "type" | "runId" | "ts">): void {
+		this.safe(() => {
+			this.store.appendEvent(this.runId, {
+				type: "loop.iteration.recorded",
+				runId: this.runId,
+				ts: this.ts(),
+				loopId: event.loopId,
+				n: event.n,
+				verdict: event.verdict,
+				decision: event.decision,
+				findingCount: event.findingCount,
+				changedFiles: event.changedFiles,
+				checksRun: event.checksRun,
+				checkDurationMs: event.checkDurationMs,
 			});
 		});
 	}

@@ -285,10 +285,11 @@ function parseCodexChitTimeout(toml: string): { configured: boolean; timeoutSec?
 	return { configured, timeoutSec };
 }
 
-// Codex applies its own per-tool call deadline on top of chit_wait.timeout_ms, so a
-// long chit_wait can be cut by the host before chit returns. This is advisory only
-// (warn, never fail): we skip the row entirely when Codex has no config or chit is
-// not registered there, since neither case is the user's problem to fix.
+// Codex applies its own per-tool call deadline on top of chit's long MCP calls.
+// A long chit_wait or inline chit_orchestrate planner run can be cut by the host
+// before chit returns. This is advisory only (warn, never fail): we skip the row
+// entirely when Codex has no config or chit is not registered there, since neither
+// case is the user's problem to fix.
 function checkCodexToolTimeout(deps: DoctorDeps): Check | null {
 	const toml = deps.readCodexConfig();
 	if (toml === undefined) return null;
@@ -299,7 +300,7 @@ function checkCodexToolTimeout(deps: DoctorDeps): Check | null {
 			name: "codex tool timeout",
 			status: "warn",
 			detail: "chit is configured for Codex but tool_timeout_sec is not set",
-			hint: `long chit_wait calls may be interrupted by Codex; set tool_timeout_sec = ${CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC} under [mcp_servers.chit] and reconnect Codex`,
+			hint: `long chit_wait or chit_orchestrate calls may be interrupted by Codex; set tool_timeout_sec = ${CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC} under [mcp_servers.chit] and reconnect Codex`,
 		};
 	}
 	if (timeoutSec < CODEX_MIN_TOOL_TIMEOUT_SEC) {
@@ -307,7 +308,7 @@ function checkCodexToolTimeout(deps: DoctorDeps): Check | null {
 			name: "codex tool timeout",
 			status: "warn",
 			detail: `chit tool_timeout_sec is ${timeoutSec}s, below ${CODEX_MIN_TOOL_TIMEOUT_SEC}s`,
-			hint: `long chit_wait calls may be interrupted by Codex; raise tool_timeout_sec to ${CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC} under [mcp_servers.chit] and reconnect Codex`,
+			hint: `long chit_wait or chit_orchestrate calls may be interrupted by Codex; raise tool_timeout_sec to ${CODEX_RECOMMENDED_TOOL_TIMEOUT_SEC} under [mcp_servers.chit] and reconnect Codex`,
 		};
 	}
 	return {
@@ -358,8 +359,9 @@ writes and removes a probe file in the audit dir to confirm it is writable).
 
 Checks: Bun, the chit binary on PATH, the codex and claude CLIs, the agent
 registry, MCP registration, the audit dir, whether the cwd is a git repo, and the
-Codex per-tool call timeout when chit is registered with Codex. Agent
-authentication is not checked here; it is confirmed on the first real run.
+Codex per-tool call timeout for long chit_wait / chit_orchestrate calls when chit
+is registered with Codex. Agent authentication is not checked here; it is
+confirmed on the first real run.
 `;
 
 export function runDoctor(

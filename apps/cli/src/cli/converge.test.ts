@@ -962,13 +962,15 @@ describe("runConvergeIteration (single-iteration primitive)", () => {
 
 	test("proceed yields stopStatus converged and surfaces auditRunId", async () => {
 		const { loopId } = startLoop(cwd, { scope: "s", task: "t", maxIterations: 1, loopId: "IT2" });
-		const review = reviewJson("proceed");
+		const review = reviewJson("proceed", { findingCount: 2, checksRun: "bun test" });
+		const recorded: unknown[] = [];
 		const execute: ConvergeExecute = async () => ({
 			ok: true,
 			output: "",
 			outputs: { implement: "x", review },
-			trace: [],
+			trace: [{ type: "step.completed", stepId: "review", output: review, durationMs: 77 }],
 			auditRunId: "run-9",
+			recordLoopIteration: (event) => recorded.push(event),
 		});
 		const res = await runConvergeIteration({
 			cwd,
@@ -984,6 +986,18 @@ describe("runConvergeIteration (single-iteration primitive)", () => {
 		expect(res.auditRunId).toBe("run-9");
 		// The audit link is threaded into the iteration record's auditRef.
 		expect(firstIteration(loopId).auditRef).toBe("run-9");
+		expect(recorded).toEqual([
+			{
+				loopId,
+				n: 1,
+				verdict: "proceed",
+				decision: "proceed",
+				findingCount: 2,
+				changedFiles: [],
+				checksRun: "bun test",
+				checkDurationMs: 77,
+			},
+		]);
 	});
 
 	test("block yields stopStatus blocked", async () => {

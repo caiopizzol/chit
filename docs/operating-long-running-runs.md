@@ -55,9 +55,10 @@ is still going, so just call `chit_wait` again. Esc stops the wait, not the run.
 
 `chit_wait.timeout_ms` is chit's internal wait deadline. It controls how long the
 `chit_wait` call itself blocks before returning a `timeout` result, and it is
-correct as is. But Codex layers its own per-MCP-tool call deadline on top of it,
-and that host deadline is short by default. A `chit_wait` that runs past it gets
-cut by Codex before chit's `timeout_ms` ever returns.
+correct as is. `chit_orchestrate` also runs its planner inline while it prepares
+the gated plan start. Codex layers its own per-MCP-tool call deadline on top of
+both calls, and that host deadline is short by default. A long call can be cut by
+Codex before chit returns.
 
 Raise the Codex tool timeout for the chit server in `~/.codex/config.toml`:
 
