@@ -27,7 +27,7 @@
 		"docs:typecheck": "bun run site:typecheck",
 		"docs:deploy": "bun run site:deploy",
 		"studio:build": "bun --filter @chit-run/studio build:client",
-		"studio:preview": "bun run studio:build && bun apps/cli/src/cli/run.ts studio examples/consult.json"
+		"studio:preview": "bun run studio:build && bun apps/cli/src/cli/run.ts studio"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",

@@ -1,9 +1,7 @@
-// SSR app shell. Plain HTML strings, no JSX runtime. The boot payload
-// (token + bootstrap) lives inside a <script> tag that the client picks up
-// on load. The </script> sequence inside JSON is escaped so the inline
-// script cannot be terminated by attacker-controlled string contents.
-
-import type { Bootstrap } from "./types.ts";
+// SSR app shell. Plain HTML strings, no JSX runtime. The boot payload carries
+// only the launch token the client uses for authenticated same-origin API calls.
+// The </script> sequence inside JSON is escaped so the inline script cannot be
+// terminated by attacker-controlled string contents.
 
 function safeJson(value: unknown): string {
 	return JSON.stringify(value).replace(/</g, "\\u003c");
@@ -11,7 +9,6 @@ function safeJson(value: unknown): string {
 
 export interface ShellPayload {
 	token: string;
-	bootstrap: Bootstrap;
 }
 
 export function renderShell(payload: ShellPayload): string {

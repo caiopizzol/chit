@@ -5,8 +5,8 @@
 // cancels the in-flight loop on unmount. Errors are unobtrusive and recoverable:
 // the last good snapshot stays on screen, an error string is surfaced, and the
 // next successful poll clears it. A page reload starts a fresh read session (no
-// snapshot carries across reloads). Mirrors the request-token / explicit-state
-// discipline of useLoops, without a state library.
+// snapshot carries across reloads). Request tokens make the latest read win
+// without a state library.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LiveActivity, LiveActivityRow } from "../server/types.ts";

@@ -6,7 +6,6 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
-	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -26,7 +25,6 @@ import {
 	buildStudioLiveActions,
 	buildStudioLiveSource,
 	parseArgs,
-	studioBootConfig,
 	studioClientDir,
 } from "./run.ts";
 
@@ -337,16 +335,14 @@ describe("parseArgs", () => {
 		expect(() => parseArgs(["uninstall"])).toThrow(/install name/);
 	});
 
-	test("studio with no args parses with empty manifestPath (discovery mode)", () => {
+	test("studio with no args parses with empty manifestPath", () => {
 		const args = parseArgs(["studio"]);
 		expect(args.command).toBe("studio");
 		expect(args.manifestPath).toBeUndefined();
 	});
 
-	test("studio captures an explicit path", () => {
-		const args = parseArgs(["studio", "consult.json"]);
-		expect(args.command).toBe("studio");
-		expect(args.manifestPath).toBe("consult.json");
+	test("studio rejects a manifest path", () => {
+		expect(() => parseArgs(["studio", "consult.json"])).toThrow(/unexpected argument/);
 	});
 
 	test("studio rejects an unknown flag", () => {
@@ -382,54 +378,6 @@ describe("parseArgs", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
-
-	// studioBootConfig hermetic setup: XDG_CONFIG_HOME points into the temp dir
-	// (so no real global config is read) and the temp dir sits outside any git
-	// work tree (so repo-config discovery resolves to the temp dir itself).
-	function withBootDir(fn: (dir: string, warnings: string[]) => void): void {
-		const dir = mkdtempSync(join(tmpdir(), "chit-studio-boot-"));
-		const prevXdg = process.env.XDG_CONFIG_HOME;
-		process.env.XDG_CONFIG_HOME = join(dir, "xdg");
-		try {
-			const warnings: string[] = [];
-			fn(dir, warnings);
-		} finally {
-			if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-			else process.env.XDG_CONFIG_HOME = prevXdg;
-			rmSync(dir, { recursive: true, force: true });
-		}
-	}
-
-	test("studioBootConfig loads a readable config normally, no warning", () => {
-		withBootDir((dir, warnings) => {
-			writeFileSync(
-				join(dir, "chit.config.json"),
-				JSON.stringify({ agents: { deep: { adapter: "codex-exec" } } }),
-			);
-			const config = studioBootConfig(dir, (msg) => warnings.push(msg));
-			expect(config.registry.agents.deep?.adapter).toBe("codex-exec");
-			// repoRoot canonicalizes the cwd, so compare against the realpath (the
-			// macOS tmpdir lives behind a /var -> /private/var symlink).
-			expect(config.repoConfigPath).toBe(join(realpathSync(dir), "chit.config.json"));
-			expect(warnings).toEqual([]);
-		});
-	});
-
-	test("studioBootConfig falls back to built-in defaults on a malformed config, warning once", () => {
-		// The boot fallback is what keeps `chit studio` startable when a config
-		// file is broken; the config drawer then shows the loader's 422 message
-		// (GET /api/config re-reads the file per request and does NOT fall back).
-		withBootDir((dir, warnings) => {
-			writeFileSync(join(dir, "chit.config.json"), "{ not json");
-			const config = studioBootConfig(dir, (msg) => warnings.push(msg));
-			expect(Object.keys(config.registry.agents).sort()).toEqual(["claude", "codex"]);
-			expect(config.roles).toEqual({});
-			expect(config.repoConfigPath).toBeUndefined();
-			expect(warnings).toHaveLength(1);
-			expect(warnings[0]).toContain("built-in defaults");
-			expect(warnings[0]).toContain("chit.config.json");
-		});
 	});
 
 	test("mcp parses as the mcp command (launches the stdio server)", () => {

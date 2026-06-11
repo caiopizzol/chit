@@ -119,9 +119,6 @@ describe("studio audit route", () => {
 		const token = generateToken();
 		const app = buildApp({
 			token,
-			cwd: "/nope",
-			makeBootstrap: () => ({}) as never,
-			store: {} as never,
 			allowedHosts: new Set([HOST]),
 			clientDistDir: "/nope",
 			auditDir,

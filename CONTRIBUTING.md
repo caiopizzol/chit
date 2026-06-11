@@ -16,7 +16,7 @@ That also installs the lefthook pre-commit hook (staged Biome formatting).
 
 - `apps/cli` (`@chit-run/cli`) - the chit CLI and the MCP stepwise surface.
 - `apps/site` (`@chit-run/site`) - the public website: landing page plus Fumadocs docs.
-- `apps/studio` (`@chit-run/studio`) - the local visual editor.
+- `apps/studio` (`@chit-run/studio`) - the local live monitor.
 - `packages/core` (`@chit-run/core`) - browser-safe shared model, parser, and graph logic.
 - `examples/` - canonical chit manifests.
 - `fixtures/traps/` - deliberately-broken manifests used as test fixtures.

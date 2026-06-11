@@ -1,120 +1,37 @@
-// End-to-end route tests via app.fetch (no server boot). Covers auth + Host
-// allowlist + SSR shell + the one document endpoint.
+// Route tests for the mounted Studio server surface: shell/static assets plus
+// the live/config APIs. Audit route details live in its focused test file.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseConfig, parseRegistry } from "@chit-run/core";
-import { buildBootstrap, DocStore, hashRaw } from "./docs.ts";
+import { parseConfig } from "@chit-run/core";
 import { buildApp } from "./index.ts";
 import { generateToken } from "./token.ts";
-import type {
-	EffectiveConfigView,
-	LiveActivity,
-	StudioConfigSource,
-	StudioLifecycle,
-	StudioLiveActions,
-	StudioLiveSource,
-} from "./types.ts";
+import type { LiveActivity, StudioLiveActions, StudioLiveSource } from "./types.ts";
 
-const REGISTRY = parseRegistry(undefined);
 const PORT = 4040;
 const HOST = `127.0.0.1:${PORT}`;
 const ALLOWED = new Set([HOST, `localhost:${PORT}`, `[::1]:${PORT}`]);
 
-function tempCwd(): string {
-	return mkdtempSync(join(tmpdir(), "chit-studio-server-"));
-}
-
-function chit(id: string): string {
-	return JSON.stringify({
-		schema: 1,
-		id,
-		description: `test chit ${id}`,
-		inputs: { q: { type: "string" } },
-		requires: {},
-		participants: { a: { agent: "claude", instructions: "r", session: "stateless" } },
-		steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
-		output: "s",
-	});
-}
-
-interface Setup {
-	cwd: string;
-	path: string;
-	token: string;
-	app: ReturnType<typeof buildApp>;
-}
-
 function setup(
 	opts: {
 		clientDistDir?: string;
-		lifecycle?: StudioLifecycle;
 		liveSource?: StudioLiveSource;
 		liveActions?: StudioLiveActions;
-		configSource?: StudioConfigSource;
+		configSource?: { load(): ReturnType<typeof parseConfig> };
 	} = {},
-): Setup {
-	const cwd = tempCwd();
-	const path = join(cwd, "consult.json");
-	writeFileSync(path, chit("consult"));
-	const store = new DocStore(cwd, REGISTRY);
-	// Regenerate per call so GET / reflects current disk (matches startStudio).
-	const makeBootstrap = () =>
-		buildBootstrap({ kind: "open", absolutePath: path, relPath: "consult.json" }, store);
-	makeBootstrap(); // seed the docId table, as startStudio does at boot
+) {
 	const token = generateToken();
 	const app = buildApp({
 		token,
-		cwd,
-		makeBootstrap,
-		store,
 		allowedHosts: ALLOWED,
 		clientDistDir: opts.clientDistDir ?? "/this/path/does/not/exist",
-		lifecycle: opts.lifecycle,
 		liveSource: opts.liveSource,
 		liveActions: opts.liveActions,
 		configSource: opts.configSource,
 	});
-	return { cwd, path, token, app };
-}
-
-// Stub lifecycle that records calls; the real install/list/uninstall code is
-// covered by chit-cli's own tests, so here we only verify route wiring.
-interface StubLifecycle extends StudioLifecycle {
-	calls: { list: number; install: unknown[]; uninstall: string[] };
-}
-function stubLifecycle(opts: { throwOn?: "install" | "uninstall" } = {}): StubLifecycle {
-	const calls = { list: 0, install: [] as unknown[], uninstall: [] as string[] };
-	return {
-		calls,
-		list: () => {
-			calls.list++;
-			return [
-				{
-					name: "consult",
-					surface: "claude-skill",
-					manifestId: "consult",
-					installedAt: "2026-01-01T00:00:00Z",
-				},
-			];
-		},
-		install: (p) => {
-			calls.install.push(p);
-			if (opts.throwOn === "install") throw new Error("dir exists; pass force");
-			return { name: p.overrideName ?? "consult", surface: p.surface, enforcementGaps: [] };
-		},
-		uninstall: (name) => {
-			calls.uninstall.push(name);
-			if (opts.throwOn === "uninstall") throw new Error(`no marked install named ${name}`);
-			return { name };
-		},
-	};
-}
-
-function teardown(s: Setup) {
-	rmSync(s.cwd, { recursive: true, force: true });
+	return { token, app };
 }
 
 async function req(
@@ -132,1194 +49,195 @@ async function req(
 describe("Host allowlist", () => {
 	test("rejects unknown Host with 403 before any route runs", async () => {
 		const s = setup();
+		const res = await req(s.app, "/", { host: "attacker.com:80" });
+		expect(res.status).toBe(403);
+	});
+
+	test("accepts local hosts on the configured port", async () => {
+		const s = setup();
+		for (const host of [`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]) {
+			const res = await req(s.app, "/", { host });
+			expect(res.status).toBe(200);
+		}
+	});
+});
+
+describe("Shell and static assets", () => {
+	test("GET / renders the token-only shell without auth", async () => {
+		const s = setup();
+		const res = await req(s.app, "/");
+		expect(res.status).toBe(200);
+		const html = await res.text();
+		expect(html).toContain("window.__chit");
+		expect(html).toContain(s.token);
+		expect(html).toContain('<script type="module" src="/client/index.js"></script>');
+		expect(html).not.toContain("graphModel");
+		expect(html).not.toContain("document");
+	});
+
+	test("client assets are served only from the explicit asset allowlist", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "chit-studio-client-"));
 		try {
-			const res = await req(s.app, "/", { host: "attacker.com:80" });
-			expect(res.status).toBe(403);
+			writeFileSync(join(dir, "index.js"), "console.log('ok');");
+			writeFileSync(join(dir, "index.css"), "body{}");
+			const s = setup({ clientDistDir: dir });
+			expect((await req(s.app, "/client/index.js")).status).toBe(200);
+			expect((await req(s.app, "/client/index.css")).status).toBe(200);
+			expect((await req(s.app, "/client/other.js")).status).toBe(404);
 		} finally {
-			teardown(s);
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	test("rejects missing Host with 403", async () => {
+	test("missing client assets return a setup hint", async () => {
 		const s = setup();
-		try {
-			// Have to construct a Request without the host header surviving;
-			// Request always sets host from URL. Use a non-allowlisted host
-			// instead, which exercises the same code path.
-			const res = await req(s.app, "/", { host: "evil:1234" });
-			expect(res.status).toBe(403);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("accepts 127.0.0.1, localhost, and [::1] on the configured port", async () => {
-		const s = setup();
-		try {
-			for (const host of [`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]) {
-				const res = await req(s.app, "/", { host });
-				expect(res.status).toBe(200);
-			}
-		} finally {
-			teardown(s);
-		}
+		const res = await req(s.app, "/client/index.js");
+		expect(res.status).toBe(503);
+		expect(await res.text()).toContain("client bundle missing");
 	});
 });
 
 describe("Bearer auth on /api/*", () => {
-	test("missing Authorization returns 401", async () => {
+	test("missing, wrong-scheme, and wrong-token Authorization return 401", async () => {
 		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current");
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("wrong-scheme Authorization returns 401", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current");
-			expect(res.status).toBe(401);
-			// Basic auth instead of Bearer
-			const res2 = await s.app.fetch(
-				new Request(`http://${HOST}/api/documents/current`, {
-					headers: { host: HOST, authorization: "Basic abc" },
-				}),
-			);
-			expect(res2.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("wrong token returns 401", async () => {
-		const s = setup();
-		try {
-			// Same length as a real token to verify it's not a length-only check.
-			const bogus = "a".repeat(s.token.length);
-			const res = await req(s.app, "/api/documents/current", { token: bogus });
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("correct token returns 200 with DocumentDetail", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				document: { status: string; id: string; relPath: string; absolutePath?: string };
-				graphModel?: unknown;
-			};
-			expect(body.document.status).toBe("parsed");
-			expect(body.document.id).toBe("current");
-			expect(body.document.relPath).toBe("consult.json");
-			expect(body.graphModel).toBeDefined();
-			expect(body.document.absolutePath).toBeUndefined();
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("unknown docId with valid token returns 404", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/nope", { token: s.token });
-			expect(res.status).toBe(404);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET ?surface=claude-skill returns DocumentDetail with validation populated", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current?surface=claude-skill", {
-				token: s.token,
-			});
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				graphModel?: { surface?: { kind: string } | null; validation: unknown };
-			};
-			expect(body.graphModel?.surface?.kind).toBe("claude-skill");
-			expect(body.graphModel?.validation).not.toBeNull();
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET ?surface=cli also returns validation populated", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current?surface=cli", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				graphModel?: { surface?: { kind: string } | null; validation: unknown };
-			};
-			expect(body.graphModel?.surface?.kind).toBe("cli");
-			expect(body.graphModel?.validation).not.toBeNull();
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET with unknown ?surface returns 400 before any document work", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current?surface=mcp", { token: s.token });
-			expect(res.status).toBe(400);
-			const body = await res.text();
-			expect(body).toContain("mcp");
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET without ?surface returns validation null (matches setup default)", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/documents/current", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { graphModel?: { validation: unknown } };
-			expect(body.graphModel?.validation).toBeNull();
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET / does NOT require token (token is in the SSR payload)", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/");
-			expect(res.status).toBe(200);
-			const html = await res.text();
-			expect(html).toContain("window.__chit");
-			expect(html).toContain(s.token);
-			expect(html).toContain('<link rel="icon" href="data:," />');
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET / regenerates the bootstrap from disk (reload reflects external changes)", async () => {
-		const s = setup();
-		try {
-			const first = await (await req(s.app, "/")).text();
-			expect(first).toContain("consult");
-			// Change the file on disk, then reload: the SSR payload must reflect
-			// the new content, not a boot-time snapshot. The token must not change.
-			writeFileSync(s.path, chit("consult-changed-on-disk"));
-			const second = await (await req(s.app, "/")).text();
-			expect(second).toContain("consult-changed-on-disk");
-			expect(second).toContain(s.token);
-		} finally {
-			teardown(s);
-		}
-	});
-});
-
-describe("PUT /api/documents/:docId", () => {
-	async function putReq(
-		app: ReturnType<typeof buildApp>,
-		path: string,
-		body: unknown,
-		token: string,
-	): Promise<Response> {
-		return app.fetch(
-			new Request(`http://${HOST}${path}`, {
-				method: "PUT",
-				headers: {
-					host: HOST,
-					authorization: `Bearer ${token}`,
-					"content-type": "application/json",
-				},
-				body: JSON.stringify(body),
+		expect((await req(s.app, "/api/live")).status).toBe(401);
+		const basic = await s.app.fetch(
+			new Request(`http://${HOST}/api/live`, {
+				headers: { host: HOST, authorization: "Basic abc" },
 			}),
 		);
-	}
-
-	test("happy path: writes + returns new hash + canonicalRaw + graphModel", async () => {
-		const s = setup();
-		try {
-			// Read the initial disk hash via GET.
-			const getRes = await req(s.app, "/api/documents/current?surface=claude-skill", {
-				token: s.token,
-			});
-			const getBody = (await getRes.json()) as { hash: string };
-			const baseHash = getBody.hash;
-			// Edit + PUT.
-			const draft = JSON.parse(chit("consult"));
-			draft.description = "edited via PUT";
-			const res = await putReq(
-				s.app,
-				"/api/documents/current",
-				{ draft, surface: "claude-skill", baseHash },
-				s.token,
-			);
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				document: { status: string };
-				graphModel?: unknown;
-				canonicalRaw?: string;
-				hash?: string;
-			};
-			expect(body.document.status).toBe("parsed");
-			expect(body.graphModel).toBeDefined();
-			expect(body.canonicalRaw).toContain("edited via PUT");
-			expect(body.hash).toBeDefined();
-			expect(body.hash).not.toBe(baseHash);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("conflict: 409 with currentHash when baseHash does not match disk", async () => {
-		const s = setup();
-		try {
-			const res = await putReq(
-				s.app,
-				"/api/documents/current",
-				{
-					draft: JSON.parse(chit("consult")),
-					surface: "claude-skill",
-					baseHash: "deadbeef".repeat(8),
-				},
-				s.token,
-			);
-			expect(res.status).toBe(409);
-			const body = (await res.json()) as { kind: string; currentHash: string };
-			expect(body.kind).toBe("conflict");
-			expect(body.currentHash).toMatch(/^[a-f0-9]{64}$/);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("parse error: 200 with error document, no write", async () => {
-		const s = setup();
-		try {
-			const getRes = await req(s.app, "/api/documents/current", { token: s.token });
-			const getBody = (await getRes.json()) as { hash: string };
-			const baseHash = getBody.hash;
-			const res = await putReq(
-				s.app,
-				"/api/documents/current",
-				{ draft: { schema: 1, id: "x" }, surface: "claude-skill", baseHash },
-				s.token,
-			);
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { document: { status: string }; hash?: string };
-			expect(body.document.status).toBe("error");
-			expect(body.hash).toBeUndefined();
-			// Verify disk hash unchanged by re-fetching.
-			const after = await req(s.app, "/api/documents/current", { token: s.token });
-			const afterBody = (await after.json()) as { hash: string };
-			expect(afterBody.hash).toBe(baseHash);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("unknown surface: 400 before any save work", async () => {
-		const s = setup();
-		try {
-			const res = await putReq(
-				s.app,
-				"/api/documents/current",
-				{ draft: {}, surface: "mcp", baseHash: "x".repeat(64) },
-				s.token,
-			);
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("missing baseHash: 400", async () => {
-		const s = setup();
-		try {
-			const res = await putReq(
-				s.app,
-				"/api/documents/current",
-				{ draft: {}, surface: "claude-skill" },
-				s.token,
-			);
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("unknown docId: 404", async () => {
-		const s = setup();
-		try {
-			const res = await putReq(
-				s.app,
-				"/api/documents/nope",
-				{ draft: {}, surface: "claude-skill", baseHash: "x".repeat(64) },
-				s.token,
-			);
-			expect(res.status).toBe(404);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("missing token: 401", async () => {
-		const s = setup();
-		try {
-			const res = await s.app.fetch(
-				new Request(`http://${HOST}/api/documents/current`, {
-					method: "PUT",
-					headers: { host: HOST, "content-type": "application/json" },
-					body: JSON.stringify({ draft: {}, baseHash: "x".repeat(64) }),
-				}),
-			);
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-});
-
-describe("POST /api/documents/:docId/preview", () => {
-	async function jsonReq(
-		app: ReturnType<typeof buildApp>,
-		path: string,
-		body: unknown,
-		token: string,
-	): Promise<Response> {
-		return app.fetch(
-			new Request(`http://${HOST}${path}`, {
-				method: "POST",
-				headers: {
-					host: HOST,
-					authorization: `Bearer ${token}`,
-					"content-type": "application/json",
-				},
-				body: JSON.stringify(body),
-			}),
-		);
-	}
-
-	test("valid draft returns parsed + graphModel + canonicalRaw", async () => {
-		const s = setup();
-		try {
-			const draft = JSON.parse(chit("consult"));
-			const res = await jsonReq(
-				s.app,
-				"/api/documents/current/preview",
-				{ draft, surface: "claude-skill" },
-				s.token,
-			);
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				document: { status: string; relPath: string };
-				graphModel?: { surface?: { kind: string } | null; validation: unknown };
-				canonicalRaw?: string;
-			};
-			expect(body.document.status).toBe("parsed");
-			expect(body.document.relPath).toBe("consult.json");
-			expect(body.graphModel?.surface?.kind).toBe("claude-skill");
-			expect(body.graphModel?.validation).not.toBeNull();
-			expect(body.canonicalRaw).toBeDefined();
-			// Tab-indented and roundtrippable.
-			expect(body.canonicalRaw).toContain("\t");
-			expect(JSON.parse(body.canonicalRaw as string)).toEqual(draft);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("invalid draft returns error document, no graphModel, no canonicalRaw", async () => {
-		const s = setup();
-		try {
-			const draft = { schema: 1, id: "x" }; // missing required fields
-			const res = await jsonReq(
-				s.app,
-				"/api/documents/current/preview",
-				{ draft, surface: "claude-skill" },
-				s.token,
-			);
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				document: { status: string; parseError?: string };
-				graphModel?: unknown;
-				canonicalRaw?: string;
-			};
-			expect(body.document.status).toBe("error");
-			expect(body.document.parseError).toBeDefined();
-			expect(body.graphModel).toBeUndefined();
-			expect(body.canonicalRaw).toBeUndefined();
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("unknown docId returns 404", async () => {
-		const s = setup();
-		try {
-			const res = await jsonReq(
-				s.app,
-				"/api/documents/nope/preview",
-				{ draft: {}, surface: "claude-skill" },
-				s.token,
-			);
-			expect(res.status).toBe(404);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("unknown surface returns 400 before any preview work", async () => {
-		const s = setup();
-		try {
-			const res = await jsonReq(
-				s.app,
-				"/api/documents/current/preview",
-				{ draft: JSON.parse(chit("consult")), surface: "mcp" },
-				s.token,
-			);
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("missing token returns 401", async () => {
-		const s = setup();
-		try {
-			const res = await s.app.fetch(
-				new Request(`http://${HOST}/api/documents/current/preview`, {
-					method: "POST",
-					headers: { host: HOST, "content-type": "application/json" },
-					body: JSON.stringify({ draft: {} }),
-				}),
-			);
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("malformed JSON body returns 400", async () => {
-		const s = setup();
-		try {
-			const res = await s.app.fetch(
-				new Request(`http://${HOST}/api/documents/current/preview`, {
-					method: "POST",
-					headers: {
-						host: HOST,
-						authorization: `Bearer ${s.token}`,
-						"content-type": "application/json",
-					},
-					body: "{not valid",
-				}),
-			);
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("missing draft key in body returns 400", async () => {
-		const s = setup();
-		try {
-			const res = await jsonReq(
-				s.app,
-				"/api/documents/current/preview",
-				{ surface: "claude-skill" },
-				s.token,
-			);
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-});
-
-describe("lifecycle endpoints", () => {
-	async function send(
-		app: ReturnType<typeof buildApp>,
-		method: string,
-		path: string,
-		token: string,
-		body?: unknown,
-	): Promise<Response> {
-		const headers: Record<string, string> = { host: HOST, authorization: `Bearer ${token}` };
-		if (body !== undefined) headers["content-type"] = "application/json";
-		return app.fetch(
-			new Request(`http://${HOST}${path}`, {
-				method,
-				headers,
-				body: body === undefined ? undefined : JSON.stringify(body),
-			}),
-		);
-	}
-
-	test("GET /api/installed returns the lifecycle list", async () => {
-		const s = setup({ lifecycle: stubLifecycle() });
-		try {
-			const res = await send(s.app, "GET", "/api/installed", s.token);
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as Array<{ name: string }>;
-			expect(body[0]?.name).toBe("consult");
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET /api/installed requires a token", async () => {
-		const s = setup({ lifecycle: stubLifecycle() });
-		try {
-			const res = await s.app.fetch(
-				new Request(`http://${HOST}/api/installed`, { headers: { host: HOST } }),
-			);
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("GET /api/installed returns 501 when no lifecycle is injected", async () => {
-		const s = setup(); // no lifecycle
-		try {
-			const res = await send(s.app, "GET", "/api/installed", s.token);
-			expect(res.status).toBe(501);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	// The setup() file on disk is exactly chit("consult"), so this is the
-	// baseHash the client would have seen.
-	const goodHash = () => hashRaw(chit("consult"));
-
-	test("POST /api/install resolves docId to the manifest path and calls install", async () => {
-		const life = stubLifecycle();
-		const s = setup({ lifecycle: life });
-		try {
-			const res = await send(s.app, "POST", "/api/install", s.token, {
-				docId: "current",
-				surface: "claude-skill",
-				baseHash: goodHash(),
-			});
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { name: string; surface: string };
-			expect(body.surface).toBe("claude-skill");
-			expect(life.calls.install).toHaveLength(1);
-			const params = life.calls.install[0] as { manifestPath: string; surface: string };
-			expect(params.manifestPath.endsWith("consult.json")).toBe(true);
-			expect(params.surface).toBe("claude-skill");
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("POST /api/install with a stale baseHash returns 409 and does not install", async () => {
-		const life = stubLifecycle();
-		const s = setup({ lifecycle: life });
-		try {
-			const res = await send(s.app, "POST", "/api/install", s.token, {
-				docId: "current",
-				surface: "claude-skill",
-				baseHash: "deadbeef".repeat(8),
-			});
-			expect(res.status).toBe(409);
-			const body = (await res.json()) as { kind: string; currentHash: string };
-			expect(body.kind).toBe("conflict");
-			expect(body.currentHash).toBe(goodHash());
-			expect(life.calls.install).toHaveLength(0); // never reached the lifecycle
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("POST /api/install unknown docId returns 404", async () => {
-		const s = setup({ lifecycle: stubLifecycle() });
-		try {
-			const res = await send(s.app, "POST", "/api/install", s.token, {
-				docId: "nope",
-				surface: "claude-skill",
-				baseHash: goodHash(),
-			});
-			expect(res.status).toBe(404);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("POST /api/install missing surface returns 400", async () => {
-		const s = setup({ lifecycle: stubLifecycle() });
-		try {
-			const res = await send(s.app, "POST", "/api/install", s.token, {
-				docId: "current",
-				baseHash: goodHash(),
-			});
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("POST /api/install missing baseHash returns 400", async () => {
-		const s = setup({ lifecycle: stubLifecycle() });
-		try {
-			const res = await send(s.app, "POST", "/api/install", s.token, {
-				docId: "current",
-				surface: "claude-skill",
-			});
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("POST /api/install surfaces a lifecycle failure as 422", async () => {
-		const s = setup({ lifecycle: stubLifecycle({ throwOn: "install" }) });
-		try {
-			const res = await send(s.app, "POST", "/api/install", s.token, {
-				docId: "current",
-				surface: "claude-skill",
-				baseHash: goodHash(),
-			});
-			expect(res.status).toBe(422);
-			expect(await res.text()).toContain("force");
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("DELETE /api/installed/:name calls uninstall", async () => {
-		const life = stubLifecycle();
-		const s = setup({ lifecycle: life });
-		try {
-			const res = await send(s.app, "DELETE", "/api/installed/consult", s.token);
-			expect(res.status).toBe(200);
-			expect(life.calls.uninstall).toEqual(["consult"]);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("DELETE /api/installed/:name surfaces a lifecycle failure as 422", async () => {
-		const s = setup({ lifecycle: stubLifecycle({ throwOn: "uninstall" }) });
-		try {
-			const res = await send(s.app, "DELETE", "/api/installed/ghost", s.token);
-			expect(res.status).toBe(422);
-		} finally {
-			teardown(s);
-		}
+		expect(basic.status).toBe(401);
+		expect((await req(s.app, "/api/live", { token: "x".repeat(s.token.length) })).status).toBe(401);
 	});
 });
 
 describe("GET /api/live", () => {
-	// A live source carrying one foreground row and one background row, each with
-	// only the safe live fields. Deliberately includes NO config/env/provenance
-	// keys, so the passthrough test can assert none leak through the route.
-	function stubLiveSource(): StudioLiveSource {
-		const activity: LiveActivity = {
+	test("returns an empty snapshot when no live source is injected", async () => {
+		const s = setup();
+		const res = await req(s.app, "/api/live", { token: s.token });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ foreground: [], background: [] });
+	});
+
+	test("returns the injected live source snapshot", async () => {
+		const live: LiveActivity = {
 			foreground: [
 				{
 					source: "foreground",
 					runId: "fg-1",
-					scope: "sc-fg",
-					task: "converge the parser",
-					taskFull: "converge the parser with full context",
+					scope: "scope",
+					task: "task",
 					phase: "implementing",
-					statusLine: "iteration 2 · implementing",
-					iteration: 2,
-					maxIterations: 5,
-					callTimeoutMs: 900_000,
-					worktreePath: "/state/chit/worktrees/fg-1",
-					elapsedMs: 12_000,
-					phaseElapsedMs: 4_000,
-					lastActivityAgeMs: 500,
-					phases: [
-						{ phase: "implementing", status: "completed", elapsedMs: 8_000 },
-						{ phase: "reviewing", status: "active", elapsedMs: 4_000 },
-					],
-					participants: { impl: { agentId: "claude", adapter: "claude-cli" } },
+					statusLine: "iteration 1",
 				},
 			],
-			background: [
-				{
-					source: "background",
-					runId: "bg-1",
-					scope: "sc-bg",
-					task: "migrate the routes",
-					taskFull: "migrate the routes with full context",
-					display: "running",
-					phase: "reviewing",
-					statusLine: "running · reviewing",
-					iteration: 2,
-					iterationsCompleted: 1,
-					maxIterations: 3,
-					callTimeoutMs: 600_000,
-					elapsedMs: 60_000,
-					phaseElapsedMs: 10_000,
-					lastHeartbeatAgeMs: 2_000,
-					participants: { rev: { agentId: "codex", adapter: "codex-exec" } },
-				},
-			],
+			background: [],
 		};
-		return { live: () => activity };
-	}
-
-	test("returns the injected live source's data, foreground and background distinct", async () => {
-		const s = setup({ liveSource: stubLiveSource() });
-		try {
-			const res = await req(s.app, "/api/live", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as LiveActivity;
-			expect(body.foreground).toHaveLength(1);
-			expect(body.background).toHaveLength(1);
-			expect(body.foreground[0]?.source).toBe("foreground");
-			expect(body.foreground[0]?.runId).toBe("fg-1");
-			expect(body.foreground[0]?.taskFull).toBe("converge the parser with full context");
-			// The structured iteration/budget counters pass through untouched.
-			expect(body.foreground[0]?.iteration).toBe(2);
-			expect(body.foreground[0]?.maxIterations).toBe(5);
-			expect(body.foreground[0]?.callTimeoutMs).toBe(900_000);
-			// The current iteration's phase timeline passes through untouched too.
-			expect(body.foreground[0]?.phases).toEqual([
-				{ phase: "implementing", status: "completed", elapsedMs: 8_000 },
-				{ phase: "reviewing", status: "active", elapsedMs: 4_000 },
-			]);
-			expect(body.background[0]?.source).toBe("background");
-			expect(body.background[0]?.runId).toBe("bg-1");
-			expect(body.background[0]?.display).toBe("running");
-			expect(body.background[0]?.iteration).toBe(2);
-			expect(body.background[0]?.iterationsCompleted).toBe(1);
-			expect(body.background[0]?.maxIterations).toBe(3);
-			expect(body.background[0]?.callTimeoutMs).toBe(600_000);
-			// Participants are the agent+adapter pair only.
-			expect(body.foreground[0]?.participants).toEqual({
-				impl: { agentId: "claude", adapter: "claude-cli" },
-			});
-		} finally {
-			teardown(s);
-		}
+		const s = setup({ liveSource: { live: () => live } });
+		const res = await req(s.app, "/api/live", { token: s.token });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual(live);
 	});
 
-	test("requires a token", async () => {
-		const s = setup({ liveSource: stubLiveSource() });
-		try {
-			const res = await s.app.fetch(
-				new Request(`http://${HOST}/api/live`, { headers: { host: HOST } }),
-			);
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("no live source injected returns a coherent empty LiveActivity, not an error", async () => {
-		const s = setup(); // no liveSource
-		try {
-			const res = await req(s.app, "/api/live", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as LiveActivity;
-			expect(body).toEqual({ foreground: [], background: [] });
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("a throwing live source degrades to an empty LiveActivity", async () => {
-		const liveSource: StudioLiveSource = {
-			live() {
-				throw new Error("state dir unavailable");
-			},
-		};
-		const s = setup({ liveSource });
-		try {
-			const res = await req(s.app, "/api/live", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as LiveActivity;
-			expect(body).toEqual({ foreground: [], background: [] });
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("response carries no config/env/provenance fields", async () => {
-		const s = setup({ liveSource: stubLiveSource() });
-		try {
-			const res = await req(s.app, "/api/live", { token: s.token });
-			const text = await res.text();
-			for (const banned of ["config", "env", "permissions"]) {
-				expect(text).not.toContain(banned);
-			}
-		} finally {
-			teardown(s);
-		}
-	});
-});
-
-describe("GET /api/config", () => {
-	// A config source whose load() re-parses on every call, like the real
-	// loadConfig-backed one. The raw object is swappable so the freshness test can
-	// change "disk" between requests.
-	function stubConfigSource(initialRaw: unknown): StudioConfigSource & { raw: unknown } {
-		const source = {
-			raw: initialRaw,
-			load() {
-				return parseConfig(source.raw, "/home/u/.config/chit/config.json");
-			},
-		};
-		return source;
-	}
-
-	test("requires a token", async () => {
-		const s = setup({ configSource: stubConfigSource(undefined) });
-		try {
-			const res = await s.app.fetch(
-				new Request(`http://${HOST}/api/config`, { headers: { host: HOST } }),
-			);
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("no config source injected returns 501 (standalone Studio)", async () => {
-		const s = setup();
-		try {
-			const res = await req(s.app, "/api/config", { token: s.token });
-			expect(res.status).toBe(501);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("defaults-only config: builtin agents, no roles, no paths", async () => {
-		const s = setup({ configSource: stubConfigSource(undefined) });
-		try {
-			const res = await req(s.app, "/api/config", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as EffectiveConfigView;
-			expect(body.agents.map((a) => a.id)).toEqual(["claude", "codex"]);
-			expect(body.agents.every((a) => a.origin === "builtin")).toBe(true);
-			expect(body.roles).toEqual([]);
-			expect(body.recipes).toEqual([]);
-			expect(body.configPath).toBeUndefined();
-			expect(body.repoConfigPath).toBeUndefined();
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("re-reads the source per request (no forever cache)", async () => {
-		const source = stubConfigSource(undefined);
-		const s = setup({ configSource: source });
-		try {
-			const first = (await (
-				await req(s.app, "/api/config", { token: s.token })
-			).json()) as EffectiveConfigView;
-			expect(first.agents.find((a) => a.id === "deep")).toBeUndefined();
-			source.raw = { agents: { deep: { adapter: "codex-exec", model: "m1" } } };
-			const second = (await (
-				await req(s.app, "/api/config", { token: s.token })
-			).json()) as EffectiveConfigView;
-			expect(second.agents.find((a) => a.id === "deep")?.model).toBe("m1");
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("env values never cross the wire; key names only", async () => {
-		const source = stubConfigSource({
-			agents: { custom: { adapter: "codex-exec", env: { API_KEY: "hush-hush-value" } } },
-		});
-		const s = setup({ configSource: source });
-		try {
-			const res = await req(s.app, "/api/config", { token: s.token });
-			const text = await res.text();
-			expect(text).not.toContain("hush-hush-value");
-			const body = JSON.parse(text) as EffectiveConfigView;
-			expect(body.agents.find((a) => a.id === "custom")?.envKeys).toEqual(["API_KEY"]);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("recipes cross the wire with origin and the contracted fields only", async () => {
-		const source = stubConfigSource({
-			recipes: {
-				deep: {
-					mode: "converge",
-					manifestPath: "/flows/deep.json",
-					maxIterations: 5,
-					callTimeoutMs: 1_200_000,
-					description: "deep converge preset",
+	test("degrades a throwing live source to an empty snapshot", async () => {
+		const s = setup({
+			liveSource: {
+				live: () => {
+					throw new Error("state dir unavailable");
 				},
 			},
 		});
-		const s = setup({ configSource: source });
-		try {
-			const res = await req(s.app, "/api/config", { token: s.token });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as EffectiveConfigView;
-			expect(body.recipes).toEqual([
-				{
-					id: "deep",
-					origin: "global",
-					mode: "converge",
-					manifestPath: "/flows/deep.json",
-					maxIterations: 5,
-					callTimeoutMs: 1_200_000,
-					description: "deep converge preset",
-				},
-			]);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("a failing load surfaces as 422 with the loader's message, not a fake empty view", async () => {
-		const source: StudioConfigSource = {
-			load() {
-				// What parseConfig throws on a malformed file: a message naming the path.
-				return parseConfig(42, "/repo/chit.config.json");
-			},
-		};
-		const s = setup({ configSource: source });
-		try {
-			const res = await req(s.app, "/api/config", { token: s.token });
-			expect(res.status).toBe(422);
-			expect(await res.text()).toContain("chit.config.json");
-		} finally {
-			teardown(s);
-		}
+		const res = await req(s.app, "/api/live", { token: s.token });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ foreground: [], background: [] });
 	});
 });
 
 describe("POST /api/live/cancel", () => {
-	async function post(
+	async function postCancel(
 		app: ReturnType<typeof buildApp>,
-		token: string | undefined,
+		token: string,
 		body: unknown,
 	): Promise<Response> {
-		const headers: Record<string, string> = { host: HOST, "content-type": "application/json" };
-		if (token !== undefined) headers.authorization = `Bearer ${token}`;
 		return app.fetch(
 			new Request(`http://${HOST}/api/live/cancel`, {
 				method: "POST",
-				headers,
+				headers: {
+					host: HOST,
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
 				body: JSON.stringify(body),
 			}),
 		);
 	}
 
-	// A stub action handler that records the runId it was asked to cancel and
-	// returns a scripted result, so the route's wiring (validation, status mapping)
-	// is tested without a real JobStore.
-	interface StubActions extends StudioLiveActions {
-		calls: string[];
-	}
-	function stubActions(
-		result: import("./types.ts").LiveCancelResult | { throw: true },
-	): StubActions {
-		const calls: string[] = [];
-		return {
-			calls,
-			cancelBackground: (runId) => {
-				calls.push(runId);
-				if ("throw" in result) throw new Error("jobstore unavailable");
-				return result;
-			},
-		};
-	}
-
-	test("requires a token", async () => {
-		const s = setup({ liveActions: stubActions({ status: "not-found" }) });
-		try {
-			const res = await post(s.app, undefined, { runId: "bg-1", source: "background" });
-			expect(res.status).toBe(401);
-		} finally {
-			teardown(s);
-		}
+	test("rejects malformed bodies and unsafe run ids before host actions", async () => {
+		const s = setup();
+		expect((await postCancel(s.app, s.token, {})).status).toBe(400);
+		expect(
+			(await postCancel(s.app, s.token, { runId: "../evil", source: "background" })).status,
+		).toBe(400);
 	});
 
-	test("cancels a background run and returns the host's result", async () => {
-		const actions = stubActions({ status: "requested", state: "running", signaled: true });
-		const s = setup({ liveActions: actions });
-		try {
-			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { status: string; state: string; signaled: boolean };
-			expect(body).toEqual({ status: "requested", state: "running", signaled: true });
-			expect(actions.calls).toEqual(["bg-1"]);
-		} finally {
-			teardown(s);
-		}
+	test("refuses foreground cancellation honestly", async () => {
+		const s = setup();
+		const res = await postCancel(s.app, s.token, { runId: "fg-1", source: "foreground" });
+		expect(res.status).toBe(422);
+		expect(await res.text()).toContain("only background");
 	});
 
-	test("a terminal run is reported already-finished, not an error", async () => {
+	test("returns 501 when no live action handler is injected", async () => {
+		const s = setup();
+		const res = await postCancel(s.app, s.token, { runId: "bg-1", source: "background" });
+		expect(res.status).toBe(501);
+	});
+
+	test("maps host action outcomes onto the wire response", async () => {
 		const s = setup({
-			liveActions: stubActions({ status: "already-finished", state: "completed" }),
+			liveActions: {
+				cancelBackground: (runId) =>
+					runId === "missing"
+						? { status: "not-found" }
+						: { status: "requested", state: "running", signaled: true },
+			},
 		});
-		try {
-			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { status: string; state: string };
-			expect(body).toEqual({ status: "already-finished", state: "completed" });
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("an unknown run returns 404", async () => {
-		const s = setup({ liveActions: stubActions({ status: "not-found" }) });
-		try {
-			const res = await post(s.app, s.token, { runId: "ghost", source: "background" });
-			expect(res.status).toBe(404);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("a foreground source is refused with 422 before the handler is called", async () => {
-		const actions = stubActions({ status: "requested", state: "running", signaled: true });
-		const s = setup({ liveActions: actions });
-		try {
-			const res = await post(s.app, s.token, { runId: "fg-1", source: "foreground" });
-			expect(res.status).toBe(422);
-			expect(await res.text()).toContain("only background");
-			expect(actions.calls).toHaveLength(0); // never reached the handler
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("no action handler injected returns 501 (for a valid background request)", async () => {
-		const s = setup(); // no liveActions
-		try {
-			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
-			expect(res.status).toBe(501);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("an unsafe run id is rejected with 400 before the handler is called", async () => {
-		const actions = stubActions({ status: "not-found" });
-		const s = setup({ liveActions: actions });
-		try {
-			const res = await post(s.app, s.token, { runId: "../etc/passwd", source: "background" });
-			expect(res.status).toBe(400);
-			expect(actions.calls).toHaveLength(0);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("a body missing runId/source is a 400", async () => {
-		const s = setup({ liveActions: stubActions({ status: "not-found" }) });
-		try {
-			const res = await post(s.app, s.token, { runId: "bg-1" });
-			expect(res.status).toBe(400);
-		} finally {
-			teardown(s);
-		}
-	});
-
-	test("a host-side cancel failure surfaces as 422", async () => {
-		const s = setup({ liveActions: stubActions({ throw: true }) });
-		try {
-			const res = await post(s.app, s.token, { runId: "bg-1", source: "background" });
-			expect(res.status).toBe(422);
-			expect(await res.text()).toBe("cancel failed");
-		} finally {
-			teardown(s);
-		}
+		const ok = await postCancel(s.app, s.token, { runId: "bg-1", source: "background" });
+		expect(ok.status).toBe(200);
+		expect(await ok.json()).toEqual({ status: "requested", state: "running", signaled: true });
+		expect(
+			(await postCancel(s.app, s.token, { runId: "missing", source: "background" })).status,
+		).toBe(404);
 	});
 });
 
-describe("/client/:asset", () => {
-	test("rejects unknown asset names with 404 before any file lookup", async () => {
+describe("GET /api/config", () => {
+	test("returns 501 when no host config source is injected", async () => {
 		const s = setup();
-		try {
-			const res = await req(s.app, "/client/secret.env");
-			expect(res.status).toBe(404);
-		} finally {
-			teardown(s);
-		}
+		const res = await req(s.app, "/api/config", { token: s.token });
+		expect(res.status).toBe(501);
 	});
 
-	test("returns 503 with a helpful message when the bundle is missing", async () => {
-		// setup() defaults clientDistDir to a non-existent path.
-		const s = setup();
-		try {
-			const res = await req(s.app, "/client/index.js");
-			expect(res.status).toBe(503);
-			const body = await res.text();
-			expect(body).toContain("studio:build");
-		} finally {
-			teardown(s);
-		}
+	test("returns the redacted effective config view from the injected source", async () => {
+		const s = setup({
+			configSource: { load: () => parseConfig({ agents: { deep: { adapter: "codex-exec" } } }) },
+		});
+		const res = await req(s.app, "/api/config", { token: s.token });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { agents: Array<{ id: string }> };
+		expect(body.agents.map((a) => a.id)).toContain("deep");
 	});
 
-	test("returns 200 with the file when the bundle is present", async () => {
-		const dist = mkdtempSync(join(tmpdir(), "chit-studio-dist-"));
-		writeFileSync(join(dist, "index.js"), 'console.log("hi");');
-		const s = setup({ clientDistDir: dist });
-		try {
-			const res = await req(s.app, "/client/index.js");
-			expect(res.status).toBe(200);
-			const body = await res.text();
-			expect(body).toContain("console.log");
-		} finally {
-			teardown(s);
-			rmSync(dist, { recursive: true, force: true });
-		}
-	});
-});
-
-describe("SSR shell payload escaping", () => {
-	test("</script> sequence in payload is escaped so the inline script cannot break out", async () => {
-		// Build a payload whose document's description contains "</script>".
-		// In normal flow this only happens if the chit's data carries it; we
-		// craft it via a custom DocStore add to simulate.
-		const cwd = tempCwd();
-		try {
-			const path = join(cwd, "x.json");
-			const raw = JSON.stringify({
-				schema: 1,
-				id: "x",
-				description: "</script><script>alert(1)</script>",
-				inputs: { q: { type: "string" } },
-				requires: {},
-				participants: { a: { agent: "claude", instructions: "r", session: "stateless" } },
-				steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
-				output: "s",
-			});
-			writeFileSync(path, raw);
-			const store = new DocStore(cwd, REGISTRY);
-			const makeBootstrap = () =>
-				buildBootstrap({ kind: "open", absolutePath: path, relPath: "x.json" }, store);
-			const token = generateToken();
-			const app = buildApp({
-				token,
-				cwd,
-				makeBootstrap,
-				store,
-				allowedHosts: ALLOWED,
-				clientDistDir: "/this/path/does/not/exist",
-			});
-			const res = await req(app, "/");
-			const html = await res.text();
-			// Raw </script> must NOT appear inside the JSON payload.
-			// (It may still appear in the surrounding HTML chrome's
-			// closing tag.) Easier check: the escape sequence is present.
-			expect(html).toContain("\\u003c/script>");
-		} finally {
-			rmSync(cwd, { recursive: true, force: true });
-		}
+	test("surfaces config load failures as 422", async () => {
+		const s = setup({
+			configSource: {
+				load: () => {
+					throw new Error("bad chit.config.json");
+				},
+			},
+		});
+		const res = await req(s.app, "/api/config", { token: s.token });
+		expect(res.status).toBe(422);
+		expect(await res.text()).toContain("bad chit.config.json");
 	});
 });

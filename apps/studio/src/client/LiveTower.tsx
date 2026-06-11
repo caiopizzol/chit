@@ -2,10 +2,10 @@
 // alive across Chit right now, with the canonical mock's four visible parts: a
 // top bar carrying the live identity and an at-a-glance count, a compact session
 // rail (foreground + background groups), the selected run's detail with its
-// agent blocks, and a small console of local activity. It consumes ONLY the GET
-// /api/live snapshot via useLive; it never reads private state, streams model
-// output, or carries run actions (apply/cancel/cleanup are a later slice). It is
-// the page, not an overlay, so it polls while mounted and resets its read
+// agent blocks, and a small console of local activity. It consumes the GET
+// /api/live snapshot via useLive plus the bounded cancel action for background
+// runs; it never reads private state, streams model output, applies changes, or
+// cleans up worktrees. It is the page, not an overlay, so it polls while mounted and resets its read
 // session on a reload rather than on an open/close toggle.
 
 import { useCallback, useState } from "react";

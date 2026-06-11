@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type { NormalizedConfig } from "@chit-run/core";
 import {
 	buildGraphModel,
@@ -8,7 +8,6 @@ import {
 	findEnforcementGaps,
 	findMissingCapabilities,
 	findUnknownAgents,
-	parseConfig,
 	parseManifest,
 	type ResolvedManifest,
 	renderShow,
@@ -26,7 +25,6 @@ import { isStale, jobTiming } from "../jobs/health.ts";
 import { JobStore } from "../jobs/store.ts";
 import type { JobRecord } from "../jobs/types.ts";
 import { runJobWorker } from "../jobs/worker.ts";
-import { loopLogDir } from "../loops/location.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { type LiveEventSummary, sanitizeLiveEvents } from "../runtime/live-events.ts";
 import { RuntimeError } from "../runtime/render.ts";
@@ -132,11 +130,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function parseStudioArgs(argv: string[]): ParsedArgs {
-	// `chit studio [path]` - path is optional. If present, it is the explicit
-	// manifest path (one positional, no flags in sub-unit 1.0). Unknown flags
-	// and extra positionals throw, following the same pattern as the other
-	// parseXxxArgs in this file. `--help` / `-h` yield the top-level help so
-	// behavior is consistent with the rest of the CLI.
+	// `chit studio` takes no manifest path: Studio is a live monitor, not a
+	// manifest editor. Rejecting extra arguments is safer than ignoring a stale
+	// `chit studio <path>` invocation and implying the file was opened.
 	const out: ParsedArgs = emptyArgs("studio");
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
@@ -147,10 +143,7 @@ function parseStudioArgs(argv: string[]): ParsedArgs {
 		if (a.startsWith("-")) {
 			throw new Error(`unknown flag: ${a}`);
 		}
-		if (out.manifestPath !== undefined) {
-			throw new Error(`studio: unexpected argument "${a}"`);
-		}
-		out.manifestPath = a;
+		throw new Error(`studio: unexpected argument "${a}"`);
 	}
 	return out;
 }
@@ -297,7 +290,7 @@ const HELP = `Usage:
   chit show <manifest.json> [--surface <kind>] [--format <fmt>]
   chit list [--to <dir>] [--json]
   chit uninstall <name> [--to <dir>]
-  chit studio [path]
+  chit studio
   chit mcp                                         (run the stdio MCP server)
   chit doctor                                      (preflight: check setup)
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
@@ -845,46 +838,6 @@ function runUninstall(args: ParsedArgs): number {
 	}
 }
 
-// Lifecycle adapter injected into Studio so its install/list/uninstall
-// endpoints reuse the exact CLI surface code paths (no workspace cycle: the
-// CLI implements the interface @chit-run/studio defines). CHIT_SKILLS_DIR overrides
-// the install location, so e2e tests install into a temp dir instead of the
-// real ~/.claude/skills.
-function buildStudioLifecycle(): import("@chit-run/studio/server").StudioLifecycle {
-	const skillsDir = process.env.CHIT_SKILLS_DIR ?? defaultSkillsDir();
-	return {
-		list: () =>
-			listInstalled(skillsDir).map((r) => ({
-				name: r.marker.installName,
-				surface: r.marker.surface,
-				manifestId: r.marker.manifestId,
-				installedAt: r.marker.installedAt,
-			})),
-		install: (params) => {
-			if (params.surface !== "claude-skill") {
-				throw new Error(`surface "${params.surface}" is not installable (today: claude-skill)`);
-			}
-			const result = installClaudeSkill({
-				manifestPath: params.manifestPath,
-				outputDir: skillsDir,
-				runtimePath: defaultRuntimePath(),
-				overrideName: params.overrideName,
-				force: params.force,
-				allowUnenforcedPermissions: params.allowUnenforcedPermissions,
-			});
-			return {
-				name: basename(result.skillDir),
-				surface: "claude-skill",
-				enforcementGaps: [...result.enforcementGaps],
-			};
-		},
-		uninstall: (name) => {
-			const removed = uninstall(skillsDir, name);
-			return { name: removed.marker.installName };
-		},
-	};
-}
-
 type StudioLiveSource = import("@chit-run/studio/server").StudioLiveSource;
 type StudioLiveActions = import("@chit-run/studio/server").StudioLiveActions;
 type LiveCancelResult = import("@chit-run/studio/server").LiveCancelResult;
@@ -896,7 +849,7 @@ type LiveExecutionIdentity = import("@chit-run/studio/server").LiveExecutionIden
 
 // Live-activity source injected into Studio so GET /api/live reflects current Chit
 // state without @chit-run/studio importing CLI internals (the CLI owns the state
-// readers and injects this small interface, like buildStudioLifecycle). Two
+// readers and injects this small interface). Two
 // sources, kept visibly distinct in the response: the cross-process FOREGROUND
 // registry (in-flight foreground loop iterations) and the durable JobStore
 // (BACKGROUND jobs). Reads are best-effort: a registry/jobs I/O failure degrades
@@ -921,8 +874,8 @@ export function buildStudioLiveSource(
 
 // Live actions injected into Studio so POST /api/live/cancel can cancel a
 // BACKGROUND job, without @chit-run/studio importing CLI internals (the CLI owns
-// JobStore and the worker signaling, like buildStudioLiveSource /
-// buildStudioLifecycle). Background ONLY: the foreground registry is a
+// JobStore and the worker signaling, like buildStudioLiveSource). Background
+// ONLY: the foreground registry is a
 // cross-process MIRROR -- Studio reads it but the MCP server, not the CLI host,
 // owns the foreground run controller -- so this surface never claims to cancel a
 // foreground run (the server rejects that with 422 before reaching here).
@@ -1183,43 +1136,14 @@ export function studioClientDir(moduleDir: string): string | undefined {
 	return existsSync(join(packaged, "index.js")) ? packaged : undefined;
 }
 
-// The config Studio boots with. A readable config loads normally; a MALFORMED
-// one falls back to built-in defaults with a stderr warning instead of aborting
-// `chit studio`. The fallback only seeds the boot registry/roles -- GET
-// /api/config keeps calling loadConfig fresh per request, so the broken file
-// still surfaces as a 422 + the loader's message in the config drawer, where
-// the operator can actually read what to fix. Exported for tests.
-export function studioBootConfig(cwd: string, warn: (msg: string) => void): NormalizedConfig {
-	try {
-		return loadConfig(undefined, { cwd });
-	} catch (e) {
-		warn(
-			`chit studio: starting with built-in defaults, config failed to load: ${(e as Error).message}`,
-		);
-		return parseConfig(undefined);
-	}
-}
-
-async function runStudio(args: ParsedArgs): Promise<number> {
-	const { PathError, startStudio } = await import("@chit-run/studio/server");
-	// The Studio target repo, captured once so the boot config, the per-request
-	// config reads, and the loop-log dir all observe the same repo.
+async function runStudio(_args: ParsedArgs): Promise<number> {
+	const { startStudio } = await import("@chit-run/studio/server");
+	// The Studio target repo, captured once so config reads observe the same repo.
 	const studioCwd = process.cwd();
 	let handle: { url: string; stop(): void };
 	try {
-		// Inject both the registry and the roles so Studio's server resolves role
-		// references in a manifest before building the graph model (buildGraphModel
-		// consumes a ResolvedManifest).
-		const config = studioBootConfig(studioCwd, (msg) => process.stderr.write(`${msg}\n`));
 		handle = await startStudio({
 			cwd: studioCwd,
-			explicitPath: args.manifestPath,
-			registry: config.registry,
-			roles: config.roles,
-			lifecycle: buildStudioLifecycle(),
-			// The CLI owns the loop-log location scheme; inject the resolved dir so
-			// Studio reads the same place chit writes.
-			loopsDir: loopLogDir(studioCwd),
 			// Live activity backed by current Chit state: the cross-process foreground
 			// registry and the durable background jobs. Defaults to the real XDG state
 			// dirs, the same locations the MCP server and workers write.
@@ -1231,11 +1155,8 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			liveActions: buildStudioLiveActions(),
 			// Effective-config reader for GET /api/config: a fresh loadConfig per
 			// request against the Studio target repo cwd, so the view tracks config
-			// edits made while Studio is open (same freshness contract as MCP
-			// launches). Studio redacts before anything crosses the wire. Deliberately
-			// NOT studioBootConfig: a load failure here must propagate so the route
-			// answers 422 with the loader's message, not a defaults view that would
-			// misreport the effective state.
+			// edits made while Studio is open. A load failure propagates as 422 from
+			// the route instead of silently reporting defaults.
 			configSource: { load: () => loadConfig(undefined, { cwd: studioCwd }) },
 			// In a published install the client bundle ships beside chit.js, not at
 			// the Studio server's default path. Undefined in a source checkout, where
@@ -1243,11 +1164,8 @@ async function runStudio(args: ParsedArgs): Promise<number> {
 			clientDistDir: studioClientDir(import.meta.dir),
 		});
 	} catch (e) {
-		if (e instanceof PathError) {
-			process.stderr.write(`chit: ${e.message}\n`);
-			return 2;
-		}
-		throw e;
+		process.stderr.write(`chit studio: failed to start: ${(e as Error).message}\n`);
+		return 1;
 	}
 
 	process.stdout.write(`chit studio: ${handle.url}\n`);

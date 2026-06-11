@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,21 +55,7 @@ describe("packaged chit studio", () => {
 		expect(existsSync(join(APPS_CLI, "dist", "client", "index.css"))).toBe(true);
 
 		const cwd = mkdtempSync(join(tmpdir(), "chit-studio-pkg-"));
-		const manifest = join(cwd, "consult.json");
-		writeFileSync(
-			manifest,
-			JSON.stringify({
-				schema: 1,
-				id: "consult",
-				description: "packaged studio smoke",
-				inputs: { q: { type: "string" } },
-				requires: {},
-				participants: { a: { agent: "claude", instructions: "r", session: "stateless" } },
-				steps: { s: { call: "a", prompt: "{{ inputs.q }}" } },
-				output: "s",
-			}),
-		);
-		const proc = Bun.spawn(["bun", DIST, "studio", manifest], {
+		const proc = Bun.spawn(["bun", DIST, "studio"], {
 			cwd,
 			stdin: "ignore",
 			stdout: "pipe",

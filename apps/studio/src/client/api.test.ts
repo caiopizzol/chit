@@ -1,19 +1,11 @@
-// Unit tests for the read-only loop fetch helpers. Stubs sessionStorage (so
+// Unit tests for the mounted LiveTower fetch helpers. Stubs sessionStorage (so
 // getToken resolves) and global fetch (so no network), and asserts the helpers
 // hit the right URL with the bearer token, parse the body, and surface non-2xx
 // as a StudioApiError.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { LoopRecord } from "@chit-run/core";
-import type { EffectiveConfigView, LiveActivity, LoopSummary } from "../server/types.ts";
-import {
-	cancelLiveRun,
-	fetchEffectiveConfig,
-	fetchLive,
-	fetchLoop,
-	fetchLoops,
-	StudioApiError,
-} from "./api.ts";
+import type { EffectiveConfigView, LiveActivity } from "../server/types.ts";
+import { cancelLiveRun, fetchEffectiveConfig, fetchLive, StudioApiError } from "./api.ts";
 import { TOKEN_STORAGE_KEY } from "./boot.ts";
 
 const realFetch = globalThis.fetch;
@@ -54,72 +46,6 @@ beforeEach(() => {
 
 afterEach(() => {
 	globalThis.fetch = realFetch;
-});
-
-describe("fetchLoops", () => {
-	test("GETs /api/loops with the bearer token and parses the array", async () => {
-		const summaries: LoopSummary[] = [
-			{
-				loopId: "A",
-				scope: "s",
-				task: "t",
-				status: "converged",
-				iterations: 1,
-				totalElapsedMs: 5000,
-				startedAt: "2026-05-29T10:00:00.000Z",
-			},
-		];
-		const calls = mock(200, summaries);
-		const out = await fetchLoops();
-		expect(out).toEqual(summaries);
-		expect(calls[0]?.url).toBe("/api/loops");
-		expect(calls[0]?.headers.Authorization).toBe("Bearer tok");
-	});
-
-	test("throws StudioApiError on a non-2xx response", async () => {
-		mock(500, "boom");
-		await expect(fetchLoops()).rejects.toBeInstanceOf(StudioApiError);
-	});
-});
-
-describe("fetchLoop", () => {
-	test("GETs /api/loops/:id (id encoded) and parses the records", async () => {
-		const records: LoopRecord[] = [
-			{
-				type: "loop",
-				schema: 1,
-				loopId: "L1",
-				scope: "s",
-				task: "t",
-				repo: "/x",
-				repoKey: "k",
-				startedAt: "2026-05-29T10:00:00.000Z",
-				maxIterations: 3,
-			},
-			{
-				type: "iteration",
-				n: 1,
-				implementSummary: "x",
-				changedFiles: [],
-				checksRun: "t",
-				verdict: "proceed",
-				findingCount: 0,
-				decision: "proceed",
-				checkDurationMs: 1,
-				at: "2026-05-29T10:01:00.000Z",
-			},
-		];
-		const calls = mock(200, records);
-		const out = await fetchLoop("L1");
-		expect(out).toEqual(records);
-		expect(calls[0]?.url).toBe("/api/loops/L1");
-		expect(calls[0]?.headers.Authorization).toBe("Bearer tok");
-	});
-
-	test("throws StudioApiError on 404", async () => {
-		mock(404, "not found");
-		await expect(fetchLoop("nope")).rejects.toBeInstanceOf(StudioApiError);
-	});
 });
 
 describe("fetchLive", () => {
