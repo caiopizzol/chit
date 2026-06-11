@@ -25,6 +25,7 @@ chit --help
 chit show path/to/your-manifest.json
 chit run path/to/your-manifest.json --input question="..."
 chit audit list
+chit audit stats
 ```
 
 Manifests are small JSON files you write. Example manifests live in the source repo under `examples/`; they are not bundled with this package.

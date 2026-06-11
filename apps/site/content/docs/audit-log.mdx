@@ -67,6 +67,22 @@ timeline:
   run.completed  ok 95000ms
 ```
 
+## Rolling up across runs
+
+`list` and `show` answer "what happened in one run". `stats` rolls the same receipts into one metrics-only summary across runs:
+
+```text
+chit audit stats
+chit audit stats --surface converge --since 2026-06-01 --limit 50
+chit audit stats --all-repos
+```
+
+It reports how many recent runs were considered (and how many had an unreadable or empty log), the breakdown by surface and by run status (so convergence vs failure, blocked, and timeout incidence are visible), the recipe breakdown when runs declared one, the convergence verdict/decision counts with total findings, how many iterations named a real verification source, and summed token usage and reported cost. `--json` emits the structured aggregate.
+
+The audit store is one per-user state dir shared by every repo, so `stats` scopes to the current repo by default: it keeps only runs whose recorded working directory resolves to this repo's root (a run from any subdirectory counts). `--all-repos` folds runs from every repo instead. The repo match is an internal filter; the path is never printed.
+
+It reads only the receipt metadata, never a blob body, and emits only counts, low-cardinality enums (surface, status, verdict, recipe id), and numeric sums. It never prints prompts, outputs, file paths, error text, or `scope` (which is accepted only as a filter via `--scope`).
+
 ## Retention
 
 Audit transcripts accumulate, so each audited run prunes the store after it finishes. The defaults keep:

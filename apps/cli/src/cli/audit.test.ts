@@ -329,6 +329,168 @@ describe("chit audit show", () => {
 	});
 });
 
+// A converge run that recorded a loop iteration (verdict + checks), so the stats
+// roll-up has convergence and verification-source signal to fold.
+function seedLoopRun(runId: string, ts: string, verdict: "proceed" | "revise" | "block"): void {
+	store.appendEvent(runId, {
+		type: "run.started",
+		runId,
+		ts: `${ts}T10:00:00.000Z`,
+		manifestId: "m",
+		cwd: "/c",
+		surface: "converge",
+		recipe: { id: "converge-default", mode: "converge" },
+	});
+	store.appendEvent(runId, {
+		type: "loop.iteration.recorded",
+		runId,
+		ts: `${ts}T10:00:01.000Z`,
+		loopId: "L",
+		n: 1,
+		verdict,
+		decision: verdict,
+		findingCount: 2,
+		changedFiles: [],
+		checksRun: "bun test",
+		checkDurationMs: 5,
+	});
+	store.appendEvent(runId, {
+		type: "run.completed",
+		runId,
+		ts: `${ts}T10:00:02.000Z`,
+		status: verdict === "block" ? "failed" : "ok",
+		durationMs: 100,
+	});
+}
+
+describe("chit audit stats", () => {
+	test("reports zero runs (and the skip count) for an empty store", () => {
+		const c = capture();
+		expect(runAudit(["stats"], c.io, store)).toBe(0);
+		expect(c.out()).toMatch(/no runs matched in this repo \(skipped 0/);
+	});
+
+	// The seed helpers record cwd "/c"; passing cwd "/c" makes the test's "current
+	// repo" that path, so default repo scoping keeps the seeded runs. (repoRoot of a
+	// nonexistent path falls back to the path itself, so this is deterministic.)
+	const AT_REPO = "/c";
+
+	test("rolls up surfaces, statuses, recipe, convergence, and usage", () => {
+		seedComplete("R1", "2026-05-29"); // converge, ok, usage
+		seedIncomplete("R2", "2026-05-30"); // mcp, incomplete
+		seedLoopRun("R3", "2026-05-31", "proceed"); // converge, ok, recipe + iteration
+		const c = capture();
+		expect(runAudit(["stats"], c.io, store, AT_REPO)).toBe(0);
+		const out = c.out();
+		expect(out).toMatch(/runs: 3/);
+		expect(out).toMatch(/surface:.*converge=2/);
+		expect(out).toMatch(/surface:.*mcp=1/);
+		expect(out).toMatch(/status:.*ok=2/);
+		expect(out).toMatch(/status:.*incomplete=1/);
+		expect(out).toMatch(/recipe:.*converge-default=1/);
+		expect(out).toMatch(/convergence: 1 iterations/);
+		expect(out).toMatch(/verdict\[.*proceed=1/);
+		expect(out).toMatch(/with verification source=1\/1/);
+		expect(out).toMatch(/reported cost: \$0\.0500/);
+	});
+
+	test("--json emits the aggregate object and never the scope filter value", () => {
+		seedComplete("R1", "2026-05-29"); // scope "s"
+		const c = capture();
+		expect(runAudit(["stats", "--json"], c.io, store, AT_REPO)).toBe(0);
+		const agg = JSON.parse(c.out());
+		expect(agg.runs).toBe(1);
+		expect(agg.bySurface).toEqual({ converge: 1 });
+		expect(agg.byStatus).toEqual({ ok: 1 });
+		// scope is an input filter only; it must not surface in the output.
+		expect(c.out()).not.toContain('"s"');
+		expect(c.out()).not.toContain("scope");
+	});
+
+	test("--surface filters to one surface", () => {
+		seedComplete("R1", "2026-05-29"); // converge
+		seedIncomplete("R2", "2026-05-30"); // mcp
+		const c = capture();
+		runAudit(["stats", "--surface", "mcp", "--json"], c.io, store, AT_REPO);
+		const agg = JSON.parse(c.out());
+		expect(agg.runs).toBe(1);
+		expect(agg.bySurface).toEqual({ mcp: 1 });
+	});
+
+	test("--limit keeps the newest runs", () => {
+		seedComplete("R1", "2026-05-29"); // converge (older)
+		seedIncomplete("R2", "2026-05-30"); // mcp (newer)
+		const c = capture();
+		runAudit(["stats", "--limit", "1", "--json"], c.io, store, AT_REPO);
+		const agg = JSON.parse(c.out());
+		expect(agg.runs).toBe(1);
+		expect(agg.bySurface).toEqual({ mcp: 1 });
+	});
+
+	test("defaults to the current repo, excluding runs recorded in other repos", () => {
+		// Two runs in the shared store, recorded in different repos.
+		store.appendEvent("HERE", {
+			type: "run.started",
+			runId: "HERE",
+			ts: "2026-05-30T10:00:00.000Z",
+			manifestId: "m",
+			cwd: "/repos/here",
+			surface: "converge",
+		});
+		store.appendEvent("HERE", {
+			type: "run.completed",
+			runId: "HERE",
+			ts: "2026-05-30T10:00:01.000Z",
+			status: "ok",
+			durationMs: 1,
+		});
+		store.appendEvent("THERE", {
+			type: "run.started",
+			runId: "THERE",
+			ts: "2026-05-30T11:00:00.000Z",
+			manifestId: "m",
+			cwd: "/repos/there",
+			surface: "converge",
+		});
+		store.appendEvent("THERE", {
+			type: "run.completed",
+			runId: "THERE",
+			ts: "2026-05-30T11:00:01.000Z",
+			status: "ok",
+			durationMs: 1,
+		});
+		const c = capture();
+		runAudit(["stats", "--json"], c.io, store, "/repos/here");
+		const scoped = JSON.parse(c.out());
+		expect(scoped.runs).toBe(1);
+
+		// --all-repos folds both, ignoring the current repo.
+		const c2 = capture();
+		runAudit(["stats", "--all-repos", "--json"], c2.io, store, "/repos/here");
+		const all = JSON.parse(c2.out());
+		expect(all.runs).toBe(2);
+		expect(c2.out()).not.toContain("/repos"); // no path leaks into the output
+	});
+
+	test("an invalid --surface is a usage error (exit 2)", () => {
+		const c = capture();
+		expect(runAudit(["stats", "--surface", "bogus"], c.io, store)).toBe(2);
+		expect(c.err()).toMatch(/--surface must be one of/);
+	});
+
+	test("an invalid --limit is a usage error (exit 2)", () => {
+		const c = capture();
+		expect(runAudit(["stats", "--limit", "-3"], c.io, store)).toBe(2);
+		expect(c.err()).toMatch(/--limit must be a non-negative integer/);
+	});
+
+	test("a flag missing its value is a usage error (exit 2)", () => {
+		const c = capture();
+		expect(runAudit(["stats", "--since"], c.io, store)).toBe(2);
+		expect(c.err()).toMatch(/--since requires a value/);
+	});
+});
+
 describe("chit audit arg parsing", () => {
 	test("show without a runId is a usage error (exit 2)", () => {
 		const c = capture();

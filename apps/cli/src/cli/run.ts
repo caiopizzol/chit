@@ -295,7 +295,7 @@ const HELP = `Usage:
   chit doctor                                      (preflight: check setup)
   chit loop-log <start|append|stop|show> [flags]   (chit loop-log --help)
   chit converge --task <text> --scope <id> [options]   (chit converge --help)
-  chit audit <list|show> [options]   (chit audit --help)
+  chit audit <list|show|stats> [options]   (chit audit --help)
   chit -h | --help
 
 run options:

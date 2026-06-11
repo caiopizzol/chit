@@ -12,10 +12,16 @@
 
 import {
 	type AuditEvent,
+	type AuditSurface,
 	configPairs,
 	formatAdapterUsage,
 	participantPermissionText,
 } from "@chit-run/core";
+import {
+	type AggregateOptions,
+	aggregateReceipts,
+	type ReceiptAggregate,
+} from "../audit/aggregate.ts";
 import {
 	describeIncomplete,
 	hiddenAdapterEventCount,
@@ -25,6 +31,7 @@ import {
 	summarizeRun,
 } from "../audit/reader.ts";
 import { AuditStore } from "../audit/store.ts";
+import { repoRoot } from "../loops/location.ts";
 
 export interface AuditIO {
 	out: (s: string) => void;
@@ -40,6 +47,7 @@ const AUDIT_HELP = `chit audit <command> [options]
 
   list                     List audited runs, newest first.
   show <runId>             Show one run as a receipt (summary, participants, timeline).
+  stats                    Roll up metrics for this repo's runs (no bodies, no paths).
 
 list options:
   --json                   Emit the run summaries as JSON.
@@ -48,6 +56,15 @@ show options:
   --json                   Emit the raw events as JSON.
   --verbose                Include the raw adapter.event rows (the CLI event stream).
   --blobs, --include-bodies  Print blob bodies (rendered prompts, outputs).
+
+stats options (defaults to runs from the current repo):
+  --json                   Emit the aggregate as JSON.
+  --all-repos              Fold runs from every repo in the state dir, not just this one.
+  --since <iso>            Only runs whose startedAt is >= this ISO timestamp.
+  --until <iso>            Only runs whose startedAt is <= this ISO timestamp.
+  --surface <cli|mcp|converge>  Restrict to one audit surface.
+  --scope <label>          Restrict to one scope (filter only; never printed).
+  --limit <n>              Cap runs folded, newest first.
 
 Audited runs live under the local state dir (XDG_STATE_HOME or ~/.local/state,
 then chit/audit). A run with no run.completed event is shown as INCOMPLETE.
@@ -81,6 +98,59 @@ function runList(store: AuditStore, io: AuditIO, json: boolean): number {
 		io.out(`    started ${s.startedAt ?? "?"}  ${formatAdapterUsage(s.usage)}\n`);
 	}
 	io.out('\n("incomplete" = no run.completed event: failed, cancelled, or abandoned.)\n');
+	return 0;
+}
+
+// Render a Record<string, number> as "key=count" pairs, sorted by count
+// descending then key, so the table is stable and the busiest dimension leads.
+function countLine(counts: Record<string, number>): string {
+	const entries = Object.entries(counts);
+	if (entries.length === 0) return "none";
+	return entries
+		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+		.map(([k, n]) => `${k}=${n}`)
+		.join("  ");
+}
+
+function runStats(
+	store: AuditStore,
+	io: AuditIO,
+	opts: AggregateOptions,
+	json: boolean,
+	scope: { allRepos: boolean; cwd: string },
+): number {
+	// Default to this repo: the audit store is one per-user state dir shared across
+	// every repo, so an unscoped roll-up would mix unrelated repos. repoRoot maps a
+	// run's recorded cwd (any subdir) to its git top-level for the comparison; the
+	// path itself is never emitted. --all-repos opts out for a cross-repo view.
+	const effective: AggregateOptions = scope.allRepos
+		? opts
+		: { ...opts, repoRoot: repoRoot(scope.cwd), resolveRepoRoot: repoRoot };
+	const agg: ReceiptAggregate = aggregateReceipts(store, effective);
+	if (json) {
+		io.out(`${JSON.stringify(agg, null, 2)}\n`);
+		return 0;
+	}
+	const where = scope.allRepos ? "all repos" : "this repo";
+	if (agg.runs === 0) {
+		io.out(`no runs matched in ${where} (skipped ${agg.skipped} unreadable/empty).\n`);
+		return 0;
+	}
+	io.out(`runs: ${agg.runs} in ${where}  (skipped ${agg.skipped} unreadable/empty)\n`);
+	if (agg.timeRange) io.out(`range: ${agg.timeRange.earliest} .. ${agg.timeRange.latest}\n`);
+	io.out(`surface:  ${countLine(agg.bySurface)}\n`);
+	io.out(`status:   ${countLine(agg.byStatus)}\n`);
+	io.out(`recipe:   ${countLine(agg.byRecipe)}\n`);
+	io.out(`steps: ${agg.steps}  failed steps: ${agg.failedSteps}\n`);
+	const c = agg.convergence;
+	io.out(
+		`convergence: ${c.iterations} iterations  verdict[${countLine(c.verdicts)}]  decision[${countLine(c.decisions)}]\n`,
+	);
+	io.out(
+		`             findings=${c.findingCount}  with verification source=${c.withVerificationSource}/${c.iterations}\n`,
+	);
+	io.out(`usage: ${formatAdapterUsage(agg.usage)}\n`);
+	io.out('\n("ok" = converged/completed; "incomplete" = no run.completed.)\n');
 	return 0;
 }
 
@@ -214,25 +284,64 @@ function runShow(
 }
 
 interface ParsedAudit {
-	command: "list" | "show";
+	command: "list" | "show" | "stats";
 	runId?: string;
 	json: boolean;
 	blobs: boolean;
 	verbose: boolean;
+	stats: AggregateOptions;
+	// stats only: fold runs from every repo in the shared state dir instead of
+	// scoping to the current repo (the default).
+	allRepos: boolean;
+}
+
+const AUDIT_SURFACES: ReadonlySet<string> = new Set(["cli", "mcp", "converge"]);
+
+// Read the value following a `--flag`, advancing the index. Throws when the flag
+// is the last token (no value), so a typo never silently swallows the next flag.
+function takeValue(argv: string[], i: number, flag: string): string {
+	const v = argv[i + 1];
+	if (v === undefined || v.startsWith("--")) {
+		throw new UsageError(`${flag} requires a value`);
+	}
+	return v;
 }
 
 function parseAuditArgs(argv: string[]): ParsedAudit {
 	const sub = argv[0];
-	if (sub !== "list" && sub !== "show") {
+	if (sub !== "list" && sub !== "show" && sub !== "stats") {
 		throw new UsageError(`unknown audit command ${JSON.stringify(sub ?? "")}`);
 	}
-	const out: ParsedAudit = { command: sub, json: false, blobs: false, verbose: false };
+	const out: ParsedAudit = {
+		command: sub,
+		json: false,
+		blobs: false,
+		verbose: false,
+		stats: {},
+		allRepos: false,
+	};
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--json") out.json = true;
 		else if (a === "--blobs" || a === "--include-bodies") out.blobs = true;
 		else if (a === "--verbose") out.verbose = true;
-		else if (
+		else if (out.command === "stats" && a === "--all-repos") out.allRepos = true;
+		else if (out.command === "stats" && a === "--since") out.stats.since = takeValue(argv, i++, a);
+		else if (out.command === "stats" && a === "--until") out.stats.until = takeValue(argv, i++, a);
+		else if (out.command === "stats" && a === "--scope") out.stats.scope = takeValue(argv, i++, a);
+		else if (out.command === "stats" && a === "--surface") {
+			const s = takeValue(argv, i++, a);
+			if (!AUDIT_SURFACES.has(s))
+				throw new UsageError(`--surface must be one of cli, mcp, converge`);
+			out.stats.surface = s as AuditSurface;
+		} else if (out.command === "stats" && a === "--limit") {
+			const raw = takeValue(argv, i++, a);
+			const n = Number(raw);
+			if (!Number.isInteger(n) || n < 0) {
+				throw new UsageError("--limit must be a non-negative integer");
+			}
+			out.stats.limit = n;
+		} else if (
 			a !== undefined &&
 			!a.startsWith("--") &&
 			out.command === "show" &&
@@ -253,6 +362,7 @@ export function runAudit(
 	argv: string[],
 	io: AuditIO = defaultIO,
 	store: AuditStore = new AuditStore(),
+	cwd: string = process.cwd(),
 ): number {
 	if (argv[0] === "-h" || argv[0] === "--help" || argv.length === 0) {
 		io.out(AUDIT_HELP);
@@ -269,6 +379,9 @@ export function runAudit(
 		throw e;
 	}
 	if (parsed.command === "list") return runList(store, io, parsed.json);
+	if (parsed.command === "stats") {
+		return runStats(store, io, parsed.stats, parsed.json, { allRepos: parsed.allRepos, cwd });
+	}
 	return runShow(store, parsed.runId as string, io, {
 		json: parsed.json,
 		blobs: parsed.blobs,
