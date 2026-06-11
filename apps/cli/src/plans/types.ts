@@ -198,6 +198,14 @@ export interface PlanStepRecord {
 	// capture), keyed by handoff id. A failed capture also pauses the step needs_human. Absent on a
 	// step that declares none and on a record that settled before capture existed.
 	pendingHandoffs?: Record<string, PendingHandoff>;
+	// The handoffs ACCEPTED into immutable plan state at the step's gated apply confirm (Phase 3),
+	// keyed by handoff id. A frozen copy of pendingHandoffs, written in the SAME store update that
+	// records appliedCommitSha -- so an applied step ALWAYS has its handoffs accepted, and a dependent
+	// can never observe an applied step whose handoffs are not yet accepted (the trust-boundary +
+	// recovery invariant: nothing flows forward before the accepted digest is durable). Once present
+	// it is never rewritten (accepted handoffs are immutable). Absent on a step with no handoffs and on
+	// a record applied before acceptance existed.
+	acceptedHandoffs?: Record<string, PendingHandoff>;
 }
 
 export interface Plan {

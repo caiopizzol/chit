@@ -6,7 +6,7 @@
 // unit-testable with a fake reader and no real worktree.
 
 import type { PlanHandoff } from "@chit-run/core";
-import type { PendingHandoff, PendingHandoffView } from "./types.ts";
+import type { PendingHandoff, PendingHandoffStatus, PendingHandoffView } from "./types.ts";
 
 // The result of the single filesystem read of one declared handoff. The reader owns everything that
 // needs the raw bytes: containment, regular-file shape, the byte cap, a strict UTF-8 decode, and the
@@ -112,6 +112,63 @@ export function pendingHandoffView(p: PendingHandoff): PendingHandoffView {
 		...(p.error !== undefined && { error: p.error }),
 		...(p.preview !== undefined && { preview: p.preview }),
 	};
+}
+
+// The apply-gate projection of a pending handoff: the same compact fields as PendingHandoffView
+// PLUS the full captured body, because apply is the one surface where the operator accepts the
+// payload into downstream prompts and must inspect the exact content (see the design's privacy
+// rule -- full bodies are reachable from the apply gate, never from the default live/status tower).
+// drifted/current* are set ONLY when the worktree file was re-read and no longer matches the stored
+// (reviewer-seen) capture, so the operator sees what changed before deciding.
+export interface ApplyHandoffReview {
+	id: string;
+	path: string;
+	format: PlanHandoff["format"];
+	status: PendingHandoffStatus; // the STORED capture's status (what acceptance would record)
+	bytes?: number;
+	digest?: string; // the STORED capture's digest -- the exact content acceptance freezes
+	error?: string;
+	preview?: string; // bounded preview, the default display
+	body?: string; // the FULL captured body, exposed for inspection at this gate only
+	// Drift since settle: the worktree file was re-read and its current content differs from the
+	// stored capture the producing step's reviewer saw. current* describe what is on disk NOW; the
+	// stored digest above is still what acceptance would freeze, so the apply confirm refuses rather
+	// than accept content nobody reviewed.
+	drifted?: boolean;
+	currentStatus?: PendingHandoffStatus;
+	currentDigest?: string;
+}
+
+// Project a step's stored pending handoffs for the apply gate, exposing each full body and flagging
+// any that drifted from the reviewer-seen capture. `current`, when given, is a fresh re-capture of
+// the same declarations from the step worktree (digest + status only are compared): a differing
+// digest, or a captured handoff that is now missing/invalid (or vice versa), is drift. With no
+// re-capture (no reader wired, or no worktree) nothing is flagged -- the stored body is still the
+// durable, accepted-as-reviewed content.
+export function reviewPendingHandoffs(
+	pending: Record<string, PendingHandoff>,
+	current?: Record<string, PendingHandoff>,
+): ApplyHandoffReview[] {
+	return Object.values(pending).map((p) => {
+		const cur = current?.[p.id];
+		const drifted = cur !== undefined && (cur.digest !== p.digest || cur.status !== p.status);
+		return {
+			id: p.id,
+			path: p.path,
+			format: p.format,
+			status: p.status,
+			...(p.bytes !== undefined && { bytes: p.bytes }),
+			...(p.digest !== undefined && { digest: p.digest }),
+			...(p.error !== undefined && { error: p.error }),
+			...(p.preview !== undefined && { preview: p.preview }),
+			...(p.body !== undefined && { body: p.body }),
+			...(drifted && {
+				drifted: true,
+				currentStatus: cur.status,
+				...(cur.digest !== undefined && { currentDigest: cur.digest }),
+			}),
+		};
+	});
 }
 
 function dataBlock(body: string): string {

@@ -44,6 +44,7 @@ import {
 	planWaitState,
 	startPlan,
 } from "./engine.ts";
+import { readHandoffFileReal } from "./read-handoff.ts";
 import { PlanStore } from "./store.ts";
 import type { Plan, PlanStepRecord } from "./types.ts";
 
@@ -1940,5 +1941,220 @@ describe("producer handoff capture", () => {
 		const c1 = advancePlan(store, d, "p2");
 		expect(stepOf(c1, "a").status).toBe("review_ready");
 		expect(stepOf(c1, "a").pendingHandoffs).toBeUndefined();
+	});
+});
+
+// --- Phase 3: gated handoff acceptance at apply -----------------------------
+//
+// These need REAL git (the apply/commit primitives), so they extend realHarness: launchJob also
+// writes the declared handoff file into the step worktree (alongside the tracked base.txt diff), and
+// readHandoffFileReal is wired so settle captures it and apply can re-read it for drift. The single
+// step "a" declares one handoff; finishing its job converged + advancing settles it review_ready with
+// the handoff captured, then applyPlanStep exercises the gate.
+describe("gated handoff acceptance (real git)", () => {
+	const HANDOFF_DECL: Record<string, { path: string; format: "json"; maxBytes: number }> = {
+		findings: { path: "findings.json", format: "json", maxBytes: 1024 },
+	};
+	const CONTENT = '{"files":["x.ts"]}';
+
+	function handoffPlan(): NormalizedPlan {
+		return {
+			schema: 1,
+			title: "handoff apply plan",
+			cleanup: "after_apply",
+			steps: [step("a", { handoffs: HANDOFF_DECL })],
+		};
+	}
+
+	// A real-git harness whose launchJob ALSO produces the declared handoff in the step worktree, with
+	// the real reader wired so capture-at-settle and drift-at-apply both read the actual file.
+	function handoffHarness(content = CONTENT): { h: RealHarness; deps: PlanEngineDeps } {
+		const h = realHarness();
+		const deps: PlanEngineDeps = {
+			...h.deps,
+			launchJob: (p) => {
+				const decl = p.handoffs?.findings;
+				if (decl) writeFileSync(join(p.cwd, decl.path), content);
+				return h.deps.launchJob(p);
+			},
+			readHandoffFile: (wt, rel, max) => readHandoffFileReal(wt, rel, max),
+		};
+		return { h, deps };
+	}
+
+	// Start, settle the single step converged, and advance so capture runs -> review_ready.
+	function reviewReady(content = CONTENT): { h: RealHarness; deps: PlanEngineDeps } {
+		const { h, deps } = handoffHarness(content);
+		const started = startPlan(h.store, deps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: handoffPlan(),
+		});
+		h.finish(stepOf(started, "a").runId ?? "", { stopStatus: "converged" });
+		const advanced = advancePlan(h.store, deps, "p");
+		expect(stepOf(advanced, "a").status).toBe("review_ready");
+		return { h, deps };
+	}
+
+	test("dry run exposes the full handoff body and a bounded preview, and accepts nothing", () => {
+		const { h, deps } = reviewReady();
+		const dry = applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: false });
+		expect(dry.confirmed).toBe(false);
+		expect(dry.handoffDrift).toBeUndefined();
+		const review = present(dry.handoffs, "handoff review");
+		expect(review).toHaveLength(1);
+		expect(review[0]).toMatchObject({ id: "findings", path: "findings.json", status: "captured" });
+		// The full body is exposed at the apply gate (preview equals it here because it is short).
+		expect(review[0].body).toBe(CONTENT);
+		expect(review[0].preview).toBe(CONTENT);
+		expect(review[0].digest?.startsWith("sha256:")).toBe(true);
+		// A dry run accepts nothing and mutates no plan state.
+		const a = stepOf(present(h.store.get("p"), "plan"), "a");
+		expect(a.status).toBe("review_ready");
+		expect(a.acceptedHandoffs).toBeUndefined();
+	});
+
+	test("confirm accepts the captured handoffs into immutable plan state in the apply commit", () => {
+		const { h, deps } = reviewReady();
+		const beforeDigest = present(
+			stepOf(present(h.store.get("p"), "plan"), "a").pendingHandoffs?.findings.digest,
+			"pending digest",
+		);
+		const ok = applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true });
+		expect(ok.stepApplied).toBe(true);
+		expect(ok.handoffDrift).toBeUndefined();
+
+		const stored = present(h.store.get("p"), "plan");
+		const a = stepOf(stored, "a");
+		expect(a.status).toBe("applied");
+		// Accepted in the SAME write that recorded appliedCommitSha: applied <=> accepted.
+		expect(a.appliedCommitSha).toBe(present(ok.appliedCommitSha, "applied sha"));
+		const accepted = present(a.acceptedHandoffs?.findings, "accepted handoff");
+		expect(accepted.status).toBe("captured");
+		expect(accepted.body).toBe(CONTENT);
+		expect(accepted.digest).toBe(beforeDigest);
+
+		// The read-only view surfaces a body-free accepted summary.
+		const view = describePlan(stored, deps);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		const accView = present(aView.acceptedHandoffs?.[0], "accepted summary");
+		expect(accView).toMatchObject({ id: "findings", status: "captured", digest: beforeDigest });
+		expect("body" in accView).toBe(false);
+	});
+
+	test("accepted handoffs survive worktree cleanup (the body lives in the plan record)", () => {
+		const { h, deps } = reviewReady();
+		applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true });
+		const res = cleanupPlan(h.store, deps, "p", true);
+		expect(res.confirmed).toBe(true);
+		// The worktrees are gone, but the accepted handoff body is still in the durable plan record.
+		const a = stepOf(present(h.store.get("p"), "plan"), "a");
+		expect(a.acceptedHandoffs?.findings.body).toBe(CONTENT);
+	});
+
+	test("digest drift: a handoff changed after review is re-reported on dry run and refused on confirm", () => {
+		const { h, deps } = reviewReady();
+		const stepWt = present(stepOf(present(h.store.get("p"), "plan"), "a").worktreePath, "worktree");
+		const reviewedDigest = present(
+			stepOf(present(h.store.get("p"), "plan"), "a").pendingHandoffs?.findings.digest,
+			"reviewed digest",
+		);
+		// Something edited the handoff file AFTER the producing step's reviewer saw it.
+		writeFileSync(join(stepWt, "findings.json"), '{"files":["y.ts","z.ts"]}');
+
+		// Dry run re-reports the new digest without accepting.
+		const dry = applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: false });
+		expect(dry.handoffDrift).toBe(true);
+		const drifted = present(dry.handoffs, "review")[0];
+		expect(drifted.drifted).toBe(true);
+		expect(drifted.digest).toBe(reviewedDigest); // still the reviewed content
+		expect(drifted.currentDigest).toBeDefined();
+		expect(drifted.currentDigest).not.toBe(reviewedDigest);
+
+		// Confirm REFUSES: nothing applied, nothing accepted, the step stays review_ready, tip unmoved.
+		const confirm = applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true });
+		expect(confirm.stepApplied).toBe(false);
+		expect(confirm.handoffDrift).toBe(true);
+		expect(confirm.note).toContain("changed since review");
+		const stored = present(h.store.get("p"), "plan");
+		expect(stepOf(stored, "a").status).toBe("review_ready");
+		expect(stepOf(stored, "a").acceptedHandoffs).toBeUndefined();
+		expect(stored.integrationTipSha).toBe(h.baseSha);
+	});
+
+	test("a second confirm after a successful apply is refused (idempotent: no double commit)", () => {
+		const { h, deps } = reviewReady();
+		const first = applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true });
+		expect(first.stepApplied).toBe(true);
+		const integration = present(
+			present(h.store.get("p"), "plan").integrationWorktree,
+			"integration",
+		);
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("1");
+		// The step is applied now, so a re-apply is refused before touching git -- no second commit.
+		expect(() => applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true })).toThrow(
+			/applied/,
+		);
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("1");
+	});
+
+	test("recovery: a retry after a lost plan-store write does NOT commit the same diff twice", () => {
+		const { h, deps } = reviewReady();
+		const first = applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true });
+		const sha = present(first.appliedCommitSha, "applied sha");
+		const integration = present(
+			present(h.store.get("p"), "plan").integrationWorktree,
+			"integration",
+		);
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("1");
+		// Simulate the interrupted boundary: the git commit landed (tip advanced), but the plan-store
+		// write that records appliedCommitSha + acceptedHandoffs was lost, so the step looks
+		// review_ready again. The conflict gate / empty no-op in applyWorkspace must prevent a second
+		// commit of the same diff on retry.
+		h.store.update("p", (c) => {
+			const s = present(
+				c.steps.find((x) => x.id === "a"),
+				"step a",
+			);
+			s.status = "review_ready";
+			s.appliedCommitSha = undefined;
+			s.acceptedHandoffs = undefined;
+			c.integrationTipSha = sha; // the prior commit already advanced the tip
+			c.status = "ready_for_apply";
+			return c;
+		});
+		applyPlanStep(h.store, deps, { planId: "p", stepId: "a", confirm: true });
+		// No second commit landed: the integration branch is still exactly one commit past base.
+		expect(run(integration, ["rev-list", "--count", `${h.baseSha}..HEAD`]).trim()).toBe("1");
+	});
+
+	test("no reader at apply: the stored capture is still accepted, with no drift detectable", () => {
+		// Settle WITH a reader (so the handoff is captured), then apply through deps that lack a reader.
+		const { h } = reviewReady();
+		const noReaderDeps: PlanEngineDeps = { ...h.deps }; // h.deps has no readHandoffFile
+		const dry = applyPlanStep(h.store, noReaderDeps, { planId: "p", stepId: "a", confirm: false });
+		// The full body still comes from the stored capture; drift cannot be evaluated without a reader.
+		expect(present(dry.handoffs, "review")[0].body).toBe(CONTENT);
+		expect(dry.handoffDrift).toBeUndefined();
+		const ok = applyPlanStep(h.store, noReaderDeps, { planId: "p", stepId: "a", confirm: true });
+		expect(ok.stepApplied).toBe(true);
+		expect(stepOf(present(h.store.get("p"), "plan"), "a").acceptedHandoffs?.findings.body).toBe(
+			CONTENT,
+		);
+	});
+
+	test("a handoff-free step applies unchanged: no handoff review, no accepted handoffs", () => {
+		const h = realHarness();
+		reviewReadySingle(h);
+		const dry = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: false });
+		expect(dry.handoffs).toBeUndefined();
+		expect(dry.handoffDrift).toBeUndefined();
+		const ok = applyPlanStep(h.store, h.deps, { planId: "p", stepId: "a", confirm: true });
+		expect(ok.stepApplied).toBe(true);
+		expect(ok.handoffs).toBeUndefined();
+		expect(stepOf(present(h.store.get("p"), "plan"), "a").acceptedHandoffs).toBeUndefined();
 	});
 });

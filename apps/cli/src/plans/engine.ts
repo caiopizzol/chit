@@ -42,10 +42,12 @@ import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
 import type { ResolveManifestBinding, ResolveRecipe } from "../manifest/binding.ts";
 import {
+	type ApplyHandoffReview,
 	captureHandoffs,
 	composeStepTask,
 	pendingHandoffView,
 	type ReadHandoffFile,
+	reviewPendingHandoffs,
 } from "./handoffs.ts";
 import { derivePlanStatus, selectNextStep } from "./schedule.ts";
 import type { PlanStore } from "./store.ts";
@@ -377,6 +379,15 @@ export interface PlanApplyOutcome {
 	integrationTipSha?: string;
 	stepApplied: boolean; // the step was marked applied (commit succeeded or a coherent no-op)
 	commitError?: string; // set when the apply was clean but the commit failed (step NOT applied)
+	// The step's captured handoffs projected for this gate: compact summary PLUS the full body the
+	// operator inspects before accepting it into downstream prompts (apply is the one surface allowed
+	// the full body). Present whenever the step captured pending handoffs; absent on a handoff-free
+	// step. A confirmed apply that succeeds accepts exactly these into immutable plan state.
+	handoffs?: ApplyHandoffReview[];
+	// True when a captured handoff's worktree file changed since the producing step's reviewer saw it
+	// (digest/status drift). Informational on a dry run (the new digest is re-reported on each entry);
+	// FATAL on confirm -- the apply refuses so content nobody reviewed cannot be accepted.
+	handoffDrift?: boolean;
 	note: string;
 	plan: Plan; // the plan AFTER the operation (unchanged on a dry run / refusal / commit failure)
 }
@@ -419,11 +430,21 @@ export function applyPlanStep(
 	}
 	assertCleanIntegrationWorktree(deps, existing.integrationWorktree);
 
+	// Project the step's captured handoffs for this gate: expose each full body (apply is the only
+	// surface allowed it) and detect drift since the producing step's reviewer saw the content. Reads
+	// the step worktree only -- never mutates -- so it is safe before the apply decision below.
+	const handoffs = reviewStepHandoffs(step, deps);
+	const handoffDrift = handoffs?.some((h) => h.drifted) ?? false;
+
+	// Run the underlying apply as a DRY RUN whenever the operator did not confirm OR a handoff drifted:
+	// drift must refuse the WHOLE apply before any mutation (the handoff content changed since review,
+	// so neither the code nor the handoffs may be accepted on this stale review), yet we still report
+	// what the diff WOULD land. A clean confirm runs the real apply.
 	const apply = deps.applyWorkspace({
 		worktreePath: step.worktreePath,
 		baseSha: step.baseSha,
 		target: existing.integrationWorktree,
-		confirm: opts.confirm,
+		confirm: opts.confirm && !handoffDrift,
 		...(opts.includeUntracked !== undefined && { includeUntracked: opts.includeUntracked }),
 	});
 
@@ -432,7 +453,26 @@ export function applyPlanStep(
 		stepId: opts.stepId,
 		confirmed: opts.confirm,
 		apply,
+		...(handoffs !== undefined && { handoffs }),
+		...(handoffDrift && { handoffDrift: true }),
 	});
+
+	// Confirm + drift: refuse before committing anything. A captured handoff's worktree file changed
+	// since the producing step's reviewer saw it, so accepting it (or the code alongside it) would flow
+	// unreviewed content forward. Re-report the new digest(s) so the operator can re-run/re-review.
+	if (opts.confirm && handoffDrift) {
+		const drifted = (handoffs ?? []).filter((h) => h.drifted);
+		return {
+			...base(),
+			stepApplied: false,
+			plan: existing,
+			note: `apply refused: handoff content changed since review (${drifted
+				.map((h) => `${h.id}: ${h.digest ?? h.status} -> ${h.currentDigest ?? h.currentStatus}`)
+				.join(
+					"; ",
+				)}). The producing step's reviewer never saw this content, so nothing was applied or accepted. Re-run the step to re-capture and re-review the handoff, then apply again. The step stays review_ready.`,
+		};
+	}
 
 	// Dry run, OR a confirmed apply the primitive refused (conflict / untracked overwrite): never
 	// touch plan state. The step stays review_ready; the operator resolves and retries.
@@ -485,14 +525,28 @@ export function applyPlanStep(
 	}
 
 	// Commit succeeded (or a coherent no-op committed nothing but resolved the unchanged tip): mark
-	// the step applied, record the commit, and advance the tip to it -- the only state that lets a
-	// dependent launch, cut from this commit. Persist atomically and re-derive the plan status.
+	// the step applied, record the commit, advance the tip, AND accept the captured handoffs -- all in
+	// ONE store update.
+	//
+	// Recovery ordering across the git-commit + plan-store boundary (the design's atomicity rule):
+	// the git commit already happened above and is the un-undoable step. We record appliedCommitSha
+	// and acceptedHandoffs together so the durable plan state has a single consistent meaning -- a
+	// step is `applied` IFF its handoffs are accepted -- and a dependent (which launches only once its
+	// dependency is `applied`) can NEVER observe an applied step whose accepted digest is not yet
+	// recorded. The only interruptible gap is between the commit and this write: a retry re-enters with
+	// the step still review_ready, re-applies the same patch against the already-advanced tip, and the
+	// conflict gate / empty no-op in applyWorkspace prevents committing the same diff twice (it either
+	// refuses, or coherently no-ops to the existing tip). So retries neither double-commit nor expose
+	// handoffs early.
 	const sha = commit.sha;
 	const plan = store.update(opts.planId, (c) => {
 		const s = c.steps.find((x) => x.id === opts.stepId);
 		if (s) {
 			s.status = "applied";
 			s.appliedCommitSha = sha;
+			// Freeze the captured pending handoffs as the immutable accepted artifact, in the same write.
+			// The body lives in the plan record, not the worktree, so it survives cleanup (Phase 3 DoD).
+			if (s.pendingHandoffs !== undefined) s.acceptedHandoffs = s.pendingHandoffs;
 		}
 		c.integrationTipSha = sha;
 		c.status = derivePlanStatus(c);
@@ -509,6 +563,26 @@ export function applyPlanStep(
 			? `applied + committed step ${opts.stepId} to the integration branch (${sha}); the tip advanced. A subsequent chit_plan_advance launches the next runnable step from it.`
 			: `step ${opts.stepId} produced no diff at all (no tracked changes, no untracked files); marked applied at the unchanged tip (${sha}). A subsequent chit_plan_advance launches the next runnable step.`,
 	};
+}
+
+// Project a review_ready step's captured handoffs for the apply gate: each full body for inspection
+// plus a drift check against the reviewer-seen capture. When a reader is wired and the step worktree
+// is recorded, RE-READ the declared handoffs from the worktree and compare digest/status to the
+// stored pending capture -- a difference is content that changed since review (drift). With no reader
+// (or no captured handoffs) there is nothing to project or re-read. The re-read only reads the
+// worktree; it never mutates it.
+function reviewStepHandoffs(
+	step: PlanStepRecord,
+	deps: PlanEngineDeps,
+): ApplyHandoffReview[] | undefined {
+	const pending = step.pendingHandoffs;
+	if (pending === undefined) return undefined;
+	const current =
+		deps.readHandoffFile !== undefined && step.worktreePath && step.handoffs !== undefined
+			? captureHandoffs(step.worktreePath, step.handoffs, deps.readHandoffFile, iso(deps.now()))
+					.pending
+			: undefined;
+	return reviewPendingHandoffs(pending, current);
 }
 
 function assertCleanIntegrationWorktree(deps: PlanEngineDeps, integrationWorktree: string): void {
@@ -1071,6 +1145,11 @@ export interface PlanStepView {
 	// The full body is NEVER in this default view (it belongs behind the apply/receipt gate). In
 	// declaration order; absent on a step that declares no handoffs.
 	pendingHandoffs?: PendingHandoffView[];
+	// Compact, body-free summaries of the handoffs ACCEPTED at this step's gated apply (Phase 3):
+	// the immutable artifact a dependent may consume. Same body-free projection as pendingHandoffs
+	// (the full body stays behind the apply/receipt gate). Present only on an applied step that had
+	// handoffs; absent otherwise.
+	acceptedHandoffs?: PendingHandoffView[];
 }
 
 export interface PlanView {
@@ -1203,6 +1282,10 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 		// handoff captured to, including a missing/invalid one that paused the step needs_human.
 		if (s.pendingHandoffs !== undefined) {
 			view.pendingHandoffs = Object.values(s.pendingHandoffs).map(pendingHandoffView);
+		}
+		// Accepted (immutable) handoff summaries for an applied step, body-free like the pending ones.
+		if (s.acceptedHandoffs !== undefined) {
+			view.acceptedHandoffs = Object.values(s.acceptedHandoffs).map(pendingHandoffView);
 		}
 		return view;
 	});
