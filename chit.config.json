@@ -1,0 +1,25 @@
+{
+	"recipes": {
+		"fast-slice": {
+			"mode": "converge",
+			"manifestPath": "examples/converge.json",
+			"maxIterations": 3,
+			"callTimeoutMs": 900000,
+			"description": "Default Chit development loop: Claude implements, Codex reviews, with the normal 15 minute per-call budget."
+		},
+		"deep-review": {
+			"mode": "converge",
+			"manifestPath": "examples/converge.json",
+			"maxIterations": 4,
+			"callTimeoutMs": 1200000,
+			"description": "Use for broad or architecture-sensitive Chit changes where the reviewer needs more than the normal budget."
+		},
+		"codex-writer": {
+			"mode": "converge",
+			"manifestPath": "examples/converge-codex-writer.json",
+			"maxIterations": 3,
+			"callTimeoutMs": 900000,
+			"description": "Role-swapped loop for dogfooding Codex as the implementer and Claude as the reviewer."
+		}
+	}
+}
