@@ -1,5 +1,6 @@
 import type {
 	AuditParticipantSnapshot,
+	ConsumedHandoffRef,
 	LoopReceipt,
 	LoopStopStatus,
 	LoopVerdict,
@@ -7,6 +8,7 @@ import type {
 	PlanApplyPolicy,
 	PlanApprovalRecipe,
 	PlanCleanupPolicy,
+	PlanConsume,
 	PlanHandoff,
 	PlanHandoffFormat,
 	RequiredCheck,
@@ -206,6 +208,21 @@ export interface PlanStepRecord {
 	// it is never rewritten (accepted handoffs are immutable). Absent on a step with no handoffs and on
 	// a record applied before acceptance existed.
 	acceptedHandoffs?: Record<string, PendingHandoff>;
+	// The accepted handoffs this step CONSUMES, frozen from the normalized plan at plan start (the
+	// runtime never re-reads the plan file). Each edge names a producing step, its handoff id, and the
+	// local alias the injection envelope labels the body with. Drives Phase 4 dependent injection at
+	// launch. Absent on a step that consumes nothing.
+	consumes?: PlanConsume[];
+	// The per-step total byte budget across ALL consumed handoff bodies, enforced at launch so several
+	// accepted handoffs cannot silently stack into an oversized prompt. Frozen alongside consumes;
+	// present only when consumes is (the parser couples them).
+	maxConsumedBytes?: number;
+	// The handoffs actually INJECTED into this step's task brief at launch (Phase 4), recorded so
+	// trace/status/audit can say what was consumed without re-reading bodies. Body-free: alias +
+	// provenance + the accepted content digest only. Written in the launch store update, in declared
+	// order. Absent on a step that consumes nothing and on a step whose launch was refused (a missing,
+	// unaccepted, or over-budget consume pauses it needs_human before injection).
+	consumedHandoffs?: ConsumedHandoffRef[];
 }
 
 export interface Plan {

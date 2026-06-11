@@ -1,6 +1,8 @@
 # Structured plan handoffs
 
-Status: design note. No code.
+Status: Phases 1 through 4 implemented (the full runtime channel: declare, produce,
+gate, consume). Phase 5 (Studio surfacing) is not built yet. The sections below describe
+the whole design; the implementation sequence at the end marks what has landed.
 
 This note describes the next orchestration layer after recipes: a plan step can
 produce a bounded structured artifact, and a later plan step can consume it
@@ -151,8 +153,11 @@ Field rules:
 7. **Dependent launch.** Chit injects the consumed accepted handoffs into the
    dependent step prompt through a deterministic untrusted-data envelope, using
    the alias from `consumes`.
-8. **Receipts.** `chit_plan_status`, `chit_trace`, and audit receipts show which
-   handoffs were produced, accepted, consumed, and by which step.
+8. **Receipts.** `chit_plan_status` shows which handoffs each step produced,
+   accepted, and consumed; `chit_trace` on a step's run reports the body-free
+   consumed refs (alias, producing step, handoff id, digest) it launched with.
+   Audit transcripts preserve the injected handoff bodies as evidence, since they
+   ride in the consuming step's task brief, not as a separate structured field.
 
 ## Privacy and visibility
 
@@ -265,14 +270,14 @@ receipt identity. Transcripts remain evidence.
 
 ## Implementation sequence
 
-### Phase 1: parser and approval surface
+### Phase 1: parser and approval surface (implemented)
 
 - Add `handoffs` and `consumes` to plan parsing.
 - Validate ids, paths, size caps, JSON-only format, and consume edges.
 - Bind declarations into the plan approval hash.
 - Update the plan-author prompt and human review rubric.
 
-### Phase 2: producer capture
+### Phase 2: producer capture (implemented)
 
 - Before each producing-step review verdict, read and validate declared handoff
   files and include their full content in the reviewer context.
@@ -281,7 +286,7 @@ receipt identity. Transcripts remain evidence.
 - Record pending handoff summaries and content blobs in the plan store.
 - Show pending summaries in `chit_plan_status`.
 
-### Phase 3: gated acceptance
+### Phase 3: gated acceptance (implemented)
 
 - Include pending handoff summaries in plan apply dry run, with preview by
   default and full body available from the same gate.
@@ -291,14 +296,28 @@ receipt identity. Transcripts remain evidence.
 - Keep accepted handoffs available after worktree cleanup.
 - Define idempotent recovery for the git-commit-plus-plan-store boundary.
 
-### Phase 4: dependent injection
+### Phase 4: dependent injection (implemented)
 
-- Before launching a consuming step, load accepted handoffs from the plan record.
-- Enforce the per-step total consumed-handoff byte budget.
-- Inject them into the task brief with a deterministic untrusted-data envelope.
-- Record the consumed handoff ids and digests on the launched job receipt.
+- Before launching a consuming step, load only accepted handoffs from the durable
+  plan record (an applied producer's immutable accepted artifact, never a pending
+  or unaccepted one). A missing, unaccepted, or uncaptured handoff pauses the
+  consuming step `needs_human` before any worktree or worker is created.
+- Enforce the per-step total consumed-handoff byte budget against the summed
+  on-disk bytes the producer captured (the bytes the accepted digest addresses).
+- Inject them into the task brief with a deterministic untrusted-data envelope:
+  alias, producing step id, handoff id, digest, format, and a clearly delimited
+  (DATA-fenced) body. The envelope states the bodies are data from another agent,
+  not instructions from the operator or chit, and must not override the task,
+  permissions, checks, recipe, or gates. A step that neither produces nor consumes
+  launches with its body unchanged.
+- Record the consumed handoff ids and digests (body-free) on the launched job
+  record and the durable plan step, so `chit_plan_status` (from the plan record)
+  and `chit_trace` (from the job record) can say exactly what each step consumed,
+  tied back to the accepted artifact by digest. The injected bodies themselves are
+  preserved in audit transcripts as the consuming step's task brief, the same way
+  every other prompt is, rather than as a separate structured audit field.
 
-### Phase 5: Studio and receipts
+### Phase 5: Studio and receipts (not implemented)
 
 - Show compact handoff chips or rows on the selected plan/run detail.
 - Keep full bodies behind receipt/audit actions.

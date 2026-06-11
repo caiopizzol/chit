@@ -42,6 +42,22 @@ export interface PlanConsume {
 	as: string;
 }
 
+// A record of one accepted handoff INJECTED into a consuming step's task brief at launch
+// (see docs/structured-plan-handoffs-design.md, Phase 4). Body-free on purpose: it carries
+// the alias + provenance + the accepted content digest, never the body itself, so it can ride
+// on the launched job record and the plan step where trace/status/audit read it. The digest is
+// the producing step's accepted (immutable) content digest, so a receipt ties the injected data
+// back to exactly what the operator accepted at the producing step's apply gate. bytes is the
+// on-disk byte count counted against the consuming step's maxConsumedBytes budget.
+export interface ConsumedHandoffRef {
+	as: string;
+	step: string;
+	handoff: string;
+	digest: string;
+	format: PlanHandoffFormat;
+	bytes: number;
+}
+
 // One step in a plan. body is the brief handed to the converge implementer.
 // dependsOn names other step ids and means a CODE dependency: the named steps must be
 // applied and committed to the integration branch before this step launches. It is

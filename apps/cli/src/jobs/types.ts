@@ -1,6 +1,7 @@
 import type {
 	AuditParticipantSnapshot,
 	BoundParticipantSummary,
+	ConsumedHandoffRef,
 	LoopStopStatus,
 	LoopVerdict,
 	PlanHandoff,
@@ -137,6 +138,14 @@ export interface LoopJobRecord extends BaseJobRecord {
 	// current handoff bodies in the reviewer prompt; settle still re-captures and
 	// validates the files before dependents can unlock.
 	planHandoffs?: Record<string, PlanHandoff>;
+	// The accepted upstream handoffs INJECTED into this run's task at launch (Phase 4 dependent
+	// injection), body-free: alias + producing step + handoff id + accepted digest + bytes. Recorded
+	// on the launched job so the run-detail trace (backgroundLoopTraceResponse) can say exactly what
+	// data this step consumed, tying it back to the immutable accepted artifact by digest. The bodies
+	// themselves live in the run's task brief (and the producing step's accepted record), not here, so
+	// audit transcripts preserve them as the task prompt rather than as a separate field. Absent when
+	// the launching plan step consumed nothing and on legacy records.
+	consumedHandoffs?: ConsumedHandoffRef[];
 	maxIterations: number;
 	// The EFFECTIVE chit-executed verification commands for this run, persisted at
 	// enqueue so the worker runs the intended checks without re-deriving them (and so a

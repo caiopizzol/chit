@@ -1050,6 +1050,49 @@ describe("receipt: a compact 'what happened' companion on terminal loop run view
 		expectNoLeakage(resp);
 	});
 
+	test("chit_trace BACKGROUND loop response surfaces the body-free consumed-handoff refs", () => {
+		writeConvergedLoop("TRACE-CONSUMED");
+		const raw = readLoop(cwd, "TRACE-CONSUMED");
+		const consumedHandoffs = [
+			{
+				as: "facts",
+				step: "investigate",
+				handoff: "findings",
+				digest: "sha256:abc123",
+				format: "json" as const,
+				bytes: 42,
+			},
+		];
+		const resp = backgroundLoopTraceResponse(
+			"bg-consumed",
+			job({
+				runId: "bg-consumed",
+				loopId: "TRACE-CONSUMED",
+				cwd,
+				state: "completed",
+				stopStatus: "converged",
+				consumedHandoffs,
+			}),
+			raw,
+		) as Record<string, unknown>;
+		// The trace reports exactly what the step consumed, tied back to the accepted artifact by digest.
+		expect(resp.consumedHandoffs).toEqual(consumedHandoffs);
+		// Body-free: a consumed ref never carries the handoff body, and the trace stays leak-free.
+		expect(JSON.stringify(resp.consumedHandoffs)).not.toContain("body");
+		expectNoLeakage(resp);
+	});
+
+	test("chit_trace BACKGROUND loop response omits consumedHandoffs on a run that consumed nothing", () => {
+		writeConvergedLoop("TRACE-NOCONSUME");
+		const raw = readLoop(cwd, "TRACE-NOCONSUME");
+		const resp = backgroundLoopTraceResponse(
+			"bg-noconsume",
+			job({ runId: "bg-noconsume", loopId: "TRACE-NOCONSUME", cwd, state: "completed" }),
+			raw,
+		) as Record<string, unknown>;
+		expect("consumedHandoffs" in resp).toBe(false);
+	});
+
 	test("chit_trace BACKGROUND loop response omits the receipt when the log is unreadable", () => {
 		// An empty raw read (worker still starting / log removed) yields no receipt and empty records,
 		// so an in-progress trace never invents a receipt.

@@ -18,6 +18,7 @@
 import { dirname } from "node:path";
 import type {
 	BoundParticipantSummary,
+	ConsumedHandoffRef,
 	LoopReceipt,
 	ManifestBinding,
 	NormalizedPlan,
@@ -27,7 +28,7 @@ import type {
 	RecipeReceipt,
 	RequiredCheck,
 } from "@chit-run/core";
-import { describeManifestBindingDrift } from "@chit-run/core";
+import { DEFAULT_CONSUMED_BYTES_BUDGET, describeManifestBindingDrift } from "@chit-run/core";
 import {
 	type GitRunner,
 	mainRepoOfWorktree,
@@ -43,10 +44,13 @@ import { repoKey } from "../loops/location.ts";
 import type { ResolveManifestBinding, ResolveRecipe } from "../manifest/binding.ts";
 import {
 	type ApplyHandoffReview,
+	buildConsumedHandoffEnvelope,
 	captureHandoffs,
 	composeStepTask,
+	consumedHandoffRef,
 	pendingHandoffView,
 	type ReadHandoffFile,
+	resolveConsumedHandoffs,
 	reviewPendingHandoffs,
 } from "./handoffs.ts";
 import { derivePlanStatus, selectNextStep } from "./schedule.ts";
@@ -91,6 +95,10 @@ export interface LaunchPlanJobParams {
 	// The approved handoff declarations for this plan step. The background worker
 	// uses them to show the produced handoff bodies to the reviewer before verdict.
 	handoffs?: Record<string, PlanHandoff>;
+	// The accepted upstream handoffs injected into this step's task at launch (Phase 4), body-free,
+	// forwarded so the launched job record carries what was consumed for trace/status/audit. The
+	// bodies live in `task`; this is the receipt-grade summary. Absent when the step consumes nothing.
+	consumedHandoffs?: ConsumedHandoffRef[];
 	worktree: {
 		worktreePath: string;
 		branch: string;
@@ -277,6 +285,13 @@ export function startPlan(store: PlanStore, deps: PlanEngineDeps, opts: StartPla
 		// Freeze the handoff declarations onto the durable record so the runtime never re-reads the
 		// plan file: capture at settle and the task-brief contract at launch both read them from here.
 		if (s.handoffs !== undefined) step.handoffs = s.handoffs;
+		// Freeze the consume edges + their byte budget too, so Phase 4 injection at launch reads the
+		// approved data contract from the record, never the plan file. The parser couples them: a budget
+		// exists IFF the step consumes.
+		if (s.consumes !== undefined) {
+			step.consumes = s.consumes;
+			step.maxConsumedBytes = s.maxConsumedBytes;
+		}
 		return step;
 	});
 
@@ -985,6 +1000,31 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 			c.updatedAt = iso(deps.now());
 			return c;
 		}
+		// Phase 4 dependent injection: resolve the accepted handoffs this step consumes BEFORE creating
+		// a worktree or spawning a worker, so a missing/unaccepted handoff or a blown byte budget pauses
+		// the step needs_human instead of launching against an incomplete data contract. The trust
+		// boundary: only an APPLIED producing step's immutable acceptedHandoffs may flow forward.
+		// selectNextStep already requires every dependency applied; the lookup re-checks the specific
+		// handoff is accepted (never pending), and resolveConsumedHandoffs enforces the per-step byte
+		// budget. The injected bodies are framed as untrusted data by buildConsumedHandoffEnvelope.
+		let consumedEnvelope: string | undefined;
+		let consumedHandoffs: ConsumedHandoffRef[] | undefined;
+		if (next.consumes !== undefined) {
+			const resolved = resolveConsumedHandoffs(
+				next.consumes,
+				next.maxConsumedBytes ?? DEFAULT_CONSUMED_BYTES_BUDGET,
+				(stepId, handoffId) => c.steps.find((s) => s.id === stepId)?.acceptedHandoffs?.[handoffId],
+			);
+			if (!resolved.ok) {
+				next.status = "needs_human";
+				next.error = `consumed handoff unavailable before launch: ${resolved.error} The step paused instead of launching against an incomplete handoff contract; apply the producing step (or fix the plan and re-approve), then advance.`;
+				c.status = derivePlanStatus(c);
+				c.updatedAt = iso(deps.now());
+				return c;
+			}
+			consumedEnvelope = buildConsumedHandoffEnvelope(resolved.consumed);
+			consumedHandoffs = resolved.consumed.map(consumedHandoffRef);
+		}
 		try {
 			// Link tooling from the checkout the plan was launched from (callerCheckout), so a step's
 			// fresh worktree resolves installed binaries exactly like the launch checkout does.
@@ -1013,10 +1053,11 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 				cwd: worktreePath,
 				scope: `plan-${c.id}-${next.id}`,
 				// Compose the operator's body with the deterministic handoff contract when this step
-				// declares handoffs, so the implementer knows exactly what to produce and the reviewer is
-				// told to inspect the declared body before its verdict. A handoff-free step launches with
-				// its body unchanged (existing plans are byte-for-byte unaffected).
-				task: composeStepTask(next.body, next.handoffs),
+				// declares handoffs (so the implementer knows what to produce and the reviewer inspects
+				// the declared body before its verdict) and the untrusted-data envelope when it consumes
+				// upstream handoffs. A step that neither produces nor consumes launches with its body
+				// unchanged (existing plans are byte-for-byte unaffected).
+				task: composeStepTask(next.body, next.handoffs, consumedEnvelope),
 				loopId,
 				maxIterations: stepMaxIterations,
 				// Record the managed worktree on the job record so chit_apply can reconstruct and land
@@ -1042,9 +1083,14 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 				...(next.requiredChecks !== undefined && { requiredChecks: next.requiredChecks }),
 				...(stepCallTimeoutMs !== undefined && { callTimeoutMs: stepCallTimeoutMs }),
 				...(next.handoffs !== undefined && { handoffs: next.handoffs }),
+				...(consumedHandoffs !== undefined && { consumedHandoffs }),
 			});
 			next.runId = jobId;
 			next.status = "running";
+			// Record what this launch consumed on the durable step (body-free), so trace/status/audit and
+			// closed-session recovery resolve it from the plan record alone. Set AFTER a successful launch:
+			// a launch that throws below leaves it unset, matching the step's failed state.
+			if (consumedHandoffs !== undefined) next.consumedHandoffs = consumedHandoffs;
 		} catch (e) {
 			// A worktree or launch failure fails just this step; the plan settles via
 			// derivePlanStatus. worktreePath/branch (if created) stay recorded so cleanup can retire it.
@@ -1150,6 +1196,10 @@ export interface PlanStepView {
 	// (the full body stays behind the apply/receipt gate). Present only on an applied step that had
 	// handoffs; absent otherwise.
 	acceptedHandoffs?: PendingHandoffView[];
+	// What this step CONSUMED at launch (Phase 4 dependent injection): alias + producing step + handoff
+	// id + accepted digest + bytes, never the body. So a receipt says exactly which upstream data fed
+	// this step, tied back to the accepted artifact by digest. Present only on a step that consumed.
+	consumedHandoffs?: ConsumedHandoffRef[];
 }
 
 export interface PlanView {
@@ -1287,6 +1337,8 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 		if (s.acceptedHandoffs !== undefined) {
 			view.acceptedHandoffs = Object.values(s.acceptedHandoffs).map(pendingHandoffView);
 		}
+		// What the step consumed at launch (body-free), surfaced straight from the durable record.
+		if (s.consumedHandoffs !== undefined) view.consumedHandoffs = s.consumedHandoffs;
 		return view;
 	});
 

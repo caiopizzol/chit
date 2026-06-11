@@ -86,7 +86,7 @@ const ALLOWED_HANDOFF_FORMAT: ReadonlySet<string> = new Set<PlanHandoffFormat>([
 // inviting a step to dump a corpus; 256 KiB total keeps several accepted handoffs from
 // stacking into an oversized dependent prompt. Both are author-overridable.
 const DEFAULT_HANDOFF_MAX_BYTES = 64 * 1024;
-const DEFAULT_CONSUMED_BYTES_BUDGET = 256 * 1024;
+export const DEFAULT_CONSUMED_BYTES_BUDGET = 256 * 1024;
 
 function isObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === "object" && !Array.isArray(v);
