@@ -164,6 +164,18 @@ This is read-only and redacted: it never returns manifest contents, participant 
 
 A **plan** runs several loop tasks in order. Each step gets its own worktree, converges, then pauses as `review_ready`. You decide whether to apply that step into the plan's integration worktree. Only after a step is applied can a dependent step launch, and it launches from the integration tip, so it can see the code its dependency produced. Use a plan when later work needs earlier work's diff. Use a batch when tasks are independent and can run in parallel.
 
+### chit_orchestrate
+
+The single-call entrypoint from a goal to a reviewable plan. Hand it a goal and it produces the same artifact you would build by hand with the planner manifest and a `chit_plan_start` dry run: the normalized plan plus the `approvalHash` you echo back to launch. It composes existing primitives and nothing more.
+
+What it does, in order: it runs the bundled planner manifest (`examples/plan-author.json`) through a read-only planning agent that inspects the repo and drafts a native sequential plan; it parses and validates that output into a plan; and it dry-runs the plan through the same `chit_plan_start` path, which resolves the base ref to a concrete commit, resolves every step's recipe and manifest binding, and computes the approval hash. It returns the normalized `plan`, the resolved `base`, the `approvalHash`, any resolved `recipes` and `manifests`, and `nextSteps`, the plain-language instructions for your next move.
+
+It is static and approval-gated by design. It only ever previews: it never launches, never confirms a start, does not auto-approve, does not schedule, and adds no dynamic routing. It creates nothing -- no plan record, worktree, job, or branch. The deliverable is a plan and a hash; a human runs `chit_plan_start` with `confirm:true` to act on it.
+
+Inputs: `goal` (required, what you want built in plain language); `context?` (operator notes the planner may use: a base branch, vetted recipe ids, or a vetted `manifestPath` override); `base_branch?` (the ref the integration branch is cut from, bound into the hash); `max_iterations?` (per-step iteration budget when a step declares none, also bound into the hash); `cwd?` (any path in the target repo the planner inspects, defaults to the server cwd).
+
+To launch, review the returned plan, base, recipes, and manifest bindings, then call `chit_plan_start` with the SAME plan, `confirm:true`, and the shown `approval_hash`, repeating `base_branch` / `max_iterations` if you set them. Editing the plan, base, budget, a referenced manifest's content, or a selected recipe's definition changes the hash and the start is refused. This is the one-call shortcut for the manual flow the [plan-author example](https://github.com/caiopizzol/chit/blob/main/examples/README.md) walks through; reach for that flow when you want to read and adjust the plan JSON between the planner and the dry run.
+
 ### chit_plan_start
 
 Approve and start a plan. The start is **gated**: with `confirm` omitted or false it parses the plan, resolves the base to a concrete commit SHA, resolves every selected recipe or direct manifest reference to a manifest digest and participant summary, returns the normalized plan plus `approval_hash`, and creates nothing. With `confirm:true`, chit re-parses, re-resolves, recomputes the hash over the plan, resolved base, `max_iterations`, recipes, manifest digests, and participant summaries, and refuses unless `approval_hash` matches. On a match it launches the first runnable step from the approved commit SHA.

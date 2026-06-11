@@ -12,6 +12,8 @@ Keep this directory small. Add a new example only when it teaches a distinct run
 
 ## Planning a sequential run with `plan-author.json`
 
+For the one-call path, use the `chit_orchestrate` MCP tool: hand it a `goal` (and optional `context`, `base_branch`, `max_iterations`) and it runs this planner manifest, validates the emitted plan, and dry-runs `chit_plan_start` for you, returning the normalized plan, the resolved base, any resolved recipes and manifest bindings, the `approvalHash`, and next-step instructions in one shot. It only ever previews: it never launches, never auto-approves, never schedules, and creates nothing. You still review and confirm the start yourself. Run the manual flow below instead when you want to read or edit the plan JSON between the planner and the dry run.
+
 The flow, end to end:
 
 1. Run the planner with `chit_start` (or `chit run examples/plan-author.json`), passing `goal` (and optional `context` naming a base branch or a vetted `manifestPath` override). The agent inspects the repo and returns one JSON plan.
