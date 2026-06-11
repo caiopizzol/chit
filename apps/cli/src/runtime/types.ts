@@ -63,6 +63,14 @@ export interface RuntimeAdapter {
 
 export type AdapterMap = Record<string, RuntimeAdapter>;
 
+export interface PromptAugmentContext {
+	stepId: string;
+	prompt: string;
+	outputs: Record<string, string>;
+}
+
+export type PromptAugmenter = (ctx: PromptAugmentContext) => string | undefined;
+
 // Trace events carry enough to reconstruct what each step did: the kind, and
 // for call steps the participant/agent/session-policy and the rendered prompt
 // actually sent to the adapter (otherwise invisible, since the prompt is
@@ -95,6 +103,10 @@ export interface ExecuteOptions {
 	adapters: AdapterMap;
 	invocationCwd: string;
 	onTrace?: (event: TraceEvent) => void;
+	// Optional prompt augmentation at the last possible point before a call step starts.
+	// Used by plan handoffs so the reviewer sees current produced handoff bodies after
+	// the implementer has run, without inventing a second converge manifest shape.
+	promptAugment?: PromptAugmenter;
 	// If provided, threaded to every adapter call so an in-flight run can be
 	// cancelled: an adapter must kill its child and reject when this aborts.
 	// Optional, so the plain CLI run path (which passes none) is unchanged. The

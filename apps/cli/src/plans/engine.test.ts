@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	appendFileSync,
 	existsSync,
@@ -62,6 +63,7 @@ class FakeJobs {
 		recipe?: LaunchPlanJobParams["recipe"];
 		requiredChecks?: LaunchPlanJobParams["requiredChecks"];
 		callTimeoutMs?: number;
+		handoffs?: LaunchPlanJobParams["handoffs"];
 		maxIterations: number;
 		worktree: LaunchPlanJobParams["worktree"];
 	}> = [];
@@ -83,6 +85,7 @@ class FakeJobs {
 			...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
 			...(p.manifestParticipants !== undefined && { manifestParticipants: p.manifestParticipants }),
 			...(p.recipe !== undefined && { recipe: p.recipe }),
+			...(p.handoffs !== undefined && { planHandoffs: p.handoffs }),
 			maxIterations: p.maxIterations,
 			allowUnenforced: false,
 			state: "queued",
@@ -100,6 +103,7 @@ class FakeJobs {
 			recipe: p.recipe,
 			requiredChecks: p.requiredChecks,
 			callTimeoutMs: p.callTimeoutMs,
+			handoffs: p.handoffs,
 			maxIterations: p.maxIterations,
 			worktree: p.worktree,
 		});
@@ -1787,5 +1791,154 @@ describe("cleanupPlan (real git)", () => {
 		expect(res.note.toLowerCase()).toContain("not marked cleaned");
 		// The record stays un-stamped, so a re-run is honest about there being work left.
 		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
+	});
+});
+
+// --- Phase 2: producer handoff capture --------------------------------------
+//
+// These reuse the fake-git scheduling harness (deps from beforeEach) and add a fake
+// readHandoffFile keyed by the declared relative path, so capture is driven without a real
+// worktree. The single step "a" declares a handoff; finishing its job converged drives the
+// settle path where capture runs.
+describe("producer handoff capture", () => {
+	const HANDOFF: Record<string, { path: string; format: "json"; maxBytes: number }> = {
+		findings: { path: "findings.json", format: "json", maxBytes: 64 },
+	};
+	function handoffPlan(): NormalizedPlan {
+		return {
+			schema: 1,
+			title: "handoff plan",
+			cleanup: "after_apply",
+			steps: [step("a", { handoffs: HANDOFF }), step("b", { dependsOn: ["a"] })],
+		};
+	}
+	// A successful read result with a digest over the bytes, exactly as the real reader returns (the
+	// reader owns the digest, so the fake must supply it).
+	function okRead(content: string): ReturnType<NonNullable<PlanEngineDeps["readHandoffFile"]>> {
+		return {
+			ok: true,
+			bytes: Buffer.byteLength(content),
+			content,
+			digest: `sha256:${createHash("sha256").update(Buffer.from(content)).digest("hex")}`,
+		};
+	}
+	// A fake reader keyed by relative path (the single-step tests need no worktree disambiguation).
+	function withReader(
+		map: Record<string, ReturnType<NonNullable<PlanEngineDeps["readHandoffFile"]>>>,
+	): PlanEngineDeps {
+		return {
+			...deps,
+			readHandoffFile: (_wt, relPath) =>
+				map[relPath] ?? { ok: false, status: "missing", error: `no ${relPath}` },
+		};
+	}
+	function settleConverged(d: PlanEngineDeps): Plan {
+		const c0 = startPlan(store, d, { id: "p1", cwd, normalizedPlan: handoffPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		return advancePlan(store, d, "p1");
+	}
+
+	test("a valid declared handoff is captured at settle and the step stays review_ready", () => {
+		const content = '{"files":["x.ts"]}';
+		const d = withReader({ "findings.json": okRead(content) });
+		const c1 = settleConverged(d);
+		const a = stepOf(c1, "a");
+		expect(a.status).toBe("review_ready");
+		expect(c1.status).toBe("ready_for_apply");
+		const h = present(a.pendingHandoffs?.findings, "captured handoff");
+		expect(h.status).toBe("captured");
+		expect(h.digest?.startsWith("sha256:")).toBe(true);
+		expect(h.body).toBe(content);
+	});
+
+	test("describePlan surfaces a compact handoff summary and never the full body", () => {
+		const content = '{"files":["x.ts"]}';
+		const d = withReader({ "findings.json": okRead(content) });
+		const c1 = settleConverged(d);
+		const view = describePlan(c1, d);
+		const aView = present(
+			view.steps.find((s) => s.id === "a"),
+			"step a view",
+		);
+		const h = present(aView.pendingHandoffs?.[0], "handoff summary");
+		expect(h).toMatchObject({
+			id: "findings",
+			path: "findings.json",
+			format: "json",
+			status: "captured",
+		});
+		expect(h.preview).toBe(content);
+		// The full body is never in the default status projection.
+		expect("body" in h).toBe(false);
+	});
+
+	test("a missing required handoff pauses the step needs_human and never unlocks the dependent", () => {
+		const d = withReader({});
+		const c1 = settleConverged(d);
+		const a = stepOf(c1, "a");
+		expect(a.status).toBe("needs_human");
+		expect(a.error).toContain("findings");
+		expect(a.pendingHandoffs?.findings.status).toBe("missing");
+		expect(c1.status).toBe("needs_human");
+		// The dependent must not launch on an unmet handoff contract.
+		expect(stepOf(c1, "b").status).toBe("pending");
+		expect(jobs.launched).toHaveLength(1);
+	});
+
+	test("an invalid-JSON handoff pauses the step needs_human", () => {
+		const content = "{not json";
+		const d = withReader({ "findings.json": okRead(content) });
+		const c1 = settleConverged(d);
+		const a = stepOf(c1, "a");
+		expect(a.status).toBe("needs_human");
+		expect(a.pendingHandoffs?.findings.status).toBe("invalid");
+		expect(a.pendingHandoffs?.findings.error).toContain("JSON");
+	});
+
+	test("an oversized handoff (reader invalid) pauses the step needs_human", () => {
+		const d = withReader({
+			"findings.json": { ok: false, status: "invalid", error: "exceeds maxBytes (200 > 64)" },
+		});
+		const c1 = settleConverged(d);
+		const a = stepOf(c1, "a");
+		expect(a.status).toBe("needs_human");
+		expect(a.pendingHandoffs?.findings.error).toContain("exceeds maxBytes");
+	});
+
+	test("declaring a handoff with NO reader wired pauses needs_human (the contract is unverifiable)", () => {
+		// base `deps` from beforeEach has no readHandoffFile.
+		const c1 = settleConverged(deps);
+		const a = stepOf(c1, "a");
+		expect(a.status).toBe("needs_human");
+		expect(a.error).toContain("no handoff reader");
+	});
+
+	test("the launched task carries the handoff contract for both implementer and reviewer", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: handoffPlan() });
+		const runId = stepOf(c0, "a").runId ?? "";
+		const task = present(jobs.get(runId)?.task, "launched task");
+		expect(task.startsWith("do a")).toBe(true);
+		expect(task).toContain("Plan handoff contract");
+		expect(task).toContain("findings.json");
+		expect(task).toContain("before returning your verdict");
+	});
+
+	test("the launched job carries the approved handoff declarations for review context", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: handoffPlan() });
+		const runId = stepOf(c0, "a").runId ?? "";
+		expect(jobs.get(runId)?.planHandoffs).toEqual(HANDOFF);
+		expect(jobs.launched[0]?.handoffs).toEqual(HANDOFF);
+	});
+
+	test("a handoff-free step is unchanged: body verbatim, no pendingHandoffs", () => {
+		const content = '{"k":1}';
+		const d = withReader({ "findings.json": okRead(content) });
+		const c0 = startPlan(store, d, { id: "p2", cwd, normalizedPlan: chainPlan() });
+		const runId = stepOf(c0, "a").runId ?? "";
+		expect(jobs.get(runId)?.task).toBe("do a");
+		jobs.finish(runId, { stopStatus: "converged" });
+		const c1 = advancePlan(store, d, "p2");
+		expect(stepOf(c1, "a").status).toBe("review_ready");
+		expect(stepOf(c1, "a").pendingHandoffs).toBeUndefined();
 	});
 });

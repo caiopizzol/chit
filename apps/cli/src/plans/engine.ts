@@ -23,6 +23,7 @@ import type {
 	NormalizedPlan,
 	PlanApplyPolicy,
 	PlanApprovalRecipe,
+	PlanHandoff,
 	RecipeReceipt,
 	RequiredCheck,
 } from "@chit-run/core";
@@ -40,9 +41,21 @@ import {
 import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { repoKey } from "../loops/location.ts";
 import type { ResolveManifestBinding, ResolveRecipe } from "../manifest/binding.ts";
+import {
+	captureHandoffs,
+	composeStepTask,
+	pendingHandoffView,
+	type ReadHandoffFile,
+} from "./handoffs.ts";
 import { derivePlanStatus, selectNextStep } from "./schedule.ts";
 import type { PlanStore } from "./store.ts";
-import type { Plan, PlanStatus, PlanStepRecord, PlanStepStatus } from "./types.ts";
+import type {
+	PendingHandoffView,
+	Plan,
+	PlanStatus,
+	PlanStepRecord,
+	PlanStepStatus,
+} from "./types.ts";
 
 export class PlanEngineError extends Error {}
 
@@ -73,6 +86,9 @@ export interface LaunchPlanJobParams {
 	requiredChecks?: RequiredCheck[];
 	// The step's per-call timeout override (ms), forwarded to the converge job.
 	callTimeoutMs?: number;
+	// The approved handoff declarations for this plan step. The background worker
+	// uses them to show the produced handoff bodies to the reviewer before verdict.
+	handoffs?: Record<string, PlanHandoff>;
 	worktree: {
 		worktreePath: string;
 		branch: string;
@@ -171,6 +187,14 @@ export interface PlanEngineDeps {
 	// is absent -- silently launching without the recipe's manifest would run an
 	// execution surface nobody reviewed.
 	resolveRecipe?: ResolveRecipe;
+	// Read a declared handoff file from a settled step's worktree for producer capture. The trust
+	// boundary's only filesystem touch: it resolves the declared RELATIVE path against the worktree
+	// root, refuses anything that escapes it or is not a regular file, enforces the byte cap, strictly
+	// decodes the bytes as UTF-8, and digests the exact bytes (real: readHandoffFileReal). JSON
+	// parseability + status projection are the pure caller's. Optional so a handoff-free plan and the
+	// fake-git scheduling harness need no reader; a step that declares handoffs but has no reader wired
+	// fails capture (the contract is unverifiable).
+	readHandoffFile?: ReadHandoffFile;
 	// Best-effort removal of the plan's now-empty worktree ROOT (~/worktrees/chit/<planId>) after
 	// every child worktree under it is retired (real: removeEmptyDir). The plan layout nests the
 	// integration worktree beside a steps/ dir, so no single removeWorktree call can drop the root --
@@ -248,6 +272,9 @@ export function startPlan(store: PlanStore, deps: PlanEngineDeps, opts: StartPla
 		if (s.manifestPath !== undefined) step.manifestPath = s.manifestPath;
 		if (s.maxIterations !== undefined) step.maxIterations = s.maxIterations;
 		if (s.callTimeoutMs !== undefined) step.callTimeoutMs = s.callTimeoutMs;
+		// Freeze the handoff declarations onto the durable record so the runtime never re-reads the
+		// plan file: capture at settle and the task-brief contract at launch both read them from here.
+		if (s.handoffs !== undefined) step.handoffs = s.handoffs;
 		return step;
 	});
 
@@ -820,6 +847,43 @@ function settleStep(
 		if (extra.job.participants !== undefined) step.participants = extra.job.participants;
 	}
 	if (status === "failed" && extra.failure !== undefined) step.error = extra.failure;
+	// Producer handoff capture (Phase 2): a step that converged clean (review_ready) and declared
+	// handoffs must have actually produced them. Read each declared file from the step worktree,
+	// validate + digest it, and record pending metadata. Every declared handoff is REQUIRED in v1, so
+	// a missing/invalid one is NOT a clean review_ready: pause the step needs_human so the plan stops
+	// for the operator instead of silently unlocking dependents on an unmet contract. Only the
+	// converged path captures (a needs_human/failed/cancelled step never converged).
+	if (status === "review_ready" && step.handoffs !== undefined) {
+		captureStepHandoffs(step, deps);
+	}
+}
+
+// Read, validate, and record the declared handoffs of a just-converged step, downgrading it to
+// needs_human if any required handoff is missing or invalid (see settleStep). Split out so the
+// settle path stays readable and the trust-boundary decision lives in one place.
+function captureStepHandoffs(step: PlanStepRecord, deps: PlanEngineDeps): void {
+	const handoffs = step.handoffs;
+	if (handoffs === undefined) return;
+	// A converged step always launched, so it has a worktree; guard defensively rather than capture
+	// from nothing. No reader wired means the contract cannot be verified -- treat that as unmet too.
+	if (!step.worktreePath || deps.readHandoffFile === undefined) {
+		step.status = "needs_human";
+		step.error = !step.worktreePath
+			? "step declares handoffs but has no worktree to capture them from; it paused instead of unlocking dependents on an unverified handoff contract."
+			: "step declares handoffs but no handoff reader is wired to capture them; it paused instead of unlocking dependents on an unverified handoff contract.";
+		return;
+	}
+	const result = captureHandoffs(
+		step.worktreePath,
+		handoffs,
+		deps.readHandoffFile,
+		iso(deps.now()),
+	);
+	step.pendingHandoffs = result.pending;
+	if (!result.ok) {
+		step.status = "needs_human";
+		step.error = `declared handoff(s) not produced or invalid: ${result.failures.join(", ")}. The step converged but its handoff contract is unmet, so it paused instead of unlocking dependents. Inspect the step worktree (chit_plan_status lists each handoff's status/error), fix the handoff file(s) and rerun, or abort.`;
+	}
 }
 
 // Launch the single next runnable step (selectNextStep enforces the v1 strict chain: one step
@@ -874,7 +938,11 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 			const { jobId } = deps.launchJob({
 				cwd: worktreePath,
 				scope: `plan-${c.id}-${next.id}`,
-				task: next.body,
+				// Compose the operator's body with the deterministic handoff contract when this step
+				// declares handoffs, so the implementer knows exactly what to produce and the reviewer is
+				// told to inspect the declared body before its verdict. A handoff-free step launches with
+				// its body unchanged (existing plans are byte-for-byte unaffected).
+				task: composeStepTask(next.body, next.handoffs),
 				loopId,
 				maxIterations: stepMaxIterations,
 				// Record the managed worktree on the job record so chit_apply can reconstruct and land
@@ -899,6 +967,7 @@ function launchNextStep(c: Plan, deps: PlanEngineDeps, defaultMaxIterations: num
 				...(c.recipes?.[next.id] !== undefined && { recipe: c.recipes[next.id] }),
 				...(next.requiredChecks !== undefined && { requiredChecks: next.requiredChecks }),
 				...(stepCallTimeoutMs !== undefined && { callTimeoutMs: stepCallTimeoutMs }),
+				...(next.handoffs !== undefined && { handoffs: next.handoffs }),
 			});
 			next.runId = jobId;
 			next.status = "running";
@@ -997,6 +1066,11 @@ export interface PlanStepView {
 	// prompts, outputs, or blob bodies. Kept out of chit_plan_list summaries.
 	receipt?: LoopReceipt;
 	error?: string;
+	// Compact, body-free summaries of the handoffs this step produced (Phase 2 producer capture):
+	// id, path, format, status, bytes/digest when present, error on a failure, and a bounded preview.
+	// The full body is NEVER in this default view (it belongs behind the apply/receipt gate). In
+	// declaration order; absent on a step that declares no handoffs.
+	pendingHandoffs?: PendingHandoffView[];
 }
 
 export interface PlanView {
@@ -1125,6 +1199,11 @@ export function describePlan(c: Plan, deps: PlanEngineDeps): PlanView {
 		// the live job join is gone.
 		if (s.receipt !== undefined) view.receipt = s.receipt;
 		if (s.error !== undefined) view.error = s.error;
+		// Surface compact handoff summaries (no full body) so the operator sees what each declared
+		// handoff captured to, including a missing/invalid one that paused the step needs_human.
+		if (s.pendingHandoffs !== undefined) {
+			view.pendingHandoffs = Object.values(s.pendingHandoffs).map(pendingHandoffView);
+		}
 		return view;
 	});
 

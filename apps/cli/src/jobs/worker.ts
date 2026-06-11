@@ -43,6 +43,8 @@ import {
 	readJobManifest,
 	resolveManifestParticipantSummary,
 } from "../manifest/binding.ts";
+import { buildHandoffReviewContext } from "../plans/handoffs.ts";
+import { readHandoffFileReal } from "../plans/read-handoff.ts";
 import { type RunOnceResult, runManifestOnce, validateOneShotAuth } from "../runs/run-once.ts";
 import {
 	appendLiveEvent,
@@ -451,6 +453,17 @@ async function runLoopJob(jobId: string, job: LoopJobRecord, deps: JobWorkerDeps
 					onAdapterEvent: (e) => {
 						appendLiveEvent(recentEvents, summarizeAdapterEvent(e.type, e, now()));
 					},
+					...(job.planHandoffs !== undefined && {
+						promptAugment: ({ stepId }) =>
+							stepId === resolved.loopSteps.reviewStep
+								? buildHandoffReviewContext(
+										job.cwd,
+										job.planHandoffs ?? {},
+										readHandoffFileReal,
+										iso(now()),
+									)
+								: undefined,
+					}),
 				});
 			} catch (e) {
 				if (e instanceof ConvergeExecuteError) {

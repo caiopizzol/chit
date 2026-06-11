@@ -251,6 +251,36 @@ describe("executeManifest: sequential-check fixture", () => {
 		// leaves a trailing newline-bounded empty region rather than additional content
 		expect(diagnoseCall?.input.endsWith("Relevant files:\n")).toBe(true);
 	});
+
+	test("promptAugment appends to the selected call prompt and trace", async () => {
+		const { adapter, calls } = recordingAdapter();
+		const manifest = loadManifestFixture("sequential-check");
+
+		const result = await executeManifest(manifest, {
+			inputs: { issue: "handoff review" },
+			adapters: { codex: adapter, claude: adapter },
+			invocationCwd: TMPDIR,
+			promptAugment: ({ stepId, outputs }) =>
+				stepId === "verify"
+					? `HANDOFF CONTEXT\nproducer said: ${outputs.diagnose ?? "(missing)"}`
+					: undefined,
+		});
+
+		expect(result.ok).toBe(true);
+		expect(calls).toHaveLength(2);
+		expect(calls[0]?.stepId).toBe("diagnose");
+		expect(calls[0]?.input).not.toContain("HANDOFF CONTEXT");
+		expect(calls[1]?.stepId).toBe("verify");
+		expect(calls[1]?.input).toContain("HANDOFF CONTEXT");
+		expect(calls[1]?.input).toContain("producer said: OK:diagnose");
+
+		const verifyStarted = result.trace.find(
+			(e) => e.type === "step.started" && e.stepId === "verify",
+		);
+		expect(verifyStarted?.type === "step.started" && verifyStarted.prompt).toContain(
+			"HANDOFF CONTEXT",
+		);
+	});
 });
 
 describe("executeManifest: failure modes", () => {

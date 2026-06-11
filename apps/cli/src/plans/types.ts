@@ -7,10 +7,51 @@ import type {
 	PlanApplyPolicy,
 	PlanApprovalRecipe,
 	PlanCleanupPolicy,
+	PlanHandoff,
+	PlanHandoffFormat,
 	RequiredCheck,
 	Verification,
 	VerificationSource,
 } from "@chit-run/core";
+
+// One declared handoff captured (or attempted) when its producing step settled after converging
+// (see docs/structured-plan-handoffs-design.md, Phase 2). status:
+//   captured - the file existed, was a regular file within the worktree, within its byte cap, and
+//              (for json) parsed; digest + body are recorded.
+//   missing  - no file at the declared path.
+//   invalid  - present but failed a trust-boundary or shape check (escaped the worktree, was a
+//              symlink or non-regular file, exceeded the byte cap, or was unparseable JSON).
+// Every declared handoff is required in v1, so a missing/invalid one keeps the step from a clean
+// review_ready (the engine pauses it needs_human).
+export type PendingHandoffStatus = "captured" | "missing" | "invalid";
+
+export interface PendingHandoff {
+	id: string;
+	path: string; // the declared relative path, echoed for receipts
+	format: PlanHandoffFormat;
+	status: PendingHandoffStatus;
+	bytes?: number; // on-disk byte count, present whenever the file was read
+	digest?: string; // "sha256:<hex>", present ONLY when status === "captured"
+	error?: string; // present when status !== "captured"
+	preview?: string; // bounded text preview, present whenever the file was read
+	// The full captured content, recorded durably for the later apply gate (Phase 3) where the
+	// operator inspects the exact body being accepted into downstream prompts. DELIBERATELY kept out
+	// of the compact status projection (PendingHandoffView) -- default status shows only the preview.
+	body?: string;
+	capturedAt: string; // ISO 8601
+}
+
+// The compact, body-free projection of a PendingHandoff for status/describe surfaces.
+export interface PendingHandoffView {
+	id: string;
+	path: string;
+	format: PlanHandoffFormat;
+	status: PendingHandoffStatus;
+	bytes?: number;
+	digest?: string;
+	error?: string;
+	preview?: string;
+}
 
 // Plan model: the durable record a sequential plan-runner drives (see
 // docs/sequential-plan-runner-design.md). A plan is the missing layer between a single
@@ -146,8 +187,17 @@ export interface PlanStepRecord {
 	// on a running step (no receipt before it settles) and on a legacy record.
 	receipt?: LoopReceipt;
 	// Set when status === "failed", and when a launch-time manifest-binding drift
-	// paused the step as "needs_human" (the reason names the drift).
+	// paused the step as "needs_human" (the reason names the drift), and when producer handoff
+	// capture failed at settle (the reason names the unmet handoff contract).
 	error?: string;
+	// The handoff declarations frozen from the normalized plan at plan start (the runtime never
+	// re-reads the plan file), keyed by handoff id. Drives producer capture at settle and the
+	// task-brief handoff contract at launch. Absent when the step declares no handoffs.
+	handoffs?: Record<string, PlanHandoff>;
+	// Pending captured handoffs, recorded when the step settles after converging (Phase 2 producer
+	// capture), keyed by handoff id. A failed capture also pauses the step needs_human. Absent on a
+	// step that declares none and on a record that settled before capture existed.
+	pendingHandoffs?: Record<string, PendingHandoff>;
 }
 
 export interface Plan {

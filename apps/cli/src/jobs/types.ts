@@ -3,6 +3,7 @@ import type {
 	BoundParticipantSummary,
 	LoopStopStatus,
 	LoopVerdict,
+	PlanHandoff,
 	RecipeReceipt,
 	RequiredCheck,
 	Verification,
@@ -131,6 +132,11 @@ export interface LoopJobRecord extends BaseJobRecord {
 	// recipe-backed plan step. Stored on the job so status/trace can answer which
 	// named recipe ran even after the plan driver is gone.
 	recipe?: RecipeReceipt;
+	// Approved plan-step handoff declarations, when this loop job was launched by
+	// a plan step that produces structured handoffs. The worker uses these to put
+	// current handoff bodies in the reviewer prompt; settle still re-captures and
+	// validates the files before dependents can unlock.
+	planHandoffs?: Record<string, PlanHandoff>;
 	maxIterations: number;
 	// The EFFECTIVE chit-executed verification commands for this run, persisted at
 	// enqueue so the worker runs the intended checks without re-deriving them (and so a

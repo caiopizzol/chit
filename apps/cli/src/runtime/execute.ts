@@ -1,6 +1,12 @@
 import type { ResolvedManifest } from "@chit-run/core";
 import { type PreparedInputs, prepareInputs, RuntimeError, renderTemplate } from "./render.ts";
-import type { AdapterMap, ExecuteOptions, RunResult, TraceEvent } from "./types.ts";
+import type {
+	AdapterMap,
+	ExecuteOptions,
+	PromptAugmenter,
+	RunResult,
+	TraceEvent,
+} from "./types.ts";
 
 export function buildAgentInput(instructions: string, prompt: string): string {
 	// The agent-facing "Role:" label is intentionally unchanged by the
@@ -37,6 +43,7 @@ async function runStep(
 	adapters: AdapterMap,
 	invocationCwd: string,
 	onTrace: (event: TraceEvent) => void,
+	promptAugment?: PromptAugmenter,
 	signal?: AbortSignal,
 ): Promise<string> {
 	const step = manifest.steps[stepId];
@@ -59,8 +66,12 @@ async function runStep(
 		if (!adapter) {
 			throw new RuntimeError(`no adapter for agent "${participant.agent}"`);
 		}
-		// Emit started AFTER rendering so the trace carries the exact prompt sent.
-		const renderedPrompt = renderTemplate(step.prompt, preparedInputs, stepOutputs);
+		let renderedPrompt = renderTemplate(step.prompt, preparedInputs, stepOutputs);
+		const augment = promptAugment?.({ stepId, prompt: renderedPrompt, outputs: stepOutputs });
+		if (augment !== undefined && augment !== "") {
+			renderedPrompt = `${renderedPrompt}\n\n${augment}`;
+		}
+		// Emit started AFTER rendering and augmentation so the trace carries the exact prompt sent.
 		onTrace({
 			type: "step.started",
 			stepId,
@@ -133,6 +144,7 @@ export async function executeManifest(
 					options.adapters,
 					options.invocationCwd,
 					recordEvent,
+					options.promptAugment,
 					options.signal,
 				),
 			),

@@ -51,7 +51,13 @@ import {
 	runRequiredChecks,
 } from "../loops/required-checks.ts";
 import { executeManifest } from "../runtime/execute.ts";
-import type { AdapterEvent, AdapterMap, RunResult, TraceEvent } from "../runtime/types.ts";
+import type {
+	AdapterEvent,
+	AdapterMap,
+	PromptAugmenter,
+	RunResult,
+	TraceEvent,
+} from "../runtime/types.ts";
 import { wrapAdaptersWithSessions } from "../sessions/coordinator.ts";
 import { defaultSessionDir, FileSessionStore } from "../sessions/store.ts";
 import type { SessionStore } from "../sessions/types.ts";
@@ -156,6 +162,10 @@ export type ConvergeExecute = (
 		// fine-grained activity between step boundaries. Best-effort: a throwing
 		// observer never breaks the run.
 		onAdapterEvent?: (event: AdapterEventSkeleton) => void;
+		// Optional per-call prompt augmentation. Plan handoffs use this to place
+		// produced handoff bodies in the reviewer prompt after the implementer
+		// has run, without changing the converge manifest vocabulary.
+		promptAugment?: PromptAugmenter;
 	},
 ) => Promise<RunResult & { auditRunId?: string }>;
 
@@ -427,6 +437,9 @@ export interface ConvergeIterationContext {
 	// When present, threaded to execute so a driver can observe safe per-event
 	// skeletons (ids + event type, never the raw payload) between step boundaries.
 	onAdapterEvent?: (event: AdapterEventSkeleton) => void;
+	// Optional per-call prompt augmentation, forwarded to execute. Background
+	// plan jobs use it for review-only handoff context.
+	promptAugment?: PromptAugmenter;
 	recipe?: RecipeReceipt;
 	// When present, invoked immediately BEFORE chit runs the required checks, and
 	// ONLY when there are checks to run, so a foreground driver can surface a
@@ -522,6 +535,7 @@ export async function runConvergeIteration(
 				...(ctx.signal && { signal: ctx.signal }),
 				...(ctx.onTrace && { onTrace: ctx.onTrace }),
 				...(ctx.onAdapterEvent && { onAdapterEvent: ctx.onAdapterEvent }),
+				...(ctx.promptAugment && { promptAugment: ctx.promptAugment }),
 			},
 		);
 	} catch (e) {
@@ -1043,6 +1057,7 @@ export function makeAuditedExecute(
 					recorder.fromTrace(e);
 					ctx?.onTrace?.(e);
 				},
+				...(ctx?.promptAugment && { promptAugment: ctx.promptAugment }),
 				...(ctx?.signal && { signal: ctx.signal }),
 			});
 			recorder.runCompleted(result.ok ? "ok" : "failed", Date.now() - startedAt);
