@@ -11,8 +11,8 @@
 			"mode": "converge",
 			"manifestPath": "examples/converge.json",
 			"maxIterations": 4,
-			"callTimeoutMs": 1200000,
-			"description": "Use for broad or architecture-sensitive Chit changes where the reviewer needs more than the normal budget."
+			"callTimeoutMs": 1800000,
+			"description": "Use for broad or architecture-sensitive Chit changes where the reviewer needs a 30 minute per-call budget."
 		},
 		"codex-writer": {
 			"mode": "converge",
