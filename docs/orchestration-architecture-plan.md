@@ -115,6 +115,11 @@ These are the local facts this plan builds on:
   entities, with provenance.
 - Plans and batches already use dry-run by default and require `confirm:true`
   plus a matching approval hash to start.
+- Plan cleanup is also dry-run by default. Safe mode retires only completed or
+  cancelled plans. `cleanup_mode: "discard_unresolved"` is the explicit operator
+  acknowledgment path for paused, failed, ready-for-apply, or cancelled plans;
+  it still refuses live workers, never applies or merges, and keeps every
+  plan/job/loop/audit receipt.
 - Managed-worktree run paths are ephemeral. Durable attribution must come from
   the loop header, job record, plan record, or batch record, using `mainRepo` or
   the durable `repo` anchor for ownership and `callerCheckout` only for apply

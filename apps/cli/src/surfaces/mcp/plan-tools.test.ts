@@ -94,6 +94,18 @@ describe("chit_plan_advance apply payload (gated apply)", () => {
 });
 
 describe("chit_plan_cleanup", () => {
+	test("advertises cleanup_mode for acknowledged unresolved cleanup", async () => {
+		const { tools } = await client.listTools();
+		const cleanup = tools.find((t) => t.name === "chit_plan_cleanup");
+		expect(cleanup).toBeDefined();
+		const props =
+			(cleanup?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
+		expect(props.plan_id).toBeDefined();
+		expect(props.confirm).toBeDefined();
+		expect(props.cleanup_mode).toBeDefined();
+		expect(cleanup?.description).toContain("cleanup_mode=discard_unresolved");
+	});
+
 	test("cleanup on an unknown plan_id reports cleanly without mutating", async () => {
 		const result = (await client.callTool({
 			name: "chit_plan_cleanup",

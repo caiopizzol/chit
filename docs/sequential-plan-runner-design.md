@@ -190,8 +190,9 @@ The human is in control at four points, all structural:
    candidates, and applies nothing; `confirm: true` applies. Same dry-run-then-
    confirm contract as `chit_apply`.
 4. **At cleanup.** `chit_plan_cleanup` is dry-run by default and removes managed
-   worktrees + branches only on confirm, keeping all receipts - mirroring
-   `cleanupBatch` (`engine.ts:245-334`).
+   worktrees + branches only on confirm, keeping all receipts. Safe mode protects
+   unresolved work; `cleanup_mode: "discard_unresolved"` is the explicit operator
+   acknowledgment path after inspection.
 
 What happens on each non-clean step outcome (mapped to the converge/batch
 vocabulary in `types.ts:41-61`):
@@ -305,7 +306,7 @@ existing tools rather than replacing them:
 | `chit_plan_drive` | `plan_id`, `cwd?`, `timeout_ms?`, `max_iterations?` | plan view plus `driveResult` and `advances` | waits while work is live, advances finished or launchable work, and stops at the next apply or terminal gate |
 | `chit_plan_advance` | `plan_id`, `apply?: { step_id, confirm, include_untracked? }` | updated view (incl. the integration commit sha on apply) | the gated apply uses `applyRunWorkspace` (the `chit_apply` core), then **commits** the staged work to the integration branch, then launches newly-unblocked steps |
 | `chit_plan_cancel` | `plan_id` | view | `chit_cancel` per active run |
-| `chit_plan_cleanup` | `plan_id`, `confirm` | cleanup result | the `cleanupBatch` pattern |
+| `chit_plan_cleanup` | `plan_id`, `confirm`, `cleanup_mode?` | cleanup result | the `cleanupBatch` pattern |
 
 `chit_plan_list` is the lost-`plan_id` recovery path, exactly as `chit_batch_list`
 is for batches (`server.ts:2474`); read-only over the plan store.

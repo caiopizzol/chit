@@ -25,6 +25,7 @@ import {
 	cleanupPlan,
 	describePlan,
 	type PlanApplyOutcome,
+	type PlanCleanupMode,
 	type PlanCleanupResult,
 	type PlanEngineDeps,
 	type PlanView,
@@ -364,11 +365,17 @@ export interface PlanCleanupResponse extends PlanCleanupResult {
 }
 
 export function runPlanCleanup(
-	input: { planId: string; confirm?: boolean },
+	input: { planId: string; confirm?: boolean; cleanupMode?: PlanCleanupMode },
 	store: PlanStore,
 	deps: PlanEngineDeps,
 ): PlanCleanupResponse {
-	const result = cleanupPlan(store, deps, input.planId, input.confirm ?? false);
+	const result = cleanupPlan(
+		store,
+		deps,
+		input.planId,
+		input.confirm ?? false,
+		input.cleanupMode ?? "safe",
+	);
 	// Re-read so the view reflects cleanedAt (cleanupPlan persisted it on a confirmed run).
 	const plan = store.get(input.planId);
 	return { ...result, plan: describePlan(plan ?? throwMissing(input.planId), deps) };

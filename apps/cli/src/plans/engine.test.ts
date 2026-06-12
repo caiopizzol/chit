@@ -1365,6 +1365,16 @@ function reviewReadySingle(h: RealHarness, stepId = "a"): { plan: Plan } {
 	return { plan: advancePlan(h.store, h.deps, "p") };
 }
 
+function needsHumanSingle(h: RealHarness): Plan {
+	const started = startPlan(h.store, h.deps, {
+		id: "p",
+		cwd: h.repo,
+		normalizedPlan: chainPlan({ steps: [step("a")] }),
+	});
+	h.finish(stepOf(started, "a").runId ?? "", { stopStatus: "max-iterations" });
+	return advancePlan(h.store, h.deps, "p");
+}
+
 describe("applyPlanStep (real git)", () => {
 	test("dry run reports what would apply and mutates neither the integration worktree nor plan state", () => {
 		const h = realHarness();
@@ -1797,6 +1807,106 @@ describe("cleanupPlan (real git)", () => {
 		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
 	});
 
+	test("safe mode refuses a needs_human plan by default", () => {
+		const h = realHarness();
+		const plan = needsHumanSingle(h);
+		expect(plan.status).toBe("needs_human");
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+
+		const res = cleanupPlan(h.store, h.deps, "p", true);
+		expect(res.available).toBe(false);
+		expect(res.cleanupMode).toBe("safe");
+		expect(present(res.refusal, "refusal")).toContain("needs_human");
+		expect(existsSync(integration)).toBe(true);
+		expect(existsSync(stepWt)).toBe(true);
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
+	});
+
+	test("discard_unresolved dry run reports unresolved step work and removes nothing", () => {
+		const h = realHarness();
+		const plan = needsHumanSingle(h);
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+
+		const dry = cleanupPlan(h.store, h.deps, "p", false, "discard_unresolved");
+		expect(dry.available).toBe(true);
+		expect(dry.confirmed).toBe(false);
+		expect(dry.cleanupMode).toBe("discard_unresolved");
+		expect(dry.receiptsKept).toBe(true);
+		expect(dry.note).toContain("discarding unresolved step work");
+		const stepTarget = present(
+			dry.targets.find((t) => t.id === "a"),
+			"step target",
+		);
+		expect(stepTarget.status).toBe("needs_human");
+		expect(stepTarget.changedFiles).toEqual(["base.txt"]);
+
+		expect(existsSync(integration)).toBe(true);
+		expect(existsSync(stepWt)).toBe(true);
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeUndefined();
+	});
+
+	test("discard_unresolved confirm removes a needs_human plan but keeps receipts", () => {
+		const h = realHarness();
+		const plan = needsHumanSingle(h);
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const step = stepOf(plan, "a");
+		const stepWt = present(step.worktreePath, "step a worktree");
+		expect(step.receipt).toEqual(SAMPLE_RECEIPT);
+
+		const res = cleanupPlan(h.store, h.deps, "p", true, "discard_unresolved");
+		expect(res.confirmed).toBe(true);
+		expect(res.available).toBe(true);
+		expect(res.cleanupMode).toBe("discard_unresolved");
+		expect(res.receiptsKept).toBe(true);
+		expect(res.targets.every((t) => t.removed === true)).toBe(true);
+		expect(res.note).toContain("discarding unresolved step work");
+
+		expect(existsSync(integration)).toBe(false);
+		expect(existsSync(stepWt)).toBe(false);
+		expect(
+			realGit(["rev-parse", "--verify", "--quiet", "refs/heads/chit-plan/p/integration"], h.repo)
+				.code,
+		).not.toBe(0);
+		expect(
+			realGit(["rev-parse", "--verify", "--quiet", "refs/heads/chit-plan/p/steps/a"], h.repo).code,
+		).not.toBe(0);
+		const stored = present(h.store.get("p"), "stored plan");
+		expect(stored.cleanedAt).toBeDefined();
+		expect(stepOf(stored, "a").status).toBe("needs_human");
+		expect(stepOf(stored, "a").receipt).toEqual(SAMPLE_RECEIPT);
+	});
+
+	test("discard_unresolved confirm removes a failed launch worktree", () => {
+		const h = realHarness();
+		const failingDeps: PlanEngineDeps = {
+			...h.deps,
+			launchJob: () => {
+				throw new Error("launch exploded");
+			},
+		};
+		const plan = startPlan(h.store, failingDeps, {
+			id: "p",
+			cwd: h.repo,
+			normalizedPlan: chainPlan({ steps: [step("a")] }),
+		});
+		expect(plan.status).toBe("failed");
+		const integration = present(plan.integrationWorktree, "integration worktree");
+		const stepWt = present(stepOf(plan, "a").worktreePath, "step a worktree");
+
+		const safe = cleanupPlan(h.store, h.deps, "p", true);
+		expect(safe.available).toBe(false);
+		expect(existsSync(stepWt)).toBe(true);
+
+		const res = cleanupPlan(h.store, h.deps, "p", true, "discard_unresolved");
+		expect(res.available).toBe(true);
+		expect(res.targets.map((t) => t.id).sort()).toEqual(["a", "integration"]);
+		expect(existsSync(integration)).toBe(false);
+		expect(existsSync(stepWt)).toBe(false);
+		expect(present(h.store.get("p"), "stored plan").cleanedAt).toBeDefined();
+	});
+
 	test("refuses (removes nothing) while a cancelled step's worker is still live", () => {
 		const h = realHarness();
 		const started = startPlan(h.store, h.deps, {
@@ -1814,6 +1924,9 @@ describe("cleanupPlan (real git)", () => {
 		const res = cleanupPlan(h.store, h.deps, "p", true);
 		expect(res.available).toBe(false);
 		expect(present(res.refusal, "refusal")).toContain("live worker");
+		const discard = cleanupPlan(h.store, h.deps, "p", true, "discard_unresolved");
+		expect(discard.available).toBe(false);
+		expect(present(discard.refusal, "discard refusal")).toContain("live worker");
 
 		// Nothing removed; the in-flight worktree is protected from removal-under-a-live-worker.
 		expect(existsSync(integration)).toBe(true);
