@@ -78,16 +78,22 @@ export interface AggregateOptions {
 	scope?: string;
 	// Restrict to runs that belong to ONE repo. The audit store is a single
 	// per-user state dir shared across every repo, so without this the roll-up
-	// would mix unrelated repos. A run belongs when its recorded run.started.cwd
-	// resolves (via resolveRepoRoot) to this same repo root. INPUT ONLY: like
-	// scope, the repo root is a filter and is never emitted (it is an absolute
-	// local path). A run with no recorded cwd is excluded when this is set.
+	// would mix unrelated repos. A run belongs when its durable run repo, or its
+	// recorded run.started.cwd resolved through resolveRepoRoot, matches this same
+	// repo root. INPUT ONLY: like scope, the repo root is a filter and is never
+	// emitted (it is an absolute local path). A run with no resolvable repo is
+	// excluded when this is set.
 	repoRoot?: string;
 	// How a recorded cwd is canonicalized to its repo root (git top-level). Injected
 	// so the fold stays pure and testable; the CLI passes location.ts's repoRoot,
 	// which makes a run from any subdir of the repo match. Defaults to identity,
 	// so a caller that already passes canonical roots needs no resolver.
 	resolveRepoRoot?: (cwd: string) => string;
+	// Optional durable run-level repo resolver. The CLI uses this to map looped
+	// managed-worktree audit runs back to the main repo recorded in the loop header,
+	// even after the worktree path in run.started.cwd has been cleaned up. Returning
+	// undefined falls back to run.started.cwd + resolveRepoRoot.
+	resolveRunRepoRoot?: (runId: string, events: AuditEvent[]) => string | undefined;
 	// Cap on runs folded, applied AFTER sorting candidates by startedAt descending
 	// (newest first). listRuns order is arbitrary, so the sort happens before the
 	// slice - exactly as listAudit does.
@@ -214,6 +220,12 @@ export function aggregateReceipts(
 		rootCache.set(cwd, root);
 		return root;
 	};
+	const runRepoRootOf = (runId: string, events: AuditEvent[]): string | undefined => {
+		const durableRoot = opts.resolveRunRepoRoot?.(runId, events);
+		if (durableRoot !== undefined) return durableRoot;
+		const cwd = runCwd(events);
+		return cwd === undefined ? undefined : repoRootOf(cwd);
+	};
 
 	const candidates: RunContribution[] = [];
 	let skipped = 0;
@@ -227,12 +239,11 @@ export function aggregateReceipts(
 		}
 		const summary = summarizeRun(runId, events);
 		if (!matchesFilters(summary, opts)) continue;
-		// Repo scoping: keep only runs whose recorded cwd resolves to the target
-		// repo root. A run without a recorded cwd cannot be confirmed to belong, so
-		// it is excluded (not a skip - it is simply out of scope).
+		// Repo scoping: keep only runs whose durable or cwd-derived repo resolves to
+		// the target repo root. A run without a resolvable repo cannot be confirmed
+		// to belong, so it is excluded (not a skip - it is simply out of scope).
 		if (opts.repoRoot !== undefined) {
-			const cwd = runCwd(events);
-			if (cwd === undefined || repoRootOf(cwd) !== opts.repoRoot) continue;
+			if (runRepoRootOf(runId, events) !== opts.repoRoot) continue;
 		}
 		candidates.push(extractContribution(summary, events));
 	}

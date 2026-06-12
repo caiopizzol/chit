@@ -31,7 +31,9 @@ import {
 	summarizeRun,
 } from "../audit/reader.ts";
 import { AuditStore } from "../audit/store.ts";
+import { mainRepoOfWorktree, realGit } from "../batches/worktree.ts";
 import { repoRoot } from "../loops/location.ts";
+import { readLoop } from "../loops/log-store.ts";
 
 export interface AuditIO {
 	out: (s: string) => void;
@@ -112,20 +114,81 @@ function countLine(counts: Record<string, number>): string {
 		.join("  ");
 }
 
+export interface AuditStatsDeps {
+	currentRepoRoot?: (cwd: string) => string;
+	resolveRunRepoRoot?: (runId: string, events: AuditEvent[]) => string | undefined;
+}
+
+function durableRepoRoot(cwd: string): string {
+	try {
+		return mainRepoOfWorktree(realGit, cwd);
+	} catch {
+		return repoRoot(cwd);
+	}
+}
+
+function runStarted(
+	events: AuditEvent[],
+): Extract<AuditEvent, { type: "run.started" }> | undefined {
+	const started = events.find((e) => e.type === "run.started");
+	return started?.type === "run.started" ? started : undefined;
+}
+
+function defaultRunRepoRootResolver(): (runId: string, events: AuditEvent[]) => string | undefined {
+	const loopCache = new Map<string, string | undefined>();
+	const cwdCache = new Map<string, string>();
+	const cwdRoot = (cwd: string): string => {
+		const cached = cwdCache.get(cwd);
+		if (cached !== undefined) return cached;
+		const root = durableRepoRoot(cwd);
+		cwdCache.set(cwd, root);
+		return root;
+	};
+	return (_runId, events) => {
+		const started = runStarted(events);
+		if (started === undefined) return undefined;
+		if (started.loopId !== undefined) {
+			const loopKey = `${started.cwd}\0${started.loopId}`;
+			if (!loopCache.has(loopKey)) {
+				let root: string | undefined;
+				try {
+					const header = readLoop(started.cwd, started.loopId)[0];
+					root = header?.type === "loop" ? header.mainRepo : undefined;
+				} catch {
+					root = undefined;
+				}
+				loopCache.set(loopKey, root);
+			}
+			const loopRoot = loopCache.get(loopKey);
+			if (loopRoot !== undefined) return loopRoot;
+		}
+		return cwdRoot(started.cwd);
+	};
+}
+
 function runStats(
 	store: AuditStore,
 	io: AuditIO,
 	opts: AggregateOptions,
 	json: boolean,
 	scope: { allRepos: boolean; cwd: string },
+	deps: AuditStatsDeps = {},
 ): number {
 	// Default to this repo: the audit store is one per-user state dir shared across
-	// every repo, so an unscoped roll-up would mix unrelated repos. repoRoot maps a
-	// run's recorded cwd (any subdir) to its git top-level for the comparison; the
-	// path itself is never emitted. --all-repos opts out for a cross-repo view.
+	// every repo, so an unscoped roll-up would mix unrelated repos. Loop-backed
+	// managed worktrees carry durable mainRepo metadata, so stats uses that first
+	// and falls back to resolving run.started.cwd. The path itself is never emitted.
+	// --all-repos opts out for a cross-repo view.
+	const currentRepoRoot = deps.currentRepoRoot ?? durableRepoRoot;
+	const resolveRunRepoRoot = deps.resolveRunRepoRoot ?? defaultRunRepoRootResolver();
 	const effective: AggregateOptions = scope.allRepos
 		? opts
-		: { ...opts, repoRoot: repoRoot(scope.cwd), resolveRepoRoot: repoRoot };
+		: {
+				...opts,
+				repoRoot: currentRepoRoot(scope.cwd),
+				resolveRepoRoot: durableRepoRoot,
+				resolveRunRepoRoot,
+			};
 	const agg: ReceiptAggregate = aggregateReceipts(store, effective);
 	if (json) {
 		io.out(`${JSON.stringify(agg, null, 2)}\n`);
@@ -363,6 +426,7 @@ export function runAudit(
 	io: AuditIO = defaultIO,
 	store: AuditStore = new AuditStore(),
 	cwd: string = process.cwd(),
+	statsDeps: AuditStatsDeps = {},
 ): number {
 	if (argv[0] === "-h" || argv[0] === "--help" || argv.length === 0) {
 		io.out(AUDIT_HELP);
@@ -380,7 +444,14 @@ export function runAudit(
 	}
 	if (parsed.command === "list") return runList(store, io, parsed.json);
 	if (parsed.command === "stats") {
-		return runStats(store, io, parsed.stats, parsed.json, { allRepos: parsed.allRepos, cwd });
+		return runStats(
+			store,
+			io,
+			parsed.stats,
+			parsed.json,
+			{ allRepos: parsed.allRepos, cwd },
+			statsDeps,
+		);
 	}
 	return runShow(store, parsed.runId as string, io, {
 		json: parsed.json,

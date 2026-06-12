@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditStore } from "../audit/store.ts";
+import { startLoop } from "../loops/log-store.ts";
 import { type AuditIO, runAudit } from "./audit.ts";
 
 let dir: string;
@@ -470,6 +471,86 @@ describe("chit audit stats", () => {
 		const all = JSON.parse(c2.out());
 		expect(all.runs).toBe(2);
 		expect(c2.out()).not.toContain("/repos"); // no path leaks into the output
+	});
+
+	test("default repo scoping can include a managed-worktree run by durable repo", () => {
+		const oldXdg = process.env.XDG_STATE_HOME;
+		process.env.XDG_STATE_HOME = dir;
+		try {
+			startLoop("/worktrees/chit/plan/step", {
+				scope: "s",
+				task: "t",
+				maxIterations: 3,
+				loopId: "managed-loop",
+				workspace: {
+					worktreePath: "/worktrees/chit/plan/step",
+					branch: "chit-plan/p/steps/s",
+					baseSha: "base",
+					mainRepo: "/repos/main",
+					callerCheckout: "/repos/main",
+				},
+			});
+			store.appendEvent("MANAGED", {
+				type: "run.started",
+				runId: "MANAGED",
+				ts: "2026-05-30T10:00:00.000Z",
+				manifestId: "m",
+				cwd: "/worktrees/chit/plan/step",
+				surface: "converge",
+				loopId: "managed-loop",
+			});
+			store.appendEvent("MANAGED", {
+				type: "loop.iteration.recorded",
+				runId: "MANAGED",
+				ts: "2026-05-30T10:00:01.000Z",
+				loopId: "managed-loop",
+				n: 1,
+				verdict: "proceed",
+				decision: "proceed",
+				findingCount: 0,
+				changedFiles: [],
+				checksRun: "bun test",
+				checkDurationMs: 1,
+			});
+			store.appendEvent("MANAGED", {
+				type: "run.completed",
+				runId: "MANAGED",
+				ts: "2026-05-30T10:00:02.000Z",
+				status: "ok",
+				durationMs: 1,
+			});
+			store.appendEvent("OTHER", {
+				type: "run.started",
+				runId: "OTHER",
+				ts: "2026-05-30T11:00:00.000Z",
+				manifestId: "m",
+				cwd: "/repos/other",
+				surface: "converge",
+			});
+			store.appendEvent("OTHER", {
+				type: "run.completed",
+				runId: "OTHER",
+				ts: "2026-05-30T11:00:01.000Z",
+				status: "ok",
+				durationMs: 1,
+			});
+
+			const c = capture();
+			runAudit(["stats", "--json"], c.io, store, "/repos/main", {
+				currentRepoRoot: () => "/repos/main",
+			});
+			const scoped = JSON.parse(c.out());
+			expect(scoped.runs).toBe(1);
+			expect(scoped.convergence.iterations).toBe(1);
+			expect(c.out()).not.toContain("/repos");
+			expect(c.out()).not.toContain("/worktrees");
+		} finally {
+			if (oldXdg === undefined) {
+				delete process.env.XDG_STATE_HOME;
+			} else {
+				process.env.XDG_STATE_HOME = oldXdg;
+			}
+		}
 	});
 
 	test("an invalid --surface is a usage error (exit 2)", () => {

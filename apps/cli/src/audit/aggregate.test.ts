@@ -29,6 +29,7 @@ interface RunSpec {
 	surface?: "cli" | "mcp" | "converge";
 	scope?: string;
 	cwd?: string;
+	loopId?: string;
 	status?: "ok" | "failed" | "cancelled" | "timeout" | "none"; // "none" = no run.completed
 	recipeId?: string;
 	usage?: Record<string, number>;
@@ -50,6 +51,7 @@ function writeRun(runId: string, spec: RunSpec): void {
 			manifestId: "m",
 			cwd: spec.cwd ?? "/c",
 			surface: spec.surface ?? "converge",
+			...(spec.loopId !== undefined && { loopId: spec.loopId }),
 			...(spec.scope !== undefined && { scope: spec.scope }),
 			...(spec.recipeId !== undefined && {
 				recipe: { id: spec.recipeId, mode: "converge" },
@@ -264,6 +266,30 @@ describe("aggregateReceipts", () => {
 		// Without a resolver, the recorded cwd is compared verbatim.
 		const agg = aggregateReceipts(store, { repoRoot: "/repos/alpha" });
 		expect(agg.runs).toBe(1);
+	});
+
+	test("repoRoot can use durable run repo metadata before the recorded cwd fallback", () => {
+		writeRun("managed", {
+			startedAt: "2026-06-01T10:00:00.000Z",
+			cwd: "/worktrees/alpha/run",
+			loopId: "managed-loop",
+			iterations: [{ verdict: "proceed", decision: "proceed", findingCount: 0 }],
+		});
+		writeRun("other", { startedAt: "2026-06-01T11:00:00.000Z", cwd: "/repos/beta" });
+		const agg = aggregateReceipts(store, {
+			repoRoot: "/repos/alpha",
+			resolveRepoRoot: (cwd) => (cwd.startsWith("/repos/beta") ? "/repos/beta" : cwd),
+			resolveRunRepoRoot: (_runId, events) => {
+				const started = events.find((e) => e.type === "run.started");
+				return started?.type === "run.started" && started.loopId === "managed-loop"
+					? "/repos/alpha"
+					: undefined;
+			},
+		});
+		expect(agg.runs).toBe(1);
+		expect(agg.convergence.iterations).toBe(1);
+		expect(JSON.stringify(agg)).not.toContain("/repos");
+		expect(JSON.stringify(agg)).not.toContain("/worktrees");
 	});
 
 	test("limit must be a non-negative integer", () => {
