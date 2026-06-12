@@ -188,6 +188,22 @@ describe("linkNodeModules", () => {
 		expect(readFileSync(join(link, "marker.txt"), "utf8")).toBe("tool");
 	});
 
+	test("links workspace package node_modules declared by the source checkout", () => {
+		const src = join(dir, "src");
+		const dst = join(dir, "wt");
+		mkdirSync(join(src, "apps", "site", "node_modules", ".bin"), { recursive: true });
+		mkdirSync(join(dst, "apps", "site"), { recursive: true });
+		writeFileSync(join(src, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+		writeFileSync(join(src, "apps", "site", "package.json"), "{}");
+		writeFileSync(join(src, "apps", "site", "node_modules", "marker.txt"), "site-tool");
+
+		linkNodeModules(src, dst);
+
+		const link = join(dst, "apps", "site", "node_modules");
+		expect(lstatSync(link).isSymbolicLink()).toBe(true);
+		expect(readFileSync(join(link, "marker.txt"), "utf8")).toBe("site-tool");
+	});
+
 	test("no-ops when the source has no node_modules (nothing to share)", () => {
 		const src = join(dir, "src");
 		const dst = join(dir, "wt");
@@ -234,12 +250,17 @@ describe("createWorktree tooling link", () => {
 			realGit(["config", "user.email", "t@chit.test"], repo);
 			realGit(["config", "user.name", "t"], repo);
 			writeFileSync(join(repo, "f.ts"), "base\n");
+			mkdirSync(join(repo, "apps", "site"), { recursive: true });
+			writeFileSync(join(repo, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+			writeFileSync(join(repo, "apps", "site", "package.json"), "{}");
 			realGit(["add", "."], repo);
 			realGit(["commit", "-qm", "base"], repo);
 			const base = realGit(["rev-parse", "HEAD"], repo).stdout.trim();
 			// The source checkout has installed tooling (node_modules); the fresh worktree does not.
 			mkdirSync(join(repo, "node_modules", ".bin"), { recursive: true });
 			writeFileSync(join(repo, "node_modules", "marker.txt"), "tool");
+			mkdirSync(join(repo, "apps", "site", "node_modules", ".bin"), { recursive: true });
+			writeFileSync(join(repo, "apps", "site", "node_modules", "marker.txt"), "site-tool");
 
 			const wt = join(root, "wt");
 			createWorktree(realGit, repo, wt, "chit-test/tool", base, repo);
@@ -247,6 +268,9 @@ describe("createWorktree tooling link", () => {
 			const link = join(wt, "node_modules");
 			expect(lstatSync(link).isSymbolicLink()).toBe(true);
 			expect(readFileSync(join(link, "marker.txt"), "utf8")).toBe("tool");
+			const workspaceLink = join(wt, "apps", "site", "node_modules");
+			expect(lstatSync(workspaceLink).isSymbolicLink()).toBe(true);
+			expect(readFileSync(join(workspaceLink, "marker.txt"), "utf8")).toBe("site-tool");
 			expect(realGit(["status", "--porcelain"], wt).stdout.trim()).toBe("");
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
@@ -834,6 +858,8 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 			// Simulate the managed worktree's tooling link: a node_modules SYMLINK. With no (or a
 			// directory-only) ignore it shows as untracked, but it is tooling, never an apply candidate.
 			symlinkSync(realNm, join(wt, "node_modules"));
+			mkdirSync(join(wt, "apps", "site"), { recursive: true });
+			symlinkSync(realNm, join(wt, "apps", "site", "node_modules"));
 			const dry = applyRunWorkspace(realGit, {
 				worktreePath: wt,
 				baseSha: base,
@@ -842,6 +868,7 @@ describe("applyRunWorkspace (#101): apply a run's diff back to a checkout", () =
 			});
 			expect(dry.untracked).toContain("newfile.ts"); // the real candidate is still listed
 			expect(dry.untracked).not.toContain("node_modules"); // the tooling link is filtered out
+			expect(dry.untracked).not.toContain("apps/site/node_modules");
 		} finally {
 			rmSync(realNm, { recursive: true, force: true });
 			teardown();

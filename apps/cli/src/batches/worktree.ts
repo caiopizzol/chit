@@ -15,6 +15,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmdirSync,
@@ -58,14 +59,12 @@ function gitErr(r: GitResult): string {
 	return (r.stderr || r.stdout || `exit ${r.code}`).trim();
 }
 
-// A managed worktree links the launching checkout's node_modules as a SYMLINK (see linkNodeModules).
-// The conventional directory-only `node_modules/` gitignore pattern does NOT match a symlink, so git
-// reports the link as untracked. node_modules is tooling, never applicable work, so it is filtered
-// from a run's apply candidates and partial-work listings -- otherwise the linked symlink would read
-// as an untracked file to apply or as uncommitted work. Matches the top-level tooling link this
-// helper creates, plus any path beneath it.
+// A managed worktree links the launching checkout's node_modules as SYMLINKS (see
+// linkNodeModules). The conventional directory-only `node_modules/` gitignore pattern does NOT
+// match a symlink, so git reports the links as untracked. node_modules is tooling, never
+// applicable work, so it is filtered from a run's apply candidates and partial-work listings.
 function isLinkedToolingPath(p: string): boolean {
-	return p === "node_modules" || p.startsWith("node_modules/");
+	return p.split("/").includes("node_modules");
 }
 
 // Where a task's worktree and branch live. The agreed v1 layout:
@@ -101,34 +100,63 @@ export function repoToplevel(git: GitRunner, cwd: string): string {
 	return r.stdout.trim();
 }
 
-// Link an existing node_modules from a source checkout into a freshly created managed worktree.
-// A managed worktree is a FRESH git worktree: it has the committed tree but NOT untracked workspace
-// tooling like node_modules, so a check that shells out to an installed binary (e.g. a `bun --filter
-// ... typecheck` that runs fumadocs-mdx / biome) fails with a mystery "command not found" even though
-// the launching checkout has dependencies installed. Symlink (not copy) the source's node_modules so
-// the worktree shares the SAME installed tooling without duplicating it on disk. We do NOT run an
-// install: the link reuses what the source already has. Conservative:
-//   - no-op when the source has no node_modules (nothing to share), and
-//   - never clobber an existing target node_modules (lstat so a dangling symlink still counts present).
-// A link failure surfaces a WorktreeError so a check fails loudly HERE, not later with a missing-binary
-// mystery. Note: a project's conventional directory-only `node_modules/` ignore does NOT match a
-// symlink, so git reports the link as untracked -- callers that read a worktree's untracked/dirty
-// state filter it via isLinkedToolingPath, and it is never linked into a worktree that is committed.
-export function linkNodeModules(sourceCheckout: string, targetWorktree: string): void {
-	const src = join(sourceCheckout, "node_modules");
-	const dst = join(targetWorktree, "node_modules");
-	if (!existsSync(src)) return; // the source has no installed deps to share
-	// lstat, not existsSync: a dangling symlink at dst must still count as present (never clobber it).
-	let dstPresent = true;
+function targetExists(p: string): boolean {
 	try {
-		lstatSync(dst);
+		lstatSync(p);
+		return true;
 	} catch {
-		dstPresent = false;
+		return false;
 	}
-	if (dstPresent) return; // never overwrite an existing install/link
+}
+
+function workspacePackageDirs(sourceCheckout: string): string[] {
+	const packageJson = join(sourceCheckout, "package.json");
+	if (!existsSync(packageJson)) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(packageJson, "utf-8"));
+	} catch {
+		return [];
+	}
+	const workspaces = (parsed as { workspaces?: unknown }).workspaces;
+	const patterns = Array.isArray(workspaces)
+		? workspaces
+		: (workspaces as { packages?: unknown } | undefined)?.packages;
+	if (!Array.isArray(patterns)) return [];
+	const dirs: string[] = [];
+	for (const raw of patterns) {
+		if (typeof raw !== "string") continue;
+		if (raw.endsWith("/*") && !raw.slice(0, -2).includes("*")) {
+			const parentRel = raw.slice(0, -2);
+			if (parentRel === "" || parentRel.startsWith("/") || parentRel.includes("..")) continue;
+			const parent = join(sourceCheckout, parentRel);
+			if (!existsSync(parent)) continue;
+			for (const entry of readdirSync(parent, { withFileTypes: true })) {
+				if (!entry.isDirectory()) continue;
+				const rel = `${parentRel}/${entry.name}`;
+				if (existsSync(join(sourceCheckout, rel, "package.json"))) dirs.push(rel);
+			}
+			continue;
+		}
+		if (raw.includes("*") || raw.startsWith("/") || raw.includes("..")) continue;
+		if (existsSync(join(sourceCheckout, raw, "package.json"))) dirs.push(raw);
+	}
+	return [...new Set(dirs)].sort();
+}
+
+function linkNodeModulesAt(
+	sourceCheckout: string,
+	targetWorktree: string,
+	relPath: string,
+): boolean {
+	const src = join(sourceCheckout, relPath);
+	const dst = join(targetWorktree, relPath);
+	if (!existsSync(src)) return false;
+	if (targetExists(dst)) return false;
 	try {
 		// Absolute target so the link resolves regardless of the worktree's own location.
 		symlinkSync(src, dst);
+		return true;
 	} catch (e) {
 		throw new WorktreeError(
 			`could not link node_modules from ${src} into ${dst}: ${(e as Error).message}`,
@@ -136,7 +164,38 @@ export function linkNodeModules(sourceCheckout: string, targetWorktree: string):
 	}
 }
 
-function excludeLinkedNodeModules(git: GitRunner, worktreePath: string): void {
+// Link existing node_modules directories from a source checkout into a freshly created managed worktree.
+// A managed worktree is a FRESH git worktree: it has the committed tree but NOT untracked workspace
+// tooling like node_modules, so a check that shells out to an installed binary (e.g. a `bun --filter
+// ... typecheck` that runs fumadocs-mdx / biome) fails with a mystery "command not found" even though
+// the launching checkout has dependencies installed. Symlink (not copy) the source's root and
+// workspace package node_modules so the worktree shares the SAME installed tooling without
+// duplicating it on disk. We do NOT run an install: the link reuses what the source already has.
+// Conservative: no-op when the source has no matching node_modules, and never clobbers an existing
+// target node_modules (lstat so a dangling symlink still counts present).
+// A link failure surfaces a WorktreeError so a check fails loudly HERE, not later with a missing-binary
+// mystery. Note: a project's conventional directory-only `node_modules/` ignore does NOT match a
+// symlink, so git reports the link as untracked -- callers that read a worktree's untracked/dirty
+// state filter it via isLinkedToolingPath, and it is never linked into a worktree that is committed.
+export function linkNodeModules(sourceCheckout: string, targetWorktree: string): string[] {
+	const linked: string[] = [];
+	if (linkNodeModulesAt(sourceCheckout, targetWorktree, "node_modules")) {
+		linked.push("node_modules");
+	}
+	for (const workspaceDir of workspacePackageDirs(sourceCheckout)) {
+		if (!existsSync(join(targetWorktree, workspaceDir))) continue;
+		const rel = `${workspaceDir}/node_modules`;
+		if (linkNodeModulesAt(sourceCheckout, targetWorktree, rel)) linked.push(rel);
+	}
+	return linked;
+}
+
+function excludeLinkedNodeModules(
+	git: GitRunner,
+	worktreePath: string,
+	linkedPaths: string[],
+): void {
+	if (linkedPaths.length === 0) return;
 	const r = git(["rev-parse", "--git-common-dir"], worktreePath);
 	if (r.code !== 0) {
 		throw new WorktreeError(
@@ -148,11 +207,11 @@ function excludeLinkedNodeModules(git: GitRunner, worktreePath: string): void {
 	const excludePath = join(gitCommonDir, "info", "exclude");
 	mkdirSync(dirname(excludePath), { recursive: true });
 	const current = existsSync(excludePath) ? readFileSync(excludePath, "utf-8") : "";
-	if (current.split(/\r?\n/).includes("/node_modules")) return;
-	appendFileSync(
-		excludePath,
-		`${current.endsWith("\n") || current.length === 0 ? "" : "\n"}/node_modules\n`,
-	);
+	const existing = new Set(current.split(/\r?\n/));
+	const additions = linkedPaths.map((p) => `/${p}`).filter((p) => !existing.has(p));
+	if (additions.length === 0) return;
+	const prefix = current.endsWith("\n") || current.length === 0 ? "" : "\n";
+	appendFileSync(excludePath, `${prefix}${additions.join("\n")}\n`);
 }
 
 // Create a worktree + branch off baseSha at an explicit path/branch. Conservative:
@@ -184,11 +243,11 @@ export function createWorktree(
 	}
 	if (toolingSource !== undefined) {
 		try {
-			linkNodeModules(toolingSource, worktreePath);
-			if (existsSync(join(worktreePath, "node_modules"))) {
+			const linkedPaths = linkNodeModules(toolingSource, worktreePath);
+			if (linkedPaths.length > 0) {
 				// Keep agent-visible `git status` clean too: a directory-only `node_modules/` ignore
-				// pattern does not ignore this symlink, so add a repo-local exclude.
-				excludeLinkedNodeModules(git, worktreePath);
+				// pattern does not ignore these symlinks, so add repo-local excludes.
+				excludeLinkedNodeModules(git, worktreePath, linkedPaths);
 			}
 		} catch (e) {
 			// Atomic: the worktree + branch already exist, but callers record worktreePath/branch only
