@@ -180,6 +180,7 @@ export async function runOrchestrate(
 			"This is a dry run: nothing was launched and no plan record, worktree, job, or branch was created. " +
 			"Review the plan, the resolved base, any resolved recipes, and any resolved manifest bindings above, " +
 			`then call chit_plan_start with this exact plan, confirm:true, approval_hash:${dry.approvalHash}${baseClause}. ` +
+			"After launch, call chit_plan_drive with the returned plan_id; it stops before each gated apply. " +
 			"Editing the plan, base, a referenced manifest's content, a selected recipe's definition, or the config " +
 			"that resolves its participants changes the hash and the start is refused.",
 	};

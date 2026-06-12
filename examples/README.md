@@ -12,7 +12,7 @@ Keep this directory small. Add a new example only when it teaches a distinct run
 
 ## Planning a sequential run with `plan-author.json`
 
-For the one-call path, use the `chit_orchestrate` MCP tool: hand it a `goal` (and optional `context`, `base_branch`, `max_iterations`) and it runs this planner manifest, validates the emitted plan, and dry-runs `chit_plan_start` for you, returning the normalized plan, the resolved base, any resolved recipes and manifest bindings, the `approvalHash`, and next-step instructions in one shot. It only ever previews: it never launches, never auto-approves, never schedules, and creates nothing. You still review and confirm the start yourself. Run the manual flow below instead when you want to read or edit the plan JSON between the planner and the dry run.
+For the one-call path, use the `chit_orchestrate` MCP tool: hand it a `goal` (and optional `context`, `base_branch`, `max_iterations`) and it runs this planner manifest, validates the emitted plan, and dry-runs `chit_plan_start` for you, returning the normalized plan, the resolved base, any resolved recipes and manifest bindings, the `approvalHash`, and next-step instructions in one shot. It only ever previews: it never launches, never auto-approves, never schedules, and creates nothing. You still review and confirm the start yourself. After launch, `chit_plan_drive` moves the plan until the next gated apply. Run the manual flow below instead when you want to read or edit the plan JSON between the planner and the dry run.
 
 The flow, end to end:
 
@@ -21,6 +21,7 @@ The flow, end to end:
 3. Dry-run `chit_plan_start` with the plan inline (`plan`) or by file (`plan_path`), no `confirm`. It returns the normalized plan, the resolved base commit, the resolved recipe and manifest binding per step that selects one, and an `approvalHash`, and creates nothing.
 4. Review the normalized plan, the base, the resolved recipes and manifest bindings, and the `approvalHash`.
 5. Confirm by calling `chit_plan_start` again with the SAME plan source (`plan` or `plan_path`) and the same `base_branch` and `max_iterations` you passed to the dry run, plus `confirm: true` and `approval_hash: <the hash from step 3>`. The start re-parses the plan and re-resolves the base, then refuses if the recomputed hash no longer matches, so a plan, base, or budget edited after approval cannot start on a stale hash.
+6. Call `chit_plan_drive` with the returned `plan_id`. It waits while a step runs, advances finished work, launches the next dependent step when allowed, and stops before each gated apply.
 
 ### Reviewing the emitted plan
 

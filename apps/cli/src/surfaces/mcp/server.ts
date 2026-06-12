@@ -122,6 +122,7 @@ import {
 	advancePlan,
 	cancelPlan,
 	describePlan,
+	drivePlanUntilBlocked,
 	listPlans,
 	type PlanEngineDeps,
 	PlanEngineError,
@@ -511,7 +512,7 @@ server.registerTool(
 	"chit_wait",
 	{
 		description:
-			"Block until a background run, batch, or plan reaches a meaningful state, then return the same view as chit_status / chit_batch_status / chit_plan_status plus a waitResult. Use this instead of polling chit_status (or chit_plan_status) in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is terminal -- ready_for_review (every task clean), needs_human (a task needs a decision or is blocked), failed, or cancelled (a needs_advance result means call chit_batch_advance now, then wait again). For a plan (plan_id): waits until the active step's job is no longer live (needs_advance), or the plan is ready_for_apply (a step converged and waits on the gated apply) or terminal (completed / cancelled / failed / needs_human) -- it does NOT advance, reconcile, apply, or launch. The plan loop is: chit_wait -> chit_plan_advance -> chit_plan_status, repeated until the plan settles (a needs_advance result means call chit_plan_advance now, then wait again; a ready_for_apply result means apply the review_ready step with chit_plan_advance and an apply payload). Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch/plan keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | ready_for_apply | timeout. Inputs: exactly one of run_id, batch_id, or plan_id, optional timeout_ms (default 900000), cwd (batch and plan only).",
+			"Block until a background run, batch, or plan reaches a meaningful state, then return the same view as chit_status / chit_batch_status / chit_plan_status plus a waitResult. Use this instead of polling chit_status (or chit_plan_status) in a loop (and never poll chit's state files -- they are private). For a background run (run_id): waits until the run is terminal (completed / failed / cancelled, or its worker died). For a batch (batch_id): waits until chit_batch_advance would do real work (a task can launch or a finished job can reconcile) or the batch is fully terminal -- it does NOT advance the batch itself. The batch loop is: chit_wait -> chit_batch_advance -> chit_batch_status, repeated until the batch is terminal -- ready_for_review (every task clean), needs_human (a task needs a decision or is blocked), failed, or cancelled (a needs_advance result means call chit_batch_advance now, then wait again). For a plan (plan_id): waits until the active step's job is no longer live (needs_advance), or the plan is ready_for_apply (a step converged and waits on the gated apply) or terminal (completed / cancelled / failed / needs_human) -- it does NOT advance, reconcile, apply, or launch. For the streamlined plan loop, use chit_plan_drive; it composes wait + advance until the next apply or terminal gate. Read-only. Emits a heartbeat while waiting; press Esc to stop waiting (the run/batch/plan keeps running). A foreground run is rejected: advance it with chit_next. waitResult is terminal | needs_advance | ready_for_apply | timeout. Inputs: exactly one of run_id, batch_id, or plan_id, optional timeout_ms (default 900000), cwd (batch and plan only).",
 		inputSchema: {
 			run_id: z
 				.string()
@@ -3360,10 +3361,88 @@ function planError(e: unknown) {
 }
 
 server.registerTool(
+	"chit_plan_drive",
+	{
+		description:
+			"Drive an existing plan until it reaches the next real operator gate. This composes chit_wait and chit_plan_advance for plans: while a step is live it waits, and when a finished/stale/vanished job can reconcile or a pending dependent can launch it advances automatically. It NEVER applies a review_ready step, confirms an apply, cleans up, cancels, or approves anything. It stops at ready_for_apply, needs_human, failed, cancelled, completed, or timeout. Use this after chit_plan_start, and again after you explicitly apply a review_ready step.",
+		inputSchema: {
+			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
+			cwd: z
+				.string()
+				.optional()
+				.describe("Any path in the target repo (defaults to the server cwd)."),
+			timeout_ms: z
+				.number()
+				.int()
+				.min(1000)
+				.default(900000)
+				.describe(
+					"Give up driving after this long and return driveResult timeout. Default 900000 (15m).",
+				),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("Per-step iteration budget for a step launched by this drive. Default 3."),
+		},
+	},
+	async ({ plan_id, cwd, timeout_ms, max_iterations }, extra) => {
+		let planStore: PlanStore;
+		try {
+			planStore = planStoreFor(cwd).store;
+			if (!planStore.get(plan_id)) return errorResult(`unknown plan_id ${plan_id}`);
+		} catch (e) {
+			return planError(e);
+		}
+
+		const deadline = Date.now() + timeout_ms;
+		let beats = 0;
+		let advances = 0;
+		const progressToken = extra._meta?.progressToken;
+		const heartbeat = (message: string) => {
+			beats++;
+			if (progressToken !== undefined) {
+				void extra
+					.sendNotification({
+						method: "notifications/progress",
+						params: { progressToken, progress: beats, message },
+					})
+					.catch(() => {});
+			}
+			void server
+				.sendLoggingMessage({ level: "info", data: message, logger: "chit" })
+				.catch(() => {});
+		};
+
+		while (true) {
+			let driven: ReturnType<typeof drivePlanUntilBlocked>;
+			try {
+				driven = drivePlanUntilBlocked(planStore, planDeps, plan_id, max_iterations);
+			} catch (e) {
+				return planError(e);
+			}
+			advances += driven.advances;
+			const view = describePlan(driven.plan, planDeps);
+			if (driven.state === "ready_for_apply" || driven.state === "terminal") {
+				return jsonResult({ ...view, driveResult: driven.state, advances });
+			}
+			if (Date.now() >= deadline) {
+				return jsonResult({ ...view, driveResult: "timeout" as const, advances, timedOut: true });
+			}
+			heartbeat(`plan ${plan_id} working; driving until the next operator gate`);
+			if (!(await waitTick(WAIT_POLL_MS, extra.signal))) {
+				return jsonResult({ ...view, driveResult: "timeout" as const, advances, timedOut: true });
+			}
+		}
+	},
+);
+
+server.registerTool(
 	"chit_plan_start",
 	{
 		description:
-			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). A step may select a vetted config recipe by id (`recipe`), which resolves at the gate to that recipe's manifest (content digest + participant summary) and default budgets; `recipe` and `manifestPath` are mutually exclusive. Universally gated by approval: with confirm omitted or false it is a DRY RUN that parses the plan, resolves the base ref to a commit SHA, resolves every step's recipe and manifest binding, returns the normalized plan plus base plus an approvalHash, and creates NOTHING (no plan record, worktree, job, or branch). With confirm:true it re-parses, re-resolves the base, recipes, and manifest bindings, recomputes the hash over the approved execution surface, and REFUSES unless your approval_hash matches, so a plan, base, budget, recipe, manifest, or participant config edited after approval cannot start on an old hash. On a match it launches the first runnable step from the approved commit SHA (pinned even if the ref moved) and returns the plan_id plus the plan view. Then drive it with chit_plan_status (read-only), chit_plan_advance (reconcile + launch, or apply a review_ready step into the integration branch with an apply payload), and chit_plan_cleanup once the plan is done. A step settles review_ready and pauses for the operator's gated apply; dependents wait until it is applied and committed.",
+			"Start a sequential plan: an operator-authored, reviewed chain of steps where each step is implemented by a converge run in its own git worktree, and a step that depends on another launches only after that dependency is APPLIED to the plan's integration branch. This is the right tool when later work needs to SEE earlier work's code (the inverse of chit_batch_start, where tasks never see each other's diffs). Provide the plan inline (`plan`, an object or JSON string) or by file (`plan_path`, relative to cwd). A step may select a vetted config recipe by id (`recipe`), which resolves at the gate to that recipe's manifest (content digest + participant summary) and default budgets; `recipe` and `manifestPath` are mutually exclusive. Universally gated by approval: with confirm omitted or false it is a DRY RUN that parses the plan, resolves the base ref to a commit SHA, resolves every step's recipe and manifest binding, returns the normalized plan plus base plus an approvalHash, and creates NOTHING (no plan record, worktree, job, or branch). With confirm:true it re-parses, re-resolves the base, recipes, and manifest bindings, recomputes the hash over the approved execution surface, and REFUSES unless your approval_hash matches, so a plan, base, budget, recipe, manifest, or participant config edited after approval cannot start on an old hash. On a match it launches the first runnable step from the approved commit SHA (pinned even if the ref moved) and returns the plan_id plus the plan view. Then drive it with chit_plan_drive until the next operator gate, use chit_plan_advance with an apply payload for a review_ready step, inspect with chit_plan_status, and clean up with chit_plan_cleanup once the plan is done. A step settles review_ready and pauses for the operator's gated apply; dependents wait until it is applied and committed.",
 		inputSchema: {
 			plan: z
 				.union([z.string(), z.record(z.string(), z.unknown())])

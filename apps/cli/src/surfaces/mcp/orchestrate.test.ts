@@ -104,6 +104,7 @@ describe("runOrchestrate", () => {
 		expect(result.approvalHash).toBe("deadbeef");
 		expect(result.nextSteps).toContain("deadbeef");
 		expect(result.nextSteps).toContain("confirm:true");
+		expect(result.nextSteps).toContain("chit_plan_drive");
 		// The base was overridden, so the instructions must name it -- confirming without
 		// the same base_branch would recompute a different hash and refuse the start.
 		expect(result.nextSteps).toContain("base_branch:main");

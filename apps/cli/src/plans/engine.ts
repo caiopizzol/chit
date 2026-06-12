@@ -346,6 +346,40 @@ export function advancePlan(
 	return store.update(planId, (c) => launchNextStep(reconcile(c, deps), deps, maxIterations));
 }
 
+export type PlanWaitState = "terminal" | "ready_for_apply" | "needs_advance" | "working";
+
+export interface PlanDriveResult {
+	plan: Plan;
+	state: Exclude<PlanWaitState, "needs_advance">;
+	advances: number;
+}
+
+// Drain every immediately-available plan mutation, stopping before the first real operator gate
+// or live wait. This is the safe core for a plan driver: it composes the existing advance path,
+// never applies a review_ready step, and never cleans up.
+export function drivePlanUntilBlocked(
+	store: PlanStore,
+	deps: PlanEngineDeps,
+	planId: string,
+	maxIterations = DEFAULT_MAX_ITERATIONS,
+	maxAdvances = 100,
+): PlanDriveResult {
+	let advances = 0;
+	while (true) {
+		const plan = store.get(planId);
+		if (!plan) throw new PlanEngineError(`no plan ${JSON.stringify(planId)}`);
+		const state = planWaitState(plan, deps);
+		if (state !== "needs_advance") return { plan, state, advances };
+		if (advances >= maxAdvances) {
+			throw new PlanEngineError(
+				`plan ${JSON.stringify(planId)} still needs advance after ${maxAdvances} consecutive advances; refusing to spin`,
+			);
+		}
+		advancePlan(store, deps, planId, maxIterations);
+		advances++;
+	}
+}
+
 // Cancel every active step job and close the plan. Pending steps become cancelled; a running
 // step's job is asked to cancel and the step is marked cancelled (its job settles cleanly in
 // the background). Worktrees are KEPT for inspection (cleanup is a separate, explicit step).
@@ -1240,10 +1274,7 @@ function anyReconcilable(c: Plan, deps: PlanEngineDeps): boolean {
 // queued/running and live, so the next advance would do nothing yet -- keep waiting. This is
 // READ-ONLY: it never advances, reconciles, applies, or launches; progress still happens through
 // chit_plan_advance.
-export function planWaitState(
-	c: Plan,
-	deps: PlanEngineDeps,
-): "terminal" | "ready_for_apply" | "needs_advance" | "working" {
+export function planWaitState(c: Plan, deps: PlanEngineDeps): PlanWaitState {
 	const status = derivePlanStatus(c);
 	// A review_ready step waits on the operator's gated apply; report it immediately. Checked before
 	// the terminal fold because ready_for_apply is a live, actionable plan, not a settled one.
@@ -1409,12 +1440,12 @@ function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 	}
 	// running
 	if (anyReconcilable(c, deps)) {
-		return "a step's run finished; call chit_plan_advance to reconcile it and launch the next step.";
+		return "a step's run finished; call chit_plan_drive to reconcile it and continue until the next operator gate.";
 	}
 	if (selectNextStep(c)) {
-		return "call chit_plan_advance to launch the next step.";
+		return "call chit_plan_drive to launch the next step and continue until the next operator gate.";
 	}
-	return "a step is in flight; watch with chit_plan_status (read-only, never launches), then call chit_plan_advance once it reports a finished job (chit_plan_cancel to stop).";
+	return "a step is in flight; call chit_plan_drive to wait, reconcile, and stop at the next operator gate (chit_plan_status stays read-only; chit_plan_cancel stops it).";
 }
 
 // --- list (recover plan ids; compact, read-only) --------------------------

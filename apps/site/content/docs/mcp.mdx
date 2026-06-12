@@ -133,7 +133,7 @@ For a foreground **loop** run, the view is the audit surface you read between an
 Block until a background run, plan, or batch reaches a meaningful state, then return the same view as `chit_status` / `chit_plan_status` / `chit_batch_status` plus a `waitResult`. This is the "tell me when it's done" tool: reach for it instead of polling status in a loop, and never read chit's state files to detect completion (they are private). Read-only: it never advances a plan or batch and never mutates a run; it watches the durable state and returns. Emits a heartbeat while waiting; press Esc to stop waiting (the work keeps running). Inputs: exactly one of `run_id`, `plan_id`, or `batch_id`; `timeout_ms?` (default 900000); `cwd?` for plan and batch.
 
 - With a `run_id` (background runs only): waits until the run is terminal (`completed` / `failed` / `cancelled`, or its worker died), so a crashed worker never hangs the wait. A **foreground** run is rejected (advance it with `chit_next`, which already blocks per unit).
-- With a `plan_id`: waits until the active step's job needs reconciliation, the plan is `ready_for_apply`, or the plan is terminal. It does **not** advance, reconcile, apply, or launch. The operator loop is: `chit_wait` -> `chit_plan_advance` -> `chit_plan_status`, repeated until a step is ready to apply or the plan settles.
+- With a `plan_id`: waits until the active step's job needs reconciliation, the plan is `ready_for_apply`, or the plan is terminal. It does **not** advance, reconcile, apply, or launch. For manual control, run `chit_wait` -> `chit_plan_advance` -> `chit_plan_status` until a step is ready to apply or the plan settles. For the streamlined loop, use `chit_plan_drive`.
 - With a `batch_id`: waits until `chit_batch_advance` would do real work (a task can launch, or a finished/stale job can reconcile) or the batch is fully terminal. It does **not** advance the batch (it is read-only; only `chit_batch_advance` mutates state). A blocking-until-fully-done wait would deadlock, since nothing would ever advance the batch. So the operator loop is: `chit_wait` → `chit_batch_advance` → `chit_batch_status`, repeated until the batch is terminal: `ready_for_review` when every task is clean, or `needs_human` when a task needs a decision (a `needs_attention` task) or is blocked.
 
 `waitResult` is `terminal` | `needs_advance` | `ready_for_apply` | `timeout`. `needs_advance` means call the matching advance tool now, then wait again; `ready_for_apply` means a plan step converged and is waiting for the gated `apply` payload.
@@ -174,7 +174,7 @@ It is static and approval-gated by design. It only ever previews: it never launc
 
 Inputs: `goal` (required, what you want built in plain language); `context?` (operator notes the planner may use: a base branch, vetted recipe ids, or a vetted `manifestPath` override); `base_branch?` (the ref the integration branch is cut from, bound into the hash); `max_iterations?` (per-step iteration budget when a step declares none, also bound into the hash); `cwd?` (any path in the target repo the planner inspects, defaults to the server cwd).
 
-To launch, review the returned plan, base, recipes, and manifest bindings, then call `chit_plan_start` with the SAME plan, `confirm:true`, and the shown `approval_hash`, repeating `base_branch` / `max_iterations` if you set them. Editing the plan, base, budget, a referenced manifest's content, or a selected recipe's definition changes the hash and the start is refused. This is the one-call shortcut for the manual flow the [plan-author example](https://github.com/caiopizzol/chit/blob/main/examples/README.md) walks through; reach for that flow when you want to read and adjust the plan JSON between the planner and the dry run.
+To launch, review the returned plan, base, recipes, and manifest bindings, then call `chit_plan_start` with the SAME plan, `confirm:true`, and the shown `approval_hash`, repeating `base_branch` / `max_iterations` if you set them. After launch, call `chit_plan_drive` with the returned `plan_id`; it stops before each gated apply. Editing the plan, base, budget, a referenced manifest's content, or a selected recipe's definition changes the hash and the start is refused. This is the one-call shortcut for the manual flow the [plan-author example](https://github.com/caiopizzol/chit/blob/main/examples/README.md) walks through; reach for that flow when you want to read and adjust the plan JSON between the planner and the dry run.
 
 ### chit_plan_start
 
@@ -189,6 +189,14 @@ List plans in this repo, newest first: `plan_id`, title, status, step count, and
 ### chit_plan_status
 
 Read-only overview for one plan: integration branch/worktree, current status, every step's run state, changed files, checks, receipts, and next action. It never launches, reconciles, applies, or cleans up. Inputs: `plan_id`, `cwd?`.
+
+### chit_plan_drive
+
+Drive an existing plan until the next operator gate. It waits while a step is live, advances when a finished, stale, or vanished job can reconcile, and launches a pending dependent when the plan can move forward. It returns the plan view plus `driveResult` and `advances`.
+
+It never applies a `review_ready` step, confirms an apply, cleans up, cancels, or approves anything. Use it after `chit_plan_start`, then again after you explicitly apply a `review_ready` step with `chit_plan_advance`.
+
+Inputs: `plan_id`, `cwd?`, `timeout_ms?`, `max_iterations?`.
 
 ### chit_plan_advance
 

@@ -302,6 +302,7 @@ existing tools rather than replacing them:
 | `chit_plan_start` | `plan` or `plan_path`, `cwd?`, `base_branch?`, `max_iterations?`, `confirm?`, `approval_hash?` | dry run (default): `launched:false`, the normalized plan, resolved `base`, and `approvalHash`. Confirmed: `plan_id` + plan view | dry run resolves the base and hashes the approval; a confirmed launch starts the first step like `chit_start` |
 | `chit_plan_list` | `cwd?`, `limit?` | one-line summary per plan (id, status, step counts, `cleanedAt`) | the `listBatches` pattern (`engine.ts:733`) |
 | `chit_plan_status` | `plan_id`, `cwd?` | read-only plan view | join over plan + job records |
+| `chit_plan_drive` | `plan_id`, `cwd?`, `timeout_ms?`, `max_iterations?` | plan view plus `driveResult` and `advances` | waits while work is live, advances finished or launchable work, and stops at the next apply or terminal gate |
 | `chit_plan_advance` | `plan_id`, `apply?: { step_id, confirm, include_untracked? }` | updated view (incl. the integration commit sha on apply) | the gated apply uses `applyRunWorkspace` (the `chit_apply` core), then **commits** the staged work to the integration branch, then launches newly-unblocked steps |
 | `chit_plan_cancel` | `plan_id` | view | `chit_cancel` per active run |
 | `chit_plan_cleanup` | `plan_id`, `confirm` | cleanup result | the `cleanupBatch` pattern |
@@ -330,6 +331,11 @@ Notes:
   flow goes through advance.
 - **Wait reuses `chit_wait`**, extended to accept `plan_id`, exactly as the batch
   family reuses it - no `chit_plan_wait`.
+- **`chit_plan_drive` removes the wait-advance babysitting loop.** It composes
+  `chit_wait` and the non-apply side of `chit_plan_advance`: while a step is live
+  it waits; when work can reconcile or a dependent can launch, it advances; when a
+  step is `review_ready`, it stops before the gated apply. The operator still
+  reviews and confirms each apply with `chit_plan_advance`.
 - It does not replace `chit_start`, `chit_batch_start`, `chit_apply`,
   `chit_cleanup`, or the audit tools; it sequences and gates them.
 

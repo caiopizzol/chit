@@ -44,6 +44,7 @@ describe("plan tool registration", () => {
 			"chit_plan_start",
 			"chit_plan_list",
 			"chit_plan_status",
+			"chit_plan_drive",
 			"chit_plan_advance",
 			"chit_plan_cancel",
 			"chit_plan_cleanup",
@@ -53,6 +54,28 @@ describe("plan tool registration", () => {
 		// The existing tools are untouched.
 		expect(names.has("chit_batch_start")).toBe(true);
 		expect(names.has("chit_start")).toBe(true);
+	});
+});
+
+describe("chit_plan_drive", () => {
+	test("is advertised as the mutating plan driver", async () => {
+		const { tools } = await client.listTools();
+		const drive = tools.find((t) => t.name === "chit_plan_drive");
+		expect(drive).toBeDefined();
+		const props = (drive?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
+		expect(props.plan_id).toBeDefined();
+		expect(props.timeout_ms).toBeDefined();
+		expect(props.max_iterations).toBeDefined();
+		expect(drive?.description).toContain("NEVER applies");
+	});
+
+	test("unknown plan_id reports cleanly before waiting or advancing", async () => {
+		const result = (await client.callTool({
+			name: "chit_plan_drive",
+			arguments: { plan_id: "does-not-exist", cwd: process.cwd(), timeout_ms: 1000 },
+		})) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("unknown plan_id does-not-exist");
 	});
 });
 

@@ -38,6 +38,7 @@ import {
 	cancelPlan,
 	cleanupPlan,
 	describePlan,
+	drivePlanUntilBlocked,
 	type LaunchPlanJobParams,
 	listPlans,
 	type PlanEngineDeps,
@@ -831,6 +832,43 @@ describe("planWaitState (what chit_wait blocks on for a plan)", () => {
 	});
 });
 
+describe("drivePlanUntilBlocked", () => {
+	test("reconciles a finished step and stops at the apply gate", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		const driven = drivePlanUntilBlocked(store, deps, "p1");
+		expect(driven.advances).toBe(1);
+		expect(driven.state).toBe("ready_for_apply");
+		expect(stepOf(driven.plan, "a").status).toBe("review_ready");
+		expect(stepOf(driven.plan, "b").status).toBe("pending");
+		expect(jobs.launched).toHaveLength(1);
+	});
+
+	test("after the operator applies, launches the next step and stops while it runs", () => {
+		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(store, deps, "p1"); // a -> review_ready
+		applyStep("p1", "a", "appliedsha");
+		const driven = drivePlanUntilBlocked(store, deps, "p1");
+		expect(driven.advances).toBe(1);
+		expect(driven.state).toBe("working");
+		expect(stepOf(driven.plan, "b").status).toBe("running");
+		expect(stepOf(driven.plan, "b").baseSha).toBe("appliedsha");
+		expect(jobs.launched).toHaveLength(2);
+	});
+
+	test("reports terminal once all steps are applied", () => {
+		startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan({ steps: [step("a")] }) });
+		const c0 = present(store.get("p1"), "p1");
+		jobs.finish(stepOf(c0, "a").runId ?? "", { stopStatus: "converged" });
+		advancePlan(store, deps, "p1"); // a -> review_ready
+		applyStep("p1", "a", "appliedsha");
+		const driven = drivePlanUntilBlocked(store, deps, "p1");
+		expect(driven.advances).toBe(0);
+		expect(driven.state).toBe("terminal");
+	});
+});
+
 describe("cancelPlan", () => {
 	test("cancels running jobs, marks pending/running cancelled, and keeps worktrees", () => {
 		const c0 = startPlan(store, deps, { id: "p1", cwd, normalizedPlan: chainPlan() });
@@ -868,6 +906,7 @@ describe("describePlan (read-only join)", () => {
 		expect(view.plan_id).toBe("p1");
 		expect(view.integrationBranch).toBe("chit-plan/p1/integration");
 		expect(view.nextAction).toContain("in flight");
+		expect(view.nextAction).toContain("chit_plan_drive");
 	});
 
 	test("surfaces the joined loop job's participant provenance for a running step", () => {
@@ -1026,7 +1065,7 @@ describe("describePlan (read-only join)", () => {
 		);
 		expect(aView.runState).toBe("stale");
 		// And it reports as reconcilable work, so advancing would settle it.
-		expect(view.nextAction).toContain("chit_plan_advance");
+		expect(view.nextAction).toContain("chit_plan_drive");
 	});
 
 	// nextAction is surfaced publicly through describePlan. A review_ready step's guidance must use
