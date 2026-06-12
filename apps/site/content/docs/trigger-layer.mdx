@@ -1,0 +1,63 @@
+---
+title: Trigger layer
+description: What calls chit and when. Triggers live outside manifests; chit does not ship a scheduler.
+---
+
+chit is a runtime. Something else decides when to call it. That something is the trigger: a Claude Code workflow, a custom command, a prompt, or a human typing a tool call. The trigger owns "when" and "what goal"; chit owns "how" and "what happened."
+
+Triggers live outside manifests by design. chit does not ship a scheduler, cron, SaaS automations, or a dynamic router. If you want a Monday-morning batch, the cron job is yours; chit is the thing the cron job calls.
+
+## Practical flows
+
+### Goal to reviewed plan
+
+The most common trigger path for multi-step work:
+
+1. The trigger calls `chit_orchestrate` with a goal. chit runs a read-only planner, drafts a sequential plan, and returns the normalized plan plus an `approval_hash`. Nothing is created yet.
+2. A human reviews the plan, base, and manifest bindings, then calls `chit_plan_start` with `confirm:true` and the hash. chit launches the first step.
+3. `chit_plan_drive` advances the plan until the next gate. It waits while a step converges, reconciles when it finishes, and launches the next runnable step. It never applies.
+4. When a step reaches `review_ready`, the human reviews the diff and calls `chit_plan_advance` with `apply.confirm:true` to commit it into the integration branch. (Without `confirm`, the apply is a dry run.) Then `chit_plan_drive` again for the next step.
+5. Repeat until every step is applied or the human cancels.
+
+The two human gates are plan-start approval and each step's apply. Everything between is mechanical progression. See [the MCP plan tools](/docs/mcp#run-a-sequential-plan) for the full reference.
+
+### Single run
+
+A trigger that needs one task, not a sequence:
+
+1. Call `chit_start` with a manifest (or recipe), a task, a scope, and a worktree as `cwd`.
+2. Advance with `chit_next` per iteration (foreground) or let it converge unattended (background with `mode: "background"`).
+3. Inspect with `chit_status` / `chit_trace`; cancel with `chit_cancel`.
+
+This is the path for well-scoped, self-contained slices. See [self-hosting](/docs/self-hosting) for the loop in practice.
+
+### Independent parallel work
+
+When tasks do not depend on each other's diffs, use a batch:
+
+1. Call `chit_batch_start` with a task graph. It is approval-gated the same way as plans: dry-run first, then confirm with the hash.
+2. `chit_batch_advance` reconciles finished runs and launches the next wave.
+3. The deliverable is a set of reviewable worktree branches. Merging is yours.
+
+See [the MCP batch tools](/docs/mcp#run-several-tasks-in-parallel) for the full reference.
+
+## What can be a trigger
+
+Anything that can call an MCP tool or the CLI. Common examples:
+
+- **A Claude Code conversation.** The human types a goal; the chat calls `chit_orchestrate` and walks the plan flow. This is the primary path today.
+- **A Claude Code custom command or prompt.** A `.claude/commands/` file or a prompt template that calls chit tools with a canned goal or recipe.
+- **A Claude Code workflow or skill.** A skill that composes chit tools into a higher-level operation (the [supervised convergence](/docs/supervised-convergence) loop is one).
+- **A shell script or CI step.** `chit converge` or `chit run` from a terminal, wrapped in whatever scheduler you already have.
+- **A human at a terminal.** `chit_start` over MCP, or `chit converge` from the CLI.
+
+chit does not care which of these called it. The manifest, the approval hash, and the audit trail are the same regardless of trigger.
+
+## What chit does not do
+
+chit is the declared runtime underneath. It does not:
+
+- Schedule or poll. No cron, no queue, no webhook listener.
+- Route dynamically. Manifests are static DAGs; iteration lives in an orchestrator on top.
+- Auto-approve. Every gate (plan start, step apply, batch start) requires a human or an explicit `confirm:true`.
+- Ship trigger infrastructure. If you need a trigger, you build or choose one; chit is the thing it calls.
