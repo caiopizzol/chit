@@ -650,26 +650,35 @@ function assertCleanIntegrationWorktree(deps: PlanEngineDeps, integrationWorktre
 
 // --- cleanup: retire the plan's managed worktrees + branches ---------------
 
-// Whether cleanup may run for the plan's current state. v1 rule (the simplest safe one): cleanup
-// requires a TERMINAL plan -- completed (every step applied to the integration branch) or cancelled
-// (the operator abandoned it) -- and refuses while ANY step is review_ready (its converged diff is
-// not yet in the integration commit, so removing its worktree would silently discard reviewable
-// work). running / ready_for_apply / needs_human / failed are all withheld: the operator may still
-// apply, fix, rerun, or inspect, and their step worktrees hold work cleanup would destroy.
-export function planCleanupReadiness(plan: Plan): { ok: true } | { ok: false; reason: string } {
+export type PlanCleanupMode = "safe" | "discard_unresolved";
+
+// Whether cleanup may run for the plan's current state. The default safe mode protects reviewable
+// or unresolved work. discard_unresolved is the explicit operator acknowledgment path: no auto-apply,
+// no merge, just retire the disposable worktrees after the operator has inspected the receipts.
+export function planCleanupReadiness(
+	plan: Plan,
+	mode: PlanCleanupMode = "safe",
+): { ok: true } | { ok: false; reason: string } {
 	// review_ready first: it is the most actionable refusal (apply it, don't discard it), and it
 	// can hide behind a terminal status (e.g. a cancelled plan with a still-review_ready step).
-	if (plan.steps.some((s) => s.status === "review_ready")) {
+	if (mode === "safe" && plan.steps.some((s) => s.status === "review_ready")) {
 		return {
 			ok: false,
 			reason:
 				"a step is review_ready: its converged diff is NOT yet applied to the integration branch. Apply it (chit_plan_advance with an apply payload) or accept its loss before cleanup -- cleanup would otherwise silently discard that reviewable work.",
 		};
 	}
-	if (plan.status !== "completed" && plan.status !== "cancelled") {
+	if (mode === "safe" && plan.status !== "completed" && plan.status !== "cancelled") {
 		return {
 			ok: false,
 			reason: `plan is ${plan.status}; cleanup requires a terminal plan (completed, or cancelled). Apply the remaining steps, or cancel the plan, before cleaning up -- the step worktrees still hold work to inspect or apply.`,
+		};
+	}
+	if (mode === "discard_unresolved" && plan.status === "running") {
+		return {
+			ok: false,
+			reason:
+				"plan is running; cleanup_mode=discard_unresolved is only for plans already paused, failed, cancelled, ready_for_apply, or completed. Drive or cancel the plan before cleaning up.",
 		};
 	}
 	return { ok: true };
@@ -692,8 +701,12 @@ function planLiveSteps(plan: Plan, deps: PlanEngineDeps): PlanStepRecord[] {
 // (planCleanupReadiness) with a LIVE-WORKER check: removing a worktree from under a still-running
 // worker corrupts the run, so even a terminal-status plan is withheld until its workers settle.
 // Shared by cleanupPlan (the refusal) and planNextAction (the suggestion) so status and action agree.
-export function planCleanupBlocker(plan: Plan, deps: PlanEngineDeps): string | undefined {
-	const readiness = planCleanupReadiness(plan);
+export function planCleanupBlocker(
+	plan: Plan,
+	deps: PlanEngineDeps,
+	mode: PlanCleanupMode = "safe",
+): string | undefined {
+	const readiness = planCleanupReadiness(plan, mode);
 	if (!readiness.ok) return readiness.reason;
 	const live = planLiveSteps(plan, deps);
 	if (live.length > 0) {
@@ -708,8 +721,10 @@ export function planCleanupBlocker(plan: Plan, deps: PlanEngineDeps): string | u
 
 export interface PlanCleanupTargetResult {
 	id: string; // "integration" or a step id
+	status?: PlanStepStatus;
 	worktreePath?: string;
 	branch?: string;
+	changedFiles?: string[];
 	removed?: boolean; // set on confirm: did THIS call retire the worktree/branch
 	alreadyRemoved?: boolean; // set on confirm: nothing to do (idempotent re-run)
 	error?: string;
@@ -718,6 +733,7 @@ export interface PlanCleanupTargetResult {
 export interface PlanCleanupResult {
 	planId: string;
 	confirmed: boolean; // false = dry run (nothing removed)
+	cleanupMode: PlanCleanupMode;
 	available: boolean; // is cleanup allowed for this plan's current state?
 	refusal?: string; // set when !available (nothing removed, even on confirm)
 	// The integration branch's committed step count, surfaced so the dry run can WARN that removing
@@ -736,6 +752,14 @@ export interface PlanCleanupResult {
 	note: string;
 }
 
+interface PlanCleanupTarget {
+	id: string;
+	status?: PlanStepStatus;
+	worktreePath: string;
+	branch: string;
+	changedFiles?: string[];
+}
+
 // Retire a plan's chit-managed worktrees + branches (integration + every recorded step worktree).
 // Dry-run by default (reports what it would remove, removes nothing); confirm required to remove.
 // NEVER deletes durable records -- the plan record, job records, loop logs, and audit receipts all
@@ -747,13 +771,14 @@ export function cleanupPlan(
 	deps: PlanEngineDeps,
 	planId: string,
 	confirm: boolean,
+	mode: PlanCleanupMode = "safe",
 ): PlanCleanupResult {
 	const existing = store.get(planId);
 	if (!existing) throw new PlanEngineError(`no plan ${JSON.stringify(planId)}`);
 	const appliedCommits = existing.steps.filter((s) => s.status === "applied").length;
 	// The managed worktrees cleanup owns: the integration worktree first, then each step that
 	// recorded one (a step that never launched its worktree has nothing to retire).
-	const integration =
+	const integration: PlanCleanupTarget | undefined =
 		existing.integrationWorktree !== undefined
 			? {
 					id: "integration",
@@ -761,12 +786,14 @@ export function cleanupPlan(
 					branch: existing.integrationBranch,
 				}
 			: undefined;
-	const stepTargets = existing.steps
+	const stepTargets: PlanCleanupTarget[] = existing.steps
 		.filter((s) => s.worktreePath !== undefined && s.branch !== undefined)
 		.map((s) => ({
 			id: s.id,
+			status: s.status,
 			worktreePath: s.worktreePath as string,
 			branch: s.branch as string,
+			changedFiles: s.changedFiles ?? [],
 		}));
 	const planned = [...(integration ? [integration] : []), ...stepTargets];
 
@@ -780,19 +807,22 @@ export function cleanupPlan(
 				? dirname(dirname(stepTargets[0].worktreePath))
 				: undefined;
 
-	const blocker = planCleanupBlocker(existing, deps);
+	const blocker = planCleanupBlocker(existing, deps, mode);
 	if (blocker !== undefined) {
 		// Refuse: report what WOULD be removed (transparency) but remove nothing, even on confirm.
 		return {
 			planId,
 			confirmed: confirm,
+			cleanupMode: mode,
 			available: false,
 			refusal: blocker,
 			appliedCommits,
 			targets: planned.map((t) => ({
 				id: t.id,
+				...(t.status !== undefined && { status: t.status }),
 				worktreePath: t.worktreePath,
 				branch: t.branch,
+				...(t.changedFiles !== undefined && { changedFiles: t.changedFiles }),
 			})),
 			receiptsKept: true,
 			note: blocker,
@@ -803,34 +833,50 @@ export function cleanupPlan(
 		appliedCommits > 0
 			? ` Removing the integration worktree also deletes the integration branch (${existing.integrationBranch}) carrying ${appliedCommits} applied commit(s); make sure you have merged or applied it elsewhere first.`
 			: "";
+	const unresolvedStepTargets = stepTargets.filter((t) => t.status !== "applied");
+	const discardsUnresolved = mode === "discard_unresolved" && unresolvedStepTargets.length > 0;
 
 	if (!confirm) {
 		return {
 			planId,
 			confirmed: false,
+			cleanupMode: mode,
 			available: true,
 			appliedCommits,
 			targets: planned.map((t) => ({
 				id: t.id,
+				...(t.status !== undefined && { status: t.status }),
 				worktreePath: t.worktreePath,
 				branch: t.branch,
+				...(t.changedFiles !== undefined && { changedFiles: t.changedFiles }),
 			})),
 			receiptsKept: true,
 			...(planRoot !== undefined && { planRootPath: planRoot }),
-			note: `dry run: would remove ${planned.length} plan-managed worktree(s) + branch(es) (integration + ${stepTargets.length} step worktree(s)).${integrationWarn} Plan/job/loop/audit records are kept. Pass confirm=true to remove.`,
+			note: discardsUnresolved
+				? `dry run: cleanup_mode=discard_unresolved would remove ${planned.length} plan-managed worktree(s) + branch(es) (integration + ${stepTargets.length} step worktree(s)), discarding unresolved step work left in those worktrees.${integrationWarn} Plan/job/loop/audit records are kept. Pass confirm=true with cleanup_mode=discard_unresolved to remove.`
+				: `dry run: would remove ${planned.length} plan-managed worktree(s) + branch(es) (integration + ${stepTargets.length} step worktree(s)).${integrationWarn} Plan/job/loop/audit records are kept. Pass confirm=true to remove.`,
 		};
 	}
 
 	const targets: PlanCleanupTargetResult[] = planned.map((t) => {
 		const r = deps.removeWorktree(existing.repo, t.worktreePath, t.branch);
 		if (!r.ok) {
-			return { id: t.id, worktreePath: t.worktreePath, branch: t.branch, error: r.error };
+			return {
+				id: t.id,
+				...(t.status !== undefined && { status: t.status }),
+				worktreePath: t.worktreePath,
+				branch: t.branch,
+				...(t.changedFiles !== undefined && { changedFiles: t.changedFiles }),
+				error: r.error,
+			};
 		}
 		const didRemove = r.removedWorktree || r.removedBranch;
 		return {
 			id: t.id,
+			...(t.status !== undefined && { status: t.status }),
 			worktreePath: t.worktreePath,
 			branch: t.branch,
+			...(t.changedFiles !== undefined && { changedFiles: t.changedFiles }),
 			removed: didRemove,
 			...(didRemove ? {} : { alreadyRemoved: true }),
 		};
@@ -861,6 +907,7 @@ export function cleanupPlan(
 	return {
 		planId,
 		confirmed: true,
+		cleanupMode: mode,
 		available: true,
 		appliedCommits,
 		targets,
@@ -870,7 +917,9 @@ export function cleanupPlan(
 		...(planRootRemoved !== undefined && { planRootRemoved }),
 		note: failures.length
 			? `removed ${targets.length - failures.length} of ${targets.length}; ${failures.length} failed (${failures.map((f) => f.id).join(", ")}) -- the plan is NOT marked cleaned, inspect and re-run to retire the rest. Plan/job/loop/audit records are kept.`
-			: `removed ${targets.length} plan-managed worktree(s) + branch(es). Plan/job/loop/audit records are kept.`,
+			: discardsUnresolved
+				? `removed ${targets.length} plan-managed worktree(s) + branch(es), discarding unresolved step work from those worktrees. Plan/job/loop/audit records are kept.`
+				: `removed ${targets.length} plan-managed worktree(s) + branch(es). Plan/job/loop/audit records are kept.`,
 	};
 }
 
@@ -1411,6 +1460,10 @@ function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 		!cleaned && planCleanupBlocker(c, deps) === undefined
 			? " When you no longer need the worktrees, retire them with chit_plan_cleanup (dry run first, then confirm=true)."
 			: "";
+	const discardCleanupClause =
+		!cleaned && planCleanupBlocker(c, deps, "discard_unresolved") === undefined
+			? ' When you are done inspecting and accept discarding unresolved work, retire the worktrees with chit_plan_cleanup { cleanup_mode: "discard_unresolved" } as a dry run, then confirm=true with the same cleanup_mode.'
+			: "";
 	if (c.status === "completed") {
 		return cleaned
 			? `plan completed: every step was applied. ${cleanedClause}`
@@ -1420,13 +1473,13 @@ function planNextAction(c: Plan, deps: PlanEngineDeps): string {
 		// A cleaned cancelled plan no longer has step worktrees to inspect, so do not point at them.
 		return cleaned
 			? `plan cancelled. ${cleanedClause}`
-			: `plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).${cleanupClause}`;
+			: `plan cancelled (running jobs settle in the background; worktrees are kept for inspection). Review what landed in the step worktrees (changedFiles).${cleanupClause || discardCleanupClause}`;
 	}
 	if (c.status === "failed") {
-		return "a step failed during execution (a dead worker, a worktree error, or a thrown run -- see the step's status/error); inspect its worktree (changedFiles may be empty if it broke mid-review) and receipt, then fix and rerun the step or abort the plan.";
+		return `a step failed during execution (a dead worker, a worktree error, or a thrown run -- see the step's status/error); inspect its worktree (changedFiles may be empty if it broke mid-review) and receipt, then fix and rerun the step or abort the plan.${discardCleanupClause}`;
 	}
 	if (c.status === "needs_human") {
-		return "a step paused for a human decision: its run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect its worktree (changedFiles) and receipt, then fix and rerun, raise the budget and rerun, or abort.";
+		return `a step paused for a human decision: its run completed but did not converge clean (the reviewer blocked, approved-but-unverified, or ran out of iterations). Inspect its worktree (changedFiles) and receipt, then fix and rerun, raise the budget and rerun, or abort.${discardCleanupClause}`;
 	}
 	if (c.status === "ready_for_apply") {
 		const ready = c.steps.find((s) => s.status === "review_ready");

@@ -3689,7 +3689,7 @@ server.registerTool(
 	"chit_plan_cleanup",
 	{
 		description:
-			"Retire a plan's chit-managed worktrees + branches (the integration worktree and every step worktree), by plan_id. DRY RUN by default (reports what it would remove, removes nothing); pass confirm=true to remove. v1 rule: cleanup requires a TERMINAL plan -- completed (every step applied) or cancelled -- and REFUSES while any step is review_ready (its converged diff is not yet in the integration commit, so removing its worktree would silently discard reviewable work). A running / needs_human / failed plan is refused too (you may still apply, fix, rerun, or inspect). NEVER deletes durable records: the plan record, job records, loop logs, and audit receipts all survive (only cleanedAt is stamped). Removing the integration worktree also deletes the integration branch and its applied commits -- merge or apply that branch first; the dry run warns with the commit count. Idempotent.",
+			"Retire a plan's chit-managed worktrees + branches (the integration worktree and every step worktree), by plan_id. DRY RUN by default (reports what it would remove, removes nothing); pass confirm=true to remove. cleanup_mode defaults to safe: cleanup requires a completed or cancelled plan and refuses review_ready / needs_human / failed / running plans. cleanup_mode=discard_unresolved is the explicit acknowledgment path for paused, failed, ready_for_apply, or cancelled plans whose unresolved work you have inspected and accept discarding; it still refuses live workers and never applies or merges. NEVER deletes durable records: the plan record, job records, loop logs, and audit receipts all survive (only cleanedAt is stamped). Removing the integration worktree also deletes the integration branch and its applied commits -- merge or apply that branch first; the dry run warns with the commit count. Idempotent.",
 		inputSchema: {
 			plan_id: z.string().describe("The plan id, from chit_plan_start or chit_plan_list."),
 			confirm: z
@@ -3698,17 +3698,25 @@ server.registerTool(
 				.describe(
 					"Remove the worktrees + branches. Default false = dry run: report what would be removed, remove nothing.",
 				),
+			cleanup_mode: z
+				.enum(["safe", "discard_unresolved"])
+				.default("safe")
+				.describe(
+					"Cleanup policy. safe preserves current behavior. discard_unresolved is an explicit acknowledgment that unresolved step work may be discarded, while receipts remain.",
+				),
 			cwd: z
 				.string()
 				.optional()
 				.describe("Any path in the target repo (defaults to the server cwd)."),
 		},
 	},
-	async ({ plan_id, confirm, cwd }) => {
+	async ({ plan_id, confirm, cleanup_mode, cwd }) => {
 		try {
 			const { store } = planStoreFor(cwd);
 			if (!store.get(plan_id)) return errorResult(`unknown plan_id ${plan_id}`);
-			return jsonResult(runPlanCleanup({ planId: plan_id, confirm }, store, planDeps));
+			return jsonResult(
+				runPlanCleanup({ planId: plan_id, confirm, cleanupMode: cleanup_mode }, store, planDeps),
+			);
 		} catch (e) {
 			return planError(e);
 		}

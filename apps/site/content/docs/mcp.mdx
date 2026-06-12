@@ -208,7 +208,9 @@ Cancel the active step's job and mark pending steps cancelled. Worktrees stay in
 
 ### chit_plan_cleanup
 
-Retire the plan-managed worktrees and branches once every step is applied or the plan is cancelled. Safe by default: with `confirm` omitted or false it lists what would be removed and removes nothing. It keeps plan, job, loop, and audit receipts. Inputs: `plan_id`, `cwd?`, `confirm?`.
+Retire the plan-managed worktrees and branches. Safe by default: with `confirm` omitted or false it lists what would be removed and removes nothing. It keeps plan, job, loop, and audit receipts. Inputs: `plan_id`, `cwd?`, `confirm?`, `cleanup_mode?`.
+
+`cleanup_mode` defaults to `safe`, which removes only completed or cancelled plans and refuses unresolved work. Use `cleanup_mode: "discard_unresolved"` only after inspecting the step worktrees and receipts for a paused, failed, ready-for-apply, or cancelled plan. It is still dry-run by default, still needs `confirm:true` to remove anything, still refuses live workers, and never applies or merges the discarded work.
 
 ## Run several tasks in parallel
 
