@@ -115,6 +115,10 @@ These are the local facts this plan builds on:
   entities, with provenance.
 - Plans and batches already use dry-run by default and require `confirm:true`
   plus a matching approval hash to start.
+- Managed-worktree run paths are ephemeral. Durable attribution must come from
+  the loop header, job record, plan record, or batch record, using `mainRepo` or
+  the durable `repo` anchor for ownership and `callerCheckout` only for apply
+  defaults and config lookup.
 - Plan steps, batch tasks, and a single `chit_start` may select a recipe by id,
   or use a direct manifest path for manual expert use. Recipe and direct manifest
   path are mutually exclusive at each selection point. A recipe-backed
