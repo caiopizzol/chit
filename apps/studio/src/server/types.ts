@@ -286,3 +286,55 @@ export interface EffectiveConfigView {
 export interface StudioConfigSource {
 	load(): NormalizedConfig;
 }
+
+// GET /api/routines. Declared converge recipes plus a best-effort manifest
+// summary. The summary is intentionally small: ids, governance, required checks,
+// and a content digest, never instructions, prompts, env values, output, or the
+// manifest body.
+export interface RoutineParticipant {
+	id: string;
+	role?: string;
+	agentId: string;
+	session: SessionPolicy;
+	filesystem: FilesystemPermission;
+}
+
+// One check from loop policy.requiredChecks. Checks carry command facts only.
+export interface RoutineCheck {
+	name?: string;
+	command: string;
+	args: string[];
+	timeoutMs?: number;
+}
+
+export interface RoutineManifestSummary {
+	manifestDigest?: string;
+	participants: RoutineParticipant[];
+	requiredChecks: RoutineCheck[];
+}
+
+// Recipe identity plus optional manifest summary. A per-recipe resolver failure
+// becomes error so one bad manifest does not hide the rest of the menu.
+export interface DeclaredRoutine {
+	id: string;
+	origin: ConfigOriginSource;
+	mode: "converge";
+	manifestPath: string;
+	maxIterations?: number;
+	callTimeoutMs?: number;
+	description?: string;
+	manifest?: RoutineManifestSummary;
+	error?: string;
+}
+
+export interface DeclaredRoutinesView {
+	configPath?: string;
+	repoConfigPath?: string;
+	routines: DeclaredRoutine[];
+}
+
+// Host-injected resolver. Studio owns the route shape; the CLI owns secure
+// manifest reads and participant resolution.
+export interface StudioRoutineSource {
+	resolveManifest(config: NormalizedConfig, recipeId: string): RoutineManifestSummary;
+}

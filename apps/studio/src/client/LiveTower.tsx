@@ -8,10 +8,11 @@
 // cleans up worktrees. It is the page, not an overlay, so it polls while mounted and resets its read
 // session on a reload rather than on an open/close toggle.
 
-import { useCallback, useState } from "react";
-import type { LiveActivityRow } from "../server/types.ts";
-import { cancelLiveRun } from "./api.ts";
+import { useCallback, useEffect, useState } from "react";
+import type { DeclaredRoutine, LiveActivityRow } from "../server/types.ts";
+import { cancelLiveRun, fetchRoutines } from "./api.ts";
 import { ConfigPanel } from "./ConfigPanel.tsx";
+import { formatTimeout, recipeMeta } from "./configView.ts";
 import {
 	activeRole,
 	agentBlockViews,
@@ -19,18 +20,29 @@ import {
 	cancelMessage,
 	cancelPending,
 	concisePhase,
-	detailAges,
 	eventTail,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
-	identityBlockViews,
 	iterationLabel,
-	liveBody,
 	phaseTimeline,
 	rowKey,
+	shortDigest,
 } from "./live.ts";
+import { routineCanvas, routineKey, towerBody } from "./routines.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
+
+type LoopRole = "implementer" | "reviewer" | "checks" | "you";
+
+interface LoopBlock {
+	role: LoopRole;
+	label: string;
+	present: boolean;
+	agentId?: string;
+	detail?: string;
+	live?: boolean;
+	warm?: boolean;
+}
 
 function agentTone(agentId: string): "claude" | "codex" | "neutral" {
 	const id = agentId.toLowerCase();
@@ -49,73 +61,6 @@ function rowSummary(row: LiveActivityRow): { dot: string; text: string } {
 	if (role === "reviewer") return { dot: "live-dot--codex live-dot--pulse", text: "reviewing" };
 	if (role === "checks") return { dot: "live-dot--check live-dot--pulse", text: "checking" };
 	return { dot: "live-dot--neutral", text: concisePhase(row) };
-}
-
-// The wiring arrow between two blocks in the execution topology. Decorative --
-// the chain order already reads left to right -- so it is hidden from assistive
-// tech.
-function Connector() {
-	return (
-		<span className="agent-connector" aria-hidden="true">
-			→
-		</span>
-	);
-}
-
-// The selected run's execution topology: the approved recipe and bound manifest
-// (when the run carries execution identity) drawn as blocks that wire into the
-// implementer/reviewer/checks agent chain. The whole thing reads as the execution
-// wiring -- what runs, bound to which bytes, executed by whom -- in one connected
-// graph rather than a separate identity strip above a separate agent graph. The
-// active phase lights up the matching agent block, and that live block carries the
-// current-phase elapsed. Rows without execution identity show just the agent
-// blocks; a run with neither shows the calm note.
-function ExecutionTopology({ row }: { row: LiveActivityRow }) {
-	const identity = identityBlockViews(row);
-	const agents = agentBlockViews(row);
-	if (identity.length === 0 && agents.length === 0) {
-		return <p className="live-muted">No agent participants reported.</p>;
-	}
-	// Each block carries its own leading connector inside a non-wrapping node, so a
-	// connector can never strand at a line break or split from the block it points
-	// to: when the chain is too wide for the panel it wraps node-by-node, the arrow
-	// always travelling with the block it feeds.
-	return (
-		<div className="agent-blocks">
-			{identity.map((b, i) => (
-				<div className="topo-node" key={`id-${b.kind}`}>
-					{i > 0 && <Connector />}
-					<div className={`exec-block exec-block--${b.kind}`}>
-						<span className="agent-role">{b.label}</span>
-						<span className="exec-block-value" title={b.title}>
-							{b.value}
-						</span>
-						{b.detail && (
-							<span className="exec-block-detail" title={b.detailTitle}>
-								{b.detail}
-							</span>
-						)}
-					</div>
-				</div>
-			))}
-			{agents.map((v, i) => (
-				<div className="topo-node" key={v.role}>
-					{(identity.length > 0 || i > 0) && <Connector />}
-					<div
-						className={`agent-block agent-block--${agentTone(v.agentId)}${
-							v.live ? " agent-block--live" : ""
-						}${v.warm ? " agent-block--warm" : ""}`}
-					>
-						<span className="agent-role">{v.role}</span>
-						<span className="agent-id">{v.agentId}</span>
-						<span className="agent-adapter">{v.adapter}</span>
-						{v.model && <span className="agent-model">{v.model}</span>}
-						{v.phaseElapsed && <span className="agent-phase-elapsed">{v.phaseElapsed}</span>}
-					</div>
-				</div>
-			))}
-		</div>
-	);
 }
 
 // One row in the session rail: scope, concise phase, and elapsed age. The whole
@@ -292,35 +237,259 @@ function ActionStrip({ row, refresh }: { row: LiveActivityRow; refresh: () => vo
 	);
 }
 
-function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => void }) {
-	if (!row) {
-		return <p className="live-muted live-detail-empty">Select a live run to inspect it.</p>;
+function RoutineRailRow({
+	routine,
+	selected,
+	onSelect,
+}: {
+	routine: DeclaredRoutine;
+	selected: boolean;
+	onSelect: (key: string) => void;
+}) {
+	return (
+		<button
+			type="button"
+			className={`live-row${selected ? " live-row--on" : ""}`}
+			onClick={() => onSelect(routineKey(routine))}
+		>
+			<span className="live-row-scope">{routine.id}</span>
+			<span className="live-row-exec">
+				<span className="routine-origin">{routine.origin}</span>
+				<span>{routine.mode}</span>
+				{routine.error && <span className="live-row-age">unresolved</span>}
+			</span>
+		</button>
+	);
+}
+
+function loopBlockWho(block: LoopBlock): string {
+	if (block.role === "checks" && block.detail?.includes(" required / ")) {
+		const count = block.detail.split(" ", 1)[0];
+		return `chit · ${count}`;
 	}
-	// Phase timing normally rides on the live agent block; the head only shows it
-	// when no block claims the phase, so it appears exactly once either way.
+	return block.agentId ?? "unknown";
+}
+
+function LoopCanvas({
+	blocks,
+	selectedBlock,
+	onSelectBlock,
+	rest = false,
+}: {
+	blocks: LoopBlock[];
+	selectedBlock: LoopRole;
+	onSelectBlock: (role: LoopRole) => void;
+	rest?: boolean;
+}) {
+	const nodes = blocks.filter((b) => b.role !== "you");
+	return (
+		<div className={`studio-canvas${rest ? " studio-canvas--rest" : ""}`}>
+			<div className="loopwrap">
+				{nodes.map((block, i) => (
+					<div className="loop-node" key={block.role}>
+						{i > 0 && <span className="awire" aria-hidden="true" />}
+						<button
+							type="button"
+							className={`loop-block loop-block--${agentTone(block.agentId ?? "")}${
+								block.live ? " loop-block--live" : ""
+							}${block.warm ? " loop-block--warm" : ""}${
+								block.present ? "" : " loop-block--idle"
+							}${selectedBlock === block.role ? " loop-block--selected" : ""}`}
+							onClick={() => onSelectBlock(block.role)}
+						>
+							<span className="loop-role">{block.label}</span>
+							<span className="loop-who">
+								<span className={`loop-ring loop-ring--${agentTone(block.agentId ?? "")}`} />
+								{loopBlockWho(block)}
+							</span>
+							{block.detail && <span className="loop-sub">{block.detail}</span>}
+						</button>
+					</div>
+				))}
+				<span className="awire" aria-hidden="true" />
+				<button
+					type="button"
+					className={`yougate${selectedBlock === "you" ? " yougate--selected" : ""}`}
+					onClick={() => onSelectBlock("you")}
+				>
+					<span className="yougate-diamond" aria-hidden="true" />
+					<span className="label">you</span>
+				</button>
+				<span className="loopback" aria-hidden="true" />
+			</div>
+		</div>
+	);
+}
+
+function liveLoopBlocks(row: LiveActivityRow): LoopBlock[] {
+	const agents = agentBlockViews(row);
+	const find = (role: LoopRole) =>
+		agents.find((a) => {
+			const key = a.role.toLowerCase();
+			if (role === "implementer") return key.includes("impl") || key.includes("plan");
+			if (role === "reviewer") return key.includes("rev");
+			if (role === "checks") return key.includes("check");
+			return false;
+		});
+	const block = (role: Exclude<LoopRole, "you">): LoopBlock => {
+		const agent = find(role);
+		if (!agent) {
+			return { role, label: role, present: false, detail: "not reported" };
+		}
+		const detail = [agent.model, agent.phaseElapsed ?? agent.adapter].filter(Boolean).join(" / ");
+		return {
+			role,
+			label: role,
+			present: true,
+			agentId: agent.agentId,
+			detail,
+			live: agent.live,
+			warm: agent.warm,
+		};
+	};
+	return [
+		block("implementer"),
+		block("reviewer"),
+		block("checks"),
+		{
+			role: "you",
+			label: "you",
+			present: true,
+			agentId: "operator",
+			detail: "approves and monitors",
+		},
+	];
+}
+
+function selectedRoutineBlock(routine: DeclaredRoutine, selectedBlock: LoopRole): LoopBlock {
+	return (
+		routineCanvas(routine).find((b) => b.role === selectedBlock) ?? {
+			role: selectedBlock,
+			label: selectedBlock,
+			present: false,
+			detail: "not declared",
+		}
+	);
+}
+
+function RoutineInspector({
+	routine,
+	selectedBlock,
+}: {
+	routine: DeclaredRoutine;
+	selectedBlock: LoopRole;
+}) {
+	const manifest = routine.manifest;
+	const block = selectedRoutineBlock(routine, selectedBlock);
+	return (
+		<aside className="studio-inspector">
+			<div className="panel-head">
+				<span className="panel-title">{block.label}</span>
+				<span className="panel-state">declared</span>
+			</div>
+			<dl className="facts">
+				<dt>agent</dt>
+				<dd>{block.agentId ?? "unknown"}</dd>
+				<dt>can</dt>
+				<dd>{block.detail ?? "not declared"}</dd>
+				<dt>recipe</dt>
+				<dd>{routine.id}</dd>
+				<dt>layer</dt>
+				<dd>{routine.origin}</dd>
+				{routine.maxIterations !== undefined && (
+					<>
+						<dt>iters</dt>
+						<dd>{routine.maxIterations}</dd>
+					</>
+				)}
+				{routine.callTimeoutMs !== undefined && (
+					<>
+						<dt>timeout</dt>
+						<dd>{formatTimeout(routine.callTimeoutMs)}</dd>
+					</>
+				)}
+			</dl>
+			<span className="label">declared in</span>
+			<p className="panel-src">
+				recipe <b>{routine.id}</b>
+				<br />
+				manifest <b>{routine.manifestPath}</b>
+				{manifest?.manifestDigest && (
+					<>
+						<br />
+						sha <b title={manifest.manifestDigest}>{shortDigest(manifest.manifestDigest)}</b>
+					</>
+				)}
+			</p>
+			{routine.error && <p className="config-error">{routine.error}</p>}
+			{manifest && selectedBlock === "checks" && manifest.requiredChecks.length > 0 && (
+				<ul className="config-list panel-checks">
+					{manifest.requiredChecks.map((check) => (
+						<li key={check.name ?? check.command} className="config-item">
+							<code className="config-id">{check.name ?? "check"}</code>
+							<p className="config-meta">
+								{[check.command, ...check.args].join(" ")}
+								{check.timeoutMs !== undefined && ` / ${formatTimeout(check.timeoutMs)}`}
+							</p>
+						</li>
+					))}
+				</ul>
+			)}
+		</aside>
+	);
+}
+
+function LiveInspector({
+	row,
+	selectedBlock,
+	refresh,
+}: {
+	row: LiveActivityRow | null;
+	selectedBlock: LoopRole;
+	refresh: () => void;
+}) {
+	if (!row) {
+		return (
+			<aside className="studio-inspector">
+				<p className="live-muted">Select a live run.</p>
+			</aside>
+		);
+	}
 	const phaseAge = headPhaseElapsed(row);
 	const iteration = iterationLabel(row);
 	return (
-		<div className="live-detail">
-			<div className="live-detail-head">
-				<span className={`live-source live-source--${row.source}`}>{row.source}</span>
-				<span className="live-detail-phase">{concisePhase(row)}</span>
-				{phaseAge && <span className="live-detail-phase-age">{phaseAge}</span>}
-				{iteration && <span className="live-detail-iter">{iteration}</span>}
+		<aside className="studio-inspector">
+			<div className="panel-head">
+				<span className="panel-title">{selectedBlock}</span>
+				<span className="panel-state panel-state--live">{concisePhase(row)}</span>
 			</div>
+			<dl className="facts">
+				<dt>scope</dt>
+				<dd>{row.scope}</dd>
+				<dt>source</dt>
+				<dd>{row.source}</dd>
+				{iteration && (
+					<>
+						<dt>iter</dt>
+						<dd>{iteration}</dd>
+					</>
+				)}
+				{phaseAge && (
+					<>
+						<dt>phase</dt>
+						<dd>{phaseAge}</dd>
+					</>
+				)}
+				{row.elapsedMs !== undefined && (
+					<>
+						<dt>elapsed</dt>
+						<dd>{formatAge(row.elapsedMs)}</dd>
+					</>
+				)}
+			</dl>
 			<ActionStrip key={rowKey(row)} row={row} refresh={refresh} />
-			<p className="live-detail-scope">{row.scope}</p>
 			{row.task && <TaskDisclosure task={row.taskFull ?? row.task} />}
-			<div className="live-ages">
-				{detailAges(row).map(([label, ms]) => (
-					<div className="live-age-cell" key={label}>
-						<span className="live-age-label">{label}</span>
-						<span className="live-age-val">{formatAge(ms)}</span>
-					</div>
-				))}
-			</div>
 			<PhaseTimeline row={row} />
-			<ExecutionTopology row={row} />
 			<RecentActivity row={row} />
 			{row.worktreePath && (
 				<p className="live-worktree">
@@ -328,6 +497,69 @@ function Detail({ row, refresh }: { row: LiveActivityRow | null; refresh: () => 
 					<code>{row.worktreePath}</code>
 				</p>
 			)}
+		</aside>
+	);
+}
+
+function StageHeader({
+	routine,
+	row,
+}: {
+	routine: DeclaredRoutine | null;
+	row: LiveActivityRow | null;
+}) {
+	if (routine) {
+		return (
+			<div className="studio-stage-head">
+				<span className="stage-title">{routine.id}</span>
+				<span className="stage-config">{recipeMeta(routine)}</span>
+				<span className="stage-state">at rest</span>
+			</div>
+		);
+	}
+	return (
+		<div className="studio-stage-head">
+			<span className="stage-title">{row?.scope ?? "live"}</span>
+			<span className="stage-config">{row?.statusLine ?? "no selected run"}</span>
+			<span className="stage-state stage-state--live">{row ? concisePhase(row) : "idle"}</span>
+		</div>
+	);
+}
+
+function BottomTicker({
+	routine,
+	row,
+	log,
+}: {
+	routine: DeclaredRoutine | null;
+	row: LiveActivityRow | null;
+	log: LiveConsoleEntry[];
+}) {
+	if (routine) {
+		return (
+			<div className="rest-ticker">
+				<span className="ticker-key">declared</span>
+				<span>
+					{routine.mode} / {routine.manifestPath}
+					{routine.manifest?.manifestDigest
+						? ` / ${shortDigest(routine.manifest.manifestDigest)}`
+						: ""}
+				</span>
+				<span className="ticker-tail">{routine.error ? "unresolved" : "ready"}</span>
+			</div>
+		);
+	}
+	const latest = log[log.length - 1];
+	return (
+		<div className="ticker">
+			<div className="ticker-line">
+				<span className="ticker-time">{latest?.time ?? "--:--"}</span>
+				<span className="ticker-glyph" aria-hidden="true">
+					•
+				</span>
+				<span className="ticker-text">{latest?.text ?? row?.statusLine ?? "No activity yet."}</span>
+			</div>
+			<span className="ticker-hint">console</span>
 		</div>
 	);
 }
@@ -369,16 +601,76 @@ export function LiveTower() {
 	// stays the live monitor; mounting on open is what makes each open re-fetch
 	// (the server re-reads disk per request).
 	const [configOpen, setConfigOpen] = useState(false);
-	const body = liveBody(activity, log.length);
+	const [routines, setRoutines] = useState<DeclaredRoutine[]>([]);
+	const [routineLoadState, setRoutineLoadState] = useState<
+		"loading" | "ready" | "unavailable" | "error"
+	>("loading");
+	const [routineError, setRoutineError] = useState<string | null>(null);
+	const [routineSel, setRoutineSel] = useState<string | null>(null);
+	const [selectedBlock, setSelectedBlock] = useState<LoopRole>("implementer");
+
+	useEffect(() => {
+		let alive = true;
+		fetchRoutines()
+			.then((outcome) => {
+				if (!alive) return;
+				if (outcome.kind === "ok") {
+					setRoutines(outcome.routines.routines);
+					setRoutineLoadState("ready");
+					setRoutineError(null);
+				} else if (outcome.kind === "unavailable") {
+					setRoutineLoadState("unavailable");
+					setRoutineError(null);
+				} else {
+					setRoutineLoadState("error");
+					setRoutineError(outcome.error);
+				}
+			})
+			.catch((e) => {
+				if (!alive) return;
+				setRoutineLoadState("error");
+				setRoutineError(e instanceof Error ? e.message : String(e));
+			});
+		return () => {
+			alive = false;
+		};
+	}, []);
+
 	const liveCount = flattenRows(activity).length;
-	const selectedLog = selected
-		? log.filter((e) => `${e.source}:${e.runId}` === rowKey(selected))
-		: log;
+	const body = towerBody(activity, routines.length, log.length);
+	const activeRoutine =
+		routineSel !== null
+			? (routines.find((r) => routineKey(r) === routineSel) ?? null)
+			: liveCount === 0
+				? (routines[0] ?? null)
+				: null;
+	const selectLiveRow = useCallback(
+		(key: string) => {
+			setRoutineSel(null);
+			select(key);
+		},
+		[select],
+	);
+	const railSelectedKey = activeRoutine ? null : selectedKey;
+	const selectedLog =
+		!activeRoutine && selected
+			? log.filter((e) => `${e.source}:${e.runId}` === rowKey(selected))
+			: log;
+	const routineEmpty =
+		routineLoadState === "loading"
+			? "loading"
+			: routineLoadState === "unavailable"
+				? "not available"
+				: routineLoadState === "error"
+					? "routines unavailable"
+					: "none declared";
 
 	return (
 		<>
 			<header className="app">
-				<span className="wordmark">chit.live</span>
+				<span className="wordmark">
+					chit <span className="light">· studio</span>
+				</span>
 				<span className="header-right">
 					<span className="live-total">
 						{liveCount} {liveCount === 1 ? "run" : "runs"} live
@@ -443,28 +735,71 @@ export function LiveTower() {
 			) : (
 				<div className="live-main live-grid">
 					<aside className="live-rail">
-						<h2 className="live-fleet-head">your sessions · live</h2>
+						<h2 className="live-fleet-head">running</h2>
 						<RailGroup
 							title="Foreground"
 							rows={activity.foreground}
-							selectedKey={selectedKey}
-							onSelect={select}
+							selectedKey={railSelectedKey}
+							onSelect={selectLiveRow}
 						/>
 						<RailGroup
 							title="Background"
 							rows={activity.background}
-							selectedKey={selectedKey}
-							onSelect={select}
+							selectedKey={railSelectedKey}
+							onSelect={selectLiveRow}
 						/>
+						<section className="live-group">
+							<h3 className="live-col-head">
+								this folder
+								{routines.length > 0 && <span className="live-count">{routines.length}</span>}
+							</h3>
+							{routines.length === 0 ? (
+								<p className="live-group-empty" title={routineError ?? undefined}>
+									{routineEmpty}
+								</p>
+							) : (
+								routines.map((routine) => (
+									<RoutineRailRow
+										key={routine.id}
+										routine={routine}
+										selected={activeRoutine?.id === routine.id}
+										onSelect={setRoutineSel}
+									/>
+								))
+							)}
+						</section>
 					</aside>
 					<main className="live-panel">
-						<section className="live-center">
-							<Detail row={selected} refresh={refresh} />
+						<StageHeader routine={activeRoutine} row={selected} />
+						<section className={`studio-body${activeRoutine ? " studio-body--rest" : ""}`}>
+							{activeRoutine ? (
+								<>
+									<LoopCanvas
+										blocks={routineCanvas(activeRoutine)}
+										selectedBlock={selectedBlock}
+										onSelectBlock={setSelectedBlock}
+										rest
+									/>
+									<RoutineInspector routine={activeRoutine} selectedBlock={selectedBlock} />
+								</>
+							) : (
+								<>
+									{selected ? (
+										<LoopCanvas
+											blocks={liveLoopBlocks(selected)}
+											selectedBlock={selectedBlock}
+											onSelectBlock={setSelectedBlock}
+										/>
+									) : (
+										<div className="studio-canvas">
+											<p className="live-muted">Select a live run to inspect it.</p>
+										</div>
+									)}
+									<LiveInspector row={selected} selectedBlock={selectedBlock} refresh={refresh} />
+								</>
+							)}
 						</section>
-						<section className="live-console-col">
-							<h3 className="live-col-head live-col-head--console">Console</h3>
-							<Console log={selectedLog} />
-						</section>
+						<BottomTicker routine={activeRoutine} row={selected} log={selectedLog} />
 					</main>
 				</div>
 			)}

@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { defaultAuditDir, readAuditRun } from "./audit.ts";
 import { bearerAuth, buildHostAllowlist, hostAllowlist } from "./auth.ts";
 import { effectiveConfigView } from "./config.ts";
+import { declaredRoutinesView } from "./routines.ts";
 import { renderShell } from "./shell.ts";
 import { generateToken } from "./token.ts";
 import type {
@@ -16,6 +17,7 @@ import type {
 	StudioConfigSource,
 	StudioLiveActions,
 	StudioLiveSource,
+	StudioRoutineSource,
 } from "./types.ts";
 
 // Safe run-id slug for the live action routes, the same shape the loop/audit
@@ -34,6 +36,8 @@ const CLIENT_ASSETS = new Set(["index.js", "index.css"]);
 export type {
 	BackgroundLiveRow,
 	ConfigOriginSource,
+	DeclaredRoutine,
+	DeclaredRoutinesView,
 	EffectiveAgentView,
 	EffectiveConfigView,
 	EffectiveRecipeView,
@@ -48,9 +52,13 @@ export type {
 	LiveExecutionIdentity,
 	LiveParticipant,
 	LiveRecipeIdentity,
+	RoutineCheck,
+	RoutineManifestSummary,
+	RoutineParticipant,
 	StudioConfigSource,
 	StudioLiveActions,
 	StudioLiveSource,
+	StudioRoutineSource,
 } from "./types.ts";
 
 export interface StartStudioOptions {
@@ -73,6 +81,8 @@ export interface StartStudioOptions {
 	// file-backed loadConfig. Called per GET /api/config request so the view
 	// observes current disk state. Absent means the route returns 501.
 	configSource?: StudioConfigSource;
+	// Optional host resolver for per-recipe manifest summaries.
+	routineSource?: StudioRoutineSource;
 }
 
 export interface StudioHandle {
@@ -99,6 +109,7 @@ export async function startStudio(opts: StartStudioOptions): Promise<StudioHandl
 		liveSource: opts.liveSource,
 		liveActions: opts.liveActions,
 		configSource: opts.configSource,
+		routineSource: opts.routineSource,
 	});
 
 	const server = Bun.serve({
@@ -143,6 +154,7 @@ interface BuildAppOptions {
 	// Effective-config reader injected by the host (see StartStudioOptions). GET
 	// /api/config calls this per request; absent means 501.
 	configSource?: StudioConfigSource;
+	routineSource?: StudioRoutineSource;
 }
 
 // Exported for tests: lets us exercise routes via app.fetch without booting
@@ -248,6 +260,23 @@ export function buildApp(opts: BuildAppOptions) {
 		} catch (e) {
 			return new Response(`config load failed: ${(e as Error).message}`, { status: 422 });
 		}
+	});
+
+	// Read-only routine menu from the effective config. Manifest resolution is
+	// best-effort per recipe; config load failure still fails the route.
+	app.get("/api/routines", (c) => {
+		if (!opts.configSource) {
+			return new Response("config view not available", { status: 501 });
+		}
+		let config: ReturnType<StudioConfigSource["load"]>;
+		try {
+			config = opts.configSource.load();
+		} catch (e) {
+			return new Response(`config load failed: ${(e as Error).message}`, { status: 422 });
+		}
+		const source = opts.routineSource;
+		const resolve = source ? (id: string) => source.resolveManifest(config, id) : undefined;
+		return c.json(declaredRoutinesView(config, resolve));
 	});
 
 	// Audit transcript for one run. The mounted client does not render receipts

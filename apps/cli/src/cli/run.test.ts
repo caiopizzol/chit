@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AuditParticipantSnapshot } from "@chit-run/core";
+import { type AuditParticipantSnapshot, parseConfig } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import { JobStore } from "../jobs/store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "../jobs/types.ts";
@@ -24,6 +25,7 @@ import {
 import {
 	buildStudioLiveActions,
 	buildStudioLiveSource,
+	buildStudioRoutineSource,
 	parseArgs,
 	studioClientDir,
 } from "./run.ts";
@@ -76,6 +78,10 @@ function writeManifestFixture(name: string, manifest: unknown): string {
 	const path = join(TMPDIR, `${name}.json`);
 	writeFileSync(path, `${JSON.stringify(manifest, null, "\t")}\n`);
 	return path;
+}
+
+function git(cwd: string, args: string[]): void {
+	execFileSync("git", args, { cwd, stdio: "ignore" });
 }
 
 beforeAll(() => {
@@ -390,6 +396,112 @@ describe("parseArgs", () => {
 
 	test("mcp --help yields help", () => {
 		expect(parseArgs(["mcp", "--help"]).command).toBe("help");
+	});
+});
+
+describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
+	function routineRepo(): string {
+		const repo = mkdtempSync(join(tmpdir(), "chit-studio-routine-"));
+		git(repo, ["init"]);
+		git(repo, ["config", "user.email", "tests@example.invalid"]);
+		git(repo, ["config", "user.name", "chit tests"]);
+		git(repo, ["config", "commit.gpgsign", "false"]);
+		mkdirSync(join(repo, "flows"));
+		writeFileSync(
+			join(repo, "flows", "deep.json"),
+			`${JSON.stringify(
+				{
+					schema: 1,
+					id: "deep",
+					description: "deep routine",
+					inputs: { task: { type: "string" } },
+					participants: {
+						impl: { role: "implementer" },
+						rev: { role: "reviewer" },
+					},
+					steps: {
+						implement: { call: "impl", prompt: "{{ inputs.task }}" },
+						review: { call: "rev", prompt: "{{ steps.implement.output }}" },
+						out: { format: "{{ steps.review.output }}" },
+					},
+					output: "out",
+					policy: {
+						kind: "loop",
+						implementStep: "implement",
+						reviewStep: "review",
+						requiredChecks: [{ name: "tests", command: "bun", args: ["test"], timeoutMs: 60_000 }],
+					},
+				},
+				null,
+				"\t",
+			)}\n`,
+		);
+		git(repo, ["add", "flows/deep.json"]);
+		git(repo, ["commit", "-m", "add routine manifest"]);
+		return repo;
+	}
+
+	function config(agent = "claude") {
+		return parseConfig({
+			roles: {
+				implementer: {
+					agent,
+					instructions: "Do the work.",
+					session: "per_scope",
+					permissions: { filesystem: "write" },
+				},
+				reviewer: {
+					agent: "codex",
+					instructions: "Review the work.",
+					session: "stateless",
+					permissions: { filesystem: "read_only" },
+				},
+			},
+			recipes: {
+				deep: { mode: "converge", manifestPath: "flows/deep.json" },
+			},
+		});
+	}
+
+	test("resolves a recipe manifest to the safe at-rest summary", () => {
+		const repo = routineRepo();
+		try {
+			const source = buildStudioRoutineSource(repo);
+			expect(source).toBeDefined();
+			const summary = source?.resolveManifest(config(), "deep");
+			expect(summary?.manifestDigest).toMatch(/^sha256:/);
+			expect(summary?.participants).toEqual([
+				{
+					id: "impl",
+					role: "implementer",
+					agentId: "claude",
+					session: "per_scope",
+					filesystem: "write",
+				},
+				{
+					id: "rev",
+					role: "reviewer",
+					agentId: "codex",
+					session: "stateless",
+					filesystem: "read_only",
+				},
+			]);
+			expect(summary?.requiredChecks).toEqual([
+				{ name: "tests", command: "bun", args: ["test"], timeoutMs: 60_000 },
+			]);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses an unknown resolved agent instead of returning a partial summary", () => {
+		const repo = routineRepo();
+		try {
+			const source = buildStudioRoutineSource(repo);
+			expect(() => source?.resolveManifest(config("ghost"), "deep")).toThrow(/unknown agent/);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
 	});
 });
 
