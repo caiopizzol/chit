@@ -29,7 +29,7 @@ import {
 	rowKey,
 	shortDigest,
 } from "./live.ts";
-import { routineCanvas, routineKey, towerBody } from "./routines.ts";
+import { routineCanvas, routineKey, routineTicker, towerBody } from "./routines.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
 
 type LoopRole = "implementer" | "reviewer" | "checks" | "you";
@@ -536,16 +536,12 @@ function BottomTicker({
 	log: LiveConsoleEntry[];
 }) {
 	if (routine) {
+		const ticker = routineTicker(routine);
 		return (
 			<div className="rest-ticker">
-				<span className="ticker-key">declared</span>
-				<span>
-					{routine.mode} / {routine.manifestPath}
-					{routine.manifest?.manifestDigest
-						? ` / ${shortDigest(routine.manifest.manifestDigest)}`
-						: ""}
-				</span>
-				<span className="ticker-tail">{routine.error ? "unresolved" : "ready"}</span>
+				<span className="ticker-key">{ticker.key}</span>
+				<span>{ticker.text}</span>
+				<span className="ticker-tail">{ticker.tail}</span>
 			</div>
 		);
 	}

@@ -16,6 +16,8 @@ import { type AuditParticipantSnapshot, parseConfig } from "@chit-run/core";
 import { AuditStore } from "../audit/store.ts";
 import { JobStore } from "../jobs/store.ts";
 import type { LoopJobRecord, OneShotJobRecord } from "../jobs/types.ts";
+import { repoKey } from "../loops/location.ts";
+import { appendIteration, startLoop, stopLoop } from "../loops/log-store.ts";
 import { type LiveEventSummary, MAX_LIVE_EVENTS } from "../runtime/live-events.ts";
 import {
 	ForegroundRegistry,
@@ -441,7 +443,7 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 		return repo;
 	}
 
-	function config(agent = "claude") {
+	function config(agent = "claude", manifestPath = "flows/deep.json") {
 		return parseConfig({
 			roles: {
 				implementer: {
@@ -458,8 +460,68 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 				},
 			},
 			recipes: {
-				deep: { mode: "converge", manifestPath: "flows/deep.json" },
+				deep: { mode: "converge", manifestPath },
 			},
+		});
+	}
+
+	function withState<T>(fn: () => T): T {
+		const state = mkdtempSync(join(tmpdir(), "chit-studio-state-"));
+		const old = process.env.XDG_STATE_HOME;
+		process.env.XDG_STATE_HOME = state;
+		try {
+			return fn();
+		} finally {
+			if (old === undefined) delete process.env.XDG_STATE_HOME;
+			else process.env.XDG_STATE_HOME = old;
+			rmSync(state, { recursive: true, force: true });
+		}
+	}
+
+	function seedStoppedLoop(
+		repo: string,
+		loopId: string,
+		over: {
+			recipeId?: string;
+			status?: "converged" | "blocked" | "max-iterations" | "needs-decision" | "cancelled";
+			startedAt?: string;
+			iterationAt?: string;
+			endedAt?: string;
+			auditRef?: string;
+			usage?: { estimatedCostUsd?: number };
+			verdict?: "proceed" | "revise" | "block";
+			decision?: "proceed" | "revise" | "block";
+		} = {},
+	): void {
+		const startedAt = Date.parse(over.startedAt ?? "2026-06-01T10:00:00.000Z");
+		const iterationAt = Date.parse(over.iterationAt ?? "2026-06-01T10:01:00.000Z");
+		const endedAt = Date.parse(over.endedAt ?? "2026-06-01T10:02:00.000Z");
+		startLoop(repo, {
+			scope: "scope",
+			task: "PRIVATE TASK BODY",
+			maxIterations: 3,
+			loopId,
+			clock: () => startedAt,
+			...(over.recipeId !== undefined && {
+				recipe: { id: over.recipeId, mode: "converge" },
+			}),
+		});
+		appendIteration(repo, loopId, {
+			implementSummary: "PRIVATE IMPLEMENT SUMMARY",
+			changedFiles: ["private.ts"],
+			checksRun: "PRIVATE CHECK OUTPUT",
+			verdict: over.verdict ?? "proceed",
+			findingCount: 0,
+			decision: over.decision ?? "proceed",
+			checkDurationMs: 1000,
+			...(over.auditRef !== undefined && { auditRef: over.auditRef }),
+			...(over.usage !== undefined && { usage: over.usage }),
+			clock: () => iterationAt,
+		});
+		stopLoop(repo, loopId, {
+			status: over.status ?? "converged",
+			reason: "done",
+			clock: () => endedAt,
 		});
 	}
 
@@ -503,6 +565,217 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 			rmSync(repo, { recursive: true, force: true });
 		}
 	});
+
+	test("maps the newest stopped loop by stamped recipe id into a safe last-run summary", () =>
+		withState(() => {
+			const repo = routineRepo();
+			try {
+				seedStoppedLoop(repo, "old-run", {
+					recipeId: "deep",
+					status: "blocked",
+					verdict: "block",
+					decision: "block",
+					endedAt: "2026-06-01T10:02:00.000Z",
+					auditRef: "aud-old",
+					usage: { estimatedCostUsd: 0.01 },
+				});
+				seedStoppedLoop(repo, "new-run", {
+					recipeId: "deep",
+					status: "converged",
+					verdict: "proceed",
+					decision: "proceed",
+					startedAt: "2026-06-01T11:00:00.000Z",
+					iterationAt: "2026-06-01T11:01:00.000Z",
+					endedAt: "2026-06-01T11:02:00.000Z",
+					auditRef: "aud-new",
+					usage: { estimatedCostUsd: 0.05 },
+				});
+				seedStoppedLoop(repo, "other-run", {
+					recipeId: "other",
+					status: "converged",
+					endedAt: "2026-06-01T12:02:00.000Z",
+					auditRef: "aud-other",
+				});
+
+				const source = buildStudioRoutineSource(repo);
+				const lastRun = source?.resolveLastRun?.(config(), "deep", {
+					manifestDigest: "sha256:unneeded-for-recipe-match",
+					participants: [],
+					requiredChecks: [],
+				});
+				expect(lastRun).toMatchObject({
+					status: "converged",
+					verdict: "proceed",
+					statusLine: "iteration 1 · proceed · converged",
+					iterationsCompleted: 1,
+					elapsedMs: 120_000,
+					estimatedCostUsd: 0.05,
+					auditRef: "aud-new",
+					traceRef: "new-run",
+				});
+				const serialized = JSON.stringify(lastRun);
+				expect(serialized).not.toContain("PRIVATE");
+				expect(serialized).not.toContain("private.ts");
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		}));
+
+	test("matches multiple recipes from one loaded config", () =>
+		withState(() => {
+			const repo = routineRepo();
+			try {
+				seedStoppedLoop(repo, "deep-run", {
+					recipeId: "deep",
+					status: "converged",
+					verdict: "proceed",
+					decision: "proceed",
+					endedAt: "2026-06-01T10:02:00.000Z",
+					auditRef: "aud-deep",
+				});
+				seedStoppedLoop(repo, "fast-run", {
+					recipeId: "fast",
+					status: "blocked",
+					verdict: "block",
+					decision: "block",
+					endedAt: "2026-06-01T11:02:00.000Z",
+					auditRef: "aud-fast",
+				});
+
+				const loadedConfig = parseConfig({
+					roles: {
+						implementer: {
+							agent: "claude",
+							instructions: "Do the work.",
+							session: "per_scope",
+							permissions: { filesystem: "write" },
+						},
+						reviewer: {
+							agent: "codex",
+							instructions: "Review the work.",
+							session: "stateless",
+							permissions: { filesystem: "read_only" },
+						},
+					},
+					recipes: {
+						deep: { mode: "converge", manifestPath: "flows/deep.json" },
+						fast: { mode: "converge", manifestPath: "flows/deep.json" },
+					},
+				});
+				const source = buildStudioRoutineSource(repo);
+				const manifest = {
+					manifestDigest: "sha256:unneeded-for-recipe-match",
+					participants: [],
+					requiredChecks: [],
+				};
+				const deep = source?.resolveLastRun?.(loadedConfig, "deep", manifest);
+				const fast = source?.resolveLastRun?.(loadedConfig, "fast", manifest);
+				expect(deep).toMatchObject({
+					status: "converged",
+					verdict: "proceed",
+					auditRef: "aud-deep",
+				});
+				expect(fast).toMatchObject({
+					status: "blocked",
+					verdict: "block",
+					auditRef: "aud-fast",
+				});
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		}));
+
+	test("does not fallback-match a run that already stamps a different recipe id", () =>
+		withState(() => {
+			const repo = routineRepo();
+			try {
+				seedStoppedLoop(repo, "other-run", {
+					recipeId: "other",
+					status: "converged",
+					auditRef: "aud-other",
+				});
+				const source = buildStudioRoutineSource(repo);
+				const lastRun = source?.resolveLastRun?.(config(), "deep", {
+					manifestDigest: "sha256:anything",
+					participants: [],
+					requiredChecks: [],
+				});
+				expect(lastRun).toBeUndefined();
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		}));
+
+	test("fallback-matches direct runs only on exact manifest path and digest", () =>
+		withState(() => {
+			const repo = routineRepo();
+			try {
+				const manifestDigest = buildStudioRoutineSource(repo)?.resolveManifest(
+					config(),
+					"deep",
+				).manifestDigest;
+				if (manifestDigest === undefined) throw new Error("expected manifest digest");
+				expect(manifestDigest).toMatch(/^sha256:/);
+				const store = new JobStore();
+				store.create({
+					policy: "loop",
+					runId: "direct-ok",
+					loopId: "direct-ok-loop",
+					repoKey: repoKey(repo),
+					repo,
+					cwd: repo,
+					scope: "scope",
+					task: "PRIVATE DIRECT TASK",
+					manifestPath: "flows/deep.json",
+					manifestDigest,
+					maxIterations: 3,
+					allowUnenforced: false,
+					iterationsCompleted: 1,
+					auditRefs: ["aud-direct"],
+					state: "completed",
+					createdAt: "2026-06-01T10:00:00.000Z",
+					startedAt: "2026-06-01T10:00:10.000Z",
+					endedAt: "2026-06-01T10:01:10.000Z",
+					lastVerdict: "proceed",
+				} as LoopJobRecord);
+				store.create({
+					policy: "loop",
+					runId: "direct-missing-digest",
+					loopId: "direct-missing-digest-loop",
+					repoKey: repoKey(repo),
+					repo,
+					cwd: repo,
+					scope: "scope",
+					task: "PRIVATE DIRECT TASK",
+					manifestPath: "flows/deep.json",
+					maxIterations: 3,
+					allowUnenforced: false,
+					iterationsCompleted: 1,
+					auditRefs: ["aud-missing"],
+					state: "completed",
+					createdAt: "2026-06-01T11:00:00.000Z",
+					endedAt: "2026-06-01T11:01:00.000Z",
+				} as LoopJobRecord);
+
+				const source = buildStudioRoutineSource(repo);
+				const lastRun = source?.resolveLastRun?.(config("claude", "./flows/deep.json"), "deep", {
+					manifestDigest,
+					participants: [],
+					requiredChecks: [],
+				});
+				expect(lastRun).toMatchObject({
+					status: "completed",
+					verdict: "proceed",
+					iterationsCompleted: 1,
+					elapsedMs: 60_000,
+					auditRef: "aud-direct",
+					traceRef: "direct-ok",
+				});
+				expect(JSON.stringify(lastRun)).not.toContain("PRIVATE");
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		}));
 });
 
 describe("buildStudioLiveSource (Studio live injection shape)", () => {

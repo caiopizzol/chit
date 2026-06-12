@@ -313,6 +313,21 @@ export interface RoutineManifestSummary {
 	requiredChecks: RoutineCheck[];
 }
 
+// Body-free receipt summary for the latest strongly matched run of a declared
+// routine. Built only from safe loop/run metadata: no prompts, outputs, manifest
+// bodies, env values, or adapter event bodies.
+export interface RoutineLastRunSummary {
+	status: string;
+	verdict?: string;
+	statusLine?: string;
+	iterationsCompleted: number;
+	elapsedMs?: number;
+	ageMs?: number;
+	estimatedCostUsd?: number;
+	auditRef?: string;
+	traceRef?: string;
+}
+
 // Recipe identity plus optional manifest summary. A per-recipe resolver failure
 // becomes error so one bad manifest does not hide the rest of the menu.
 export interface DeclaredRoutine {
@@ -324,6 +339,7 @@ export interface DeclaredRoutine {
 	callTimeoutMs?: number;
 	description?: string;
 	manifest?: RoutineManifestSummary;
+	lastRun?: RoutineLastRunSummary;
 	error?: string;
 }
 
@@ -337,4 +353,9 @@ export interface DeclaredRoutinesView {
 // manifest reads and participant resolution.
 export interface StudioRoutineSource {
 	resolveManifest(config: NormalizedConfig, recipeId: string): RoutineManifestSummary;
+	resolveLastRun?(
+		config: NormalizedConfig,
+		recipeId: string,
+		manifest: RoutineManifestSummary | undefined,
+	): RoutineLastRunSummary | undefined;
 }

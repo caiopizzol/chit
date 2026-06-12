@@ -1308,6 +1308,17 @@ header.app .config-btn {
 .ticker-hint {
 	color: var(--console-dim);
 }
+.rest-ticker > span:not(.ticker-key):not(.ticker-tail) {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.rest-ticker .ticker-tail {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .agent-block--you {
 	border-style: dashed;
 	background: var(--sheet);
@@ -1353,5 +1364,25 @@ header.app .config-btn {
 	}
 	.loopback {
 		display: none;
+	}
+	.rest-ticker {
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		align-items: start;
+		gap: 5px 12px;
+	}
+	.rest-ticker .ticker-key {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.rest-ticker > span:not(.ticker-key):not(.ticker-tail) {
+		grid-column: 2;
+		grid-row: 1;
+	}
+	.rest-ticker .ticker-tail {
+		grid-column: 2;
+		grid-row: 2;
+		justify-self: start;
+		max-width: 100%;
 	}
 }

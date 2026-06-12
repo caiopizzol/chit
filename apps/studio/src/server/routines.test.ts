@@ -84,6 +84,62 @@ describe("declaredRoutinesView", () => {
 		expect(view.routines[0]?.error).toBeUndefined();
 	});
 
+	test("last-run resolver can attach a body-free receipt summary", () => {
+		const config = layered({
+			recipes: { deep: { mode: "converge", manifestPath: "/flows/deep.json" } },
+		});
+		const view = declaredRoutinesView(config, {
+			resolveManifest: () => summary("claude"),
+			resolveLastRun: (id, manifest) => {
+				expect(id).toBe("deep");
+				expect(manifest?.manifestDigest).toBe("sha256:abc");
+				return {
+					status: "converged",
+					verdict: "proceed",
+					statusLine: "iteration 2 · proceed · converged",
+					iterationsCompleted: 2,
+					elapsedMs: 65_000,
+					ageMs: 12_000,
+					estimatedCostUsd: 0.05,
+					auditRef: "aud-2",
+					traceRef: "run-2",
+				};
+			},
+		});
+		expect(view.routines[0]?.lastRun).toEqual({
+			status: "converged",
+			verdict: "proceed",
+			statusLine: "iteration 2 · proceed · converged",
+			iterationsCompleted: 2,
+			elapsedMs: 65_000,
+			ageMs: 12_000,
+			estimatedCostUsd: 0.05,
+			auditRef: "aud-2",
+			traceRef: "run-2",
+		});
+	});
+
+	test("last-run resolver absence or failure omits lastRun without marking routine unresolved", () => {
+		const config = layered({
+			recipes: { deep: { mode: "converge", manifestPath: "/flows/deep.json" } },
+		});
+		const absent = declaredRoutinesView(config, {
+			resolveManifest: () => summary("claude"),
+			resolveLastRun: () => undefined,
+		});
+		expect(absent.routines[0]).not.toHaveProperty("lastRun");
+		expect(absent.routines[0]?.error).toBeUndefined();
+
+		const failed = declaredRoutinesView(config, {
+			resolveManifest: () => summary("claude"),
+			resolveLastRun: () => {
+				throw new Error("corrupt old loop log");
+			},
+		});
+		expect(failed.routines[0]).not.toHaveProperty("lastRun");
+		expect(failed.routines[0]?.error).toBeUndefined();
+	});
+
 	test("a throwing resolver degrades that one routine to a recoverable error string", () => {
 		const config = layered({
 			recipes: {

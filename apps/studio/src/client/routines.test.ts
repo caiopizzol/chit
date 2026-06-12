@@ -2,7 +2,13 @@
 
 import { describe, expect, test } from "bun:test";
 import type { DeclaredRoutine, LiveActivity, RoutineParticipant } from "../server/types.ts";
-import { participantRole, routineCanvas, routineKey, towerBody } from "./routines.ts";
+import {
+	participantRole,
+	routineCanvas,
+	routineKey,
+	routineTicker,
+	towerBody,
+} from "./routines.ts";
 
 const EMPTY: LiveActivity = { foreground: [], background: [] };
 
@@ -132,5 +138,66 @@ describe("towerBody", () => {
 	test("falls back to console-only / empty when nothing is live and no routines", () => {
 		expect(towerBody(EMPTY, 0, 3)).toBe("empty-with-console");
 		expect(towerBody(EMPTY, 0, 0)).toBe("empty");
+	});
+});
+
+describe("routineTicker", () => {
+	test("uses a last-run receipt summary when one is present", () => {
+		const view = routineTicker(
+			routine({
+				lastRun: {
+					status: "converged",
+					verdict: "proceed",
+					statusLine: "iteration 2 · proceed · converged",
+					iterationsCompleted: 2,
+					elapsedMs: 65_000,
+					ageMs: 12_000,
+					estimatedCostUsd: 0.05,
+					auditRef: "aud-2",
+					traceRef: "run-2",
+				},
+			}),
+		);
+		expect(view).toEqual({
+			key: "last run",
+			text: "converged / proceed / 2 iters / 12s ago / elapsed 1m 5s / $0.0500",
+			tail: "audit aud-2",
+		});
+	});
+
+	test("falls back to the declared manifest line when there is no strong last-run match", () => {
+		const view = routineTicker(
+			routine({
+				manifest: {
+					manifestDigest: "sha256:0123456789abcdef",
+					participants: [],
+					requiredChecks: [],
+				},
+			}),
+		);
+		expect(view).toEqual({
+			key: "declared",
+			text: "converge / flows/deep.json / sha256:0123456789…",
+			tail: "ready",
+		});
+	});
+
+	test("uses trace handle when an audit ref is absent", () => {
+		const view = routineTicker(
+			routine({
+				lastRun: {
+					status: "blocked",
+					verdict: "block",
+					iterationsCompleted: 1,
+					ageMs: 5000,
+					traceRef: "run-1",
+				},
+			}),
+		);
+		expect(view).toEqual({
+			key: "last run",
+			text: "blocked / block / 1 iter / 5s ago",
+			tail: "trace run-1",
+		});
 	});
 });

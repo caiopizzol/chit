@@ -2,7 +2,7 @@
 // rendering while this module owns keys, body selection, and canvas shaping.
 
 import type { DeclaredRoutine, LiveActivity, RoutineParticipant } from "../server/types.ts";
-import { flattenRows } from "./live.ts";
+import { flattenRows, formatAge, shortDigest } from "./live.ts";
 
 // Namespaced so routine selection cannot collide with live row keys.
 export function routineKey(routine: { id: string }): string {
@@ -106,4 +106,43 @@ export function towerBody(
 ): TowerBody {
 	if (flattenRows(activity).length > 0 || routineCount > 0) return "grid";
 	return logCount > 0 ? "empty-with-console" : "empty";
+}
+
+export interface RoutineTickerView {
+	key: string;
+	text: string;
+	tail: string;
+}
+
+function formatCost(cost: number | undefined): string | undefined {
+	if (cost === undefined || !Number.isFinite(cost) || cost < 0) return undefined;
+	return `$${cost.toFixed(4)}`;
+}
+
+function runRef(routine: DeclaredRoutine): string {
+	const lastRun = routine.lastRun;
+	if (lastRun?.auditRef) return `audit ${lastRun.auditRef}`;
+	if (lastRun?.traceRef) return `trace ${lastRun.traceRef}`;
+	return "receipt";
+}
+
+export function routineTicker(routine: DeclaredRoutine): RoutineTickerView {
+	const lastRun = routine.lastRun;
+	if (lastRun !== undefined) {
+		const parts = [
+			[lastRun.status, lastRun.verdict].filter(Boolean).join(" / "),
+			`${lastRun.iterationsCompleted} ${lastRun.iterationsCompleted === 1 ? "iter" : "iters"}`,
+			lastRun.ageMs !== undefined ? `${formatAge(lastRun.ageMs)} ago` : undefined,
+			lastRun.elapsedMs !== undefined ? `elapsed ${formatAge(lastRun.elapsedMs)}` : undefined,
+			formatCost(lastRun.estimatedCostUsd),
+		].filter((part): part is string => part !== undefined && part.length > 0);
+		return { key: "last run", text: parts.join(" / "), tail: runRef(routine) };
+	}
+	return {
+		key: "declared",
+		text: `${routine.mode} / ${routine.manifestPath}${
+			routine.manifest?.manifestDigest ? ` / ${shortDigest(routine.manifest.manifestDigest)}` : ""
+		}`,
+		tail: routine.error ? "unresolved" : "ready",
+	};
 }
