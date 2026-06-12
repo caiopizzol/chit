@@ -14,6 +14,7 @@ import { generateToken } from "./token.ts";
 import type {
 	LiveActivity,
 	LiveCancelResult,
+	RoutineManifestSummary,
 	StudioConfigSource,
 	StudioLiveActions,
 	StudioLiveSource,
@@ -53,6 +54,7 @@ export type {
 	LiveParticipant,
 	LiveRecipeIdentity,
 	RoutineCheck,
+	RoutineLastRunSummary,
 	RoutineManifestSummary,
 	RoutineParticipant,
 	StudioConfigSource,
@@ -275,8 +277,16 @@ export function buildApp(opts: BuildAppOptions) {
 			return new Response(`config load failed: ${(e as Error).message}`, { status: 422 });
 		}
 		const source = opts.routineSource;
-		const resolve = source ? (id: string) => source.resolveManifest(config, id) : undefined;
-		return c.json(declaredRoutinesView(config, resolve));
+		const resolvers = source
+			? {
+					resolveManifest: (id: string) => source.resolveManifest(config, id),
+					...(source.resolveLastRun !== undefined && {
+						resolveLastRun: (id: string, manifest: RoutineManifestSummary | undefined) =>
+							source.resolveLastRun?.(config, id, manifest),
+					}),
+				}
+			: undefined;
+		return c.json(declaredRoutinesView(config, resolvers));
 	});
 
 	// Audit transcript for one run. The mounted client does not render receipts

@@ -290,6 +290,38 @@ describe("GET /api/routines", () => {
 		expect(body.routines[0]?.manifest?.manifestDigest).toBe("sha256:deep");
 	});
 
+	test("enriches routines with the injected last-run summary", async () => {
+		const routineSource: StudioRoutineSource = {
+			resolveManifest: (_config, id) => ({
+				manifestDigest: `sha256:${id}`,
+				participants: [],
+				requiredChecks: [],
+			}),
+			resolveLastRun: (_config, id, manifest) => {
+				expect(id).toBe("deep");
+				expect(manifest?.manifestDigest).toBe("sha256:deep");
+				return {
+					status: "converged",
+					verdict: "proceed",
+					iterationsCompleted: 2,
+					elapsedMs: 65_000,
+					estimatedCostUsd: 0.05,
+					auditRef: "aud-2",
+				};
+			},
+		};
+		const s = setup({ configSource: { load: repoWithRecipe }, routineSource });
+		const res = await req(s.app, "/api/routines", { token: s.token });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			routines: Array<{ lastRun?: { status: string; auditRef?: string } }>;
+		};
+		expect(body.routines[0]?.lastRun).toMatchObject({
+			status: "converged",
+			auditRef: "aud-2",
+		});
+	});
+
 	test("a throwing resolver degrades that routine to a recoverable error, not a 500", async () => {
 		const routineSource: StudioRoutineSource = {
 			resolveManifest: () => {

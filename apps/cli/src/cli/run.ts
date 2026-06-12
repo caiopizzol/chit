@@ -1,19 +1,25 @@
-import { existsSync, readFileSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { NormalizedConfig } from "@chit-run/core";
 import {
 	buildGraphModel,
+	buildLoopReceipt,
 	collectInvocationWarnings,
 	findEnforcementGaps,
 	findMissingCapabilities,
 	findUnknownAgents,
+	type LoopHeaderRecord,
+	type LoopIterationRecord,
+	type LoopRecord,
+	parseLoopLog,
 	parseManifest,
 	type ResolvedManifest,
 	renderShow,
 	resolveManifest,
 	resolveParticipantSnapshots,
 	type ShowFormat,
+	validateLoopLog,
 } from "@chit-run/core";
 import { AdapterError, buildAdapter } from "../adapters/factory.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
@@ -24,8 +30,10 @@ import { loadConfig } from "../config/load.ts";
 import { requestJobCancel } from "../jobs/cancel.ts";
 import { isStale, jobTiming } from "../jobs/health.ts";
 import { JobStore } from "../jobs/store.ts";
-import type { JobRecord } from "../jobs/types.ts";
+import type { JobRecord, LoopJobRecord } from "../jobs/types.ts";
 import { runJobWorker } from "../jobs/worker.ts";
+import { loopLogDir, repoKey } from "../loops/location.ts";
+import { readLoop } from "../loops/log-store.ts";
 import {
 	digestManifestText,
 	normalizeManifestReference,
@@ -852,6 +860,8 @@ type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
 type LiveParticipant = import("@chit-run/studio/server").LiveParticipant;
 type LiveEventView = import("@chit-run/studio/server").LiveEventView;
 type LiveExecutionIdentity = import("@chit-run/studio/server").LiveExecutionIdentity;
+type RoutineLastRunSummary = import("@chit-run/studio/server").RoutineLastRunSummary;
+type RoutineManifestSummary = import("@chit-run/studio/server").RoutineManifestSummary;
 type StudioRoutineSource = import("@chit-run/studio/server").StudioRoutineSource;
 
 // Live-activity source injected into Studio so GET /api/live reflects current Chit
@@ -1143,6 +1153,224 @@ export function studioClientDir(moduleDir: string): string | undefined {
 	return existsSync(join(packaged, "index.js")) ? packaged : undefined;
 }
 
+interface LastRunCandidate {
+	recipeId?: string;
+	manifestPath?: string;
+	manifestDigest?: string;
+	loopId: string;
+	sortAt: string;
+	summary: RoutineLastRunSummary;
+}
+
+function loopHeader(records: LoopRecord[]): LoopHeaderRecord | undefined {
+	const first = records[0];
+	return first?.type === "loop" ? first : undefined;
+}
+
+function latestIteration(records: LoopRecord[]): LoopIterationRecord | undefined {
+	return records.filter((r): r is LoopIterationRecord => r.type === "iteration").at(-1);
+}
+
+function positiveAgeMs(iso: string | undefined, nowMs: number): number | undefined {
+	if (iso === undefined) return undefined;
+	const parsed = Date.parse(iso);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.max(0, nowMs - parsed);
+}
+
+function terminalLastRunCandidate(
+	records: LoopRecord[],
+	nowMs: number,
+	opts: { traceRef?: string; manifestPath?: string; manifestDigest?: string } = {},
+): LastRunCandidate | undefined {
+	const header = loopHeader(records);
+	if (header === undefined) return undefined;
+	const receipt = buildLoopReceipt(records);
+	if (receipt.status === "open" || receipt.status === "running") return undefined;
+	const latest = latestIteration(records);
+	const auditRef = receipt.auditRefs.at(-1);
+	const summary: RoutineLastRunSummary = {
+		status: receipt.status,
+		iterationsCompleted: receipt.iterationsCompleted,
+	};
+	if (latest !== undefined) summary.verdict = latest.verdict;
+	if (receipt.statusLine !== undefined) summary.statusLine = receipt.statusLine;
+	if (receipt.elapsedMs !== undefined) summary.elapsedMs = receipt.elapsedMs;
+	const ageMs = positiveAgeMs(receipt.endedAt ?? latest?.at ?? header.startedAt, nowMs);
+	if (ageMs !== undefined) summary.ageMs = ageMs;
+	if (receipt.usage?.estimatedCostUsd !== undefined) {
+		summary.estimatedCostUsd = receipt.usage.estimatedCostUsd;
+	}
+	if (auditRef !== undefined) summary.auditRef = auditRef;
+	summary.traceRef = opts.traceRef ?? header.loopId;
+	const candidate: LastRunCandidate = {
+		loopId: header.loopId,
+		sortAt: receipt.endedAt ?? latest?.at ?? header.startedAt,
+		summary,
+	};
+	if (header.recipe?.id !== undefined) candidate.recipeId = header.recipe.id;
+	if (opts.manifestPath !== undefined) candidate.manifestPath = opts.manifestPath;
+	if (opts.manifestDigest !== undefined) candidate.manifestDigest = opts.manifestDigest;
+	return candidate;
+}
+
+function safeReadLoopRecords(path: string): LoopRecord[] | undefined {
+	try {
+		return validateLoopLog(parseLoopLog(readFileSync(path, "utf-8")));
+	} catch {
+		return undefined;
+	}
+}
+
+function safeDirEntries(path: string): Dirent[] {
+	try {
+		return readdirSync(path, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+}
+
+function loopRecordPathsForCwd(studioCwd: string): string[] {
+	const paths: string[] = [];
+	const directDir = loopLogDir(studioCwd);
+	if (existsSync(directDir)) {
+		for (const entry of safeDirEntries(directDir)) {
+			if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+				paths.push(join(directDir, entry.name));
+			}
+		}
+	}
+	return paths;
+}
+
+function jobBelongsToRepo(
+	job: LoopJobRecord,
+	targetRepoRoot: string,
+	targetRepoKey: string,
+): boolean {
+	return (
+		job.repoKey === targetRepoKey ||
+		job.repo === targetRepoRoot ||
+		job.callerCheckout === targetRepoRoot
+	);
+}
+
+function terminalJobCandidate(job: LoopJobRecord, nowMs: number): LastRunCandidate | undefined {
+	if (job.state === "queued" || job.state === "running") return undefined;
+	let records: LoopRecord[] | undefined;
+	try {
+		records = readLoop(job.cwd, job.loopId);
+	} catch {
+		records = undefined;
+	}
+	if (records !== undefined) {
+		const candidate = terminalLastRunCandidate(records, nowMs, {
+			traceRef: job.runId,
+			...(job.manifestPath !== undefined && { manifestPath: job.manifestPath }),
+			...(job.manifestDigest !== undefined && { manifestDigest: job.manifestDigest }),
+		});
+		if (candidate !== undefined) {
+			if (job.recipe?.id !== undefined) candidate.recipeId = job.recipe.id;
+			return candidate;
+		}
+	}
+
+	const endedAge = positiveAgeMs(job.endedAt, nowMs);
+	const elapsedMs =
+		job.startedAt !== undefined && job.endedAt !== undefined
+			? Date.parse(job.endedAt) - Date.parse(job.startedAt)
+			: undefined;
+	const summary: RoutineLastRunSummary = {
+		status: job.stopStatus ?? job.state,
+		iterationsCompleted: job.iterationsCompleted,
+		traceRef: job.runId,
+	};
+	if (job.lastVerdict !== undefined) summary.verdict = job.lastVerdict;
+	if (Number.isFinite(elapsedMs) && elapsedMs !== undefined && elapsedMs >= 0) {
+		summary.elapsedMs = elapsedMs;
+	}
+	if (endedAge !== undefined) summary.ageMs = endedAge;
+	const auditRef = job.auditRefs.at(-1);
+	if (auditRef !== undefined) summary.auditRef = auditRef;
+	const candidate: LastRunCandidate = {
+		loopId: job.loopId,
+		sortAt: job.endedAt ?? job.startedAt ?? job.createdAt,
+		summary,
+	};
+	if (job.recipe?.id !== undefined) candidate.recipeId = job.recipe.id;
+	if (job.manifestPath !== undefined) candidate.manifestPath = job.manifestPath;
+	if (job.manifestDigest !== undefined) candidate.manifestDigest = job.manifestDigest;
+	return candidate;
+}
+
+function lastRunMatchesRoutine(
+	candidate: LastRunCandidate,
+	recipeId: string,
+	recipeManifestPath: string,
+	manifest: RoutineManifestSummary | undefined,
+): boolean {
+	if (candidate.recipeId !== undefined) return candidate.recipeId === recipeId;
+	return (
+		candidate.manifestPath === recipeManifestPath &&
+		candidate.manifestDigest !== undefined &&
+		manifest?.manifestDigest !== undefined &&
+		candidate.manifestDigest === manifest.manifestDigest
+	);
+}
+
+function collectLastRunCandidates(studioCwd: string, targetRepoRoot: string): LastRunCandidate[] {
+	const nowMs = Date.now();
+	const byLoop = new Map<string, LastRunCandidate>();
+	for (const path of loopRecordPathsForCwd(studioCwd)) {
+		const records = safeReadLoopRecords(path);
+		if (records === undefined) continue;
+		const candidate = terminalLastRunCandidate(records, nowMs);
+		if (candidate !== undefined) byLoop.set(candidate.loopId, candidate);
+	}
+
+	let jobs: JobRecord[] = [];
+	try {
+		jobs = new JobStore().list(nowMs);
+	} catch {
+		jobs = [];
+	}
+	const targetRepoKey = repoKey(studioCwd);
+	for (const job of jobs) {
+		if (job.policy !== "loop" || !jobBelongsToRepo(job, targetRepoRoot, targetRepoKey)) {
+			continue;
+		}
+		const candidate = terminalJobCandidate(job, nowMs);
+		if (candidate !== undefined) byLoop.set(candidate.loopId, candidate);
+	}
+
+	return [...byLoop.values()];
+}
+
+function latestRoutineLastRun(
+	candidates: LastRunCandidate[],
+	targetRepoRoot: string,
+	config: NormalizedConfig,
+	recipeId: string,
+	manifest: RoutineManifestSummary | undefined,
+): RoutineLastRunSummary | undefined {
+	const recipe = config.recipes[recipeId];
+	if (recipe === undefined) return undefined;
+	let recipeManifestPath: string;
+	try {
+		recipeManifestPath = normalizeManifestReference(
+			recipe.manifestPath,
+			targetRepoRoot,
+			targetRepoRoot,
+		).manifestPath;
+	} catch {
+		return undefined;
+	}
+
+	return candidates
+		.filter((candidate) => lastRunMatchesRoutine(candidate, recipeId, recipeManifestPath, manifest))
+		.sort((a, b) => b.sortAt.localeCompare(a.sortAt))[0]?.summary;
+}
+
 // Studio asks the CLI to resolve manifests because the CLI owns the git read point
 // and path guards. The returned shape is the small at-rest summary only.
 export function buildStudioRoutineSource(studioCwd: string): StudioRoutineSource | undefined {
@@ -1151,6 +1379,14 @@ export function buildStudioRoutineSource(studioCwd: string): StudioRoutineSource
 		repoRoot = repoToplevel(realGit, studioCwd);
 	} catch {
 		return undefined;
+	}
+	const candidatesByConfig = new WeakMap<NormalizedConfig, LastRunCandidate[]>();
+	function candidatesForConfig(config: NormalizedConfig): LastRunCandidate[] {
+		const existing = candidatesByConfig.get(config);
+		if (existing !== undefined) return existing;
+		const candidates = collectLastRunCandidates(studioCwd, repoRoot);
+		candidatesByConfig.set(config, candidates);
+		return candidates;
 	}
 	return {
 		resolveManifest(config, recipeId) {
@@ -1197,6 +1433,15 @@ export function buildStudioRoutineSource(studioCwd: string): StudioRoutineSource
 						}))
 					: [];
 			return { manifestDigest: digestManifestText(text), participants, requiredChecks };
+		},
+		resolveLastRun(config, recipeId, manifest) {
+			return latestRoutineLastRun(
+				candidatesForConfig(config),
+				repoRoot,
+				config,
+				recipeId,
+				manifest,
+			);
 		},
 	};
 }
