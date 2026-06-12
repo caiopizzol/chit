@@ -4,8 +4,14 @@
 // as a StudioApiError.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { EffectiveConfigView, LiveActivity } from "../server/types.ts";
-import { cancelLiveRun, fetchEffectiveConfig, fetchLive, StudioApiError } from "./api.ts";
+import type { DeclaredRoutinesView, EffectiveConfigView, LiveActivity } from "../server/types.ts";
+import {
+	cancelLiveRun,
+	fetchEffectiveConfig,
+	fetchLive,
+	fetchRoutines,
+	StudioApiError,
+} from "./api.ts";
 import { TOKEN_STORAGE_KEY } from "./boot.ts";
 
 const realFetch = globalThis.fetch;
@@ -119,6 +125,55 @@ describe("fetchEffectiveConfig", () => {
 	test("throws StudioApiError on 401 (auth failure is not a config state)", async () => {
 		mock(401, "unauthorized");
 		await expect(fetchEffectiveConfig()).rejects.toBeInstanceOf(StudioApiError);
+	});
+});
+
+describe("fetchRoutines", () => {
+	const routines: DeclaredRoutinesView = {
+		repoConfigPath: "/repo/chit.config.json",
+		routines: [
+			{
+				id: "deep",
+				origin: "repo",
+				mode: "converge",
+				manifestPath: "flows/deep.json",
+				manifest: {
+					manifestDigest: "sha256:abc",
+					participants: [
+						{ id: "impl", agentId: "claude", session: "per_scope", filesystem: "write" },
+					],
+					requiredChecks: [{ command: "bun", args: ["test"] }],
+				},
+			},
+		],
+	};
+
+	test("GETs /api/routines with the bearer token and maps a 200 to ok", async () => {
+		const calls = mock(200, routines);
+		const out = await fetchRoutines();
+		expect(out).toEqual({ kind: "ok", routines });
+		expect(calls[0]?.url).toBe("/api/routines");
+		expect(calls[0]?.headers.Authorization).toBe("Bearer tok");
+	});
+
+	test("maps a 501 (no host config source) to unavailable", async () => {
+		mock(501, "config view not available");
+		expect(await fetchRoutines()).toEqual({ kind: "unavailable" });
+	});
+
+	test("maps a 422 load failure to the error outcome, not a throw", async () => {
+		mock(422, "config load failed: /repo/chit.config.json: invalid JSON");
+		const out = await fetchRoutines();
+		expect(out.kind).toBe("error");
+		if (out.kind === "error") {
+			expect(out.status).toBe(422);
+			expect(out.error).toContain("chit.config.json");
+		}
+	});
+
+	test("throws StudioApiError on 401 (auth failure is not a routines state)", async () => {
+		mock(401, "unauthorized");
+		await expect(fetchRoutines()).rejects.toBeInstanceOf(StudioApiError);
 	});
 });
 

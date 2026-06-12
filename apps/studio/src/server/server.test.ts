@@ -8,7 +8,12 @@ import { join } from "node:path";
 import { parseConfig } from "@chit-run/core";
 import { buildApp } from "./index.ts";
 import { generateToken } from "./token.ts";
-import type { LiveActivity, StudioLiveActions, StudioLiveSource } from "./types.ts";
+import type {
+	LiveActivity,
+	StudioLiveActions,
+	StudioLiveSource,
+	StudioRoutineSource,
+} from "./types.ts";
 
 const PORT = 4040;
 const HOST = `127.0.0.1:${PORT}`;
@@ -20,6 +25,7 @@ function setup(
 		liveSource?: StudioLiveSource;
 		liveActions?: StudioLiveActions;
 		configSource?: { load(): ReturnType<typeof parseConfig> };
+		routineSource?: StudioRoutineSource;
 	} = {},
 ) {
 	const token = generateToken();
@@ -30,6 +36,7 @@ function setup(
 		liveSource: opts.liveSource,
 		liveActions: opts.liveActions,
 		configSource: opts.configSource,
+		routineSource: opts.routineSource,
 	});
 	return { token, app };
 }
@@ -237,6 +244,74 @@ describe("GET /api/config", () => {
 			},
 		});
 		const res = await req(s.app, "/api/config", { token: s.token });
+		expect(res.status).toBe(422);
+		expect(await res.text()).toContain("bad chit.config.json");
+	});
+});
+
+describe("GET /api/routines", () => {
+	const repoWithRecipe = () =>
+		parseConfig({ recipes: { deep: { mode: "converge", manifestPath: "/flows/deep.json" } } });
+
+	test("returns 501 when no host config source is injected", async () => {
+		const s = setup();
+		const res = await req(s.app, "/api/routines", { token: s.token });
+		expect(res.status).toBe(501);
+	});
+
+	test("lists the recipe identity (no manifest summary) without a routine source", async () => {
+		const s = setup({ configSource: { load: repoWithRecipe } });
+		const res = await req(s.app, "/api/routines", { token: s.token });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			routines: Array<{ id: string; manifest?: unknown; error?: unknown }>;
+		};
+		expect(body.routines.map((r) => r.id)).toEqual(["deep"]);
+		expect(body.routines[0]).not.toHaveProperty("manifest");
+		expect(body.routines[0]).not.toHaveProperty("error");
+	});
+
+	test("enriches routines with the injected resolver's manifest summary", async () => {
+		const routineSource: StudioRoutineSource = {
+			resolveManifest: (_config, id) => ({
+				manifestDigest: `sha256:${id}`,
+				participants: [
+					{ id: "impl", agentId: "claude", session: "per_scope", filesystem: "write" },
+				],
+				requiredChecks: [{ command: "bun", args: ["test"] }],
+			}),
+		};
+		const s = setup({ configSource: { load: repoWithRecipe }, routineSource });
+		const res = await req(s.app, "/api/routines", { token: s.token });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			routines: Array<{ id: string; manifest?: { manifestDigest?: string } }>;
+		};
+		expect(body.routines[0]?.manifest?.manifestDigest).toBe("sha256:deep");
+	});
+
+	test("a throwing resolver degrades that routine to a recoverable error, not a 500", async () => {
+		const routineSource: StudioRoutineSource = {
+			resolveManifest: () => {
+				throw new Error("no /flows/deep.json in the git tree at HEAD");
+			},
+		};
+		const s = setup({ configSource: { load: repoWithRecipe }, routineSource });
+		const res = await req(s.app, "/api/routines", { token: s.token });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { routines: Array<{ error?: string }> };
+		expect(body.routines[0]?.error).toContain("git tree at HEAD");
+	});
+
+	test("surfaces config load failures as 422", async () => {
+		const s = setup({
+			configSource: {
+				load: () => {
+					throw new Error("bad chit.config.json");
+				},
+			},
+		});
+		const res = await req(s.app, "/api/routines", { token: s.token });
 		expect(res.status).toBe(422);
 		expect(await res.text()).toContain("bad chit.config.json");
 	});

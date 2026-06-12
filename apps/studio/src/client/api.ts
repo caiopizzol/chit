@@ -3,7 +3,12 @@
 // the client bundle and the API on one port), so no CORS configuration is
 // involved.
 
-import type { EffectiveConfigView, LiveActivity, LiveCancelResult } from "../server/types.ts";
+import type {
+	DeclaredRoutinesView,
+	EffectiveConfigView,
+	LiveActivity,
+	LiveCancelResult,
+} from "../server/types.ts";
 import { getToken } from "./boot.ts";
 
 export class StudioApiError extends Error {
@@ -88,4 +93,23 @@ export async function fetchEffectiveConfig(): Promise<EffectiveConfigOutcome> {
 	}
 	if (!res.ok) return { kind: "error", status: res.status, error: await res.text() };
 	return { kind: "ok", config: (await res.json()) as EffectiveConfigView };
+}
+
+// --- Declared routines (read-only) ---
+
+// Same outcome shape as the config fetch. Per-recipe manifest failures stay inside
+// an ok response as routine.error; route-level config failures are error outcomes.
+export type DeclaredRoutinesOutcome =
+	| { kind: "ok"; routines: DeclaredRoutinesView }
+	| { kind: "unavailable" }
+	| { kind: "error"; status: number; error: string };
+
+export async function fetchRoutines(): Promise<DeclaredRoutinesOutcome> {
+	const res = await fetch("/api/routines", { headers: authHeaders() });
+	if (res.status === 501) return { kind: "unavailable" };
+	if (res.status === 401) {
+		throw new StudioApiError(res.status, `GET /api/routines: ${res.status} ${await res.text()}`);
+	}
+	if (!res.ok) return { kind: "error", status: res.status, error: await res.text() };
+	return { kind: "ok", routines: (await res.json()) as DeclaredRoutinesView };
 }

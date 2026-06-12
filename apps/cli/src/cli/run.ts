@@ -19,12 +19,18 @@ import { AdapterError, buildAdapter } from "../adapters/factory.ts";
 import { AuditRecorder } from "../audit/recorder.ts";
 import { AuditStore } from "../audit/store.ts";
 import { wrapAdaptersWithAudit } from "../audit/wrap.ts";
+import { realGit, repoToplevel, resolveBaseSha } from "../batches/worktree.ts";
 import { loadConfig } from "../config/load.ts";
 import { requestJobCancel } from "../jobs/cancel.ts";
 import { isStale, jobTiming } from "../jobs/health.ts";
 import { JobStore } from "../jobs/store.ts";
 import type { JobRecord } from "../jobs/types.ts";
 import { runJobWorker } from "../jobs/worker.ts";
+import {
+	digestManifestText,
+	normalizeManifestReference,
+	readBoundManifestText,
+} from "../manifest/binding.ts";
 import { executeManifest } from "../runtime/execute.ts";
 import { type LiveEventSummary, sanitizeLiveEvents } from "../runtime/live-events.ts";
 import { RuntimeError } from "../runtime/render.ts";
@@ -846,6 +852,7 @@ type BackgroundLiveRow = import("@chit-run/studio/server").BackgroundLiveRow;
 type LiveParticipant = import("@chit-run/studio/server").LiveParticipant;
 type LiveEventView = import("@chit-run/studio/server").LiveEventView;
 type LiveExecutionIdentity = import("@chit-run/studio/server").LiveExecutionIdentity;
+type StudioRoutineSource = import("@chit-run/studio/server").StudioRoutineSource;
 
 // Live-activity source injected into Studio so GET /api/live reflects current Chit
 // state without @chit-run/studio importing CLI internals (the CLI owns the state
@@ -1136,6 +1143,64 @@ export function studioClientDir(moduleDir: string): string | undefined {
 	return existsSync(join(packaged, "index.js")) ? packaged : undefined;
 }
 
+// Studio asks the CLI to resolve manifests because the CLI owns the git read point
+// and path guards. The returned shape is the small at-rest summary only.
+export function buildStudioRoutineSource(studioCwd: string): StudioRoutineSource | undefined {
+	let repoRoot: string;
+	try {
+		repoRoot = repoToplevel(realGit, studioCwd);
+	} catch {
+		return undefined;
+	}
+	return {
+		resolveManifest(config, recipeId) {
+			const recipe = config.recipes[recipeId];
+			if (recipe === undefined) throw new Error(`unknown recipe ${JSON.stringify(recipeId)}`);
+			const baseSha = resolveBaseSha(realGit, repoRoot, "HEAD");
+			const ref = normalizeManifestReference(recipe.manifestPath, repoRoot, repoRoot);
+			const text = readBoundManifestText(ref, { git: realGit, gitCwd: repoRoot, baseSha });
+			let raw: unknown;
+			try {
+				raw = JSON.parse(text);
+			} catch (e) {
+				throw new Error(`manifest ${ref.manifestPath} is not valid JSON: ${(e as Error).message}`);
+			}
+			const resolved = resolveManifest(parseManifest(raw), { roles: config.roles });
+			const unknownAgents = findUnknownAgents(resolved, config.registry);
+			if (unknownAgents.length > 0) {
+				const first = unknownAgents[0] as (typeof unknownAgents)[number];
+				throw new Error(
+					`manifest ${ref.manifestPath}: unknown agent ${JSON.stringify(first.agentId)} referenced by participant ${JSON.stringify(first.participantId)}`,
+				);
+			}
+			const snapshots = resolveParticipantSnapshots(resolved, config.registry);
+			const participants = Object.entries(resolved.participants).map(([id, p]) => {
+				const snapshot = snapshots[id];
+				if (snapshot === undefined) {
+					throw new Error(`manifest ${ref.manifestPath}: could not resolve participant ${id}`);
+				}
+				return {
+					id,
+					...(p.provenance.role !== undefined && { role: p.provenance.role }),
+					agentId: snapshot.agentId,
+					session: snapshot.session,
+					filesystem: snapshot.permissions.filesystem,
+				};
+			});
+			const requiredChecks =
+				resolved.policy.kind === "loop"
+					? (resolved.policy.requiredChecks ?? []).map((check) => ({
+							...(check.name !== undefined && { name: check.name }),
+							command: check.command,
+							args: check.args,
+							...(check.timeoutMs !== undefined && { timeoutMs: check.timeoutMs }),
+						}))
+					: [];
+			return { manifestDigest: digestManifestText(text), participants, requiredChecks };
+		},
+	};
+}
+
 async function runStudio(_args: ParsedArgs): Promise<number> {
 	const { startStudio } = await import("@chit-run/studio/server");
 	// The Studio target repo, captured once so config reads observe the same repo.
@@ -1158,6 +1223,8 @@ async function runStudio(_args: ParsedArgs): Promise<number> {
 			// edits made while Studio is open. A load failure propagates as 422 from
 			// the route instead of silently reporting defaults.
 			configSource: { load: () => loadConfig(undefined, { cwd: studioCwd }) },
+			// Lets /api/routines show the same manifest identity a recipe-backed run binds.
+			routineSource: buildStudioRoutineSource(studioCwd),
 			// In a published install the client bundle ships beside chit.js, not at
 			// the Studio server's default path. Undefined in a source checkout, where
 			// the server default already resolves correctly.
