@@ -194,7 +194,7 @@ Read-only overview for one plan: integration branch/worktree, current status, ev
 
 Drive an existing plan until the next operator gate. It waits while a step is live, advances when a finished, stale, or vanished job can reconcile, and launches a pending dependent when the plan can move forward. It returns the plan view plus `driveResult` and `advances`.
 
-It never applies a `review_ready` step, confirms an apply, cleans up, cancels, or approves anything. Use it after `chit_plan_start`, then again after you explicitly apply a `review_ready` step with `chit_plan_advance`.
+It never applies a `review_ready` step, confirms an apply, cleans up, cancels, or approves anything. More broadly, a driver agent calling this tool must never start or confirm a plan, approve any gate, merge branches, bypass approval hashes, or change recipes or manifests. The two human gates are plan start approval and each step apply; everything between is mechanical progression. Use `chit_plan_drive` after `chit_plan_start`, then again after you explicitly apply a `review_ready` step with `chit_plan_advance`.
 
 Inputs: `plan_id`, `cwd?`, `timeout_ms?`, `max_iterations?`.
 

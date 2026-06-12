@@ -398,6 +398,42 @@ This is an orchestrator experience without model-decided runtime mutation.
 Later, the orchestrator can recommend recipes automatically. It still should not
 approve its own plan or weaken the gates.
 
+## Driver autonomy policy
+
+A plan driver (the agent that calls `chit_plan_drive`) is an automation
+assistant, not a decision-maker. Its autonomy is intentionally narrow.
+
+A driver **may**:
+
+- wait for a live step to finish
+- reconcile a finished, stale, or vanished job
+- launch a pending dependent whose prerequisites are met in the approved plan
+
+A driver **must never**:
+
+- start a plan or confirm a plan start
+- apply a `review_ready` step or confirm an apply
+- auto-approve any gate
+- clean up worktrees or branches
+- cancel a plan or step
+- merge branches
+- bypass or recompute approval hashes
+- change recipes, manifests, or runtime knobs
+- make dynamic routing decisions (choose which step runs next outside the
+  declared dependency graph)
+
+The two human gates that frame all driver work are **plan start approval**
+(the operator reviews the plan, recipes, base, and approval hash before
+`chit_plan_start confirm:true`) and **each step apply** (the operator reviews
+the converged diff before `chit_plan_advance apply confirm:true`). Everything
+between those gates is mechanical progression that `chit_plan_drive` performs.
+
+This boundary is load-bearing: relaxing it would let a model silently commit
+code, weaken approval invariants, or change the execution contract after the
+operator approved it. If a future capability needs broader driver authority, it
+must be an explicit, operator-approved policy extension, not an implicit
+expansion of driver scope.
+
 ## Meta-loops
 
 Meta-loops are the later layer: loops that inspect receipts, cost, failures, and
