@@ -95,6 +95,29 @@ describe("runConvergeInSandbox", () => {
 		expect(h.sandbox()?.discarded).toBe(true);
 	});
 
+	test("an apply failure is recorded on the receipt, not thrown (durable evidence)", async () => {
+		const sb = fakeSandbox({ workDir: "/sandbox", diff: "diff body" });
+		sb.apply = async () => {
+			throw new Error("could not apply: conflict");
+		};
+		let t = 0;
+		const deps: ConvergeRunDeps = {
+			sandboxFactory: { async create() { return sb; } },
+			adapter: fakeAdapter((req) => `${req.agent}|${req.prompt}`),
+			checkRunner: fakeCheckRunner(),
+			cwd: "/origin",
+			now: () => ++t,
+			newRunId: () => "run-s",
+			apply: true,
+		};
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, deps);
+		expect(res.receipt.status).toBe("converged"); // the run itself converged
+		expect(res.applied).toBe(false);
+		expect(res.applyError).toMatch(/conflict/);
+		expect(res.receipt.applyError).toMatch(/conflict/); // durable on the receipt
+		expect(sb.discarded).toBe(true); // sandbox still torn down
+	});
+
 	test("discards the sandbox even when the loop throws", async () => {
 		const adapter: Adapter = {
 			async call() {

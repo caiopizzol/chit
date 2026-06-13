@@ -35,6 +35,9 @@ export interface ConvergeRunResult {
 	receipt: ConvergeReceipt;
 	diff: string;
 	applied: boolean;
+	// Set when the run converged but the write-back (sandbox.apply) failed. The receipt
+	// carries the same message, so an apply failure still leaves durable evidence.
+	applyError?: string;
 }
 
 export async function runConvergeInSandbox(
@@ -71,16 +74,28 @@ export async function runConvergeInSandbox(
 		const diffStat = await sandbox.diffStat();
 		const status = await sandbox.status();
 
+		let applyError: string | undefined;
 		if (receipt.status === "converged" && deps.apply) {
 			deps.onProgress?.("  applying changes to your tree …");
-			await sandbox.apply();
-			applied = true;
+			try {
+				await sandbox.apply();
+				applied = true;
+			} catch (e) {
+				// The run converged; only the write-back failed (e.g. a dirty origin). Record
+				// it instead of throwing, so the converged run still leaves a durable receipt.
+				applyError = (e as Error).message;
+			}
 		}
 
 		return {
-			receipt: { ...receipt, sandbox: { workDir: sandbox.workDir, status, ...(diffStat ? { diffStat } : {}) } },
+			receipt: {
+				...receipt,
+				sandbox: { workDir: sandbox.workDir, status, ...(diffStat ? { diffStat } : {}) },
+				...(applyError !== undefined && { applyError }),
+			},
 			diff,
 			applied,
+			...(applyError !== undefined && { applyError }),
 		};
 	} finally {
 		await sandbox.discard();

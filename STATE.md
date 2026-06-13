@@ -244,18 +244,29 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       in-flight cancel -> an async abort DURING a running check cancels + discards (not just pre-abort).
 - [x] 157 tests (430 expects), typecheck clean, no leftover worktrees / temp husks.
 
+## Increment 15 COMPLETE — apply-failure leaves a durable receipt (+ stale-doc fix)
+- [x] FIXED the last reliability hole: when a converged run's write-back (sandbox.apply) failed (e.g. a
+      dirty origin), runConvergeInSandbox threw before the CLI could save the receipt -- so a converged
+      run could leave NO evidence. Now the apply error is CAUGHT, recorded on the receipt (applyError) and
+      the result; the run returns normally, the CLI saves the receipt and reports "converged, but could
+      not apply" (exit 1). A flow's terminal apply behaves the same; trace renders the apply line.
+- [x] tests: converge-run unit (apply throws -> receipt.applyError, not thrown, sandbox still discarded);
+      acceptance dirty-origin now asserts the persisted receipt + applyError; a views render test.
+- [x] fixed stale STATE "Not in scope" (it still listed routine composition + live progress, both built).
+- [x] 159 tests (439 expects), typecheck clean, no leftover worktrees / temp husks.
+
 ## NEXT: routine scaffolding (`chit init`)
-- happy AND unhappy E2E paths are now proven; scaffolding is the right next step.
+- the full happy + unhappy E2E story is proven and every run now leaves a receipt; scaffolding is next.
 - still optional/deferred: one real-claude smoke outside CI (the suite fakes the model on purpose);
-  HARD run deadline (wire runTimeoutMinutes to the cancel signal); a dry-run/cancelled sandbox receipt
-  stores its (removed) workDir path (JSON-only; trace does not render it).
+  HARD run deadline (wire runTimeoutMinutes to the cancel signal); dry-run/cancelled sandbox receipts
+  still store their (removed) workDir path (JSON-only; trace does not render it).
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed
 steps (shared-flow-sandbox), `repeat.from`.
 
 ## Not in scope (deferred on purpose)
-Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,
-durable resume, live progress. (Per-participant `filesystem` maps to a claude permission
-mode -- claude-level, not an OS sandbox; converge WRITE safety is enforced by the
-disposable git worktree.)
+Studio, MCP, plan/batch, a config editor, multi-provider adapters, durable resume.
+(Routine composition and live progress WERE here but are now built.) Per-participant
+`filesystem` maps to a claude permission mode -- claude-level, not an OS sandbox;
+converge WRITE safety is enforced by the disposable git worktree.

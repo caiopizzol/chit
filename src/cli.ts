@@ -171,6 +171,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				}
 				if (result.terminalDiff !== undefined) {
 					deps.out(result.terminalDiff.trim() ? `\n${result.terminalDiff}` : "\n(no changes produced)");
+					if (result.applyError !== undefined) {
+						deps.err(`\nrun ${r.runId} completed, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`);
+						return 1;
+					}
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
@@ -212,6 +216,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
 				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
 				if (r.status === "converged") {
+					if (result.applyError !== undefined) {
+						deps.err(`\nrun ${r.runId} converged, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`);
+						return 1;
+					}
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`

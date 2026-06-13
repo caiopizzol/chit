@@ -324,6 +324,10 @@ describe("acceptance matrix -- failure cases", () => {
 		expect(readFileSync(join(repo, "seed.txt"), "utf-8")).toBe("changed in origin\n"); // origin not corrupted
 		const worktrees = Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString();
 		expect(worktrees.includes("chit-sbx-")).toBe(false); // sandbox still discarded
+		// the converged-but-unapplied run still leaves durable evidence
+		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
+		expect(receipt.status).toBe("converged");
+		expect(receipt.applyError).toMatch(/could not apply/);
 	});
 
 	test("interrupted in-flight: an abort during a running check cancels and discards", async () => {

@@ -58,6 +58,10 @@ export interface ConvergeReceipt {
 	iterations: IterationReceipt[];
 	sandbox?: SandboxReceipt;
 	error?: string;
+	// Set when the run converged but applying the diff back to origin failed (e.g. a
+	// dirty origin or a conflict). The run still succeeded in the sandbox and still
+	// leaves this durable receipt; only the write-back failed.
+	applyError?: string;
 }
 
 export interface SandboxReceipt {

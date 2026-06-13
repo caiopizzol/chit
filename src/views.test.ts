@@ -170,6 +170,12 @@ describe("formatTrace converge", () => {
 		expect(out).toContain("bun test:ok");
 	});
 
+	test("renders an apply failure on a converged-but-unapplied receipt", () => {
+		const out = formatTrace({ ...receipt, applyError: "could not apply sandbox changes: conflict" } as ConvergeReceipt);
+		expect(out).toContain("run-c  impl-review  converged"); // the run still converged
+		expect(out).toContain("apply:    could not apply to your tree -- could not apply sandbox changes: conflict");
+	});
+
 	test("a legacy receipt without per-step timestamps renders without NaN", () => {
 		// a receipt written before per-step startedAt existed (durable artifact on disk)
 		const legacy = {

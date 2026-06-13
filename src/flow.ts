@@ -136,6 +136,8 @@ export interface FlowRunResult {
 	subReceipts: Array<RunReceipt | ConvergeReceipt>;
 	terminalDiff?: string;
 	applied?: boolean;
+	// Set when the terminal sandboxed step converged but its write-back failed.
+	applyError?: string;
 }
 
 export interface FlowDeps {
@@ -173,6 +175,7 @@ export async function runFlow(
 	let cancelled = false;
 	let terminalDiff: string | undefined;
 	let applied: boolean | undefined;
+	let applyError: string | undefined;
 
 	for (const step of resolved.steps) {
 		if (deps.signal?.aborted) {
@@ -224,6 +227,7 @@ export async function runFlow(
 			subReceipts.push(r.receipt);
 			terminalDiff = r.diff;
 			applied = r.applied;
+			if (r.applyError !== undefined) applyError = r.applyError;
 			ctx.steps[step.id] = { output: r.diff };
 			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.receipt.runId, status: r.receipt.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			if (r.receipt.status === "cancelled") {
@@ -275,5 +279,6 @@ export async function runFlow(
 		subReceipts,
 		...(terminalDiff !== undefined && { terminalDiff }),
 		...(applied !== undefined && { applied }),
+		...(applyError !== undefined && { applyError }),
 	};
 }

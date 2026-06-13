@@ -167,6 +167,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 			out.push("changes:");
 			for (const line of r.sandbox.diffStat.split("\n")) out.push(`  ${line}`);
 		}
+		if (r.applyError) out.push(`apply:    could not apply to your tree -- ${r.applyError}`);
 		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
 	}
