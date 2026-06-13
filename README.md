@@ -41,8 +41,12 @@ deterministic and free.
 ## Boundaries (kept on purpose)
 
 - **Manifest is authoritative.** Inputs live in the manifest, never duplicated into config.
-- **Converge is inspect-only.** You can list and inspect a converge routine; running its
-  loop (and the digest/drift safety that guards it) is the hardened runtime's job, not this proof's.
+- **Loops are step-based, not fixed roles.** A converge routine is ordered steps (`call` /
+  `format` / `check`); "build"/"critique" are step ids and "builder"/"critic" participant names.
+  There is no built-in implementer/reviewer slot.
+- **Converge's loop is proven but not yet live.** The executor loops until checks pass, feeding
+  failing check output forward (proven under test, fake-backed). Live `chit run` is gated until a
+  write-safety slice, because a read-write step would edit your files unsandboxed.
 - **Filesystem permissions are requested, not enforced.** A participant's `filesystem` is
   shown and passed to the adapter, but nothing sandboxes the model. A "read-only" routine is
   read-only because it was *instructed* to be, not because chit-minimal stops a write.
@@ -62,10 +66,12 @@ src/config.ts     thin routine config (names + manifest path + defaults)
 src/routine.ts    resolve a routine: config + bound manifest + digest
 src/inputs.ts     validate operator inputs
 src/template.ts   {{ inputs.x }} / {{ steps.y.output }} rendering
-src/adapter.ts    the one model-call seam (fake for tests, claude CLI for real)
-src/run.ts        one-shot executor -> receipt (deterministic, no IO)
-src/store.ts      receipts on disk under .chit/runs
-src/views.ts      routine list / inspect / trace rendering
-src/cli.ts        the four verbs
-src/index.ts      the bin
+src/adapter.ts      the one model-call seam (fake for tests, claude CLI for real)
+src/check-runner.ts the check seam (fake for tests, real argv spawn)
+src/run.ts          one-shot executor -> receipt (deterministic, no IO)
+src/converge.ts     converge loop executor -> iteration receipt (deterministic, no IO)
+src/store.ts        receipts on disk under .chit/runs (one-shot | converge)
+src/views.ts        routine list / inspect / trace rendering
+src/cli.ts          the four verbs
+src/index.ts        the bin
 ```

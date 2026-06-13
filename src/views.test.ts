@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ConvergeReceipt } from "./converge.ts";
 import { parseManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
@@ -36,11 +37,14 @@ const CONVERGE = {
 	description: "Implement and review.",
 	inputs: { task: { type: "string" } },
 	participants: {
-		impl: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
-		rev: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
+		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
-	loop: { implementer: "impl", reviewer: "rev" },
-	checks: [{ command: "bun", args: ["test"] }],
+	steps: [
+		{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
+		{ id: "critique", call: "critic", prompt: "{{ steps.build.output }}" },
+		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+	],
 	maxIterations: 3,
 };
 
@@ -78,19 +82,63 @@ describe("formatInspect", () => {
 		expect(out).toContain("sha256:aaaaaaaaaaaa");
 	});
 
-	test("converge: shows loop refs, checks, and the inspect-only note", () => {
+	test("converge: shows steps (including checks) and the gated-execution note, no fixed roles", () => {
 		const out = formatInspect(routineFrom(CONVERGE));
 		expect(out).toContain("impl-review  (converge)");
-		expect(out).toContain("implementer=impl");
-		expect(out).toContain("reviewer=rev");
-		expect(out).toContain("bun test");
-		expect(out).toContain("max iterations: 3");
-		expect(out).toMatch(/converge execution is not wired/);
+		expect(out).toContain("call builder");
+		expect(out).toContain("call critic");
+		expect(out).toContain("check: bun test");
+		expect(out).toContain("max 3 iterations");
+		expect(out).toMatch(/working step-based executor/);
+		expect(out).not.toContain("implementer=");
 	});
 
-	test("converge: a config default overrides the manifest's max iterations in the view", () => {
+	test("converge: a config default overrides max iterations in the view", () => {
 		const out = formatInspect(routineFrom(CONVERGE, { defaults: { maxIterations: 9 } }));
-		expect(out).toContain("max iterations: 9");
+		expect(out).toContain("max 9 iterations");
+	});
+});
+
+describe("formatTrace converge", () => {
+	const receipt: ConvergeReceipt = {
+		runId: "run-c",
+		routineId: "impl-review",
+		policy: "converge",
+		digest: `sha256:${"c".repeat(64)}`,
+		inputs: { task: "ship it" },
+		maxIterations: 3,
+		startedAt: 0,
+		finishedAt: 50,
+		elapsedMs: 50,
+		status: "converged",
+		iterations: [
+			{
+				n: 1,
+				allChecksPassed: false,
+				steps: [
+					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", elapsedMs: 10 },
+					{ id: "verify", kind: "check", status: "failed", elapsedMs: 5, checks: [{ command: "bun test", ok: false, elapsedMs: 5 }] },
+				],
+			},
+			{
+				n: 2,
+				allChecksPassed: true,
+				steps: [
+					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", elapsedMs: 8 },
+					{ id: "verify", kind: "check", status: "ok", elapsedMs: 4, checks: [{ command: "bun test", ok: true, elapsedMs: 4 }] },
+				],
+			},
+		],
+	};
+
+	test("shows per-iteration steps and per-check results", () => {
+		const out = formatTrace(receipt);
+		expect(out).toContain("run-c  impl-review  converged");
+		expect(out).toContain("iterations: 2 (max 3)");
+		expect(out).toContain("iteration 1  checks failed");
+		expect(out).toContain("iteration 2  checks passed");
+		expect(out).toContain("bun test:fail");
+		expect(out).toContain("bun test:ok");
 	});
 });
 

@@ -42,12 +42,25 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       printed a grounded report, persisted receipt run-a109eae0, trace renders it.
       NOTE: receipts store inputs + final output in plaintext (.chit/runs, gitignored).
 
-## Next candidates (not started)
-- converge executor proven with a FAKE adapter + FAKE check-runner first (mirror how one-shot
-  was proven), iteration-shaped receipt, explicit convergence contract. Decide prompt source
-  (manifest vs executor) and the done-signal BEFORE code. Real check-runner + fs safety later.
-- `--full` flag on trace to print the stored output body.
-- biome/lint config if this graduates past a proof.
+## Increment 2 COMPLETE — step-based converge (configurable, no fixed roles)
+- [x] Loop is now STEP-BASED, not implementer/reviewer slots. A manifest is ordered steps
+      (`call` / `format` / `check`); "build"/"critique" are step ids, "builder"/"critic" are
+      participant names. Roles are examples, not runtime concepts. (other-model catch on my
+      earlier fixed-slot CONVERGE-DESIGN was correct; design changed.)
+- [x] check step kind; converge requires >=1 check step (its convergence signal).
+- [x] `{{ iteration }}` template var; cross-iteration step refs via a pre-seeded loop context.
+- [x] CheckRunner seam: fakeCheckRunner (tests) + argvCheckRunner (real).
+- [x] runConverge executor: loops steps until all checks pass or maxIterations; feeds failing
+      check output forward to the next iteration's call steps. Fake-backed, deterministic.
+- [x] ConvergeReceipt / IterationReceipt (tagged union by policy); store + trace handle both.
+- [x] example implementation-review.json rewritten step-based; inspect renders it.
+- [x] 77 tests pass, typecheck clean. Proven: fail -> feedback -> converge (converge.test.ts).
+
+## Gated on purpose (the next slice)
+- Live `chit run <converge>` still REFUSES: a read-write step edits files unsandboxed. The
+  write-safety slice (run in a temp copy / git worktree, then show/apply the diff) is next,
+  plus a real claude adapter that can actually edit under that sandbox.
+- `--full` trace flag: decide receipt storage policy first.
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, converge execution, config editor, multi-provider adapters,

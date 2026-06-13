@@ -1,0 +1,189 @@
+// Execute a converge routine: run its ordered steps repeatedly until every check
+// step passes, or maxIterations is hit. State threads across iterations through a
+// persistent context -- a check step's combined failing output becomes its
+// `output`, so the NEXT iteration's call steps can reference {{ steps.verify.output }}
+// and react to the failures. That feedback IS the loop.
+//
+// Like runOneShot, this does no disk IO and takes an injected clock, id, adapter,
+// and check-runner, so it is fully deterministic under test with fakes. No real
+// model call and no real check run happen in the test suite.
+
+import type { Adapter } from "./adapter.ts";
+import type { CheckRunner } from "./check-runner.ts";
+import type { ConvergeManifest } from "./manifest.ts";
+import type { ResolvedRoutine } from "./routine.ts";
+import { renderTemplate } from "./template.ts";
+
+export interface CheckReceipt {
+	command: string;
+	ok: boolean;
+	elapsedMs: number;
+}
+
+export interface ConvergeStepReceipt {
+	id: string;
+	kind: "call" | "format" | "check";
+	participant?: string;
+	agent?: string;
+	status: "ok" | "failed";
+	elapsedMs: number;
+	checks?: CheckReceipt[];
+	error?: string;
+}
+
+export interface IterationReceipt {
+	n: number;
+	steps: ConvergeStepReceipt[];
+	allChecksPassed: boolean;
+}
+
+export interface ConvergeReceipt {
+	runId: string;
+	routineId: string;
+	policy: "converge";
+	scope?: string;
+	digest: string;
+	inputs: Record<string, string>;
+	maxIterations: number;
+	startedAt: number;
+	finishedAt: number;
+	elapsedMs: number;
+	status: "converged" | "did-not-converge" | "failed";
+	iterations: IterationReceipt[];
+	error?: string;
+}
+
+export interface ConvergeDeps {
+	adapter: Adapter;
+	checkRunner: CheckRunner;
+	cwd: string;
+	now: () => number;
+	newRunId: () => string;
+	// Override for the manifest's maxIterations (e.g. a config default). Clamped.
+	maxIterations?: number;
+}
+
+const DEFAULT_MAX_ITERATIONS = 5;
+const ITERATION_CEILING = 20;
+
+export function effectiveMaxIterations(manifest: ConvergeManifest, override?: number): number {
+	const chosen = override ?? manifest.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+	return Math.max(1, Math.min(ITERATION_CEILING, chosen));
+}
+
+export async function runConverge(
+	routine: ResolvedRoutine,
+	values: Record<string, string>,
+	deps: ConvergeDeps,
+	opts: { scope?: string } = {},
+): Promise<ConvergeReceipt> {
+	if (routine.manifest.policy !== "converge") {
+		throw new Error("runConverge called with a non-converge routine");
+	}
+	const manifest: ConvergeManifest = routine.manifest;
+	const maxIterations = effectiveMaxIterations(manifest, deps.maxIterations);
+	const runId = deps.newRunId();
+	const startedAt = deps.now();
+
+	// Persistent across iterations: every step id pre-seeded to "" so a
+	// cross-iteration reference renders empty on iteration 1 (a typo'd id still throws).
+	const ctx: { inputs: Record<string, string>; steps: Record<string, { output: string }>; iteration: number } = {
+		inputs: values,
+		steps: Object.fromEntries(manifest.steps.map((s) => [s.id, { output: "" }])),
+		iteration: 0,
+	};
+
+	const iterations: IterationReceipt[] = [];
+	let runError: string | undefined;
+	let converged = false;
+
+	for (let n = 1; n <= maxIterations && runError === undefined && !converged; n++) {
+		ctx.iteration = n;
+		const stepReceipts: ConvergeStepReceipt[] = [];
+		let allChecksPassed = true;
+
+		for (const step of manifest.steps) {
+			const stepStart = deps.now();
+			try {
+				if (step.kind === "call") {
+					const participant = manifest.participants[step.call];
+					if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
+					const result = await deps.adapter.call({
+						agent: participant.agent,
+						instructions: participant.instructions,
+						prompt: renderTemplate(step.prompt, ctx),
+						filesystem: participant.filesystem,
+						cwd: deps.cwd,
+					});
+					ctx.steps[step.id] = { output: result.output };
+					stepReceipts.push({
+						id: step.id,
+						kind: "call",
+						participant: step.call,
+						agent: participant.agent,
+						status: "ok",
+						elapsedMs: deps.now() - stepStart,
+					});
+				} else if (step.kind === "format") {
+					ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
+					stepReceipts.push({ id: step.id, kind: "format", status: "ok", elapsedMs: deps.now() - stepStart });
+				} else {
+					const checks: CheckReceipt[] = [];
+					const failures: string[] = [];
+					let stepPassed = true;
+					for (const cmd of step.checks) {
+						const checkStart = deps.now();
+						const res = await deps.checkRunner.run(cmd, deps.cwd);
+						const label = [cmd.command, ...cmd.args].join(" ");
+						checks.push({ command: label, ok: res.ok, elapsedMs: deps.now() - checkStart });
+						if (!res.ok) {
+							stepPassed = false;
+							failures.push(`$ ${label}\n${res.output}`.trim());
+						}
+					}
+					// Feed the failing output forward: next iteration's call steps read it.
+					ctx.steps[step.id] = { output: failures.join("\n\n") };
+					if (!stepPassed) allChecksPassed = false;
+					stepReceipts.push({
+						id: step.id,
+						kind: "check",
+						status: stepPassed ? "ok" : "failed",
+						elapsedMs: deps.now() - stepStart,
+						checks,
+					});
+				}
+			} catch (e) {
+				runError = (e as Error).message;
+				stepReceipts.push({
+					id: step.id,
+					kind: step.kind,
+					...(step.kind === "call" && { participant: step.call }),
+					status: "failed",
+					elapsedMs: deps.now() - stepStart,
+					error: runError,
+				});
+				break;
+			}
+		}
+
+		iterations.push({ n, steps: stepReceipts, allChecksPassed: runError === undefined && allChecksPassed });
+		if (runError === undefined && allChecksPassed) converged = true;
+	}
+
+	const finishedAt = deps.now();
+	return {
+		runId,
+		routineId: routine.id,
+		policy: "converge",
+		...(opts.scope !== undefined && { scope: opts.scope }),
+		digest: routine.digest,
+		inputs: values,
+		maxIterations,
+		startedAt,
+		finishedAt,
+		elapsedMs: finishedAt - startedAt,
+		status: runError !== undefined ? "failed" : converged ? "converged" : "did-not-converge",
+		iterations,
+		...(runError !== undefined && { error: runError }),
+	};
+}

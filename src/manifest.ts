@@ -1,28 +1,25 @@
 // A manifest is the source of truth for a routine: its inputs, participants,
-// steps, policy, prompts, and checks. The config layer only NAMES a routine and
-// points at one of these; it never redeclares any of this. Keeping that boundary
-// strict is the whole point of the model -- one place to read "what will run".
+// ordered steps, policy, prompts, and checks. The config layer only NAMES a
+// routine and points at one of these; it never redeclares any of this.
 //
-// Parsing rejects anything off-contract loudly, the same discipline the hardened
-// runtime uses: an unknown field is a typo or a smuggled surface, never a silent
-// passthrough.
+// Both policies are just ORDERED STEPS. The difference is termination:
+//   one-shot  -- run the steps once; `output` names the step to return.
+//   converge  -- run the steps repeatedly until every check step passes (or
+//                maxIterations). There is no fixed implementer/reviewer slot:
+//                "build"/"critique" are step ids and "builder"/"critic" are
+//                participant names, nothing more. Roles are examples, not runtime.
 
 export type Filesystem = "read-only" | "read-write" | "none";
 export type Policy = "one-shot" | "converge";
 
 const FILESYSTEMS = new Set<Filesystem>(["read-only", "read-write", "none"]);
 
-// An input the operator supplies at run time. v1 is string-typed only; `required`
-// defaults to true so a routine asks for what it needs unless explicitly optional.
 export interface InputSpec {
 	type: "string";
 	required: boolean;
 	description?: string;
 }
 
-// A named actor in the routine. `agent` is the adapter/model id (e.g. "claude").
-// `filesystem` is the permission the run SHOULD grant it; the inspect view surfaces
-// it so a reader knows the blast radius before running.
 export interface Participant {
 	id: string;
 	agent: string;
@@ -30,9 +27,16 @@ export interface Participant {
 	filesystem: Filesystem;
 }
 
-// One ordered unit of a one-shot routine. A `call` step invokes a participant with
-// a rendered prompt; a `format` step assembles text (typically a prior step's
-// output) without a model call.
+// A check command: argv only (command + args), never a shell string, so there is
+// nothing to quote-escape or inject.
+export interface Check {
+	command: string;
+	args: string[];
+}
+
+// One ordered step. `call` invokes a participant with a rendered prompt; `format`
+// assembles text without a model call; `check` runs commands and records pass/fail
+// (the convergence signal). A step is exactly one kind.
 export interface CallStep {
 	id: string;
 	kind: "call";
@@ -44,14 +48,16 @@ export interface FormatStep {
 	kind: "format";
 	format: string;
 }
-export type Step = CallStep | FormatStep;
-
-// A check the converge loop runs to decide "done": argv only (command + args),
-// never a shell string, so there is nothing to quote-escape or inject.
-export interface Check {
-	command: string;
-	args: string[];
+export interface CheckStep {
+	id: string;
+	kind: "check";
+	checks: Check[];
 }
+export type Step = CallStep | FormatStep | CheckStep;
+// One-shot routines cannot contain check steps (a single pass has nothing to
+// converge on); the parser enforces it, and this narrower type lets the one-shot
+// executor see only the two kinds it handles.
+export type OneShotStep = CallStep | FormatStep;
 
 export interface OneShotManifest {
 	id: string;
@@ -59,21 +65,17 @@ export interface OneShotManifest {
 	policy: "one-shot";
 	inputs: Record<string, InputSpec>;
 	participants: Record<string, Participant>;
-	steps: Step[];
+	steps: OneShotStep[];
 	output: string;
 }
 
-// Converge declares its loop by REFERENCE to participant ids rather than fixed
-// "implementer"/"reviewer" role names -- roles are examples of participant names,
-// not a built-in vocabulary.
 export interface ConvergeManifest {
 	id: string;
 	description?: string;
 	policy: "converge";
 	inputs: Record<string, InputSpec>;
 	participants: Record<string, Participant>;
-	loop: { implementer: string; reviewer: string };
-	checks: Check[];
+	steps: Step[];
 	maxIterations?: number;
 }
 
@@ -152,7 +154,33 @@ function parseParticipants(raw: unknown, source: string): Record<string, Partici
 	return out;
 }
 
-function parseSteps(raw: unknown, source: string, participants: Record<string, Participant>): Step[] {
+function parseCheckArray(raw: unknown, where: string): Check[] {
+	if (!Array.isArray(raw) || raw.length === 0) {
+		throw new ManifestError(where, "`check` must be a non-empty array of commands");
+	}
+	return raw.map((c, i) => {
+		const at = `${where}[${i}]`;
+		if (!isObject(c)) throw new ManifestError(at, "must be an object");
+		requireKeys(c, new Set(["command", "args"]), at);
+		if (typeof c.command !== "string" || !c.command) {
+			throw new ManifestError(at, "`command` must be a non-empty string");
+		}
+		const args = c.args ?? [];
+		if (!Array.isArray(args) || args.some((a) => typeof a !== "string")) {
+			throw new ManifestError(at, "`args` must be an array of strings");
+		}
+		return { command: c.command, args: args as string[] };
+	});
+}
+
+// Parse the ordered steps. `allowCheck` is false for one-shot (a single pass has
+// nothing to converge on), true for converge.
+function parseSteps(
+	raw: unknown,
+	source: string,
+	participants: Record<string, Participant>,
+	allowCheck: boolean,
+): Step[] {
 	if (!Array.isArray(raw)) throw new ManifestError(source, "`steps` must be an array");
 	if (raw.length === 0) throw new ManifestError(source, "`steps` must not be empty");
 	const out: Step[] = [];
@@ -163,12 +191,12 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 		if (typeof s.id !== "string" || !s.id) throw new ManifestError(where, "`id` must be a non-empty string");
 		if (seen.has(s.id)) throw new ManifestError(where, `duplicate step id "${s.id}"`);
 		seen.add(s.id);
-		const hasCall = s.call !== undefined;
-		const hasFormat = s.format !== undefined;
-		if (hasCall === hasFormat) {
-			throw new ManifestError(where, "a step is exactly one of `call` or `format`");
+		const kinds = (["call", "format", "check"] as const).filter((k) => s[k] !== undefined);
+		if (kinds.length !== 1) {
+			throw new ManifestError(where, "a step is exactly one of `call`, `format`, or `check`");
 		}
-		if (hasCall) {
+		const kind = kinds[0];
+		if (kind === "call") {
 			requireKeys(s, new Set(["id", "call", "prompt"]), where);
 			if (typeof s.call !== "string" || !(s.call in participants)) {
 				throw new ManifestError(where, `\`call\` must name a participant (got ${JSON.stringify(s.call)})`);
@@ -177,33 +205,21 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 				throw new ManifestError(where, "`prompt` must be a non-empty string");
 			}
 			out.push({ id: s.id, kind: "call", call: s.call, prompt: s.prompt });
-		} else {
+		} else if (kind === "format") {
 			requireKeys(s, new Set(["id", "format"]), where);
 			if (typeof s.format !== "string" || !s.format) {
 				throw new ManifestError(where, "`format` must be a non-empty string");
 			}
 			out.push({ id: s.id, kind: "format", format: s.format });
+		} else {
+			if (!allowCheck) {
+				throw new ManifestError(where, "`check` steps are only valid in a converge routine");
+			}
+			requireKeys(s, new Set(["id", "check"]), where);
+			out.push({ id: s.id, kind: "check", checks: parseCheckArray(s.check, `${where}.check`) });
 		}
 	}
 	return out;
-}
-
-function parseChecks(raw: unknown, source: string): Check[] {
-	if (raw === undefined) return [];
-	if (!Array.isArray(raw)) throw new ManifestError(source, "`checks` must be an array");
-	return raw.map((c, i) => {
-		const where = `${source}.checks[${i}]`;
-		if (!isObject(c)) throw new ManifestError(where, "must be an object");
-		requireKeys(c, new Set(["command", "args"]), where);
-		if (typeof c.command !== "string" || !c.command) {
-			throw new ManifestError(where, "`command` must be a non-empty string");
-		}
-		const args = c.args ?? [];
-		if (!Array.isArray(args) || args.some((a) => typeof a !== "string")) {
-			throw new ManifestError(where, "`args` must be an array of strings");
-		}
-		return { command: c.command, args: args as string[] };
-	});
 }
 
 export function parseManifest(raw: unknown, source: string): Manifest {
@@ -227,7 +243,8 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 			new Set(["id", "policy", "description", "inputs", "participants", "steps", "output"]),
 			source,
 		);
-		const steps = parseSteps(raw.steps, source, participants);
+		// allowCheck=false guarantees no check steps, so the narrower OneShotStep[] holds.
+		const steps = parseSteps(raw.steps, source, participants, false) as OneShotStep[];
 		if (typeof raw.output !== "string" || !steps.some((s) => s.id === raw.output)) {
 			throw new ManifestError(source, "`output` must name one of the steps");
 		}
@@ -244,16 +261,12 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 
 	requireKeys(
 		raw,
-		new Set(["id", "policy", "description", "inputs", "participants", "loop", "checks", "maxIterations"]),
+		new Set(["id", "policy", "description", "inputs", "participants", "steps", "maxIterations"]),
 		source,
 	);
-	if (!isObject(raw.loop)) throw new ManifestError(source, "`loop` must be an object");
-	requireKeys(raw.loop, new Set(["implementer", "reviewer"]), `${source}.loop`);
-	for (const role of ["implementer", "reviewer"] as const) {
-		const ref = raw.loop[role];
-		if (typeof ref !== "string" || !(ref in participants)) {
-			throw new ManifestError(`${source}.loop`, `\`${role}\` must name a participant`);
-		}
+	const steps = parseSteps(raw.steps, source, participants, true);
+	if (!steps.some((s) => s.kind === "check")) {
+		throw new ManifestError(source, "a converge routine needs at least one `check` step (its convergence signal)");
 	}
 	if (raw.maxIterations !== undefined) {
 		if (typeof raw.maxIterations !== "number" || !Number.isInteger(raw.maxIterations) || raw.maxIterations < 1) {
@@ -266,8 +279,7 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		policy: "converge",
 		inputs,
 		participants,
-		loop: { implementer: raw.loop.implementer as string, reviewer: raw.loop.reviewer as string },
-		checks: parseChecks(raw.checks, source),
+		steps,
 		...(typeof raw.maxIterations === "number" && { maxIterations: raw.maxIterations }),
 	};
 }

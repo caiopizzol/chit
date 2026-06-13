@@ -7,7 +7,11 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ConvergeReceipt } from "./converge.ts";
 import type { RunReceipt } from "./run.ts";
+
+// A stored receipt is either policy's shape; `policy` discriminates them.
+export type AnyReceipt = RunReceipt | ConvergeReceipt;
 
 export function runsDir(cwd: string): string {
 	return join(cwd, ".chit", "runs");
@@ -17,7 +21,7 @@ export function receiptPath(cwd: string, runId: string): string {
 	return join(runsDir(cwd), `${runId}.json`);
 }
 
-export function saveReceipt(cwd: string, receipt: RunReceipt): string {
+export function saveReceipt(cwd: string, receipt: AnyReceipt): string {
 	const dir = runsDir(cwd);
 	mkdirSync(dir, { recursive: true });
 	const path = receiptPath(cwd, receipt.runId);
@@ -25,10 +29,10 @@ export function saveReceipt(cwd: string, receipt: RunReceipt): string {
 	return path;
 }
 
-export function loadReceipt(cwd: string, runId: string): RunReceipt {
+export function loadReceipt(cwd: string, runId: string): AnyReceipt {
 	const path = receiptPath(cwd, runId);
 	if (!existsSync(path)) {
 		throw new Error(`no run ${JSON.stringify(runId)} found (looked in ${runsDir(cwd)})`);
 	}
-	return JSON.parse(readFileSync(path, "utf-8")) as RunReceipt;
+	return JSON.parse(readFileSync(path, "utf-8")) as AnyReceipt;
 }

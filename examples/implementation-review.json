@@ -6,21 +6,35 @@
 		"task": { "type": "string", "required": true, "description": "the slice to implement" }
 	},
 	"participants": {
-		"implementer": {
+		"builder": {
 			"agent": "claude",
-			"instructions": "You implement a small, well-scoped code slice and keep going until the reviewer and checks pass.",
+			"instructions": "You implement a small, well-scoped code slice and keep going until the checks pass.",
 			"filesystem": "read-write"
 		},
-		"reviewer": {
+		"critic": {
 			"agent": "claude",
-			"instructions": "You review the implementer's diff for correctness and scope. You do not edit files.",
+			"instructions": "You review the work for correctness and scope. You do not edit files.",
 			"filesystem": "read-only"
 		}
 	},
-	"loop": { "implementer": "implementer", "reviewer": "reviewer" },
-	"checks": [
-		{ "command": "bun", "args": ["run", "typecheck"] },
-		{ "command": "bun", "args": ["test"] }
+	"steps": [
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nPrior review:\n{{ steps.critique.output }}\n\nFailing checks from last iteration:\n{{ steps.verify.output }}\n\nMake the smallest change that moves toward passing the checks."
+		},
+		{
+			"id": "critique",
+			"call": "critic",
+			"prompt": "Review this work for the task \"{{ inputs.task }}\":\n\n{{ steps.build.output }}\n\nCall out correctness and scope problems. Be brief."
+		},
+		{
+			"id": "verify",
+			"check": [
+				{ "command": "bun", "args": ["run", "typecheck"] },
+				{ "command": "bun", "args": ["test"] }
+			]
+		}
 	],
 	"maxIterations": 3
 }

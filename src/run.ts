@@ -8,7 +8,7 @@
 // the hardened runtime's job, not this proof's.
 
 import type { Adapter } from "./adapter.ts";
-import type { OneShotManifest, Policy } from "./manifest.ts";
+import type { OneShotManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -25,7 +25,7 @@ export interface StepReceipt {
 export interface RunReceipt {
 	runId: string;
 	routineId: string;
-	policy: Policy;
+	policy: "one-shot";
 	scope?: string;
 	digest: string;
 	inputs: Record<string, string>;

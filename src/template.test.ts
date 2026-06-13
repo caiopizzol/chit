@@ -35,4 +35,17 @@ describe("renderTemplate", () => {
 	test("leaves text without references untouched", () => {
 		expect(renderTemplate("plain text", ctx)).toBe("plain text");
 	});
+
+	test("renders the iteration number inside a loop context", () => {
+		expect(renderTemplate("iter {{ iteration }}", { ...ctx, iteration: 2 })).toBe("iter 2");
+	});
+
+	test("throws on {{ iteration }} outside a loop", () => {
+		expect(() => renderTemplate("{{ iteration }}", ctx)).toThrow(/only valid inside a converge loop/);
+	});
+
+	test("a pre-seeded cross-iteration step ref renders its (possibly empty) value", () => {
+		const seeded = { inputs: {}, steps: { critique: { output: "" } }, iteration: 1 };
+		expect(renderTemplate("[{{ steps.critique.output }}]", seeded)).toBe("[]");
+	});
 });

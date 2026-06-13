@@ -25,11 +25,14 @@ const REVIEW = {
 	policy: "converge",
 	inputs: { task: { type: "string" } },
 	participants: {
-		impl: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
-		rev: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
+		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
-	loop: { implementer: "impl", reviewer: "rev" },
-	checks: [{ command: "bun", args: ["test"] }],
+	steps: [
+		{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
+		{ id: "critique", call: "critic", prompt: "{{ steps.build.output }}" },
+		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+	],
 };
 
 beforeAll(() => {
@@ -86,10 +89,13 @@ describe("chit inspect", () => {
 		expect(text).toContain("call griller");
 	});
 
-	test("inspects a converge routine and notes execution is not wired", async () => {
+	test("inspects a converge routine as ordered steps and notes execution is gated", async () => {
 		const { deps, out } = harness();
 		expect(await runCli(["inspect", "impl-review"], deps)).toBe(0);
-		expect(out.join("\n")).toMatch(/converge execution is not wired/);
+		const text = out.join("\n");
+		expect(text).toContain("call builder");
+		expect(text).toContain("check: bun test");
+		expect(text).toMatch(/working step-based executor/);
 	});
 
 	test("refuses an unknown routine with a helpful error", async () => {
@@ -114,10 +120,10 @@ describe("chit run", () => {
 		expect(err.join("\n")).toMatch(/missing required input "idea"/);
 	});
 
-	test("refuses a converge routine (one-shot only for now)", async () => {
+	test("refuses to live-run a converge routine (gated on write-safety)", async () => {
 		const { deps, err } = harness();
 		expect(await runCli(["run", "impl-review", "--input", "task=x"], deps)).toBe(1);
-		expect(err.join("\n")).toMatch(/converge; chit-minimal runs one-shot/);
+		expect(err.join("\n")).toMatch(/gated until the write-safety slice/);
 	});
 
 	test("rejects a malformed --input", async () => {

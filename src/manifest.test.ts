@@ -16,16 +16,21 @@ const ONE_SHOT = {
 	output: "out",
 };
 
+// Step-based converge: no implementer/reviewer slots. "build"/"critique" are step
+// ids; "builder"/"critic" are participant names; "verify" is a check step.
 const CONVERGE = {
 	id: "impl-review",
 	policy: "converge",
 	inputs: { task: { type: "string" } },
 	participants: {
-		impl: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
-		rev: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
+		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
-	loop: { implementer: "impl", reviewer: "rev" },
-	checks: [{ command: "bun", args: ["test"] }],
+	steps: [
+		{ id: "build", call: "builder", prompt: "{{ inputs.task }} {{ iteration }} {{ steps.verify.output }}" },
+		{ id: "critique", call: "critic", prompt: "{{ steps.build.output }}" },
+		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+	],
 	maxIterations: 3,
 };
 
@@ -39,16 +44,11 @@ describe("parseManifest one-shot", () => {
 		expect(m.policy).toBe("one-shot");
 		expect(m.inputs.idea?.required).toBe(true);
 		expect(m.inputs.context?.required).toBe(false);
-		expect(m.participants.griller?.filesystem).toBe("read-only");
 		if (m.policy !== "one-shot") throw new Error("narrow");
 		expect(m.steps.map((s) => s.id)).toEqual(["grill", "out"]);
 		expect(m.steps[0]).toMatchObject({ kind: "call", call: "griller" });
 		expect(m.steps[1]).toMatchObject({ kind: "format" });
 		expect(m.output).toBe("out");
-	});
-
-	test("required defaults to true when omitted", () => {
-		expect(parse(ONE_SHOT).inputs.idea?.required).toBe(true);
 	});
 
 	test("rejects an output that names no step", () => {
@@ -60,9 +60,12 @@ describe("parseManifest one-shot", () => {
 		expect(() => parse({ ...ONE_SHOT, steps, output: "grill" })).toThrow(/`call` must name a participant/);
 	});
 
-	test("rejects a step that is both call and format", () => {
-		const steps = [{ id: "x", call: "griller", prompt: "p", format: "f" }];
-		expect(() => parse({ ...ONE_SHOT, steps, output: "x" })).toThrow(/exactly one of `call` or `format`/);
+	test("rejects a check step in a one-shot routine", () => {
+		const steps = [
+			{ id: "grill", call: "griller", prompt: "p" },
+			{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+		];
+		expect(() => parse({ ...ONE_SHOT, steps, output: "grill" })).toThrow(/`check` steps are only valid in a converge/);
 	});
 
 	test("rejects duplicate step ids", () => {
@@ -72,40 +75,50 @@ describe("parseManifest one-shot", () => {
 		];
 		expect(() => parse({ ...ONE_SHOT, steps, output: "dup" })).toThrow(/duplicate step id/);
 	});
-
-	test("rejects converge-only fields on a one-shot manifest", () => {
-		expect(() => parse({ ...ONE_SHOT, checks: [] })).toThrow(/unknown field "checks"/);
-	});
 });
 
-describe("parseManifest converge", () => {
-	test("parses a valid converge manifest", () => {
+describe("parseManifest converge (step-based)", () => {
+	test("parses a valid converge manifest as ordered steps", () => {
 		const m = parse(CONVERGE);
 		expect(m.policy).toBe("converge");
 		if (m.policy !== "converge") throw new Error("narrow");
-		expect(m.loop).toEqual({ implementer: "impl", reviewer: "rev" });
-		expect(m.checks).toEqual([{ command: "bun", args: ["test"] }]);
+		expect(m.steps.map((s) => [s.id, s.kind])).toEqual([
+			["build", "call"],
+			["critique", "call"],
+			["verify", "check"],
+		]);
+		const verify = m.steps[2];
+		if (verify?.kind !== "check") throw new Error("narrow");
+		expect(verify.checks).toEqual([{ command: "bun", args: ["test"] }]);
 		expect(m.maxIterations).toBe(3);
 	});
 
-	test("loop roles are references to participants, not fixed names", () => {
-		const m = parse({ ...CONVERGE, loop: { implementer: "rev", reviewer: "impl" } });
+	test("has no fixed implementer/reviewer slots -- they are just step/participant names", () => {
+		const m = parse(CONVERGE);
 		if (m.policy !== "converge") throw new Error("narrow");
-		expect(m.loop.implementer).toBe("rev");
+		expect(Object.keys(m.participants)).toEqual(["builder", "critic"]);
+		expect("loop" in m).toBe(false);
 	});
 
-	test("rejects a loop role naming no participant", () => {
-		expect(() => parse({ ...CONVERGE, loop: { implementer: "impl", reviewer: "ghost" } })).toThrow(
-			/`reviewer` must name a participant/,
-		);
+	test("requires at least one check step (the convergence signal)", () => {
+		const steps = [{ id: "build", call: "builder", prompt: "p" }];
+		expect(() => parse({ ...CONVERGE, steps })).toThrow(/needs at least one `check` step/);
 	});
 
-	test("rejects one-shot-only fields on a converge manifest", () => {
-		expect(() => parse({ ...CONVERGE, steps: [] })).toThrow(/unknown field "steps"/);
+	test("rejects an empty check command list", () => {
+		const steps = [
+			{ id: "build", call: "builder", prompt: "p" },
+			{ id: "verify", check: [] },
+		];
+		expect(() => parse({ ...CONVERGE, steps })).toThrow(/non-empty array of commands/);
 	});
 
 	test("rejects a non-positive maxIterations", () => {
 		expect(() => parse({ ...CONVERGE, maxIterations: 0 })).toThrow(/positive integer/);
+	});
+
+	test("rejects a converge manifest with a stray top-level field", () => {
+		expect(() => parse({ ...CONVERGE, output: "build" })).toThrow(/unknown field "output"/);
 	});
 });
 
@@ -122,6 +135,11 @@ describe("parseManifest shared validation", () => {
 
 	test("rejects a manifest with no participants", () => {
 		expect(() => parse({ ...ONE_SHOT, participants: {} })).toThrow(/at least one participant/);
+	});
+
+	test("rejects a step that is more than one kind", () => {
+		const steps = [{ id: "x", call: "griller", prompt: "p", format: "f" }];
+		expect(() => parse({ ...ONE_SHOT, steps, output: "x" })).toThrow(/exactly one of `call`, `format`, or `check`/);
 	});
 
 	test("errors are ManifestError carrying the source", () => {

@@ -108,7 +108,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			}
 
 			if (routine.manifest.policy !== "one-shot") {
-				deps.err(`routine ${JSON.stringify(args.id)} is converge; chit-minimal runs one-shot routines only (inspect works for both)`);
+				// The step-based converge executor exists and is proven under test, but the
+				// live CLI does not run it yet: a read-write step edits files unsandboxed, and
+				// that write-safety slice is deliberately next. `inspect` shows the loop.
+				deps.err(
+					`routine ${JSON.stringify(args.id)} is converge. Its executor works (see tests), but live \`chit run\` is gated until the write-safety slice. Try \`chit inspect ${args.id}\`.`,
+				);
 				return 1;
 			}
 
