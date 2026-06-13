@@ -204,6 +204,14 @@ describe("runFlow (execution)", () => {
 		expect(sub.maxIterations).toBe(7);
 	});
 
+	test("emits a live-progress header per sub-routine", async () => {
+		const lines: string[] = [];
+		await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, { ...deps(), onProgress: (l) => lines.push(l) });
+		expect(lines).toContain("step grill -> grill");
+		expect(lines).toContain("step plan -> plan");
+		expect(lines).toContain("step impl -> impl");
+	});
+
 	test("propagates the composition scope to every sub-run", async () => {
 		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, deps(), { scope: "feat-z" });
 		expect(res.receipt.scope).toBe("feat-z");

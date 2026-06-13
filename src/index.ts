@@ -16,6 +16,8 @@ const code = await runCli(process.argv.slice(2), {
 	newRunId: () => `run-${crypto.randomUUID().slice(0, 8)}`,
 	out: (line) => console.log(line),
 	err: (line) => console.error(line),
+	// Live progress streams to stderr as it happens; the final result is on stdout.
+	onProgress: (line) => process.stderr.write(`${line}\n`),
 });
 
 process.exit(code);

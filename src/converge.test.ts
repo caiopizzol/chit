@@ -117,6 +117,19 @@ describe("runConverge", () => {
 		expect(r.maxIterations).toBe(3);
 	});
 
+	test("emits live progress: iteration headers and check results", async () => {
+		const lines: string[] = [];
+		const checkRunner = fakeCheckRunner((_c, i) =>
+			i === 0 ? { ok: false, exitCode: 1, output: "x" } : { ok: true, exitCode: 0, output: "" },
+		);
+		await runConverge(routineFrom(CONVERGE), { task: "x" }, { ...deps({ checkRunner }), onProgress: (l) => lines.push(l) });
+		expect(lines).toContain("iteration 1");
+		expect(lines).toContain("iteration 2");
+		expect(lines.some((l) => l.includes("call builder"))).toBe(true);
+		expect(lines.some((l) => l.includes("check bun test → fail"))).toBe(true);
+		expect(lines.some((l) => l.includes("check bun test → ok"))).toBe(true);
+	});
+
 	test("aborts before exhausting iterations when the wall-time budget is exceeded", async () => {
 		// each clock read advances 1s; the budget is small enough to stop the loop
 		// well before its 10-iteration cap, even though checks keep failing.

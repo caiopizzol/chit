@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { fakeSandbox, gitWorktreeSandboxFactory } from "./sandbox.ts";
+import { fakeSandbox, gitWorktreeSandboxFactory, reapStaleSandboxes } from "./sandbox.ts";
 
 describe("fakeSandbox", () => {
 	test("records apply/discard and returns the canned diff", async () => {
@@ -73,5 +73,15 @@ describe("gitWorktreeSandbox (real git)", () => {
 		const plain = mkdtempSync(join(tmpdir(), "chit-plain-"));
 		temps.push(plain);
 		await expect(gitWorktreeSandboxFactory.create(plain, "t3")).rejects.toThrow(/needs a git repository/);
+	});
+
+	test("reapStaleSandboxes removes a leftover sandbox worktree (interrupted run)", async () => {
+		const repo = newRepo();
+		const sb = await gitWorktreeSandboxFactory.create(repo, "leak");
+		// simulate a force-killed run: the worktree exists, discard never ran
+		expect(existsSync(sb.workDir)).toBe(true);
+		const removed = await reapStaleSandboxes(repo);
+		expect(removed.length).toBeGreaterThanOrEqual(1);
+		expect(existsSync(sb.workDir)).toBe(false);
 	});
 });

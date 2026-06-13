@@ -165,6 +165,14 @@ describe("chit trace", () => {
 	});
 });
 
+describe("chit cleanup", () => {
+	test("reports when there are no stale sandboxes (non-git cwd)", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["cleanup"], deps)).toBe(0);
+		expect(out.join("\n")).toMatch(/no stale sandboxes/);
+	});
+});
+
 describe("chit help", () => {
 	test("prints usage with no args", async () => {
 		const { deps, out } = harness();

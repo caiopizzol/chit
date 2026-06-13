@@ -43,6 +43,9 @@ export interface RunDeps {
 	cwd: string;
 	now: () => number;
 	newRunId: () => string;
+	// Optional live-progress sink: one line per notable event, so a multi-minute
+	// run is not a black box. The bin prints these to stderr as they happen.
+	onProgress?: (line: string) => void;
 }
 
 export async function runOneShot(
@@ -65,6 +68,7 @@ export async function runOneShot(
 			if (step.kind === "call") {
 				const participant = manifest.participants[step.call];
 				if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
+				deps.onProgress?.(`  call ${step.call} (${participant.agent}) …`);
 				const result = await deps.adapter.call({
 					agent: participant.agent,
 					instructions: participant.instructions,

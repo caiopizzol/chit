@@ -144,6 +144,7 @@ export interface FlowDeps {
 	now: () => number;
 	newRunId: () => string;
 	maxWallMs?: number;
+	onProgress?: (line: string) => void;
 	apply: boolean;
 }
 
@@ -164,6 +165,7 @@ export async function runFlow(
 
 	for (const step of resolved.steps) {
 		const stepStart = deps.now();
+		deps.onProgress?.(`step ${step.id} -> ${step.routine.id}`);
 		// Derived: a sub-routine that writes or runs checks is sandboxed (-> converge path);
 		// otherwise it is a pure text run (-> one-shot path).
 		const sandboxed = isSandboxed(step.routine.manifest);
@@ -194,6 +196,7 @@ export async function runFlow(
 					// standalone `chit run` of it would -- so it behaves the same in a flow.
 					...(step.routine.defaults?.maxIterations !== undefined && { maxIterations: step.routine.defaults.maxIterations }),
 					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
+					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 					apply: deps.apply,
 				},
 				opts,
@@ -211,7 +214,7 @@ export async function runFlow(
 			const r = await runOneShot(
 				step.routine,
 				validation.values,
-				{ adapter: deps.adapter, cwd: deps.cwd, now: deps.now, newRunId: deps.newRunId },
+				{ adapter: deps.adapter, cwd: deps.cwd, now: deps.now, newRunId: deps.newRunId, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) },
 				opts,
 			);
 			subReceipts.push(r);

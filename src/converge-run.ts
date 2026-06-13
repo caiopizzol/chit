@@ -22,6 +22,7 @@ export interface ConvergeRunDeps {
 	newRunId: () => string;
 	maxIterations?: number;
 	maxWallMs?: number;
+	onProgress?: (line: string) => void;
 	// Apply the diff back to origin on success. Default behavior (false) is a
 	// dry-run: run, show the diff, discard. The caller gates this on confirm.
 	apply: boolean;
@@ -41,6 +42,7 @@ export async function runConvergeInSandbox(
 ): Promise<ConvergeRunResult> {
 	// One id shared by the sandbox and the receipt.
 	const runId = deps.newRunId();
+	deps.onProgress?.("  creating sandbox (git worktree) …");
 	const sandbox = await deps.sandboxFactory.create(deps.cwd, runId);
 	let applied = false;
 	try {
@@ -55,6 +57,7 @@ export async function runConvergeInSandbox(
 				newRunId: () => runId,
 				...(deps.maxIterations !== undefined && { maxIterations: deps.maxIterations }),
 				...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
+				...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 				diffProvider: () => sandbox.diff(),
 			},
 			opts,
@@ -65,6 +68,7 @@ export async function runConvergeInSandbox(
 		const status = await sandbox.status();
 
 		if (receipt.status === "converged" && deps.apply) {
+			deps.onProgress?.("  applying changes to your tree …");
 			await sandbox.apply();
 			applied = true;
 		}

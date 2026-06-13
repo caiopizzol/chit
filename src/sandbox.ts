@@ -136,3 +136,24 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		};
 	},
 };
+
+// Reap sandbox worktrees left behind by an INTERRUPTED run (a force-kill skips the
+// `finally { discard() }`). Removes every worktree whose path carries the chit-sbx
+// marker, then prunes. Returns the paths removed. This is the `chit cleanup` path.
+export async function reapStaleSandboxes(originCwd: string): Promise<string[]> {
+	const top = await git(["rev-parse", "--show-toplevel"], originCwd);
+	if (!top.ok) return [];
+	const repoRoot = top.out.trim();
+	const list = await git(["worktree", "list", "--porcelain"], repoRoot);
+	if (!list.ok) return [];
+	const removed: string[] = [];
+	for (const line of list.out.split("\n")) {
+		if (!line.startsWith("worktree ")) continue;
+		const path = line.slice("worktree ".length).trim();
+		if (!path.includes("chit-sbx-")) continue;
+		const r = await git(["worktree", "remove", "--force", path], repoRoot);
+		if (r.ok) removed.push(path);
+	}
+	await git(["worktree", "prune"], repoRoot);
+	return removed;
+}

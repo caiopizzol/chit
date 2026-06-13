@@ -15,7 +15,7 @@ import { validateInputs } from "./inputs.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
-import type { SandboxFactory } from "./sandbox.ts";
+import { reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { saveReceipt, loadReceipt } from "./store.ts";
 import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } from "./views.ts";
 
@@ -29,6 +29,8 @@ export interface CliDeps {
 	newRunId: () => string;
 	out: (line: string) => void;
 	err: (line: string) => void;
+	// Live-progress sink: notable events as they happen (the bin prints to stderr).
+	onProgress?: (line: string) => void;
 }
 
 const USAGE = `chit -- run declared routines
@@ -40,6 +42,7 @@ const USAGE = `chit -- run declared routines
       --scope <name>                  name the run's scope (session grouping)
       --apply                         (sandboxed routines) apply the result to your tree; default is a dry run
   chit trace <run-id>                 show the receipt for a past run
+  chit cleanup                        remove sandbox worktrees left by interrupted runs
 
 A routine is a declared workflow. Its manifest is the source of truth: inputs,
 participants, ordered steps, and an optional repeat. Config only names it. How it
@@ -145,6 +148,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						now: deps.now,
 						newRunId: deps.newRunId,
 						maxWallMs: 30 * 60_000,
+						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
@@ -191,6 +195,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						newRunId: deps.newRunId,
 						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
 						maxWallMs: 30 * 60_000,
+						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
@@ -227,6 +232,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const id = rest[0];
 			if (id === undefined) return fail(deps, "trace needs a run id");
 			deps.out(formatTrace(loadReceipt(deps.cwd, id)));
+			return 0;
+		}
+
+		if (command === "cleanup") {
+			const removed = await reapStaleSandboxes(deps.cwd);
+			deps.out(
+				removed.length > 0
+					? `removed ${removed.length} stale sandbox${removed.length === 1 ? "" : "es"}:\n${removed.map((p) => `  ${p}`).join("\n")}`
+					: "no stale sandboxes to clean up",
+			);
 			return 0;
 		}
 

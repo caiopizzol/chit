@@ -73,6 +73,7 @@ export interface ConvergeDeps {
 	// the per-call timeout this keeps a slow-but-not-hung run from running unbounded.
 	maxWallMs?: number;
 	diffProvider?: () => Promise<string> | string;
+	onProgress?: (line: string) => void;
 }
 
 const DEFAULT_MAX_ITERATIONS = 5;
@@ -126,6 +127,7 @@ export async function runConverge(
 			break;
 		}
 		ctx.iteration = n;
+		deps.onProgress?.(`iteration ${n}`);
 		const stepReceipts: ConvergeStepReceipt[] = [];
 		let allChecksPassed = true;
 
@@ -136,7 +138,8 @@ export async function runConverge(
 				if (step.kind === "call") {
 					const participant = manifest.participants[step.call];
 					if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
-					const result = await deps.adapter.call({
+					deps.onProgress?.(`  call ${step.call} (${participant.agent})`);
+						const result = await deps.adapter.call({
 						agent: participant.agent,
 						instructions: participant.instructions,
 						prompt: renderTemplate(step.prompt, ctx),
@@ -163,6 +166,7 @@ export async function runConverge(
 						const checkStart = deps.now();
 						const res = await deps.checkRunner.run(cmd, deps.cwd);
 						const label = [cmd.command, ...cmd.args].join(" ");
+							deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"}`);
 						checks.push({ command: label, ok: res.ok, elapsedMs: deps.now() - checkStart });
 						if (!res.ok) {
 							stepPassed = false;
