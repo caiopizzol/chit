@@ -119,9 +119,17 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       run-f5111fa3); `chit trace <subRunId>` works per step. NOTE: ~12.5 min wall-clock (3 real
       model calls + a converge loop) -- reinforces that live progress + budgets are the real next needs.
 
+## Increment 6.1 — flow propagation fixes (review follow-ups)
+- [x] flow now forwards a converge sub-routine's config `defaults.maxIterations` into the sub-run,
+      so it behaves identically inside a flow and standalone (was ignored before).
+- [x] flow `scope` propagates to every sub-run (one-shot + converge), so the whole chain shares it.
+- [x] resolveFlow now also validates `{{ inputs.X }}` refs against the declared flow inputs (a typo
+      is caught at resolve, not silently rendered empty). 108 tests, typecheck clean.
+
 ## Deferred still
 durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out,
 nested flows / multiple converge steps (the shared-flow-sandbox model).
+NEXT high-value: live progress/streaming (the 12.5-min blind wait is the clearest pain).
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,

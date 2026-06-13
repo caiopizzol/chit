@@ -36,15 +36,22 @@ export interface ResolvedFlow {
 	steps: ResolvedFlowStep[];
 }
 
-function stepRefs(template: string): string[] {
+function refsOf(template: string, re: RegExp): string[] {
 	const out: string[] = [];
-	const re = /\{\{\s*steps\.([a-zA-Z0-9_-]+)\.output\s*\}\}/g;
 	let m: RegExpExecArray | null = re.exec(template);
 	while (m !== null) {
 		if (m[1]) out.push(m[1]);
 		m = re.exec(template);
 	}
 	return out;
+}
+
+function stepRefs(template: string): string[] {
+	return refsOf(template, /\{\{\s*steps\.([a-zA-Z0-9_-]+)\.output\s*\}\}/g);
+}
+
+function inputRefs(template: string): string[] {
+	return refsOf(template, /\{\{\s*inputs\.([a-zA-Z0-9_-]+)\s*\}\}/g);
 }
 
 // Validate the graph and resolve every sub-routine. Config-aware on purpose.
@@ -74,6 +81,11 @@ export function resolveFlow(
 			for (const ref of stepRefs(template)) {
 				if (!priorIds.has(ref)) {
 					throw new RoutineError(`flow step ${JSON.stringify(step.id)}: input references step ${JSON.stringify(ref)}, which is not an earlier step`);
+				}
+			}
+			for (const ref of inputRefs(template)) {
+				if (!(ref in manifest.inputs)) {
+					throw new RoutineError(`flow step ${JSON.stringify(step.id)}: input references {{ inputs.${ref} }}, which is not a declared flow input`);
 				}
 			}
 		}
@@ -179,9 +191,13 @@ export async function runFlow(
 					cwd: deps.cwd,
 					now: deps.now,
 					newRunId: deps.newRunId,
+					// Honor the sub-routine's config-level converge default, exactly as a
+					// standalone `chit run` of it would -- so it behaves the same in a flow.
+					...(step.routine.defaults?.maxIterations !== undefined && { maxIterations: step.routine.defaults.maxIterations }),
 					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 					apply: deps.apply,
 				},
+				opts,
 			);
 			subReceipts.push(r.receipt);
 			terminalDiff = r.diff;
@@ -193,12 +209,12 @@ export async function runFlow(
 				break;
 			}
 		} else {
-			const r = await runOneShot(step.routine, validation.values, {
-				adapter: deps.adapter,
-				cwd: deps.cwd,
-				now: deps.now,
-				newRunId: deps.newRunId,
-			});
+			const r = await runOneShot(
+				step.routine,
+				validation.values,
+				{ adapter: deps.adapter, cwd: deps.cwd, now: deps.now, newRunId: deps.newRunId },
+				opts,
+			);
 			subReceipts.push(r);
 			ctx.steps[step.id] = { output: r.output ?? "" };
 			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, elapsedMs: deps.now() - stepStart });

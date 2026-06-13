@@ -126,6 +126,16 @@ describe("resolveFlow (graph rules)", () => {
 		expect(() => resolveFlow(f, resolver())).toThrow(/not an earlier step/);
 	});
 
+	test("rejects an input referencing an undeclared flow input (a typo)", () => {
+		const f = routine({
+			id: "f",
+			policy: "flow",
+			inputs: { idea: { type: "string" } },
+			steps: [{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idae }}" } }],
+		});
+		expect(() => resolveFlow(f, resolver())).toThrow(/not a declared flow input/);
+	});
+
 	test("rejects a nested flow", () => {
 		const f = routine({ id: "f", policy: "flow", inputs: {}, steps: [{ id: "n", routine: "feature-flow", inputs: {} }] });
 		expect(() => resolveFlow(f, resolver())).toThrow(/nested flows are not supported/);
@@ -189,5 +199,27 @@ describe("runFlow (execution)", () => {
 		const res = await runFlow(resolveFlow(f, resolver()), {}, deps());
 		expect(res.receipt.status).toBe("failed");
 		expect(res.receipt.error).toMatch(/missing required input "goal"/);
+	});
+
+	test("forwards the sub-routine's config maxIterations default into the converge sub-run", async () => {
+		const implCapped: ResolvedRoutine = { ...IMPL, defaults: { maxIterations: 7 } };
+		const f = routine({
+			id: "f",
+			policy: "flow",
+			inputs: { task: { type: "string" } },
+			steps: [{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.task }}" } }],
+		});
+		const res = await runFlow(resolveFlow(f, resolver({ impl: implCapped })), { task: "x" }, deps());
+		const sub = res.subReceipts[0];
+		expect(sub?.policy).toBe("converge");
+		if (sub?.policy !== "converge") throw new Error("narrow");
+		expect(sub.maxIterations).toBe(7);
+	});
+
+	test("propagates the flow scope to every sub-run", async () => {
+		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, deps(), { scope: "feat-z" });
+		expect(res.receipt.scope).toBe("feat-z");
+		expect(res.subReceipts).toHaveLength(3);
+		for (const sub of res.subReceipts) expect(sub.scope).toBe("feat-z");
 	});
 });
