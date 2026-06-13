@@ -89,8 +89,8 @@ function roleView(id: string, role: NormalizedRole, origin: ConfigOriginSource):
 }
 
 // Field-by-field rebuild (no object spread) so only the contracted fields cross
-// the wire: id + origin, the converge mode, the manifest path, and the optional
-// loop knobs. Recipes carry no env or instruction bodies, so there is nothing to
+// the wire: id + origin, mode, manifest path, and loop knobs for converge
+// recipes. Recipes carry no env or instruction bodies, so there is nothing to
 // redact here beyond keeping the shape explicit.
 function recipeView(
 	id: string,
@@ -103,8 +103,10 @@ function recipeView(
 		mode: recipe.mode,
 		manifestPath: recipe.manifestPath,
 	};
-	if (recipe.maxIterations !== undefined) view.maxIterations = recipe.maxIterations;
-	if (recipe.callTimeoutMs !== undefined) view.callTimeoutMs = recipe.callTimeoutMs;
+	if (recipe.mode === "converge") {
+		if (recipe.maxIterations !== undefined) view.maxIterations = recipe.maxIterations;
+		if (recipe.callTimeoutMs !== undefined) view.callTimeoutMs = recipe.callTimeoutMs;
+	}
 	if (recipe.description !== undefined) view.description = recipe.description;
 	return view;
 }

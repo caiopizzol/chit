@@ -29,7 +29,6 @@ import {
 	buildLoopReceipt,
 	type ConsumedHandoffRef,
 	composeLoopStatusLine,
-	describeParticipantSummaryDrift,
 	type LoopRecord,
 	type LoopRunStatus,
 	type ManifestSpec,
@@ -107,16 +106,16 @@ import {
 } from "../../loops/log-store.ts";
 import { pickRequiredChecks, resolveRunRequiredChecks } from "../../loops/required-checks.ts";
 import {
-	digestManifestText,
 	ManifestBindingError,
+	parseBoundManifestText,
 	type ResolveManifestBinding,
 	type ResolveRecipe,
 	readBoundManifestText,
 	readJobManifest,
 	recipeReceiptOf,
 	resolveManifestBindingWith,
-	resolveManifestParticipantSummary,
 	resolveRecipe,
+	verifyBoundManifestParticipants,
 } from "../../manifest/binding.ts";
 import {
 	advancePlan,
@@ -311,20 +310,20 @@ function readySummary(run: Run) {
 // --- config tools ----------------------------------------------------------
 //
 // Read the effective recipe menu for the target repo/session, so an orchestrator
-// can discover which named converge presets a run could launch (and where each was
+// can discover which named routines a run could launch (and where each was
 // defined) without reading chit.config.json or a manifest itself. Read-only and
 // redacted: config is loaded FRESH for the given cwd through the same layered path
 // every other tool uses (global + repo), and each recipe crosses the wire through
 // effectiveRecipeViews -- the same single redaction the Studio config view uses, so
-// only safe naming/budget facts leak (id, origin layer, mode, manifestPath, and the
-// optional loop knobs). Manifest contents, participant instructions, env values,
+// only safe naming/budget facts leak (id, origin layer, mode, manifestPath, and
+// optional loop knobs on converge recipes). Manifest contents, participant instructions, env values,
 // permissions, prompt bodies, audit blobs, and model output never appear here.
 
 server.registerTool(
 	"chit_recipes",
 	{
 		description:
-			"List the effective recipe menu for the target repo: each named converge preset Chit could launch here, with its origin layer (global/repo), bound manifest path, and any loop knobs (max_iterations, call timeout, description). Read-only and redacted -- no manifest contents, instructions, env, or prompts. Use a recipe id with chit_start, chit_batch_start, or chit_plan_start. Resolves layered global + repo config, read fresh per call.",
+			"List the effective recipe menu for the target repo: each named routine Chit could launch here, with its origin layer (global/repo), mode, bound manifest path, and any converge loop knobs (max_iterations, call timeout, description). Read-only and redacted -- no manifest contents, instructions, env, or prompts. Use any recipe id with chit_start; only converge recipes are valid for chit_batch_start and chit_plan_start. Resolves layered global + repo config, read fresh per call.",
 		inputSchema: {
 			cwd: z
 				.string()
@@ -781,12 +780,14 @@ function launchConvergeJob(p: {
 	if (p.manifestText !== undefined) {
 		// Recipe-backed run: use the resolver-bound bytes directly. No filesystem read, so an
 		// in_place run never touches the caller working tree; manifestPath is kept only as the
-		// surfaced identity. The bytes were already digest-verified at resolution.
-		try {
-			raw = JSON.parse(p.manifestText);
-		} catch (e) {
-			return { ok: false, error: `recipe manifest is not valid JSON: ${(e as Error).message}` };
-		}
+		// surfaced identity. Re-check the approved digest before execution.
+		const parsed = parseBoundManifestText({
+			text: p.manifestText,
+			...(p.manifestDigest !== undefined && { expectedDigest: p.manifestDigest }),
+			retryAction: "re-run the start",
+		});
+		if (!parsed.ok) return { ok: false, error: parsed.error };
+		raw = parsed.raw;
 		manifestAbs = p.manifestPath;
 	} else if (p.manifestPath) {
 		// The guarded read: a relative (repo-relative) path is realpath-verified to stay
@@ -810,24 +811,13 @@ function launchConvergeJob(p: {
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
 	}
-	if (p.manifestParticipants !== undefined) {
-		let currentParticipants: ReturnType<typeof resolveManifestParticipantSummary>;
-		try {
-			currentParticipants = resolveManifestParticipantSummary(raw, config);
-		} catch (e) {
-			return {
-				ok: false,
-				error: `could not resolve manifest participant summary: ${(e as Error).message}`,
-			};
-		}
-		const drift = describeParticipantSummaryDrift(p.manifestParticipants, currentParticipants);
-		if (drift !== undefined) {
-			return {
-				ok: false,
-				error: `manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; re-run the start.`,
-			};
-		}
-	}
+	const participantCheck = verifyBoundManifestParticipants({
+		raw,
+		config,
+		...(p.manifestParticipants !== undefined && { expectedParticipants: p.manifestParticipants }),
+		retryAction: "re-run the start",
+	});
+	if (!participantCheck.ok) return { ok: false, error: participantCheck.error };
 	const prep = prepareConvergeExecute(
 		raw,
 		config.registry,
@@ -953,19 +943,28 @@ function launchConvergeJob(p: {
 // (no loop). Validates exactly as startRun does for a foreground one-shot (unknown
 // agents, enforcement gaps, per_scope needs a scope, inputs match the schema), so a
 // background run is refused for the same reasons a foreground one is. Validation is
-// at enqueue: the worker re-reads the manifest and runs it via runManifestOnce but
-// does not re-validate, so a bad manifest is rejected here, synchronously, before a
-// detached worker is spawned. A one-shot run reserves no loop, so (unlike a loop
-// job) there is no loop log to close on failure.
+// at enqueue: the worker later re-validates governance against either the persisted
+// recipe bytes or the named manifest path, so a bad manifest is rejected here before
+// a detached worker is spawned and again before execution. A one-shot run reserves
+// no loop, so unlike a loop job there is no loop log to close on failure.
 function launchOneShotJob(p: {
 	manifestPath: string; // absolute or relative to cwd (a one-shot run always names a manifest)
+	manifestText?: string;
+	manifestDigest?: string;
+	manifestParticipants?: Record<string, BoundParticipantSummary>;
+	recipe?: RecipeReceipt;
 	scope?: string;
 	cwd: string; // absolute
 	inputs: Record<string, unknown>;
 	audit: boolean;
 	allowUnenforced: boolean;
 }): { ok: true; jobId: string; warnings: string[] } | { ok: false; error: string } {
-	const manifestAbs = isAbsolute(p.manifestPath) ? p.manifestPath : resolve(p.cwd, p.manifestPath);
+	const manifestAbs =
+		p.manifestText !== undefined
+			? p.manifestPath
+			: isAbsolute(p.manifestPath)
+				? p.manifestPath
+				: resolve(p.cwd, p.manifestPath);
 	// Load config FIRST, in its own try, so a malformed config.json reports as a
 	// config error rather than being misattributed to the manifest below. The loop
 	// launcher (prepareConvergeExecute) and the CLI run path isolate config the same
@@ -979,20 +978,48 @@ function launchOneShotJob(p: {
 	}
 	const registry = config.registry;
 
+	let raw: unknown;
+	if (p.manifestText !== undefined) {
+		const parsed = parseBoundManifestText({
+			text: p.manifestText,
+			...(p.manifestDigest !== undefined && { expectedDigest: p.manifestDigest }),
+			retryAction: "re-run the start",
+		});
+		if (!parsed.ok) return { ok: false, error: parsed.error };
+		raw = parsed.raw;
+	} else {
+		try {
+			raw = JSON.parse(readFileSync(manifestAbs, "utf-8"));
+		} catch (e) {
+			return {
+				ok: false,
+				error: `could not load manifest at ${manifestAbs}: ${(e as Error).message}`,
+			};
+		}
+	}
+
 	let manifest: ResolvedManifest;
 	try {
 		// Resolve role refs before governance (validateOneShotAuth reads the resolved
 		// participants). An unknown-role / no-agent failure is reported the same way as
 		// a parse failure.
-		manifest = resolveManifest(parseManifest(JSON.parse(readFileSync(manifestAbs, "utf-8"))), {
-			roles: config.roles,
-		});
+		manifest = resolveManifest(parseManifest(raw), { roles: config.roles });
 	} catch (e) {
 		return {
 			ok: false,
-			error: `could not load manifest at ${manifestAbs}: ${(e as Error).message}`,
+			error:
+				p.manifestText !== undefined
+					? `could not resolve recipe manifest: ${(e as Error).message}`
+					: `could not load manifest at ${manifestAbs}: ${(e as Error).message}`,
 		};
 	}
+	const participantCheck = verifyBoundManifestParticipants({
+		raw,
+		config,
+		...(p.manifestParticipants !== undefined && { expectedParticipants: p.manifestParticipants }),
+		retryAction: "re-run the start",
+	});
+	if (!participantCheck.ok) return { ok: false, error: participantCheck.error };
 	// Governance gate (unknown agents, enforcement, per_scope scope), shared with the
 	// worker's re-validation. The same decision is persisted (allowUnenforced) so the
 	// worker re-checks in its own process.
@@ -1016,6 +1043,10 @@ function launchOneShotJob(p: {
 		repoKey: repoKey(p.cwd),
 		cwd: p.cwd,
 		manifestPath: manifestAbs,
+		...(p.manifestText !== undefined && { manifestText: p.manifestText }),
+		...(p.manifestDigest !== undefined && { manifestDigest: p.manifestDigest }),
+		...(p.manifestParticipants !== undefined && { manifestParticipants: p.manifestParticipants }),
+		...(p.recipe !== undefined && { recipe: p.recipe }),
 		manifestId: manifest.id,
 		...(p.scope !== undefined && { scope: p.scope }),
 		inputs: p.inputs,
@@ -1175,6 +1206,7 @@ function describeJob(job: JobRecord) {
 	return {
 		...base,
 		manifestId: job.manifestId,
+		...(job.recipe !== undefined && { recipe: job.recipe.id }),
 		...(job.scope !== undefined && { scope: job.scope }),
 		nextAction,
 	};
@@ -1587,13 +1619,13 @@ export function effectiveStartKnobs(
 // Open a run: the single public entry point. The manifest's policy decides the
 // kind (one-shot DAG vs converge loop); `mode` decides where it runs. `task` (no
 // manifest) converges on a slice with the built-in loop manifest. A `recipe` names
-// a vetted converge preset: it supplies the manifest + default budgets and runs as a
-// loop, the same execution surface a recipe-backed plan step or batch task launches.
+// a vetted routine: it supplies the manifest, and converge recipes may also supply
+// loop defaults.
 server.registerTool(
 	"chit_start",
 	{
 		description:
-			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge), or `recipe` to run a vetted converge preset from config (it supplies the manifest and default budgets; list them with chit_recipes). A recipe is converge-only, so a recipe-backed run is a loop run: it needs `task` and `scope` just like the built-in loop, and the resolved recipe is stamped through the run for status/trace/audit. mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: chit_wait blocks until it finishes (don't poll), chit_status for a snapshot, chit_cancel to stop. For SEVERAL tasks in parallel, use chit_batch_start (it isolates each in its own git worktree).",
+			"Open a run and return its run_id. Pass `task` to converge on a slice with the built-in loop (a write-capable implementer plus a read-only reviewer), `manifest_path` to run a specific manifest whose policy decides one-shot (a single DAG pass) vs loop (converge), or `recipe` to run a vetted routine from config (list them with chit_recipes). A converge recipe needs `task` and `scope`; a one-shot recipe needs `inputs` and no task. mode foreground (default) supervises the run in this session: advance with chit_next, inspect with chit_status / chit_trace, stop with chit_cancel. mode background hands it to a detached worker that drives it to completion and survives a reconnect: chit_wait blocks until it finishes (do not poll), chit_status for a snapshot, chit_cancel to stop. For several converge tasks in parallel, use chit_batch_start.",
 		inputSchema: {
 			task: z
 				.string()
@@ -1611,7 +1643,7 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe(
-					"A vetted config recipe id (kebab-case, from chit_recipes / chit config) to run. The recipe supplies the converge manifest and default max_iterations / call_timeout_ms; explicit max_iterations / call_timeout_ms below stay the closest override. Recipes are converge-only, so this is a loop run: pass `task` and `scope`. Mutually exclusive with manifest_path.",
+					"A vetted config recipe id (kebab-case, from chit_recipes / chit config) to run. The recipe supplies the manifest. Converge recipes may also supply default max_iterations / call_timeout_ms; explicit max_iterations / call_timeout_ms below stay the closest override. Converge recipes need task + scope; one-shot recipes need inputs and no task. Mutually exclusive with manifest_path.",
 				),
 			mode: z
 				.enum(["foreground", "background"])
@@ -1762,18 +1794,14 @@ server.registerTool(
 			// The bytes the resolver digested ARE the run's manifest; reuse them for the policy
 			// parse and the foreground prep below. Guard against drift between the resolver's read
 			// and this one (a global recipe's absolute file could change between two filesystem reads).
-			if (digestManifestText(text) !== manifestDigest) {
-				return errorResult(
-					`recipe ${JSON.stringify(recipe)} manifest changed during resolution; re-run the start`,
-				);
-			}
-			try {
-				raw = JSON.parse(text);
-			} catch (e) {
-				return errorResult(
-					`recipe ${JSON.stringify(recipe)} manifest is not valid JSON: ${(e as Error).message}`,
-				);
-			}
+			const parsed = parseBoundManifestText({
+				text,
+				expectedDigest: manifestDigest,
+				retryAction: "re-run the start",
+				label: `recipe ${JSON.stringify(recipe)} manifest`,
+			});
+			if (!parsed.ok) return errorResult(parsed.error);
+			raw = parsed.raw;
 		} else if (manifest_path) {
 			manifestAbs = resolveManifestPathAbsolute(manifest_path, runCwd);
 			try {
@@ -1793,12 +1821,13 @@ server.registerTool(
 		} catch (e) {
 			return errorResult(`invalid manifest: ${(e as Error).message}`);
 		}
-		// Recipes are converge-only: a recipe whose manifest is one-shot is a config error,
-		// refused here rather than silently dispatched to the one-shot path (which rejects `task`).
-		if (recipe !== undefined && manifest.policy.kind !== "loop") {
-			return errorResult(
-				`recipe ${JSON.stringify(recipe)} resolves to a one-shot manifest, but recipes are converge-only (loop)`,
-			);
+		if (recipeReceipt !== undefined) {
+			const expectedPolicyKind = recipeReceipt.mode === "converge" ? "loop" : "one-shot";
+			if (manifest.policy.kind !== expectedPolicyKind) {
+				return errorResult(
+					`recipe ${JSON.stringify(recipe)} declares mode ${recipeReceipt.mode} but its manifest policy is ${manifest.policy.kind}`,
+				);
+			}
 		}
 		// Effective loop budgets: an explicit tool input beats the recipe's default beats the
 		// built-in fallback. Computed once and threaded into both modes below.
@@ -1820,6 +1849,12 @@ server.registerTool(
 		);
 		if (!checksRes.ok) return errorResult(checksRes.error);
 		const requiredChecks = checksRes.checks;
+
+		if (manifest.policy.kind === "one-shot" && max_iterations !== undefined) {
+			return errorResult(
+				"max_iterations applies only to a loop run; this manifest declares a one-shot policy",
+			);
+		}
 
 		// call_timeout_ms governs the loop's adapter calls; a one-shot run has no
 		// implement/review loop to budget. Reject rather than silently ignore it (mirrors
@@ -1917,23 +1952,15 @@ server.registerTool(
 			// runConfig was set by ensureConfig above (planManagedWorkspace always loads
 			// config before opening a workspace); the fallback only satisfies the type.
 			runConfig ??= getConfig(runCwd);
-			if (manifestParticipants !== undefined) {
-				let currentParticipants: ReturnType<typeof resolveManifestParticipantSummary>;
-				try {
-					currentParticipants = resolveManifestParticipantSummary(raw, runConfig);
-				} catch (e) {
-					ws.cleanup?.();
-					return errorResult(
-						`could not resolve recipe participant summary: ${(e as Error).message}`,
-					);
-				}
-				const drift = describeParticipantSummaryDrift(manifestParticipants, currentParticipants);
-				if (drift !== undefined) {
-					ws.cleanup?.();
-					return errorResult(
-						`manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; re-run the start.`,
-					);
-				}
+			const participantCheck = verifyBoundManifestParticipants({
+				raw,
+				config: runConfig,
+				...(manifestParticipants !== undefined && { expectedParticipants: manifestParticipants }),
+				retryAction: "re-run the start",
+			});
+			if (!participantCheck.ok) {
+				ws.cleanup?.();
+				return errorResult(participantCheck.error);
 			}
 			const prep = prepareConvergeExecute(
 				raw,
@@ -1989,10 +2016,17 @@ server.registerTool(
 		if (task) {
 			return errorResult("a one-shot manifest does not take a `task`; pass `inputs` instead");
 		}
-		if (!manifest_path) return errorResult("a one-shot run needs a `manifest_path`");
+		const oneShotManifestPath = recipeManifestRef ?? manifest_path;
+		if (oneShotManifestPath === undefined) {
+			return errorResult("a one-shot run needs a `manifest_path` or one-shot `recipe`");
+		}
 		if (mode === "background") {
 			const r = launchOneShotJob({
-				manifestPath: manifest_path,
+				manifestPath: oneShotManifestPath,
+				...(recipeManifestText !== undefined && { manifestText: recipeManifestText }),
+				...(manifestDigest !== undefined && { manifestDigest }),
+				...(manifestParticipants !== undefined && { manifestParticipants }),
+				...(recipeReceipt !== undefined && { recipe: recipeReceipt }),
 				...(scope !== undefined && { scope }),
 				cwd: runCwd,
 				inputs,
@@ -2013,6 +2047,13 @@ server.registerTool(
 			// One load (config is fresh per call, not cached), so the registry and roles
 			// this run validates against come from the same config snapshot.
 			const oneShotConfig = getConfig(runCwd);
+			const participantCheck = verifyBoundManifestParticipants({
+				raw,
+				config: oneShotConfig,
+				...(manifestParticipants !== undefined && { expectedParticipants: manifestParticipants }),
+				retryAction: "re-run the start",
+			});
+			if (!participantCheck.ok) return errorResult(participantCheck.error);
 			run = startRun(crypto.randomUUID(), {
 				rawManifest: raw,
 				inputs,

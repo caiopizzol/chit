@@ -660,6 +660,42 @@ describe("runBatchStart: recipe selections (resolved recipes in the hash)", () =
 		).toThrow(/task "a" recipe: unknown recipe/);
 	});
 
+	test("a one-shot batch recipe is refused because batches launch loop jobs", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () =>
+			gateRecipe({
+				mode: "one-shot",
+				maxIterations: undefined,
+				callTimeoutMs: undefined,
+			});
+		expect(() =>
+			runBatchStart({ tasks: TASKS, recipe: "deep-feature" }, h.cwd, h.store, h.deps, noLaunch),
+		).toThrow(/recipe.*batch recipes must be converge recipes/);
+		expect(h.launched).toHaveLength(0);
+	});
+
+	test("a one-shot task recipe is refused because batches launch loop jobs", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () =>
+			gateRecipe({
+				mode: "one-shot",
+				maxIterations: undefined,
+				callTimeoutMs: undefined,
+			});
+		expect(() =>
+			runBatchStart(
+				{
+					tasks: [{ id: "a", title: "A", body: "do a", claimedPaths: ["src/a"], recipe: "ghost" }],
+				},
+				h.cwd,
+				h.store,
+				h.deps,
+				noLaunch,
+			),
+		).toThrow(/task "a" recipe.*batch recipes must be converge recipes/);
+		expect(h.launched).toHaveLength(0);
+	});
+
 	test("a recipe-naming batch with no recipe resolver wired is refused, not silently launched", () => {
 		const h = makeHarness(); // makeHarness wires no resolveRecipe
 		expect(() =>

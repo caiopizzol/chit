@@ -31,18 +31,29 @@ export interface NormalizedRole {
 	permissions: { filesystem: FilesystemPermission };
 }
 
-// A recipe: a named, vetted REFERENCE to an execution manifest, plus safe
-// runtime defaults. Deliberately thin: it does NOT redeclare participants,
-// prompts, checks, reviewer wiring, or approval policy; all of that lives in the
-// manifest it points at. Recipes are references, not a second execution
-// language. v1 supports only the converge mode.
-export interface NormalizedRecipe {
-	mode: "converge";
+export type RecipeMode = "converge" | "one-shot";
+
+// A recipe: a named, vetted REFERENCE to an execution manifest. Deliberately thin:
+// it does NOT redeclare participants, prompts, checks, reviewer wiring, or
+// approval policy; all of that lives in the manifest it points at. Recipes are
+// references, not a second execution language.
+export interface NormalizedRecipeBase {
+	mode: RecipeMode;
 	manifestPath: string;
-	maxIterations?: number;
-	callTimeoutMs?: number;
 	description?: string;
 }
+
+export interface NormalizedConvergeRecipe extends NormalizedRecipeBase {
+	mode: "converge";
+	maxIterations?: number;
+	callTimeoutMs?: number;
+}
+
+export interface NormalizedOneShotRecipe extends NormalizedRecipeBase {
+	mode: "one-shot";
+}
+
+export type NormalizedRecipe = NormalizedConvergeRecipe | NormalizedOneShotRecipe;
 
 // Config layers a user can write. Built-ins are a third, implicit origin below
 // both. Later layers win: global sits over built-ins, repo sits over global.
@@ -62,7 +73,7 @@ export interface ConfigOrigin {
 export interface RecipeReceipt {
 	id: string;
 	origin?: ConfigOrigin;
-	mode: "converge";
+	mode: RecipeMode;
 	maxIterations?: number;
 	callTimeoutMs?: number;
 	description?: string;

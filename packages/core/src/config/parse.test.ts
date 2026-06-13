@@ -307,7 +307,7 @@ describe("parseConfigLayers", () => {
 // They do not redeclare participants, prompts, checks, or approval policy; the
 // unknown-field rejection is what enforces that (there is nothing to smuggle).
 describe("parseConfig: recipes", () => {
-	test("a minimal recipe (mode + manifestPath) is valid", () => {
+	test("a minimal converge recipe (mode + manifestPath) is valid", () => {
 		const c = parseConfig({
 			recipes: { "deep-review": { mode: "converge", manifestPath: "manifests/review.json" } },
 		});
@@ -315,7 +315,17 @@ describe("parseConfig: recipes", () => {
 		expect(r).toEqual({ mode: "converge", manifestPath: "manifests/review.json" });
 	});
 
-	test("optional runtime defaults are carried through", () => {
+	test("a minimal one-shot recipe is valid", () => {
+		const c = parseConfig({
+			recipes: { "feature-grill": { mode: "one-shot", manifestPath: "manifests/grill.json" } },
+		});
+		expect(c.recipes["feature-grill"]).toEqual({
+			mode: "one-shot",
+			manifestPath: "manifests/grill.json",
+		});
+	});
+
+	test("converge runtime defaults are carried through", () => {
 		const c = parseConfig({
 			recipes: {
 				"deep-review": {
@@ -328,9 +338,11 @@ describe("parseConfig: recipes", () => {
 			},
 		});
 		const r = c.recipes["deep-review"];
-		expect(r?.maxIterations).toBe(5);
-		expect(r?.callTimeoutMs).toBe(600000);
-		expect(r?.description).toBe("Vetted review loop.");
+		expect(r?.mode).toBe("converge");
+		if (r?.mode !== "converge") throw new Error("expected converge recipe");
+		expect(r.maxIterations).toBe(5);
+		expect(r.callTimeoutMs).toBe(600000);
+		expect(r.description).toBe("Vetted review loop.");
 	});
 
 	test("no recipes section -> empty recipes", () => {
@@ -382,7 +394,7 @@ describe("parseConfig: recipes", () => {
 		expect(() => parseConfig({ recipes: { r: { manifestPath: "m.json" } } })).toThrow(/mode/);
 	});
 
-	test("a mode other than converge is a ConfigError (v1)", () => {
+	test("a mode outside the recipe vocabulary is a ConfigError", () => {
 		expect(() =>
 			parseConfig({ recipes: { r: { mode: "pipeline", manifestPath: "m.json" } } }),
 		).toThrow(/mode/);
@@ -416,6 +428,19 @@ describe("parseConfig: recipes", () => {
 				}),
 			).toThrow(/callTimeoutMs.*positive integer/);
 		}
+	});
+
+	test("loop runtime defaults are rejected on one-shot recipes", () => {
+		expect(() =>
+			parseConfig({
+				recipes: { r: { mode: "one-shot", manifestPath: "m.json", maxIterations: 3 } },
+			}),
+		).toThrow(/maxIterations.*converge/);
+		expect(() =>
+			parseConfig({
+				recipes: { r: { mode: "one-shot", manifestPath: "m.json", callTimeoutMs: 60_000 } },
+			}),
+		).toThrow(/callTimeoutMs.*converge/);
 	});
 
 	test("a non-string description is a ConfigError", () => {
@@ -469,9 +494,11 @@ describe("parseConfigLayers: recipes", () => {
 		);
 		const r = c.recipes["deep-review"];
 		expect(r?.manifestPath).toBe("manifests/review.json");
+		expect(r?.mode).toBe("converge");
+		if (r?.mode !== "converge") throw new Error("expected converge recipe");
 		// Whole-entity replacement: the global maxIterations and description do NOT survive.
-		expect(r?.maxIterations).toBeUndefined();
-		expect(r?.description).toBeUndefined();
+		expect(r.maxIterations).toBeUndefined();
+		expect(r.description).toBeUndefined();
 		expect(c.provenance?.recipes["deep-review"]).toEqual({ source: "repo", path: REPO });
 	});
 

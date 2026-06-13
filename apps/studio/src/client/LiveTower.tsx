@@ -16,6 +16,7 @@ import { formatTimeout, recipeMeta } from "./configView.ts";
 import {
 	activeRole,
 	agentBlockViews,
+	type BlockFeedRole,
 	blockFeed,
 	cancelAvailable,
 	cancelMessage,
@@ -32,7 +33,7 @@ import {
 import { routineCanvas, routineKey, routineTicker, towerBody } from "./routines.ts";
 import { type LiveConsoleEntry, useLive } from "./useLive.ts";
 
-type LoopRole = "implementer" | "reviewer" | "checks" | "you";
+type LoopRole = string;
 
 interface LoopBlock {
 	role: LoopRole;
@@ -142,7 +143,14 @@ function PhaseTimeline({ row }: { row: LiveActivityRow }) {
 	);
 }
 
-function blockFeedLineClass(entry: ReturnType<typeof blockFeed>[number], role: LoopRole): string {
+function isBlockFeedRole(role: LoopRole): role is BlockFeedRole {
+	return role === "implementer" || role === "reviewer" || role === "checks" || role === "you";
+}
+
+function blockFeedLineClass(
+	entry: ReturnType<typeof blockFeed>[number],
+	role: BlockFeedRole,
+): string {
 	if (entry.kind === "step.failed") return "block-feed-line--fail";
 	if (role === "implementer") return "block-feed-line--implementer";
 	if (role === "reviewer") return "block-feed-line--reviewer";
@@ -156,12 +164,13 @@ function LiveBlockFeed({
 	row: LiveActivityRow | null;
 	selectedBlock: LoopRole;
 }) {
-	const entries = row ? blockFeed(row, selectedBlock) : [];
+	const feedRole = isBlockFeedRole(selectedBlock) ? selectedBlock : "implementer";
+	const entries = row ? blockFeed(row, feedRole) : [];
 	return (
 		<section className="block-feed">
 			<div className="block-feed-head">
 				<span>feed</span>
-				<span className="block-feed-role">{selectedBlock}</span>
+				<span className="block-feed-role">{feedRole}</span>
 				<span>refreshed</span>
 			</div>
 			{entries.length === 0 ? (
@@ -171,7 +180,7 @@ function LiveBlockFeed({
 					{entries.map((e) => (
 						<li
 							key={e.key}
-							className={`block-feed-line ${blockFeedLineClass(e, selectedBlock)}${
+							className={`block-feed-line ${blockFeedLineClass(e, feedRole)}${
 								e.active ? " block-feed-line--active" : ""
 							}`}
 						>
@@ -325,11 +334,13 @@ function LoopCanvas({
 	selectedBlock,
 	onSelectBlock,
 	rest = false,
+	loop = true,
 }: {
 	blocks: LoopBlock[];
 	selectedBlock: LoopRole;
 	onSelectBlock: (role: LoopRole) => void;
 	rest?: boolean;
+	loop?: boolean;
 }) {
 	const nodes = blocks.filter((b) => b.role !== "you");
 	return (
@@ -365,7 +376,7 @@ function LoopCanvas({
 					<span className="yougate-diamond" aria-hidden="true" />
 					<span className="label">you</span>
 				</button>
-				<span className="loopback" aria-hidden="true" />
+				{loop && <span className="loopback" aria-hidden="true" />}
 			</div>
 		</div>
 	);
@@ -431,6 +442,7 @@ function RoutineInspector({
 }) {
 	const manifest = routine.manifest;
 	const block = selectedRoutineBlock(routine, selectedBlock);
+	const selectedStep = manifest?.steps.find((step) => step.id === selectedBlock);
 	return (
 		<aside className="studio-inspector">
 			<div className="panel-head">
@@ -442,6 +454,12 @@ function RoutineInspector({
 				<dd>{block.agentId ?? "unknown"}</dd>
 				<dt>can</dt>
 				<dd>{block.detail ?? "not declared"}</dd>
+				{selectedStep !== undefined && (
+					<>
+						<dt>step</dt>
+						<dd>{selectedStep.kind}</dd>
+					</>
+				)}
 				<dt>recipe</dt>
 				<dd>{routine.id}</dd>
 				<dt>layer</dt>
@@ -689,6 +707,18 @@ export function LiveTower() {
 			: liveCount === 0
 				? (routines[0] ?? null)
 				: null;
+	useEffect(() => {
+		if (activeRoutine) {
+			const blocks = routineCanvas(activeRoutine);
+			if (!blocks.some((b) => b.role === selectedBlock)) {
+				setSelectedBlock(blocks[0]?.role ?? "you");
+			}
+			return;
+		}
+		if (!["implementer", "reviewer", "checks", "you"].includes(selectedBlock)) {
+			setSelectedBlock("implementer");
+		}
+	}, [activeRoutine, selectedBlock]);
 	const selectLiveRow = useCallback(
 		(key: string) => {
 			setRoutineSel(null);
@@ -824,6 +854,7 @@ export function LiveTower() {
 										selectedBlock={selectedBlock}
 										onSelectBlock={setSelectedBlock}
 										rest
+										loop={activeRoutine.mode === "converge"}
 									/>
 									<RoutineInspector routine={activeRoutine} selectedBlock={selectedBlock} />
 								</>

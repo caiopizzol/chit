@@ -180,7 +180,14 @@ export interface LoopJobRecord extends BaseJobRecord {
 // identity, no loop log, no iterations/verdict. Its history is the audit run.
 export interface OneShotJobRecord extends BaseJobRecord {
 	policy: "one-shot";
-	manifestPath: string; // a one-shot run always names a manifest (the task-form default is a LOOP)
+	// A one-shot run always names a manifest (the task-form default is a loop).
+	// For a recipe-backed run this is the resolver-bound identity, while
+	// manifestText carries the bytes the worker executes.
+	manifestPath: string;
+	manifestText?: string;
+	manifestDigest?: string;
+	manifestParticipants?: Record<string, BoundParticipantSummary>;
+	recipe?: RecipeReceipt;
 	manifestId: string; // for display
 	scope?: string;
 	// Persisted at enqueue: the worker runs later in a separate process, so caller

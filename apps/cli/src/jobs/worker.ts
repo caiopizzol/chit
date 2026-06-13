@@ -20,12 +20,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { AuditParticipantSnapshot } from "@chit-run/core";
-import {
-	describeParticipantSummaryDrift,
-	parseManifest,
-	type ResolvedManifest,
-	resolveManifest,
-} from "@chit-run/core";
+import { parseManifest, type ResolvedManifest, resolveManifest } from "@chit-run/core";
 import {
 	type ConvergeExecute,
 	ConvergeExecuteError,
@@ -39,9 +34,9 @@ import { DEFAULT_CONVERGE_MANIFEST } from "../cli/default-converge-manifest.ts";
 import { loadConfig } from "../config/load.ts";
 import { stopLoop } from "../loops/log-store.ts";
 import {
-	digestManifestText,
+	parseBoundManifestText,
 	readJobManifest,
-	resolveManifestParticipantSummary,
+	verifyBoundManifestParticipants,
 } from "../manifest/binding.ts";
 import { buildHandoffReviewContext } from "../plans/handoffs.ts";
 import { readHandoffFileReal } from "../plans/read-handoff.ts";
@@ -118,18 +113,13 @@ export function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 		// enforces -- the last verification before execution -- so a job whose manifestText was
 		// tampered with (or whose stamped digest no longer matches the bytes) is refused exactly
 		// as a drifted on-disk manifest would be, rather than silently running unverified bytes.
-		const digest = digestManifestText(job.manifestText);
-		if (job.manifestDigest !== undefined && digest !== job.manifestDigest) {
-			return {
-				ok: false,
-				error: `recipe manifest no longer matches the approved content (approved ${job.manifestDigest}, found ${digest}); the execution surface changed after approval, so the run is refused -- re-run the dry run and re-approve`,
-			};
-		}
-		try {
-			raw = JSON.parse(job.manifestText);
-		} catch (e) {
-			return { ok: false, error: `recipe manifest is not valid JSON: ${(e as Error).message}` };
-		}
+		const parsed = parseBoundManifestText({
+			text: job.manifestText,
+			...(job.manifestDigest !== undefined && { expectedDigest: job.manifestDigest }),
+			retryAction: "re-run the dry run and re-approve",
+		});
+		if (!parsed.ok) return { ok: false, error: parsed.error };
+		raw = parsed.raw;
 	} else if (job.manifestPath) {
 		// The guarded read: a relative (repo-relative) path is realpath-verified to stay
 		// under the run's worktree (no symlink escape), and when the job carries an
@@ -159,24 +149,15 @@ export function defaultResolveExecute(job: LoopJobRecord): ExecuteResolution {
 	} catch (e) {
 		return { ok: false, error: `could not load config: ${(e as Error).message}` };
 	}
-	if (job.manifestParticipants !== undefined) {
-		let currentParticipants: ReturnType<typeof resolveManifestParticipantSummary>;
-		try {
-			currentParticipants = resolveManifestParticipantSummary(raw, config);
-		} catch (e) {
-			return {
-				ok: false,
-				error: `could not resolve manifest participant summary: ${(e as Error).message}`,
-			};
-		}
-		const drift = describeParticipantSummaryDrift(job.manifestParticipants, currentParticipants);
-		if (drift !== undefined) {
-			return {
-				ok: false,
-				error: `manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; re-run the dry run and re-approve.`,
-			};
-		}
-	}
+	const participantCheck = verifyBoundManifestParticipants({
+		raw,
+		config,
+		...(job.manifestParticipants !== undefined && {
+			expectedParticipants: job.manifestParticipants,
+		}),
+		retryAction: "re-run the dry run and re-approve",
+	});
+	if (!participantCheck.ok) return { ok: false, error: participantCheck.error };
 	const prep = prepareConvergeExecute(
 		raw,
 		config.registry,
@@ -635,16 +616,45 @@ async function defaultRunOnce(
 	// managed job's callerCheckout is the config source; job.cwd remains where it runs.
 	const config = loadConfig(undefined, { cwd: job.callerCheckout ?? job.cwd });
 	const registry = config.registry;
+	let raw: unknown;
+	if (job.manifestText !== undefined) {
+		const parsed = parseBoundManifestText({
+			text: job.manifestText,
+			...(job.manifestDigest !== undefined && { expectedDigest: job.manifestDigest }),
+			retryAction: "re-run the start",
+		});
+		if (!parsed.ok) return { ok: false, error: parsed.error };
+		raw = parsed.raw;
+	} else {
+		try {
+			raw = JSON.parse(readFileSync(path, "utf-8"));
+		} catch (e) {
+			return { ok: false, error: `could not load manifest at ${path}: ${(e as Error).message}` };
+		}
+	}
 	let manifest: ResolvedManifest;
 	try {
 		// Resolve role references before governance (validateOneShotAuth reads the
 		// resolved participants); an unknown-role / no-agent failure is reported here.
-		manifest = resolveManifest(parseManifest(JSON.parse(readFileSync(path, "utf-8"))), {
-			roles: config.roles,
-		});
+		manifest = resolveManifest(parseManifest(raw), { roles: config.roles });
 	} catch (e) {
-		return { ok: false, error: `could not load manifest at ${path}: ${(e as Error).message}` };
+		return {
+			ok: false,
+			error:
+				job.manifestText !== undefined
+					? `could not resolve recipe manifest: ${(e as Error).message}`
+					: `could not load manifest at ${path}: ${(e as Error).message}`,
+		};
 	}
+	const participantCheck = verifyBoundManifestParticipants({
+		raw,
+		config,
+		...(job.manifestParticipants !== undefined && {
+			expectedParticipants: job.manifestParticipants,
+		}),
+		retryAction: "re-run the start",
+	});
+	if (!participantCheck.ok) return { ok: false, error: participantCheck.error };
 	// Re-validate governance in this process. launchRun validated at enqueue, but
 	// the manifest file may have changed since; re-run the same checks (with the
 	// persisted allow-unenforced decision) so a now-invalid manifest cannot run.

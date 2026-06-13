@@ -104,6 +104,12 @@ describe("recipeMeta", () => {
 		expect(recipeMeta(recipe({ id: "bare" }))).toBe("converge · /flows/main.json");
 	});
 
+	test("a one-shot recipe reads as mode and manifest path", () => {
+		expect(recipeMeta(recipe({ id: "grill", mode: "one-shot" }))).toBe(
+			"one-shot · /flows/main.json",
+		);
+	});
+
 	test("appends max iterations and call timeout when set", () => {
 		const meta = recipeMeta(recipe({ id: "deep", maxIterations: 5, callTimeoutMs: 1_200_000 }));
 		expect(meta).toBe("converge · /flows/main.json · max 5 · call 20m");

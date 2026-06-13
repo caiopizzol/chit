@@ -139,8 +139,19 @@ describe("fetchRoutines", () => {
 				manifestPath: "flows/deep.json",
 				manifest: {
 					manifestDigest: "sha256:abc",
+					policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 					participants: [
 						{ id: "impl", agentId: "claude", session: "per_scope", filesystem: "write" },
+					],
+					steps: [
+						{
+							id: "implement",
+							kind: "call",
+							participantId: "impl",
+							agentId: "claude",
+							session: "per_scope",
+							filesystem: "write",
+						},
 					],
 					requiredChecks: [{ command: "bun", args: ["test"] }],
 				},

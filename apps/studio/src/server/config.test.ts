@@ -197,6 +197,26 @@ describe("effectiveConfigView recipes", () => {
 		});
 	});
 
+	test("carries one-shot recipes without loop knobs", () => {
+		const config = layered({
+			recipes: {
+				grill: {
+					mode: "one-shot",
+					manifestPath: "/flows/grill.json",
+					description: "question loop",
+				},
+			},
+		});
+		const recipe = effectiveConfigView(config).recipes.find((r) => r.id === "grill");
+		expect(recipe).toEqual({
+			id: "grill",
+			origin: "global",
+			mode: "one-shot",
+			manifestPath: "/flows/grill.json",
+			description: "question loop",
+		});
+	});
+
 	test("a recipe with no optional knobs carries only the contracted fields", () => {
 		const config = layered({
 			recipes: { bare: { mode: "converge", manifestPath: "/flows/bare.json" } },

@@ -71,7 +71,7 @@ Open a run and return its `run_id`. Inputs:
 
 - `task?` - a slice to converge on with the built-in loop. A loop run requires it; omit it when `manifest_path` names a one-shot manifest.
 - `manifest_path?` - a manifest `.json` (absolute, or relative to `cwd`). Its policy decides one-shot vs loop. Omit to converge on `task` with the built-in loop. Mutually exclusive with `recipe`.
-- `recipe?` - a vetted config recipe id from `chit_recipes`. Recipes are converge-only today: the recipe supplies the loop manifest plus default `max_iterations` / `call_timeout_ms`, and the run still needs `task` and `scope`. Mutually exclusive with `manifest_path`; explicit `max_iterations` and `call_timeout_ms` inputs override the recipe defaults.
+- `recipe?` - a vetted config recipe id from `chit_recipes`. The recipe supplies the manifest. A converge recipe needs `task` and `scope` and may supply default `max_iterations` / `call_timeout_ms`; explicit values override those defaults. A one-shot recipe uses `inputs` and no `task`. Mutually exclusive with `manifest_path`.
 - `mode` - `foreground` (default) or `background`.
 - `scope?` - session scope id. Required for a loop run and for any `per_scope` manifest.
 - `cwd?` - repo / working dir (defaults to the server cwd; also where a loop log is written).
@@ -81,7 +81,7 @@ Open a run and return its `run_id`. Inputs:
 - `allow_unenforced_permissions` - run even when a declared permission cannot be enforced (emits warnings), default `false` (such a manifest is otherwise refused).
 - `required_checks?` - verification commands chit runs **itself** after a `proceed` review (loop runs only), each `{ command, args?, name?, timeoutMs? }`. They REPLACE the manifest's `policy.requiredChecks` for this run (never merge), so a default-loop `task` run gets real verification without a custom manifest. Rejected for a one-shot run. See [Chit-executed verification](#chit-executed-verification).
 
-Returns the run view with the initial ready set (one-shot) or the open loop (loop). Errors: unreadable or invalid manifest, a one-shot manifest given a `task`, a loop run with no `scope`, unknown agent, enforcement gap without the flag, `required_checks` on a one-shot run.
+Returns the run view with the initial ready set (one-shot) or the open loop (loop). Errors: unreadable or invalid manifest, a one-shot manifest given a `task`, a loop run with no `scope`, unknown agent, enforcement gap without the flag, loop-only knobs on a one-shot run, `required_checks` on a one-shot run.
 
 ### Chit-executed verification
 

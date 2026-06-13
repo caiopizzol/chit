@@ -9,7 +9,7 @@ the published site).
 
 A `recipes` top-level section in the layered config, next to `agents` and
 `roles`. A recipe is a named, vetted REFERENCE to an execution manifest plus
-safe runtime defaults:
+safe runtime defaults for converge recipes:
 
 ```json
 {
@@ -25,12 +25,27 @@ safe runtime defaults:
 }
 ```
 
+One-shot recipes use the same reference shape without loop knobs:
+
+```json
+{
+	"recipes": {
+		"feature-griller": {
+			"mode": "one-shot",
+			"manifestPath": "examples/feature-griller.json",
+			"description": "Ask the repo-grounded questions before implementation."
+		}
+	}
+}
+```
+
 Fields, v1:
 
-- `mode` - required; only `"converge"` is accepted. Any other value fails at
-  parse so a future mode is an explicit addition, never a silent passthrough.
+- `mode` - required; `"converge"` and `"one-shot"` are accepted. Any other value
+  fails at parse so a future mode is an explicit addition, never a silent passthrough.
 - `manifestPath` - required, non-empty string. The manifest the recipe names.
-- `maxIterations`, `callTimeoutMs` - optional, positive integers.
+- `maxIterations`, `callTimeoutMs` - optional, positive integers on converge
+  recipes only. They are rejected on one-shot recipes.
 - `description` - optional string.
 
 Anything else is an unknown field and fails loudly. That is deliberate: a
@@ -74,6 +89,7 @@ diffable, not under `.chit/`.
 A sequential plan step may select a recipe by id (`"recipe": "deep-review"`).
 The rules, all enforced:
 
+- Plan-step recipes are converge-only. A one-shot recipe is refused at the gate.
 - `recipe` and `manifestPath` are mutually exclusive on a step; the parser
   rejects the pair. Direct `manifestPath` stays available for manual expert
   use, but the plan-author prompt and the human review rubric steer planners
@@ -100,6 +116,7 @@ Batches can select recipes at either the batch level or the task level.
 
 Rules:
 
+- Batch recipes are converge-only. A one-shot recipe is refused at the gate.
 - A batch-level `recipe` and batch-level `manifest_path` are mutually exclusive.
 - A task-level `recipe` and task-level `manifestPath` are mutually exclusive.
 - Per-task selection wins over the batch default.
@@ -121,32 +138,39 @@ tasks, with or without recipes.
 ## Single-run `recipe` (Phase 6)
 
 `chit_start` accepts a `recipe` id directly, so a single unattended run can use a
-vetted preset without an orchestrating plan or batch. The `chit_recipes` menu now
-points at `chit_start` alongside `chit_batch_start` and `chit_plan_start`.
+vetted preset without an orchestrating plan or batch. Any recipe mode can launch
+through `chit_start`; only converge recipes are valid for `chit_batch_start` and
+`chit_plan_start`.
 
 Rules:
 
 - `recipe` and `manifest_path` are mutually exclusive (a recipe supplies its own
   manifest); the pair is refused before any resolution.
-- Recipes are converge-only, so a recipe-backed start is a loop run: it needs
-  `task` and `scope` exactly like a built-in-loop or loop-manifest start. A recipe
-  whose manifest resolves to a one-shot policy is refused.
+- A converge recipe is a loop run: it needs `task` and `scope` exactly like a
+  built-in-loop or loop-manifest start.
+- A one-shot recipe is a single DAG pass: it takes `inputs`, rejects `task`, and
+  rejects loop-only knobs such as `max_iterations`, `required_checks`, and
+  `call_timeout_ms`.
+- The declared recipe mode must match the manifest policy (`converge` maps to a
+  loop policy, `one-shot` maps to a one-shot policy). A mismatch is refused.
 - The recipe resolves once, at start, through the SAME fresh-config recipe resolver
   and layered-config path plan and batch use, against the commit the run executes
   from (HEAD of the caller checkout, what the managed worktree is cut from). There
   is no separate dry-run/confirm gate: the resolved binding IS the approved surface.
-- The recipe supplies the manifest and default `maxIterations`/`callTimeoutMs`; an
-  explicit `max_iterations`/`call_timeout_ms` tool input stays the closest override
+- A converge recipe supplies the manifest and default `maxIterations`/`callTimeoutMs`;
+  an explicit `max_iterations`/`call_timeout_ms` tool input stays the closest override
   (explicit > recipe default > built-in fallback, per knob), matching the batch
   gate's precedence. `max_iterations` therefore lost its hard schema default of 3;
   the fallback now applies only when neither input nor recipe sets it.
 - The resolved recipe receipt, manifest content digest, and participant execution
   summary are stamped through the run wherever a recipe-backed plan step / batch
   task already stamps them: the loop log header, the durable job record (background),
-  the in-memory session (foreground), and each iteration's audit. A background
-  worker re-verifies the digest against the bytes it reads before executing, so an
-  uncommitted edit to a vetted manifest is refused as drift. `chit_status` /
-  `chit_trace` surface which recipe ran (by id) for both modes.
+  the in-memory session (foreground), and each iteration's audit. One-shot background
+  jobs also persist the resolver-bound manifest bytes and re-check their digest before
+  execution. A background worker re-verifies the digest against the bytes it reads
+  before executing, so an uncommitted edit to a vetted manifest is refused as drift.
+  `chit_status` / `chit_trace` surface which recipe ran (by id) where the run record
+  carries that identity.
 - Bare `task` runs, direct `manifest_path` runs, foreground/background dispatch,
   `required_checks` replacement, and `in_place` are unchanged: the recipe path only
   adds a third manifest source and the stamping the other surfaces already do.

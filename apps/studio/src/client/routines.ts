@@ -22,7 +22,7 @@ export function participantRole(
 }
 
 export interface RoutineBlockView {
-	role: "implementer" | "reviewer" | "checks" | "you";
+	role: string;
 	label: string;
 	present: boolean;
 	agentId?: string;
@@ -51,6 +51,15 @@ function participantBlock(
 	};
 }
 
+function participantForStep(
+	routine: DeclaredRoutine,
+	stepId: string,
+): RoutineParticipant | undefined {
+	const step = routine.manifest?.steps.find((s) => s.id === stepId && s.kind === "call");
+	if (step?.participantId === undefined) return undefined;
+	return routine.manifest?.participants.find((p) => p.id === step.participantId);
+}
+
 function checksBlock(routine: DeclaredRoutine): RoutineBlockView {
 	const checks = routine.manifest?.requiredChecks;
 	if (checks === undefined) {
@@ -75,14 +84,20 @@ function checksBlock(routine: DeclaredRoutine): RoutineBlockView {
 	};
 }
 
-// The at-rest routine canvas keeps the converge loop shape even when the manifest
-// summary is unavailable, with unknown blocks marked as placeholders.
-export function routineCanvas(routine: DeclaredRoutine): RoutineBlockView[] {
+function convergeCanvas(routine: DeclaredRoutine): RoutineBlockView[] {
+	const policy = routine.manifest?.policy;
 	const participants = routine.manifest?.participants ?? [];
 	const implementer =
-		participants.find((p) => participantRole(p) === "implementer") ??
-		participants.find((p) => participantRole(p) === "other");
-	const reviewer = participants.find((p) => participantRole(p) === "reviewer");
+		policy?.kind === "loop"
+			? (participantForStep(routine, policy.implementStep) ??
+				participants.find((p) => participantRole(p) === "implementer") ??
+				participants.find((p) => participantRole(p) === "other"))
+			: undefined;
+	const reviewer =
+		policy?.kind === "loop"
+			? (participantForStep(routine, policy.reviewStep) ??
+				participants.find((p) => participantRole(p) === "reviewer"))
+			: undefined;
 	return [
 		participantBlock("implementer", implementer),
 		participantBlock("reviewer", reviewer),
@@ -95,6 +110,61 @@ export function routineCanvas(routine: DeclaredRoutine): RoutineBlockView[] {
 			detail: "approves and monitors",
 		},
 	];
+}
+
+function oneShotCanvas(routine: DeclaredRoutine): RoutineBlockView[] {
+	const steps = routine.manifest?.steps ?? [];
+	if (steps.length === 0) {
+		return [
+			{ role: "manifest", label: "manifest", present: false, detail: "not resolved" },
+			{
+				role: "you",
+				label: "you",
+				present: true,
+				agentId: "operator",
+				detail: "runs and reads output",
+			},
+		];
+	}
+	return [
+		...steps.map((step): RoutineBlockView => {
+			if (step.kind === "format") {
+				return {
+					role: step.id,
+					label: step.id,
+					present: true,
+					agentId: "chit",
+					detail: "formats output",
+				};
+			}
+			const detail =
+				step.session !== undefined && step.filesystem !== undefined
+					? `call ${step.participantId} / ${step.session} / ${step.filesystem}`
+					: step.participantId !== undefined
+						? `call ${step.participantId}`
+						: "call";
+			return {
+				role: step.id,
+				label: step.id,
+				present: true,
+				agentId: step.agentId,
+				detail,
+			};
+		}),
+		{
+			role: "you",
+			label: "you",
+			present: true,
+			agentId: "operator",
+			detail: "runs and reads output",
+		},
+	];
+}
+
+// The at-rest routine canvas keeps the converge loop shape for converge recipes
+// and uses the manifest's own ordered steps for one-shot routines.
+export function routineCanvas(routine: DeclaredRoutine): RoutineBlockView[] {
+	return routine.mode === "converge" ? convergeCanvas(routine) : oneShotCanvas(routine);
 }
 
 export type TowerBody = "empty" | "empty-with-console" | "grid";

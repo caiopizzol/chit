@@ -22,8 +22,28 @@ function layered(global?: unknown, repo?: unknown) {
 
 const summary = (agentId: string): RoutineManifestSummary => ({
 	manifestDigest: "sha256:abc",
+	policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 	participants: [
 		{ id: "impl", role: "implementer", agentId, session: "per_scope", filesystem: "write" },
+	],
+	steps: [
+		{
+			id: "implement",
+			kind: "call",
+			participantId: "impl",
+			agentId,
+			session: "per_scope",
+			filesystem: "write",
+		},
+		{
+			id: "review",
+			kind: "call",
+			participantId: "impl",
+			agentId,
+			session: "per_scope",
+			filesystem: "write",
+		},
+		{ id: "out", kind: "format" },
 	],
 	requiredChecks: [{ name: "test", command: "bun", args: ["test"], timeoutMs: 60_000 }],
 });
@@ -63,6 +83,18 @@ describe("declaredRoutinesView", () => {
 			mode: "converge",
 			manifestPath: "/flows/one.json",
 			maxIterations: 4,
+		});
+	});
+
+	test("lists one-shot recipes with their mode", () => {
+		const config = layered({
+			recipes: { grill: { mode: "one-shot", manifestPath: "/flows/grill.json" } },
+		});
+		expect(declaredRoutinesView(config).routines[0]).toEqual({
+			id: "grill",
+			origin: "global",
+			mode: "one-shot",
+			manifestPath: "/flows/grill.json",
 		});
 	});
 
