@@ -18,6 +18,7 @@ import { argvCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
+import type { RunReceipt } from "./run.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 import { loadReceipt } from "./store.ts";
 
@@ -224,5 +225,124 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		// receipt-level: a cancelled receipt is persisted
 		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
 		expect(receipt.status).toBe("cancelled");
+	});
+});
+
+describe("acceptance matrix -- failure cases", () => {
+	test("did-not-converge: --apply does NOT write a non-converged result", async () => {
+		const impl = {
+			id: "impl",
+			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			steps: [
+				{ id: "build", call: "b", prompt: "try" },
+				{ id: "verify", check: [{ command: "sh", args: ["-c", "test -f goal.txt"] }] }, // never created
+			],
+			repeat: { until: "checks-pass", maxIterations: 2 },
+		};
+		const repo = newRepo({ impl }, { routines: { impl: { manifestPath: "impl.json" } } });
+		// the builder writes a file, but never the one the check wants
+		const adapter = modelStub((req) => {
+			if (req.filesystem === "read-write") writeFileSync(join(req.cwd, "attempt.txt"), "x\n");
+			return "tried";
+		});
+		const { deps, out } = harness(repo, adapter);
+		expect(await runCli(["run", "impl", "--apply"], deps)).toBe(1);
+		expect(out.join("\n")).toMatch(/run did-not-converge/);
+		expect(existsSync(join(repo, "attempt.txt"))).toBe(false); // never applied
+		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
+		expect(receipt.status).toBe("did-not-converge");
+		expect(receipt.iterations).toHaveLength(2);
+	});
+
+	test("failed: a throwing model call yields a failed receipt and exit 1", async () => {
+		const repo = newRepo({ griller: GRILLER }, { routines: { griller: { manifestPath: "griller.json" } } });
+		const adapter: Adapter = {
+			async call() {
+				throw new Error("model exploded");
+			},
+		};
+		const { deps, err } = harness(repo, adapter);
+		expect(await runCli(["run", "griller", "--input", "idea=x"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/failed/);
+		const receipt = loadReceipt(repo, "run-accept-0") as RunReceipt;
+		expect(receipt.status).toBe("failed");
+		expect(receipt.steps.at(-1)).toMatchObject({ status: "failed" });
+	});
+
+	test("composition: a failing sub-run fails the flow and stops before the rest", async () => {
+		const impl = {
+			id: "impl",
+			inputs: { task: { type: "string" } },
+			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			steps: [{ id: "go", call: "b", prompt: "build {{ inputs.task }}" }],
+		};
+		const flow = {
+			id: "flow",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "griller", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "impl", routine: "impl", inputs: { task: "{{ steps.grill.output }}" } },
+			],
+		};
+		const repo = newRepo(
+			{ griller: GRILLER, impl, flow },
+			{ routines: { griller: { manifestPath: "griller.json" }, impl: { manifestPath: "impl.json" }, flow: { manifestPath: "flow.json" } } },
+		);
+		// the first sub-run (grill, read-only) throws; the sandboxed impl must never run
+		const adapter: Adapter = {
+			async call(req) {
+				if (req.filesystem === "read-only") throw new Error("grill failed");
+				writeFileSync(join(req.cwd, "built.txt"), "should not happen\n");
+				return { output: "done" };
+			},
+		};
+		const { deps } = harness(repo, adapter);
+		expect(await runCli(["run", "flow", "--input", "idea=x"], deps)).toBe(1);
+		const flowReceipt = loadReceipt(repo, "run-accept-0") as FlowReceipt;
+		expect(flowReceipt.status).toBe("failed");
+		expect(flowReceipt.steps).toHaveLength(1); // stopped at grill
+		expect(flowReceipt.steps[0]).toMatchObject({ id: "grill", status: "failed" });
+		expect(existsSync(join(repo, "built.txt"))).toBe(false); // impl never ran
+	});
+
+	test("dirty-origin apply conflict: --apply fails cleanly without corrupting origin", async () => {
+		const writeySeed = {
+			id: "writey-seed",
+			participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+			steps: [{ id: "go", call: "w", prompt: "edit the seed" }],
+		};
+		const repo = newRepo({ "writey-seed": writeySeed }, { routines: { "writey-seed": { manifestPath: "writey-seed.json" } } });
+		// dirty the origin: change the same file the model will edit, so the patch context conflicts
+		writeFileSync(join(repo, "seed.txt"), "changed in origin\n");
+		const adapter = modelStub((req) => {
+			if (req.filesystem === "read-write") writeFileSync(join(req.cwd, "seed.txt"), "edited in sandbox\n");
+			return "done";
+		});
+		const { deps, err } = harness(repo, adapter);
+		expect(await runCli(["run", "writey-seed", "--apply"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/could not apply|apply/i);
+		expect(readFileSync(join(repo, "seed.txt"), "utf-8")).toBe("changed in origin\n"); // origin not corrupted
+		const worktrees = Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString();
+		expect(worktrees.includes("chit-sbx-")).toBe(false); // sandbox still discarded
+	});
+
+	test("interrupted in-flight: an abort during a running check cancels and discards", async () => {
+		const slow = {
+			id: "slow",
+			inputs: {},
+			steps: [{ id: "wait", check: [{ command: "sh", args: ["-c", "sleep 2"] }] }],
+			repeat: { until: "checks-pass", maxIterations: 1 },
+		};
+		const repo = newRepo({ slow }, { routines: { slow: { manifestPath: "slow.json" } } });
+		const controller = new AbortController();
+		const { deps, err } = harness(repo, modelStub(() => ""), { signal: controller.signal });
+		// abort asynchronously, after the run has started and the sleep check is in flight
+		const timer = setTimeout(() => controller.abort(), 300);
+		const code = await runCli(["run", "slow"], deps);
+		clearTimeout(timer);
+		expect(code).toBe(130);
+		expect(err.join("\n")).toMatch(/cancelled/);
+		const worktrees = Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString();
+		expect(worktrees.includes("chit-sbx-")).toBe(false); // worktree discarded
 	});
 });

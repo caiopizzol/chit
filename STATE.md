@@ -232,13 +232,23 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       newRunId is now a per-run counter so a flow's sub-receipts no longer collide.
 - [x] 151 tests (406 expects), typecheck clean, no leftover worktrees / temp husks.
 
+## Increment 14 COMPLETE — legacy trace compat + failure-case E2E
+- [x] FIXED a regression: the timeline render assumed per-step startedAt, so `chit trace` on receipts
+      written before increment 13 showed "+NaNms". Reproduced on real old receipts (run-12c4ae18 etc.).
+      Now the offset is omitted when a step/iteration lacks startedAt (legacy), so old receipts stay
+      readable. Regression test added (a legacy receipt renders without NaN).
+- [x] failure-case E2E (real git, faked model), 5 new cases:
+      did-not-converge with --apply does NOT write / a throwing model call -> failed receipt + exit 1 /
+      composition sub-run failure stops the flow before the sandboxed step (which never runs) /
+      dirty-origin apply conflict -> --apply fails cleanly, origin uncorrupted, sandbox discarded /
+      in-flight cancel -> an async abort DURING a running check cancels + discards (not just pre-abort).
+- [x] 157 tests (430 expects), typecheck clean, no leftover worktrees / temp husks.
+
 ## NEXT: routine scaffolding (`chit init`)
-- deferred E2E gaps (per review): failure-case acceptance cases (did-not-converge / failed text / flow
-  sub-run fails / --apply non-converged never writes); in-flight (not pre-aborted) Ctrl-C in the matrix
-  (mechanism already covered by proc.test + a manual smoke); apply-conflict on a dirty origin; one optional
-  real-claude smoke outside CI.
-- deferred follow-ups: HARD run deadline (wire runTimeoutMinutes to the cancel signal); a dry-run/cancelled
-  sandbox receipt still stores its (removed) workDir path -- trace does not render it (minor, per review).
+- happy AND unhappy E2E paths are now proven; scaffolding is the right next step.
+- still optional/deferred: one real-claude smoke outside CI (the suite fakes the model on purpose);
+  HARD run deadline (wire runTimeoutMinutes to the cancel signal); a dry-run/cancelled sandbox receipt
+  stores its (removed) workDir path (JSON-only; trace does not render it).
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed
