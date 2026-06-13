@@ -140,10 +140,22 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       maxIter from repeat or 1; composition -> runFlow). All examples + tests converted.
 - [x] 108 tests, typecheck clean. CLI smoke: routines shows text/loop/composition; inspect/run derive.
 
+## Increment 8 — v2 DX pass + acceptance closed
+- [x] DX wording: README rewritten around one shape + derived behavior; CLI help/labels no longer
+      say policy/one-shot/converge ("converge:" run label -> "run <status>"); receipt `policy`
+      documented as an internal per-kind tag. Dropped the unverifiable "Biome clean" claim
+      (Biome is not configured here; gates are `bun test` + `tsc`).
+- [x] FOUND+FIXED via the acceptance run: the 5-min per-call timeout killed a legit ~5-min planning
+      call (feature-flow failed at plan). Raised to 10 min (46cadb8).
+- [x] ACCEPTANCE CLOSED on v2: real `feature-flow` (grill->plan->impl) converged end-to-end
+      (run-daa20f5a): grill completed, output fed to plan (293s, completed), impl converged in a
+      sandbox; dry-run discarded; origin clean; no leftover worktree.
+- known edge: force-killing a sandboxed run mid-flight skips its worktree cleanup (leak); add a guard.
+
 ## Deferred still
 durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out,
 nested composition / multiple sandboxed steps (the shared-flow-sandbox model), `repeat.from`.
-NEXT high-value: live progress/streaming (the multi-minute blind wait is the clearest pain).
+NEXT high-value: live progress/streaming (the ~13-min blind wait on a real flow is the clearest pain).
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,
