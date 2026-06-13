@@ -169,6 +169,36 @@ describe("formatTrace converge", () => {
 		expect(out).toContain("bun test:fail");
 		expect(out).toContain("bun test:ok");
 	});
+
+	test("a legacy receipt without per-step timestamps renders without NaN", () => {
+		// a receipt written before per-step startedAt existed (durable artifact on disk)
+		const legacy = {
+			runId: "old",
+			routineId: "smoke",
+			policy: "converge",
+			digest: "sha256:old",
+			inputs: {},
+			maxIterations: 3,
+			startedAt: 0,
+			finishedAt: 100,
+			elapsedMs: 100,
+			status: "converged",
+			iterations: [
+				{
+					n: 1,
+					allChecksPassed: true,
+					steps: [
+						{ id: "build", kind: "call", participant: "b", status: "ok", elapsedMs: 80 },
+						{ id: "verify", kind: "check", status: "ok", elapsedMs: 20, checks: [{ command: "grep x", ok: true, elapsedMs: 20 }] },
+					],
+				},
+			],
+		} as unknown as ConvergeReceipt;
+		const out = formatTrace(legacy);
+		expect(out).not.toContain("NaN");
+		expect(out).toContain("iteration 1  checks passed"); // offset omitted, still readable
+		expect(out).toContain("build"); // the step line renders (just without an offset)
+	});
 });
 
 describe("formatTrace", () => {
