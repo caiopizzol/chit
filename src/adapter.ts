@@ -10,8 +10,10 @@ import type { Filesystem } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
 
 // A hung model call must never block a run forever (it would defeat the loop's
-// bounds). Five minutes is generous for one print-mode call.
-const CALL_TIMEOUT_MS = 5 * 60_000;
+// bounds). The bound has to clear a LEGITIMATE slow call, though: a real planning
+// call over a large input was observed at ~5 min, so 5 min killed honest work.
+// Ten minutes leaves headroom while still catching a truly stuck process.
+const CALL_TIMEOUT_MS = 10 * 60_000;
 
 export interface AdapterRequest {
 	agent: string;
