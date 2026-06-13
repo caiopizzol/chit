@@ -18,6 +18,7 @@ import { renderTemplate } from "./template.ts";
 export interface CheckReceipt {
 	command: string;
 	ok: boolean;
+	startedAt: number;
 	elapsedMs: number;
 }
 
@@ -26,7 +27,9 @@ export interface ConvergeStepReceipt {
 	kind: "call" | "format" | "check";
 	participant?: string;
 	agent?: string;
-	status: "ok" | "failed";
+	status: "ok" | "failed" | "cancelled";
+	// Absolute clock when the step started (see StepReceipt) -- the timeline source.
+	startedAt: number;
 	elapsedMs: number;
 	checks?: CheckReceipt[];
 	error?: string;
@@ -34,6 +37,8 @@ export interface ConvergeStepReceipt {
 
 export interface IterationReceipt {
 	n: number;
+	// Absolute clock when the iteration started, so trace can place it on the timeline.
+	startedAt: number;
 	steps: ConvergeStepReceipt[];
 	allChecksPassed: boolean;
 }
@@ -140,6 +145,7 @@ export async function runConverge(
 		}
 		ctx.iteration = n;
 		deps.onProgress?.(`iteration ${n}`);
+		const iterationStart = deps.now();
 		const stepReceipts: ConvergeStepReceipt[] = [];
 		let allChecksPassed = true;
 
@@ -171,11 +177,12 @@ export async function runConverge(
 						participant: step.call,
 						agent: participant.agent,
 						status: "ok",
+						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
 					});
 				} else if (step.kind === "format") {
 					ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
-					stepReceipts.push({ id: step.id, kind: "format", status: "ok", elapsedMs: deps.now() - stepStart });
+					stepReceipts.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 				} else if (step.kind === "check") {
 					const checks: CheckReceipt[] = [];
 					const failures: string[] = [];
@@ -185,7 +192,7 @@ export async function runConverge(
 						const res = await deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal);
 						const label = [cmd.command, ...cmd.args].join(" ");
 							deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"}`);
-						checks.push({ command: label, ok: res.ok, elapsedMs: deps.now() - checkStart });
+						checks.push({ command: label, ok: res.ok, startedAt: checkStart, elapsedMs: deps.now() - checkStart });
 						if (!res.ok) {
 							stepPassed = false;
 							failures.push(`$ ${label}\n${res.output}`.trim());
@@ -197,26 +204,38 @@ export async function runConverge(
 					stepReceipts.push({
 						id: step.id,
 						kind: "check",
-						status: stepPassed ? "ok" : "failed",
+						status: deps.signal?.aborted ? "cancelled" : stepPassed ? "ok" : "failed",
+						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
 						checks,
-					});
+						});
 				} else {
 					// An execution routine has no `routine` steps (those are a composition).
 					throw new Error(`runConverge cannot run a ${step.kind} step (${step.id})`);
 				}
 			} catch (e) {
-				// A call/check killed by the cancellation signal is a cancel, not a failure.
+				const kind = step.kind === "routine" ? "check" : step.kind;
+				// A call/check killed by the cancellation signal is a cancel, not a failure;
+				// record the active step so the timeline shows what was interrupted.
 				if (deps.signal?.aborted) {
 					cancelled = true;
+					stepReceipts.push({
+						id: step.id,
+						kind,
+						...(step.kind === "call" && { participant: step.call }),
+						status: "cancelled",
+						startedAt: stepStart,
+						elapsedMs: deps.now() - stepStart,
+					});
 					break;
 				}
 				runError = (e as Error).message;
 				stepReceipts.push({
 					id: step.id,
-					kind: step.kind === "routine" ? "check" : step.kind,
+					kind,
 					...(step.kind === "call" && { participant: step.call }),
 					status: "failed",
+					startedAt: stepStart,
 					elapsedMs: deps.now() - stepStart,
 					error: runError,
 				});
@@ -227,8 +246,13 @@ export async function runConverge(
 		// An aborted check returns a flagged result rather than throwing, so the catch
 		// above won't see it; treat a signal that fired during the iteration as a cancel.
 		if (deps.signal?.aborted) cancelled = true;
-		if (cancelled) break; // don't record a partial, interrupted iteration
-		iterations.push({ n, steps: stepReceipts, allChecksPassed: runError === undefined && allChecksPassed });
+		if (cancelled) {
+			// Record the partial iteration (so the timeline shows how far it got and what
+			// was active), but only if it actually began running steps.
+			if (stepReceipts.length > 0) iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: false });
+			break;
+		}
+		iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: runError === undefined && allChecksPassed });
 		if (runError === undefined && allChecksPassed) converged = true;
 	}
 

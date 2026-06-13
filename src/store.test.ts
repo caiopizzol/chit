@@ -18,7 +18,7 @@ const receipt: RunReceipt = {
 	finishedAt: 5,
 	elapsedMs: 4,
 	status: "completed",
-	steps: [{ id: "out", kind: "format", status: "ok", elapsedMs: 1 }],
+	steps: [{ id: "out", kind: "format", status: "ok", startedAt: 1, elapsedMs: 1 }],
 	output: "the report",
 };
 

@@ -15,7 +15,10 @@ export interface StepReceipt {
 	kind: "call" | "format";
 	participant?: string;
 	agent?: string;
-	status: "ok" | "failed";
+	status: "ok" | "failed" | "cancelled";
+	// Absolute clock (deps.now()) when the step started. With the run's startedAt this
+	// gives a timeline (offset = startedAt - run.startedAt); elapsedMs is the duration.
+	startedAt: number;
 	elapsedMs: number;
 	error?: string;
 }
@@ -97,18 +100,27 @@ export async function runOneShot(
 					...(deps.signal !== undefined && { signal: deps.signal }),
 				});
 				ctx.steps[step.id] = { output: result.output };
-				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, status: "ok", elapsedMs: deps.now() - stepStart });
+				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
-				steps.push({ id: step.id, kind: "format", status: "ok", elapsedMs: deps.now() - stepStart });
+				steps.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			} else {
 				// A non-sandboxed text routine has only call/format steps (dispatch guarantees it).
 				throw new Error(`runOneShot cannot run a ${step.kind} step (${step.id})`);
 			}
 		} catch (e) {
-			// A call killed by the cancellation signal is a cancel, not a failure.
+			// A call killed by the cancellation signal is a cancel, not a failure. Record
+			// the step that was active so the timeline shows what was interrupted.
 			if (deps.signal?.aborted) {
 				cancelled = true;
+				steps.push({
+					id: step.id,
+					kind: step.kind === "call" ? "call" : "format",
+					...(step.kind === "call" && { participant: step.call }),
+					status: "cancelled",
+					startedAt: stepStart,
+					elapsedMs: deps.now() - stepStart,
+				});
 				break;
 			}
 			failed = (e as Error).message;
@@ -117,6 +129,7 @@ export async function runOneShot(
 				kind: step.kind === "call" ? "call" : "format",
 				...(step.kind === "call" && { participant: step.call }),
 				status: "failed",
+				startedAt: stepStart,
 				elapsedMs: deps.now() - stepStart,
 				error: failed,
 			});

@@ -40,6 +40,9 @@ describe("runOneShot", () => {
 		]);
 		expect(r.steps[0]).toMatchObject({ participant: "griller", agent: "claude" });
 		expect(r.finishedAt).toBeGreaterThan(r.startedAt);
+		// timeline: each step carries an absolute startedAt within the run's window, in order
+		expect(r.steps[0]?.startedAt).toBeGreaterThanOrEqual(r.startedAt);
+		expect(r.steps[1]?.startedAt ?? 0).toBeGreaterThan(r.steps[0]?.startedAt ?? 0);
 	});
 
 	test("passes the participant's instructions, filesystem, and cwd to the adapter", async () => {
@@ -125,6 +128,8 @@ describe("runOneShot", () => {
 		const r = await runOneShot(routineFrom(GRILLER), { idea: "x" }, { ...deps(adapter), signal: controller.signal });
 		expect(r.status).toBe("cancelled");
 		expect(r.error).toBe("cancelled by operator");
+		// the active step is recorded so the timeline shows what was interrupted
+		expect(r.steps.at(-1)).toMatchObject({ id: "grill", status: "cancelled" });
 	});
 
 	test("a template error in a format step fails the run", async () => {

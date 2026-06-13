@@ -109,6 +109,8 @@ export interface FlowStepReceipt {
 	policy: "one-shot" | "converge";
 	subRunId: string;
 	status: string;
+	// Absolute clock when the sub-run started, so trace can place it on the timeline.
+	startedAt: number;
 	elapsedMs: number;
 }
 
@@ -194,7 +196,7 @@ export async function runFlow(
 		const validation = validateInputs(step.routine.manifest, mapped);
 		if (!validation.ok) {
 			failed = `step ${step.id} (${step.routine.id}): ${validation.errors.join("; ")}`;
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: "", status: "failed", elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: "", status: "failed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			break;
 		}
 
@@ -223,7 +225,7 @@ export async function runFlow(
 			terminalDiff = r.diff;
 			applied = r.applied;
 			ctx.steps[step.id] = { output: r.diff };
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.receipt.runId, status: r.receipt.status, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.receipt.runId, status: r.receipt.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			if (r.receipt.status === "cancelled") {
 				cancelled = true;
 				break;
@@ -241,7 +243,7 @@ export async function runFlow(
 			);
 			subReceipts.push(r);
 			ctx.steps[step.id] = { output: r.output ?? "" };
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			if (r.status === "cancelled") {
 				cancelled = true;
 				break;

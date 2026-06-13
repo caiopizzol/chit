@@ -136,7 +136,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		out.push("steps:");
 		const w = Math.max(1, ...r.steps.map((s) => s.id.length));
 		for (const s of r.steps) {
-			out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${s.elapsedMs}ms  ${s.subRunId || "-"}`);
+			out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  +${s.startedAt - r.startedAt}ms  ${s.elapsedMs}ms  ${s.subRunId || "-"}`);
 		}
 		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
@@ -146,11 +146,11 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	if (r.policy === "converge") {
 		out.push(`iterations: ${r.iterations.length} (max ${r.maxIterations})`);
 		for (const it of r.iterations) {
-			out.push(`  iteration ${it.n}  ${it.allChecksPassed ? "checks passed" : "checks failed"}`);
+			out.push(`  iteration ${it.n}  +${it.startedAt - r.startedAt}ms  ${it.allChecksPassed ? "checks passed" : "checks failed"}`);
 			const w = Math.max(1, ...it.steps.map((s) => s.id.length));
 			for (const s of it.steps) {
 				const who = s.kind === "call" ? `call ${s.participant}` : s.kind;
-				let line = `    ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 6)}  ${s.elapsedMs}ms`;
+				let line = `    ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  +${s.startedAt - r.startedAt}ms  ${s.elapsedMs}ms`;
 				if (s.checks) line += `  [${s.checks.map((c) => `${c.command}:${c.ok ? "ok" : "fail"}`).join(", ")}]`;
 				out.push(line);
 				if (s.error) out.push(`      error: ${s.error}`);
@@ -168,7 +168,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	const w = Math.max(1, ...r.steps.map((s) => s.id.length));
 	for (const s of r.steps) {
 		const who = s.kind === "call" ? `call ${s.participant}` : "format";
-		out.push(`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 6)}  ${s.elapsedMs}ms`);
+		out.push(`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  +${s.startedAt - r.startedAt}ms  ${s.elapsedMs}ms`);
 	}
 	if (r.status === "failed" || r.status === "cancelled") {
 		out.push(`error:    ${r.error ?? "(unknown)"}`);

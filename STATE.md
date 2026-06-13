@@ -219,13 +219,26 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] all 7 green first try; full suite 151 tests, typecheck clean; no leftover worktrees, 0 temp husks.
       The shape is boring and reliable across the real cases.
 
-## NEXT: persisted progress in receipts, then routine scaffolding
-- persisted progress: receipts already hold steps/iterations/checks with elapsedMs; consider per-step
-  start timestamps so trace can render a real execution timeline.
-- routine scaffolding/templates (`chit init`).
-- deferred follow-ups: HARD run deadline (wire runTimeoutMinutes to the cancel signal; today cooperative,
-  Ctrl-C is the only mid-call abort); a cancelled/dry-run sandbox receipt still stores its (now-removed)
-  workDir path -- trace does not render it, but the stored JSON could mark it "discarded" (minor, per review).
+## Increment 13 COMPLETE — persisted execution timeline (receipts + trace)
+- [x] every step/check/iteration/sub-run receipt now carries an absolute `startedAt` (deps.now()); with
+      the run's startedAt that is a real timeline (offset = startedAt - run.startedAt). elapsedMs is the
+      duration.
+- [x] "what was active when cancelled": cancel now RECORDS the active step (status "cancelled") and the
+      partial converge iteration, so trace shows where the run was when it stopped (failed already did).
+- [x] trace renders the timeline: each step/iteration shows "+<offset>ms <duration>ms" and its status.
+      Real smoke: a check-only routine traced as "iteration 1 +0ms checks passed / wait check ok +0ms 320ms".
+- [x] receipt-level assertions added: unit (run startedAt monotonic; converge cancel records the active
+      step) + acceptance (loop timeline, composition sub-run links persisted, cancelled receipt). Acceptance
+      newRunId is now a per-run counter so a flow's sub-receipts no longer collide.
+- [x] 151 tests (406 expects), typecheck clean, no leftover worktrees / temp husks.
+
+## NEXT: routine scaffolding (`chit init`)
+- deferred E2E gaps (per review): failure-case acceptance cases (did-not-converge / failed text / flow
+  sub-run fails / --apply non-converged never writes); in-flight (not pre-aborted) Ctrl-C in the matrix
+  (mechanism already covered by proc.test + a manual smoke); apply-conflict on a dirty origin; one optional
+  real-claude smoke outside CI.
+- deferred follow-ups: HARD run deadline (wire runTimeoutMinutes to the cancel signal); a dry-run/cancelled
+  sandbox receipt still stores its (removed) workDir path -- trace does not render it (minor, per review).
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed

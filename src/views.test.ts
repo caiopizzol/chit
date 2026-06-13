@@ -140,18 +140,20 @@ describe("formatTrace converge", () => {
 		iterations: [
 			{
 				n: 1,
+				startedAt: 0,
 				allChecksPassed: false,
 				steps: [
-					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", elapsedMs: 10 },
-					{ id: "verify", kind: "check", status: "failed", elapsedMs: 5, checks: [{ command: "bun test", ok: false, elapsedMs: 5 }] },
+					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", startedAt: 0, elapsedMs: 10 },
+					{ id: "verify", kind: "check", status: "failed", startedAt: 10, elapsedMs: 5, checks: [{ command: "bun test", ok: false, startedAt: 10, elapsedMs: 5 }] },
 				],
 			},
 			{
 				n: 2,
+				startedAt: 15,
 				allChecksPassed: true,
 				steps: [
-					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", elapsedMs: 8 },
-					{ id: "verify", kind: "check", status: "ok", elapsedMs: 4, checks: [{ command: "bun test", ok: true, elapsedMs: 4 }] },
+					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", startedAt: 15, elapsedMs: 8 },
+					{ id: "verify", kind: "check", status: "ok", startedAt: 23, elapsedMs: 4, checks: [{ command: "bun test", ok: true, startedAt: 23, elapsedMs: 4 }] },
 				],
 			},
 		],
@@ -161,8 +163,9 @@ describe("formatTrace converge", () => {
 		const out = formatTrace(receipt);
 		expect(out).toContain("run-c  impl-review  converged");
 		expect(out).toContain("iterations: 2 (max 3)");
-		expect(out).toContain("iteration 1  checks failed");
-		expect(out).toContain("iteration 2  checks passed");
+		expect(out).toContain("iteration 1  +0ms  checks failed");
+		expect(out).toContain("iteration 2  +15ms  checks passed"); // timeline: iteration start offset
+		expect(out).toContain("+10ms"); // step-level offset (verify started 10ms into the run)
 		expect(out).toContain("bun test:fail");
 		expect(out).toContain("bun test:ok");
 	});
@@ -180,8 +183,8 @@ describe("formatTrace", () => {
 		elapsedMs: 900,
 		status: "completed",
 		steps: [
-			{ id: "grill", kind: "call", participant: "griller", agent: "claude", status: "ok", elapsedMs: 880 },
-			{ id: "out", kind: "format", status: "ok", elapsedMs: 2 },
+			{ id: "grill", kind: "call", participant: "griller", agent: "claude", status: "ok", startedAt: 0, elapsedMs: 880 },
+			{ id: "out", kind: "format", status: "ok", startedAt: 880, elapsedMs: 2 },
 		],
 		output: "SECRET REPORT BODY",
 	};
@@ -190,6 +193,7 @@ describe("formatTrace", () => {
 		const out = formatTrace(base);
 		expect(out).toContain("run-1  feature-griller  completed");
 		expect(out).toContain("call griller");
+		expect(out).toContain("+880ms"); // timeline: the format step started 880ms into the run
 		expect(out).toContain("900ms");
 		expect(out).not.toContain("SECRET REPORT BODY");
 		expect(out).toContain(`${"SECRET REPORT BODY".length} chars`);

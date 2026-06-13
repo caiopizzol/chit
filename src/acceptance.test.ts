@@ -16,7 +16,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Adapter, AdapterRequest } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
+import type { ConvergeReceipt } from "./converge.ts";
+import type { FlowReceipt } from "./flow.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
+import { loadReceipt } from "./store.ts";
 
 function modelStub(onCall: (req: AdapterRequest, callIndex: number) => string): Adapter {
 	let i = 0;
@@ -51,13 +54,15 @@ function harness(repo: string, adapter: Adapter, over: Partial<CliDeps> = {}) {
 	const out: string[] = [];
 	const err: string[] = [];
 	let t = 0;
+	let rid = 0;
 	const deps: CliDeps = {
 		cwd: repo,
 		adapter,
 		checkRunner: argvCheckRunner,
 		sandboxFactory: gitWorktreeSandboxFactory,
 		now: () => (t += 1),
-		newRunId: () => "run-accept",
+		// unique per run/sub-run, so a composition's receipts do not overwrite each other
+		newRunId: () => `run-accept-${rid++}`,
 		out: (l) => out.push(l),
 		err: (l) => err.push(l),
 		...over,
@@ -137,6 +142,14 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		expect(out.join("\n")).toMatch(/run converged \(2 iterations\)/);
 		expect(out.join("\n")).toMatch(/applied to/);
 		expect(existsSync(join(repo, "ready.txt"))).toBe(true);
+
+		// receipt-level: the persisted receipt carries the timeline and per-step status
+		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
+		expect(receipt.status).toBe("converged");
+		expect(receipt.iterations).toHaveLength(2);
+		expect(typeof receipt.iterations[0]?.startedAt).toBe("number");
+		expect(receipt.iterations[1]?.steps.every((s) => typeof s.startedAt === "number")).toBe(true);
+		expect(receipt.iterations[1]?.steps.at(-1)).toMatchObject({ id: "verify", status: "ok" });
 	});
 
 	test("check-only: a passing check converges with no changes", async () => {
@@ -188,6 +201,13 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		expect(text).toMatch(/applied to/);
 		// grill's output flowed into impl's prompt, then into the file impl wrote
 		expect(readFileSync(join(repo, "built.txt"), "utf-8")).toContain("build GRILLED-IDEA");
+
+		// receipt-level: the flow links its sub-runs, which are persisted separately
+		const flowReceipt = loadReceipt(repo, "run-accept-0") as FlowReceipt;
+		expect(flowReceipt.policy).toBe("flow");
+		expect(flowReceipt.steps.map((s) => s.subRunId)).toEqual(["run-accept-1", "run-accept-2"]);
+		expect(loadReceipt(repo, "run-accept-1").routineId).toBe("griller");
+		expect(loadReceipt(repo, "run-accept-2").routineId).toBe("impl");
 	});
 
 	test("interrupted: a pre-aborted run cancels, discards the worktree, exits 130", async () => {
@@ -200,5 +220,9 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		expect(existsSync(join(repo, "made.txt"))).toBe(false); // origin untouched
 		const worktrees = Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString();
 		expect(worktrees.includes("chit-sbx-")).toBe(false); // no leftover sandbox worktree
+
+		// receipt-level: a cancelled receipt is persisted
+		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
+		expect(receipt.status).toBe("cancelled");
 	});
 });

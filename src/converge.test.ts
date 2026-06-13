@@ -149,7 +149,7 @@ describe("runConverge", () => {
 		expect(r.error).toBe("cancelled by operator");
 	});
 
-	test("a call interrupted by the signal cancels the run, recording no partial iteration", async () => {
+	test("a call interrupted by the signal cancels the run and records the active step", async () => {
 		const controller = new AbortController();
 		const adapter: Adapter = {
 			async call() {
@@ -159,7 +159,9 @@ describe("runConverge", () => {
 		};
 		const r = await runConverge(routineFrom(CONVERGE), { task: "x" }, { ...deps({ adapter }), signal: controller.signal });
 		expect(r.status).toBe("cancelled");
-		expect(r.iterations).toHaveLength(0); // the interrupted iteration is not recorded
+		// the partial iteration is recorded so the timeline shows what was active
+		expect(r.iterations).toHaveLength(1);
+		expect(r.iterations[0]?.steps.at(-1)).toMatchObject({ id: "build", status: "cancelled" });
 	});
 
 	test("an aborted check (a flagged result, not a throw) still cancels the run", async () => {
@@ -173,7 +175,9 @@ describe("runConverge", () => {
 		const once = { ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 1 } };
 		const r = await runConverge(routineFrom(once), { task: "x" }, { ...deps({ checkRunner }), signal: controller.signal });
 		expect(r.status).toBe("cancelled"); // not "did-not-converge"
-		expect(r.iterations).toHaveLength(0);
+		// the partial iteration is recorded; the active check shows as cancelled
+		expect(r.iterations).toHaveLength(1);
+		expect(r.iterations[0]?.steps.at(-1)).toMatchObject({ id: "verify", status: "cancelled" });
 	});
 
 	test("aborts before exhausting iterations when the wall-time budget is exceeded", async () => {
