@@ -22,10 +22,12 @@ import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import {
 	type BoundParticipantSummary,
 	type ConfigOrigin,
+	describeParticipantSummaryDrift,
 	type ManifestBinding,
 	type ManifestBindingSource,
 	type NormalizedConfig,
 	parseManifest,
+	type RecipeMode,
 	type RecipeReceipt,
 	resolveManifest,
 	resolveParticipantSnapshots,
@@ -46,6 +48,53 @@ export class ManifestBindingError extends Error {
 // recorded value (receipts stay self-describing if the algorithm ever changes).
 export function digestManifestText(text: string): string {
 	return `sha256:${createHash("sha256").update(text).digest("hex")}`;
+}
+
+export function parseBoundManifestText(p: {
+	text: string;
+	expectedDigest?: string;
+	retryAction: string;
+	label?: string;
+}): { ok: true; raw: unknown; digest: string } | { ok: false; error: string } {
+	const label = p.label ?? "recipe manifest";
+	const digest = digestManifestText(p.text);
+	if (p.expectedDigest !== undefined && digest !== p.expectedDigest) {
+		return {
+			ok: false,
+			error: `${label} no longer matches the approved content (approved ${p.expectedDigest}, found ${digest}); the execution surface changed after approval, so the run is refused -- ${p.retryAction}`,
+		};
+	}
+	try {
+		return { ok: true, raw: JSON.parse(p.text), digest };
+	} catch (e) {
+		return { ok: false, error: `${label} is not valid JSON: ${(e as Error).message}` };
+	}
+}
+
+export function verifyBoundManifestParticipants(p: {
+	raw: unknown;
+	config: NormalizedConfig;
+	expectedParticipants?: Record<string, BoundParticipantSummary>;
+	retryAction: string;
+}): { ok: true } | { ok: false; error: string } {
+	if (p.expectedParticipants === undefined) return { ok: true };
+	let currentParticipants: Record<string, BoundParticipantSummary>;
+	try {
+		currentParticipants = resolveManifestParticipantSummary(p.raw, p.config);
+	} catch (e) {
+		return {
+			ok: false,
+			error: `could not resolve manifest participant summary: ${(e as Error).message}`,
+		};
+	}
+	const drift = describeParticipantSummaryDrift(p.expectedParticipants, currentParticipants);
+	if (drift !== undefined) {
+		return {
+			ok: false,
+			error: `manifest participant execution drift detected before execution: ${drift}. The run was refused instead of silently using a different agent/model/permission surface; ${p.retryAction}.`,
+		};
+	}
+	return { ok: true };
 }
 
 // The normalized identity of a manifest reference: an absolute path stays itself
@@ -271,7 +320,7 @@ export function readJobManifest(p: {
 export interface ResolvedRecipe {
 	id: string;
 	origin?: ConfigOrigin;
-	mode: "converge";
+	mode: RecipeMode;
 	binding: ManifestBinding;
 	maxIterations?: number;
 	callTimeoutMs?: number;
@@ -329,8 +378,10 @@ export function resolveRecipe(
 		}),
 		mode: recipe.mode,
 		binding,
-		...(recipe.maxIterations !== undefined && { maxIterations: recipe.maxIterations }),
-		...(recipe.callTimeoutMs !== undefined && { callTimeoutMs: recipe.callTimeoutMs }),
+		...(recipe.mode === "converge" &&
+			recipe.maxIterations !== undefined && { maxIterations: recipe.maxIterations }),
+		...(recipe.mode === "converge" &&
+			recipe.callTimeoutMs !== undefined && { callTimeoutMs: recipe.callTimeoutMs }),
 		...(recipe.description !== undefined && { description: recipe.description }),
 	};
 }

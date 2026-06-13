@@ -274,9 +274,12 @@ describe("loadConfig: repo config (chit.config.json)", () => {
 			}),
 		);
 		const c = loadConfig(globalPath, { cwd: plainCwd });
-		expect(c.recipes["deep-review"]?.manifestPath).toBe("manifests/review.json");
+		const r = c.recipes["deep-review"];
+		expect(r?.manifestPath).toBe("manifests/review.json");
+		expect(r?.mode).toBe("converge");
+		if (r?.mode !== "converge") throw new Error("expected converge recipe");
 		// Whole-entity replacement: the global maxIterations does not survive.
-		expect(c.recipes["deep-review"]?.maxIterations).toBeUndefined();
+		expect(r.maxIterations).toBeUndefined();
 		expect(c.provenance?.recipes["deep-review"]?.source).toBe("repo");
 	});
 

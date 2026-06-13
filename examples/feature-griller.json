@@ -1,0 +1,36 @@
+{
+	"schema": 1,
+	"id": "feature-griller",
+	"description": "Read-only discovery routine. A griller inspects the repo and an idea, then returns the questions and risks that should be answered before implementation starts.",
+
+	"inputs": {
+		"idea": { "type": "string" },
+		"context": { "type": "string", "optional": true }
+	},
+
+	"requires": {
+		"can_show_markdown": true
+	},
+
+	"participants": {
+		"griller": {
+			"agent": "claude",
+			"instructions": "You run a read-only grilling session for a proposed software change. Inspect the repository at your cwd enough to ground the questions in real files and workflows. Do not edit files. Do not produce an implementation plan yet. Your job is to surface the missing product, design, architecture, testing, migration, and rollout decisions that would change the first implementation slice. Ask concrete questions, explain why each one matters, and call out which questions can be answered by repo inspection versus by the human operator.",
+			"session": "per_scope",
+			"permissions": { "filesystem": "read_only" }
+		}
+	},
+
+	"steps": {
+		"grill": {
+			"call": "griller",
+			"prompt": "Feature idea:\n{{ inputs.idea }}\n\nAdditional context:\n{{ inputs.context }}\n\nInspect the repository at your cwd in read-only mode. Return markdown with exactly these sections:\n\n## Understanding\nA short restatement of the feature in concrete terms.\n\n## Repo Signals\nSpecific files, commands, or existing patterns you inspected that constrain the work.\n\n## Questions\nPrioritized questions the human should answer before implementation. For each question, include why it matters.\n\n## Risks\nImplementation, product, migration, privacy, or testing risks visible now.\n\n## Suggested First Slice\nA small first version if the answers are favorable, including what should stay out of scope.\n\nDo not edit files. Do not invent answers where the repo or prompt is silent."
+		},
+
+		"out": {
+			"format": "{{ steps.grill.output }}"
+		}
+	},
+
+	"output": "out"
+}

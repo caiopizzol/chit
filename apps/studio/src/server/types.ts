@@ -3,7 +3,12 @@
 // server is the only consumer in sub-unit 1.0; the client will import the
 // same module from across the workspace once it lands.
 
-import type { FilesystemPermission, NormalizedConfig, SessionPolicy } from "@chit-run/core";
+import type {
+	FilesystemPermission,
+	NormalizedConfig,
+	RecipeMode,
+	SessionPolicy,
+} from "@chit-run/core";
 
 // GET /api/live. A compact, read-only snapshot of what is live across Chit right
 // now, for the future visual control tower (a session rail plus a selected run's
@@ -253,15 +258,13 @@ export interface EffectiveRoleView {
 	instructionsLength: number;
 }
 
-// A recipe is a named, reusable converge preset: a manifest to run plus the
-// loop knobs a run would inherit. Field-by-field rebuilt server-side (never
+// A recipe is a named, reusable routine: a manifest to run plus the converge
+// loop knobs a loop run would inherit. Field-by-field rebuilt server-side (never
 // spread from NormalizedRecipe) so the wire view stays an explicit contract.
 export interface EffectiveRecipeView {
 	id: string;
 	origin: ConfigOriginSource;
-	// Only "converge" exists today; kept as an explicit literal like the other
-	// wire unions so the contract states its vocabulary.
-	mode: "converge";
+	mode: RecipeMode;
 	manifestPath: string;
 	maxIterations?: number;
 	callTimeoutMs?: number;
@@ -307,9 +310,24 @@ export interface RoutineCheck {
 	timeoutMs?: number;
 }
 
+export type RoutineManifestPolicy =
+	| { kind: "one-shot" }
+	| { kind: "loop"; implementStep: string; reviewStep: string };
+
+export interface RoutineStep {
+	id: string;
+	kind: "call" | "format";
+	participantId?: string;
+	agentId?: string;
+	session?: SessionPolicy;
+	filesystem?: FilesystemPermission;
+}
+
 export interface RoutineManifestSummary {
 	manifestDigest?: string;
+	policy: RoutineManifestPolicy;
 	participants: RoutineParticipant[];
+	steps: RoutineStep[];
 	requiredChecks: RoutineCheck[];
 }
 
@@ -333,7 +351,7 @@ export interface RoutineLastRunSummary {
 export interface DeclaredRoutine {
 	id: string;
 	origin: ConfigOriginSource;
-	mode: "converge";
+	mode: RecipeMode;
 	manifestPath: string;
 	maxIterations?: number;
 	callTimeoutMs?: number;

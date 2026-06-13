@@ -100,6 +100,11 @@ describe("chit_recipes response", () => {
 					callTimeoutMs: 900_000,
 					description: "fix loop preset",
 				},
+				grill: {
+					mode: "one-shot",
+					manifestPath: "flows/grill.json",
+					description: "question routine",
+				},
 			},
 		});
 		const result = await callRecipes(repo);
@@ -114,6 +119,13 @@ describe("chit_recipes response", () => {
 				maxIterations: 4,
 				callTimeoutMs: 900_000,
 				description: "fix loop preset",
+			},
+			{
+				id: "grill",
+				origin: "repo",
+				mode: "one-shot",
+				manifestPath: "flows/grill.json",
+				description: "question routine",
 			},
 		]);
 		// No global file was written, so only the repo config path is reported.

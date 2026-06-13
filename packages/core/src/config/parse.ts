@@ -21,8 +21,10 @@ import {
 	type ConfigLayerSource,
 	type ConfigProvenance,
 	type NormalizedConfig,
+	type NormalizedConvergeRecipe,
 	type NormalizedRecipe,
 	type NormalizedRole,
+	type RecipeMode,
 } from "./types.ts";
 
 const ALLOWED_CONFIG_KEYS = new Set(["agents", "roles", "recipes"]);
@@ -31,8 +33,8 @@ const ALLOWED_PERMISSION_KEYS = new Set(["filesystem"]);
 // Kebab-case, matching agent ids: lowercase letters/digits/hyphens, starts with a
 // letter. A manifest participant references a role by this id.
 const ROLE_ID_RE = /^[a-z][a-z0-9-]*$/;
-// v1 recipe surface, deliberately small: a mode, a manifest reference, and safe
-// runtime defaults. Rejecting everything else loudly IS the recipe trust boundary:
+// Recipe surface, deliberately small: a mode, a manifest reference, and safe
+// loop defaults for converge recipes. Rejecting everything else loudly IS the recipe trust boundary:
 // there is no approval or policy field for a repo config to smuggle in.
 const ALLOWED_RECIPE_KEYS = new Set([
 	"mode",
@@ -41,12 +43,16 @@ const ALLOWED_RECIPE_KEYS = new Set([
 	"callTimeoutMs",
 	"description",
 ]);
-const ALLOWED_RECIPE_MODES = new Set(["converge"]);
+const ALLOWED_RECIPE_MODES: readonly RecipeMode[] = ["converge", "one-shot"];
 // Same id shape as agents and roles.
 const RECIPE_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 function isObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function isRecipeMode(v: string): v is RecipeMode {
+	return v === "converge" || v === "one-shot";
 }
 
 // One config layer to parse: the raw JSON, the file path (for error messages and
@@ -256,14 +262,15 @@ function parseRecipe(raw: unknown, path: string, source: ConfigLayerSource): Nor
 		if (!ALLOWED_RECIPE_KEYS.has(k)) throw new ConfigError(path, `unknown field "${k}"`);
 	}
 
-	// mode: required. v1 supports only converge; anything else fails loudly so a
+	// mode: required. Anything outside the declared vocabulary fails loudly so a
 	// future mode is an explicit addition, never a silent passthrough.
-	if (typeof raw.mode !== "string" || !ALLOWED_RECIPE_MODES.has(raw.mode)) {
+	if (typeof raw.mode !== "string" || !isRecipeMode(raw.mode)) {
 		throw new ConfigError(
 			`${path}.mode`,
 			`must be one of: ${[...ALLOWED_RECIPE_MODES].join(", ")}`,
 		);
 	}
+	const mode = raw.mode;
 
 	if (typeof raw.manifestPath !== "string" || !raw.manifestPath) {
 		throw new ConfigError(`${path}.manifestPath`, "must be a non-empty string");
@@ -272,7 +279,29 @@ function parseRecipe(raw: unknown, path: string, source: ConfigLayerSource): Nor
 		rejectEscapingRepoManifestPath(raw.manifestPath, `${path}.manifestPath`);
 	}
 
-	const recipe: NormalizedRecipe = { mode: "converge", manifestPath: raw.manifestPath };
+	let description: string | undefined;
+	if (raw.description !== undefined) {
+		if (typeof raw.description !== "string") {
+			throw new ConfigError(`${path}.description`, "must be a string");
+		}
+		description = raw.description;
+	}
+
+	if (mode === "one-shot") {
+		if (raw.maxIterations !== undefined) {
+			throw new ConfigError(`${path}.maxIterations`, "applies only to converge recipes");
+		}
+		if (raw.callTimeoutMs !== undefined) {
+			throw new ConfigError(`${path}.callTimeoutMs`, "applies only to converge recipes");
+		}
+		return {
+			mode,
+			manifestPath: raw.manifestPath,
+			...(description !== undefined && { description }),
+		};
+	}
+
+	const recipe: NormalizedConvergeRecipe = { mode, manifestPath: raw.manifestPath };
 
 	if (raw.maxIterations !== undefined) {
 		if (
@@ -296,12 +325,7 @@ function parseRecipe(raw: unknown, path: string, source: ConfigLayerSource): Nor
 		recipe.callTimeoutMs = raw.callTimeoutMs;
 	}
 
-	if (raw.description !== undefined) {
-		if (typeof raw.description !== "string") {
-			throw new ConfigError(`${path}.description`, "must be a string");
-		}
-		recipe.description = raw.description;
-	}
+	if (description !== undefined) recipe.description = description;
 
 	return recipe;
 }

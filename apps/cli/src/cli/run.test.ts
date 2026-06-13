@@ -465,6 +465,16 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 		});
 	}
 
+	function manifestSummary(manifestDigest: string) {
+		return {
+			manifestDigest,
+			policy: { kind: "loop", implementStep: "implement", reviewStep: "review" } as const,
+			steps: [],
+			participants: [],
+			requiredChecks: [],
+		};
+	}
+
 	function withState<T>(fn: () => T): T {
 		const state = mkdtempSync(join(tmpdir(), "chit-studio-state-"));
 		const old = process.env.XDG_STATE_HOME;
@@ -598,11 +608,11 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 				});
 
 				const source = buildStudioRoutineSource(repo);
-				const lastRun = source?.resolveLastRun?.(config(), "deep", {
-					manifestDigest: "sha256:unneeded-for-recipe-match",
-					participants: [],
-					requiredChecks: [],
-				});
+				const lastRun = source?.resolveLastRun?.(
+					config(),
+					"deep",
+					manifestSummary("sha256:unneeded-for-recipe-match"),
+				);
 				expect(lastRun).toMatchObject({
 					status: "converged",
 					verdict: "proceed",
@@ -663,11 +673,7 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 					},
 				});
 				const source = buildStudioRoutineSource(repo);
-				const manifest = {
-					manifestDigest: "sha256:unneeded-for-recipe-match",
-					participants: [],
-					requiredChecks: [],
-				};
+				const manifest = manifestSummary("sha256:unneeded-for-recipe-match");
 				const deep = source?.resolveLastRun?.(loadedConfig, "deep", manifest);
 				const fast = source?.resolveLastRun?.(loadedConfig, "fast", manifest);
 				expect(deep).toMatchObject({
@@ -695,11 +701,11 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 					auditRef: "aud-other",
 				});
 				const source = buildStudioRoutineSource(repo);
-				const lastRun = source?.resolveLastRun?.(config(), "deep", {
-					manifestDigest: "sha256:anything",
-					participants: [],
-					requiredChecks: [],
-				});
+				const lastRun = source?.resolveLastRun?.(
+					config(),
+					"deep",
+					manifestSummary("sha256:anything"),
+				);
 				expect(lastRun).toBeUndefined();
 			} finally {
 				rmSync(repo, { recursive: true, force: true });
@@ -758,11 +764,11 @@ describe("buildStudioRoutineSource (Studio routine injection shape)", () => {
 				} as LoopJobRecord);
 
 				const source = buildStudioRoutineSource(repo);
-				const lastRun = source?.resolveLastRun?.(config("claude", "./flows/deep.json"), "deep", {
-					manifestDigest,
-					participants: [],
-					requiredChecks: [],
-				});
+				const lastRun = source?.resolveLastRun?.(
+					config("claude", "./flows/deep.json"),
+					"deep",
+					manifestSummary(manifestDigest),
+				);
 				expect(lastRun).toMatchObject({
 					status: "completed",
 					verdict: "proceed",

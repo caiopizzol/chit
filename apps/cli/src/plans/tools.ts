@@ -19,7 +19,7 @@ import {
 	parsePlan,
 } from "@chit-run/core";
 import { repoToplevel, resolveBaseSha } from "../batches/worktree.ts";
-import { normalizeManifestReference } from "../manifest/binding.ts";
+import { normalizeManifestReference, type ResolvedRecipe } from "../manifest/binding.ts";
 import {
 	applyPlanStep,
 	cleanupPlan,
@@ -250,6 +250,14 @@ function resolveStepBindings(
 	manifests?: Record<string, ManifestBinding>;
 	recipes?: Record<string, PlanApprovalRecipe>;
 } {
+	const ensureConvergeRecipe = (resolved: ResolvedRecipe, stepId: string): void => {
+		if (resolved.mode !== "converge") {
+			throw new PlanError(
+				`steps.${stepId}.recipe`,
+				`recipe ${JSON.stringify(resolved.id)} is ${resolved.mode}; plan steps must use converge recipes`,
+			);
+		}
+	};
 	const manifests: Record<string, ManifestBinding> = {};
 	const recipes: Record<string, PlanApprovalRecipe> = {};
 	for (const step of plan.steps) {
@@ -267,6 +275,7 @@ function resolveStepBindings(
 					gitCwd: callerCheckout,
 					configCwd: cwd,
 				});
+				ensureConvergeRecipe(resolved, step.id);
 				manifests[step.id] = resolved.binding;
 				recipes[step.id] = {
 					id: resolved.id,

@@ -20,6 +20,11 @@
 			"maxIterations": 3,
 			"callTimeoutMs": 900000,
 			"description": "Role-swapped loop for dogfooding Codex as the implementer and Claude as the reviewer."
+		},
+		"feature-griller": {
+			"mode": "one-shot",
+			"manifestPath": "examples/feature-griller.json",
+			"description": "Read-only discovery routine that inspects an idea and returns questions, risks, and a suggested first slice."
 		}
 	}
 }

@@ -301,6 +301,13 @@ function resolveBatchBindings(
 	cwd: string,
 	deps: BatchEngineDeps,
 ): { manifests?: BatchManifestBindings; recipes?: BatchRecipeBindings } {
+	const ensureConvergeRecipe = (resolved: ResolvedRecipe, context: string): void => {
+		if (resolved.mode !== "converge") {
+			throw new PlanError(
+				`${context}: recipe ${JSON.stringify(resolved.id)} is ${resolved.mode}; batch recipes must be converge recipes`,
+			);
+		}
+	};
 	const bindRecipe = (recipeId: string, context: string): ResolvedRecipe => {
 		if (deps.resolveRecipe === undefined) {
 			throw new PlanError(
@@ -331,6 +338,7 @@ function resolveBatchBindings(
 	for (const t of tasks) {
 		if (t.recipe !== undefined) {
 			const resolved = bindRecipe(t.recipe, `task ${JSON.stringify(t.id)} recipe`);
+			ensureConvergeRecipe(resolved, `task ${JSON.stringify(t.id)} recipe`);
 			taskBindings[t.id] = resolved.binding;
 			taskRecipes[t.id] = recipeReceiptOf(resolved);
 			continue;
@@ -343,6 +351,7 @@ function resolveBatchBindings(
 	let batchReceipt: RecipeReceipt | undefined;
 	if (batchRecipe !== undefined) {
 		const resolved = bindRecipe(batchRecipe, "recipe");
+		ensureConvergeRecipe(resolved, "recipe");
 		batchBinding = resolved.binding;
 		batchReceipt = recipeReceiptOf(resolved);
 	} else if (batchManifest !== undefined && deps.resolveManifestBinding !== undefined) {

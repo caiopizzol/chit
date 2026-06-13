@@ -694,6 +694,48 @@ describe("background one-shot worker", () => {
 		expect(store.get("os1")?.state).toBe("completed");
 	});
 
+	test("recipe-backed manifestText runs without reading the manifestPath copy", async () => {
+		const savedConfig = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = stateDir;
+		const manifestText = JSON.stringify({
+			schema: 1,
+			id: "one-shot-bound",
+			description: "format-only one-shot worker fixture",
+			inputs: { idea: { type: "string" } },
+			participants: {
+				griller: {
+					agent: "codex",
+					instructions: "Ask questions.",
+					session: "stateless",
+					permissions: { filesystem: "read_only" },
+				},
+			},
+			steps: { out: { format: "{{ inputs.idea }}" } },
+			output: "out",
+		});
+		try {
+			seedOneShot({
+				manifestPath: join(cwd, "missing.json"),
+				manifestText,
+				manifestDigest: digestManifestText(manifestText),
+				inputs: { idea: "custom routine" },
+				audit: false,
+				allowUnenforced: true,
+				recipe: { id: "grill", mode: "one-shot" },
+			});
+			await runJobWorker("os1", {
+				jobStore: store,
+				installSignalHandlers: false,
+				heartbeatMs: 1_000_000,
+				now: () => 1000,
+			});
+			expect(store.get("os1")).toMatchObject({ state: "completed", policy: "one-shot" });
+		} finally {
+			if (savedConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = savedConfig;
+		}
+	});
+
 	test("a cancel persisted during the run -> cancelled even if the run reports ok", async () => {
 		seedOneShot();
 		await runJobWorker(

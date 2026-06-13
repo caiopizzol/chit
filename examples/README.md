@@ -1,11 +1,12 @@
 # Examples
 
-Five manifests live here on purpose:
+Six manifests live here on purpose:
 
 - `consult.json` - the first-run example. Ask Codex and Claude the same question in parallel, then format both answers.
 - `converge.json` - the advanced loop manifest used by `chit converge`. The default pairing: a write-capable Claude implements, a read-only Codex reviews, and the driver owns the loop.
 - `converge-codex-writer.json` - the same loop with the agents swapped (a write-capable Codex implements, a read-only Claude reviews). Point a batch task's `manifestPath`, or `chit_start`'s `manifest_path`, at it to run a Codex implementer. Shows that roles are assigned in the chit, not fixed to a vendor.
 - `converge-required-checks.json` - the same loop with `policy.requiredChecks`, so chit runs its own verification commands (argv, no shell) after a proceed review and treats the result as ground truth: pass converges, fail revises, a check that cannot run needs a human. Shows chit-executed verification, not the reviewer's self-report.
+- `feature-griller.json` - a read-only one-shot routine that inspects a feature idea and the repo, then returns clarifying questions, risks, and a suggested first slice. It is wired as the `feature-griller` recipe in this repo's `chit.config.json`.
 - `plan-author.json` - use chit to plan a sequential run. A read-only planning agent inspects the repo and drafts a native sequential plan as JSON, ready for `chit_plan_start`. It is one-shot (no loop), and it teaches a distinct shape: a manifest whose output is another chit artifact, not a code edit. The agent emits only the plan shape `chit_plan_start` accepts; the operator reviews and gates the start.
 
 Keep this directory small. Add a new example only when it teaches a distinct runtime shape that the docs actually need.

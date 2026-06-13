@@ -55,6 +55,7 @@ describe("routineCanvas", () => {
 		const r = routine({
 			manifest: {
 				manifestDigest: "sha256:abc",
+				policy: { kind: "loop", implementStep: "do", reviewStep: "check" },
 				participants: [
 					participant({ id: "impl", agentId: "claude", session: "per_scope", filesystem: "write" }),
 					participant({
@@ -63,6 +64,25 @@ describe("routineCanvas", () => {
 						session: "stateless",
 						filesystem: "read_only",
 					}),
+				],
+				steps: [
+					{
+						id: "do",
+						kind: "call",
+						participantId: "impl",
+						agentId: "claude",
+						session: "per_scope",
+						filesystem: "write",
+					},
+					{
+						id: "check",
+						kind: "call",
+						participantId: "rev",
+						agentId: "codex",
+						session: "stateless",
+						filesystem: "read_only",
+					},
+					{ id: "out", kind: "format" },
 				],
 				requiredChecks: [{ name: "test", command: "bun", args: ["test"] }],
 			},
@@ -90,7 +110,9 @@ describe("routineCanvas", () => {
 	test("falls back to the first participant for the implementer when none classifies", () => {
 		const r = routine({
 			manifest: {
+				policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 				participants: [participant({ id: "p1", agentId: "claude" })],
+				steps: [],
 				requiredChecks: [],
 			},
 		});
@@ -110,13 +132,55 @@ describe("routineCanvas", () => {
 	});
 
 	test("a resolved manifest with zero checks reads as 'no required checks'", () => {
-		const blocks = routineCanvas(routine({ manifest: { participants: [], requiredChecks: [] } }));
+		const blocks = routineCanvas(
+			routine({
+				manifest: {
+					policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
+					participants: [],
+					steps: [],
+					requiredChecks: [],
+				},
+			}),
+		);
 		expect(blocks[2]).toMatchObject({
 			role: "checks",
 			present: false,
 			agentId: "chit",
 			detail: "no required checks",
 		});
+	});
+
+	test("one-shot routines render their declared steps instead of the converge skeleton", () => {
+		const blocks = routineCanvas(
+			routine({
+				mode: "one-shot",
+				manifest: {
+					policy: { kind: "one-shot" },
+					participants: [
+						participant({ id: "griller", agentId: "claude", filesystem: "read_only" }),
+					],
+					steps: [
+						{
+							id: "grill",
+							kind: "call",
+							participantId: "griller",
+							agentId: "claude",
+							session: "per_scope",
+							filesystem: "read_only",
+						},
+						{ id: "out", kind: "format" },
+					],
+					requiredChecks: [],
+				},
+			}),
+		);
+		expect(blocks.map((b) => b.role)).toEqual(["grill", "out", "you"]);
+		expect(blocks[0]).toMatchObject({
+			label: "grill",
+			agentId: "claude",
+			detail: "call griller / per_scope / read_only",
+		});
+		expect(blocks[1]).toMatchObject({ label: "out", agentId: "chit", detail: "formats output" });
 	});
 });
 
@@ -170,7 +234,9 @@ describe("routineTicker", () => {
 			routine({
 				manifest: {
 					manifestDigest: "sha256:0123456789abcdef",
+					policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 					participants: [],
+					steps: [],
 					requiredChecks: [],
 				},
 			}),

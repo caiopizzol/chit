@@ -1121,7 +1121,7 @@ function liveParticipants(job: JobRecord): Record<string, LiveParticipant> | und
 function executionIdentity(job: JobRecord): LiveExecutionIdentity | undefined {
 	if (job.policy !== "loop") return undefined;
 	const identity: LiveExecutionIdentity = {};
-	if (job.recipe !== undefined) {
+	if (job.recipe !== undefined && job.recipe.mode === "converge") {
 		identity.recipe = {
 			id: job.recipe.id,
 			mode: job.recipe.mode,
@@ -1423,6 +1423,39 @@ export function buildStudioRoutineSource(studioCwd: string): StudioRoutineSource
 					filesystem: snapshot.permissions.filesystem,
 				};
 			});
+			const stepById = resolved.steps;
+			const steps = resolved.executionOrder.flat().map((id) => {
+				const step = stepById[id];
+				if (step === undefined) {
+					throw new Error(`manifest ${ref.manifestPath}: could not resolve step ${id}`);
+				}
+				if (step.kind === "call") {
+					const participant = resolved.participants[step.call];
+					const snapshot = snapshots[step.call];
+					if (participant === undefined || snapshot === undefined) {
+						throw new Error(
+							`manifest ${ref.manifestPath}: call step ${id} references unknown participant ${step.call}`,
+						);
+					}
+					return {
+						id,
+						kind: "call" as const,
+						participantId: step.call,
+						agentId: snapshot.agentId,
+						session: snapshot.session,
+						filesystem: snapshot.permissions.filesystem,
+					};
+				}
+				return { id, kind: "format" as const };
+			});
+			const policy =
+				resolved.policy.kind === "loop"
+					? {
+							kind: "loop" as const,
+							implementStep: resolved.policy.implementStep,
+							reviewStep: resolved.policy.reviewStep,
+						}
+					: { kind: "one-shot" as const };
 			const requiredChecks =
 				resolved.policy.kind === "loop"
 					? (resolved.policy.requiredChecks ?? []).map((check) => ({
@@ -1432,7 +1465,13 @@ export function buildStudioRoutineSource(studioCwd: string): StudioRoutineSource
 							...(check.timeoutMs !== undefined && { timeoutMs: check.timeoutMs }),
 						}))
 					: [];
-			return { manifestDigest: digestManifestText(text), participants, requiredChecks };
+			return {
+				manifestDigest: digestManifestText(text),
+				policy,
+				participants,
+				steps,
+				requiredChecks,
+			};
 		},
 		resolveLastRun(config, recipeId, manifest) {
 			return latestRoutineLastRun(

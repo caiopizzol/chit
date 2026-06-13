@@ -860,6 +860,20 @@ describe("runPlanStart: recipe-backed steps (resolved recipe in the hash)", () =
 		expect(h.launched).toHaveLength(0);
 	});
 
+	test("a one-shot recipe is refused because plans launch loop jobs", () => {
+		const h = makeHarness();
+		h.deps.resolveRecipe = () =>
+			gateRecipe({
+				mode: "one-shot",
+				maxIterations: undefined,
+				callTimeoutMs: undefined,
+			});
+		expect(() => runPlanStart({ plan: RECIPE_PLAN }, h.cwd, h.store, h.deps, noLaunch)).toThrow(
+			/steps\.a\.recipe.*plan steps must use converge recipes/,
+		);
+		expect(h.launched).toHaveLength(0);
+	});
+
 	test("a recipe-naming plan with no recipe resolver wired is refused, never silently launched", () => {
 		const h = makeHarness();
 		// h.deps carries no resolveRecipe (the harness default).

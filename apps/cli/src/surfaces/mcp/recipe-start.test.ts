@@ -93,6 +93,26 @@ const CONVERGE_MANIFEST = {
 	policy: { kind: "loop", implementStep: "implement", reviewStep: "review" },
 };
 
+const ONE_SHOT_MANIFEST = {
+	schema: 1,
+	id: "recipe-grill",
+	description: "read-only one-shot recipe for recipe-start tests",
+	inputs: { idea: { type: "string" } },
+	participants: {
+		griller: {
+			agent: "codex",
+			instructions: "Ask clarifying questions.",
+			session: "per_scope",
+			permissions: { filesystem: "read_only" },
+		},
+	},
+	steps: {
+		grill: { call: "griller", prompt: "{{ inputs.idea }}" },
+		out: { format: "{{ steps.grill.output }}" },
+	},
+	output: "out",
+};
+
 // The loop log header (records[0]) carries the run's effective maxIterations and the
 // stamped recipe receipt; read it back from the in_place run cwd (the repo itself).
 function loopHeader(cwd: string, runId: string): LoopRecord {
@@ -108,6 +128,7 @@ function makeRecipeRepo(recipes: Record<string, unknown>): string {
 	repoDirs.push(dir);
 	mkdirSync(join(dir, "manifests"), { recursive: true });
 	writeFileSync(join(dir, "manifests", "converge.json"), JSON.stringify(CONVERGE_MANIFEST));
+	writeFileSync(join(dir, "manifests", "grill.json"), JSON.stringify(ONE_SHOT_MANIFEST));
 	writeFileSync(join(dir, "chit.config.json"), JSON.stringify({ recipes }));
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
 	git("init", "-q");
@@ -173,6 +194,83 @@ describe("chit_start recipe input: unknown recipe", () => {
 		expect(text).toContain("unknown recipe");
 		// The resolver lists what IS configured, so the caller can self-correct.
 		expect(text).toContain("deep-feature");
+	});
+});
+
+describe("chit_start recipe input: one-shot recipes", () => {
+	const RECIPE = {
+		grill: {
+			mode: "one-shot",
+			manifestPath: "manifests/grill.json",
+			description: "question loop",
+		},
+	};
+
+	async function cancel(runId: unknown): Promise<void> {
+		if (typeof runId === "string") {
+			await client.callTool({ name: "chit_cancel", arguments: { run_id: runId } });
+		}
+	}
+
+	test("a recipe-backed foreground start runs the bound one-shot manifest", async () => {
+		const repo = makeRecipeRepo(RECIPE);
+		rmSync(join(repo, "manifests", "grill.json"));
+		const r = await start({
+			recipe: "grill",
+			mode: "foreground",
+			cwd: repo,
+			scope: "grill-scope",
+			inputs: { idea: "Add a custom onboarding routine" },
+			allow_unenforced_permissions: true,
+		});
+		expect(r.isError).toBeUndefined();
+		const body = bodyOf(r);
+		expect(body.execution).toBe("one-shot");
+		expect(body.manifest).toBe("recipe-grill");
+		expect(body.ready).toEqual([
+			{ step: "grill", kind: "call", participant: "griller", agent: "codex", session: "per_scope" },
+		]);
+		await cancel(body.run_id);
+	});
+
+	test("a one-shot recipe rejects task and loop knobs", async () => {
+		const repo = makeRecipeRepo(RECIPE);
+		const withTask = await start({
+			recipe: "grill",
+			task: "do it",
+			mode: "foreground",
+			cwd: repo,
+			inputs: { idea: "x" },
+			allow_unenforced_permissions: true,
+		});
+		expect(withTask.isError).toBe(true);
+		expect(textOf(withTask)).toContain("does not take a `task`");
+
+		const withBudget = await start({
+			recipe: "grill",
+			mode: "foreground",
+			cwd: repo,
+			inputs: { idea: "x" },
+			max_iterations: 2,
+			allow_unenforced_permissions: true,
+		});
+		expect(withBudget.isError).toBe(true);
+		expect(textOf(withBudget)).toContain("max_iterations applies only to a loop run");
+	});
+
+	test("a recipe mode that disagrees with the manifest policy is refused", async () => {
+		const repo = makeRecipeRepo({
+			mismatch: { mode: "one-shot", manifestPath: "manifests/converge.json" },
+		});
+		const r = await start({
+			recipe: "mismatch",
+			mode: "foreground",
+			cwd: repo,
+			inputs: { idea: "x" },
+			allow_unenforced_permissions: true,
+		});
+		expect(r.isError).toBe(true);
+		expect(textOf(r)).toContain("declares mode one-shot but its manifest policy is loop");
 	});
 });
 

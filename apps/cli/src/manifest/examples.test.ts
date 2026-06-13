@@ -24,6 +24,7 @@ describe("example manifests", () => {
 			"converge-codex-writer.json",
 			"converge-required-checks.json",
 			"converge.json",
+			"feature-griller.json",
 			"plan-author.json",
 		]);
 	});
@@ -131,6 +132,27 @@ describe("example manifests", () => {
 		expect(persona).toContain("first byte of your output MUST be `{`");
 		const planPrompt = m.steps.plan?.kind === "call" ? m.steps.plan.prompt : "";
 		expect(planPrompt).toContain("first output character must be `{`");
+	});
+
+	test("feature-griller is a one-shot read-only discovery routine", () => {
+		const m = parseManifest(loadExample("feature-griller"));
+
+		expect(m.id).toBe("feature-griller");
+		expect(m.policy).toEqual({ kind: "one-shot" });
+		expect(m.executionOrder).toEqual([["grill"], ["out"]]);
+		expect(m.output).toBe("out");
+
+		expect(m.inputs.idea?.type).toBe("string");
+		expect(m.inputs.idea?.optional).toBe(false);
+		expect(m.inputs.context?.optional).toBe(true);
+		expect(Object.keys(m.participants)).toEqual(["griller"]);
+		expect(m.participants.griller?.permissions?.filesystem).toBe("read_only");
+		expect(m.participants.griller?.session).toBe("per_scope");
+
+		const prompt = m.steps.grill?.kind === "call" ? m.steps.grill.prompt : "";
+		expect(prompt).toContain("## Questions");
+		expect(prompt).toContain("## Suggested First Slice");
+		expect(prompt).toContain("Do not edit files");
 	});
 
 	test("every loop example's reviewer prompt teaches the structured checks contract", () => {
