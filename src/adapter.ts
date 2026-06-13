@@ -9,12 +9,6 @@
 import type { Filesystem } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
 
-// A hung model call must never block a run forever (it would defeat the loop's
-// bounds). The bound has to clear a LEGITIMATE slow call, though: a real planning
-// call over a large input was observed at ~5 min, so 5 min killed honest work.
-// Ten minutes leaves headroom while still catching a truly stuck process.
-const CALL_TIMEOUT_MS = 10 * 60_000;
-
 export interface AdapterRequest {
 	agent: string;
 	instructions: string;
@@ -23,6 +17,9 @@ export interface AdapterRequest {
 	// in this proof -- enforcement is the hardened runtime's job.
 	filesystem: Filesystem;
 	cwd: string;
+	// Per-call timeout (ms) the executor derives from the routine's limits; the call
+	// is killed past it. Undefined means no bound (the routine opted out with "none").
+	timeoutMs?: number;
 }
 
 export interface AdapterResult {
@@ -65,9 +62,13 @@ export const claudeCliAdapter: Adapter = {
 				: req.filesystem === "read-only"
 					? ["claude", "-p", "--permission-mode", "plan"]
 					: ["claude", "-p", "--tools", ""];
-		const r = await spawnCapture(args, { cwd: req.cwd, stdin: composed, timeoutMs: CALL_TIMEOUT_MS });
+		const r = await spawnCapture(args, {
+			cwd: req.cwd,
+			stdin: composed,
+			...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
+		});
 		if (r.timedOut) {
-			throw new Error(`claude call timed out after ${CALL_TIMEOUT_MS}ms`);
+			throw new Error(`claude call timed out after ${req.timeoutMs}ms`);
 		}
 		if (r.exitCode !== 0) {
 			throw new Error(`claude exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);

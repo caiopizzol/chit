@@ -11,8 +11,8 @@ shares no code with the main runtime, so the product shape can be judged on its 
 One shape. You describe the work; **how it runs is derived**, never chosen.
 
 - A **routine** is the one concept you configure: a name pointing at a manifest.
-- A **manifest** is the source of truth: inputs, participants, ordered steps, and an
-  optional `repeat`. Config never restates any of this.
+- A **manifest** is the source of truth: inputs, participants, ordered steps, an
+  optional `repeat`, and optional `limits` (time bounds). Config never restates any of this.
 - **Steps** are `call` (ask a participant), `format` (assemble text), `check` (run a
   command), or `routine` (run another routine). "build"/"critique" are just step ids,
   "builder"/"critic" just participant names -- there is no built-in implementer/reviewer.
@@ -59,8 +59,9 @@ machine, no API keys, no HTTP). Tests inject fakes, so they stay deterministic a
   not an OS sandbox. The strong, enforced one is the worktree: a sandboxed routine cannot reach your
   tree without `--apply`. A `check` is arbitrary process execution, so any routine with a check is
   sandboxed too.
-- **Model calls and checks have a per-call timeout; a loop has a wall-time bound.** A hung call or
-  check can't block a run, and a slow run is capped.
+- **Time bounds are configurable per routine (`limits`).** A per-call timeout (default 30 min) kills a
+  hung call or check; a whole-run bound (default 120 min) caps a slow run. Set either to `"none"` to opt
+  out. Defaults are high on purpose -- the bound catches a hang, it does not cut off honest slow work.
 - **Receipts store inputs and the final output in plaintext** under `.chit/runs` (gitignored),
   not per-step transcripts. Whether the body should be stored by default is an open question.
 

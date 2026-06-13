@@ -11,7 +11,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
-import type { Manifest } from "./manifest.ts";
+import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -105,6 +105,10 @@ export async function runConverge(
 	opts: { scope?: string } = {},
 ): Promise<ConvergeReceipt> {
 	const manifest: Manifest = routine.manifest;
+	const callTimeoutMs = effectiveCallTimeoutMs(manifest);
+	// Whole-run wall-time: an explicit deps override (config), else the routine's
+	// limits, else the default. Undefined means no bound ("none").
+	const maxWallMs = deps.maxWallMs ?? effectiveRunTimeoutMs(manifest);
 	const maxIterations = effectiveMaxIterations(manifest, deps.maxIterations);
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
@@ -122,8 +126,8 @@ export async function runConverge(
 	let converged = false;
 
 	for (let n = 1; n <= maxIterations && runError === undefined && !converged; n++) {
-		if (deps.maxWallMs !== undefined && deps.now() - startedAt >= deps.maxWallMs) {
-			runError = `exceeded max wall-time of ${deps.maxWallMs}ms after ${n - 1} iteration(s)`;
+		if (maxWallMs !== undefined && deps.now() - startedAt >= maxWallMs) {
+			runError = `exceeded max wall-time of ${maxWallMs}ms after ${n - 1} iteration(s)`;
 			break;
 		}
 		ctx.iteration = n;
@@ -145,6 +149,7 @@ export async function runConverge(
 						prompt: renderTemplate(step.prompt, ctx),
 						filesystem: participant.filesystem,
 						cwd: deps.cwd,
+						...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
 					});
 					ctx.steps[step.id] = { output: result.output };
 					stepReceipts.push({

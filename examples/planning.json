@@ -19,5 +19,6 @@
 		},
 		{ "id": "out", "format": "{{ steps.plan.output }}" }
 	],
-	"output": "out"
+	"output": "out",
+	"limits": { "callTimeoutMinutes": 45 }
 }

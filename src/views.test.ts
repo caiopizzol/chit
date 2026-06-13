@@ -76,6 +76,7 @@ describe("formatInspect", () => {
 		expect(out).toContain("filesystem: read-only");
 		expect(out).toContain("call griller");
 		expect(out).toContain("output: out");
+		expect(out).toContain("limits: per call 30m"); // default, no whole-run bound shown for a text routine
 		expect(out).toContain("manifest: examples/m.json");
 		expect(out).toContain("sha256:aaaaaaaaaaaa");
 	});
@@ -87,6 +88,7 @@ describe("formatInspect", () => {
 		expect(out).toContain("call critic");
 		expect(out).toContain("check: bun test");
 		expect(out).toContain("max 3 iterations");
+		expect(out).toContain("limits: per call 30m, whole run 120m"); // sandboxed -> both bounds shown
 		expect(out).toMatch(/git-worktree sandbox/);
 		expect(out).not.toContain("implementer=");
 	});
@@ -94,6 +96,15 @@ describe("formatInspect", () => {
 	test("converge: a config default overrides max iterations in the view", () => {
 		const out = formatInspect(routineFrom(CONVERGE, { defaults: { maxIterations: 9 } }));
 		expect(out).toContain("max 9 iterations");
+	});
+
+	test("surfaces effective limits, including explicit overrides and a \"none\" opt-out", () => {
+		const tight = formatInspect(routineFrom({ ...ONE_SHOT, limits: { callTimeoutMinutes: 45 } }));
+		expect(tight).toContain("limits: per call 45m");
+
+		const none = formatInspect(routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none", runTimeoutMinutes: "none" } }));
+		expect(none).toContain("per call none");
+		expect(none).toContain("whole run none");
 	});
 });
 

@@ -6,7 +6,7 @@
 // composition go through converge.ts and flow.ts. Dispatch in cli.ts picks one.)
 
 import type { Adapter } from "./adapter.ts";
-import type { Manifest } from "./manifest.ts";
+import { effectiveCallTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -55,6 +55,7 @@ export async function runOneShot(
 	opts: { scope?: string } = {},
 ): Promise<RunReceipt> {
 	const manifest: Manifest = routine.manifest;
+	const callTimeoutMs = effectiveCallTimeoutMs(manifest);
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
 
@@ -75,6 +76,7 @@ export async function runOneShot(
 					prompt: renderTemplate(step.prompt, ctx),
 					filesystem: participant.filesystem,
 					cwd: deps.cwd,
+					...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
 				});
 				ctx.steps[step.id] = { output: result.output };
 				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, status: "ok", elapsedMs: deps.now() - stepStart });

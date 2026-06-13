@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+	effectiveCallTimeoutMs,
+	effectiveRunTimeoutMs,
 	hasChecks,
 	isComposition,
 	isSandboxed,
@@ -158,5 +160,49 @@ describe("parseManifest -- rules", () => {
 			expect(e).toBeInstanceOf(ManifestError);
 			expect((e as ManifestError).source).toBe("test.json");
 		}
+	});
+});
+
+describe("parseManifest -- limits", () => {
+	test("parses numeric per-call and per-run limits", () => {
+		const m = parse({ ...TEXT, limits: { callTimeoutMinutes: 10, runTimeoutMinutes: 60 } });
+		expect(m.limits).toEqual({ callTimeoutMinutes: 10, runTimeoutMinutes: 60 });
+	});
+
+	test('accepts "none" to opt a bound out entirely', () => {
+		const m = parse({ ...TEXT, limits: { callTimeoutMinutes: "none" } });
+		expect(m.limits).toEqual({ callTimeoutMinutes: "none" });
+	});
+
+	test("rejects an unknown limits field", () => {
+		expect(() => parse({ ...TEXT, limits: { wallMinutes: 5 } })).toThrow(/unknown field "wallMinutes"/);
+	});
+
+	test("rejects a non-positive timeout", () => {
+		expect(() => parse({ ...TEXT, limits: { callTimeoutMinutes: 0 } })).toThrow(/positive number of minutes or "none"/);
+	});
+
+	test('rejects a string timeout that is not "none"', () => {
+		expect(() => parse({ ...TEXT, limits: { runTimeoutMinutes: "lots" } })).toThrow(/positive number of minutes or "none"/);
+	});
+});
+
+describe("effective timeouts", () => {
+	test("fall back to the built-in defaults when no limits are set", () => {
+		const m = parse(TEXT);
+		expect(effectiveCallTimeoutMs(m)).toBe(30 * 60_000);
+		expect(effectiveRunTimeoutMs(m)).toBe(120 * 60_000);
+	});
+
+	test("numeric limits override the defaults", () => {
+		const m = parse({ ...TEXT, limits: { callTimeoutMinutes: 5, runTimeoutMinutes: 45 } });
+		expect(effectiveCallTimeoutMs(m)).toBe(5 * 60_000);
+		expect(effectiveRunTimeoutMs(m)).toBe(45 * 60_000);
+	});
+
+	test('"none" disables a bound (undefined, i.e. unbounded)', () => {
+		const m = parse({ ...TEXT, limits: { callTimeoutMinutes: "none", runTimeoutMinutes: "none" } });
+		expect(effectiveCallTimeoutMs(m)).toBeUndefined();
+		expect(effectiveRunTimeoutMs(m)).toBeUndefined();
 	});
 });

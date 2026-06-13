@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { fakeSandbox, gitWorktreeSandboxFactory, reapStaleSandboxes } from "./sandbox.ts";
 
@@ -75,13 +75,30 @@ describe("gitWorktreeSandbox (real git)", () => {
 		await expect(gitWorktreeSandboxFactory.create(plain, "t3")).rejects.toThrow(/needs a git repository/);
 	});
 
-	test("reapStaleSandboxes removes a leftover sandbox worktree (interrupted run)", async () => {
+	test("reapStaleSandboxes removes a leftover sandbox whose owner is gone (interrupted run)", async () => {
 		const repo = newRepo();
 		const sb = await gitWorktreeSandboxFactory.create(repo, "leak");
-		// simulate a force-killed run: the worktree exists, discard never ran
+		// simulate a force-killed run: the worktree exists, discard never ran, and the
+		// owning process has exited -- rewrite the lock to a pid that is no longer alive
+		const ghost = Bun.spawn(["sh", "-c", "exit 0"]);
+		const deadPid = ghost.pid;
+		await ghost.exited;
+		writeFileSync(join(dirname(sb.workDir), "owner.pid"), String(deadPid));
 		expect(existsSync(sb.workDir)).toBe(true);
+
 		const removed = await reapStaleSandboxes(repo);
 		expect(removed.length).toBeGreaterThanOrEqual(1);
 		expect(existsSync(sb.workDir)).toBe(false);
+	});
+
+	test("reapStaleSandboxes leaves an ACTIVE sandbox (live owner) untouched", async () => {
+		const repo = newRepo();
+		// create() stamps THIS process's pid as the owner, and this process is alive,
+		// so a concurrent `chit cleanup` must not pull the sandbox out from under it.
+		const sb = await gitWorktreeSandboxFactory.create(repo, "active");
+		const removed = await reapStaleSandboxes(repo);
+		expect(removed).toEqual([]);
+		expect(existsSync(sb.workDir)).toBe(true);
+		await sb.discard(); // we own it; clean it up ourselves
 	});
 });

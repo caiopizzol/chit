@@ -4,9 +4,9 @@
 // confirm. Like the adapter and check-runner, it is a seam: a fake for tests, a
 // real git-worktree implementation for the bin.
 
-import { existsSync, lstatSync, mkdtempSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface Sandbox {
 	// Where steps run (passed as the adapter/check cwd). Edits here never touch origin.
@@ -86,6 +86,10 @@ async function gitOrThrow(args: string[], cwd: string, stdin?: string): Promise<
 // deps would fail. Symlink it from origin and keep it out of every diff/stage.
 const EXCLUDE_NM = ":(exclude)node_modules";
 
+// The liveness lock filename inside a sandbox's parent dir. Holds the owning run's
+// pid so `chit cleanup` can tell an interrupted-run leftover from a live sandbox.
+const OWNER_LOCK = "owner.pid";
+
 export const gitWorktreeSandboxFactory: SandboxFactory = {
 	async create(originCwd, runId) {
 		const head = await git(["rev-parse", "--show-toplevel"], originCwd);
@@ -93,6 +97,9 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		const repoRoot = head.out.trim();
 		const parent = mkdtempSync(join(tmpdir(), `chit-sbx-${runId}-`));
 		const workDir = join(parent, "wt");
+		// Write the liveness lock before the worktree exists, so any worktree that
+		// `git worktree list` reports already carries one. cleanup keys off it.
+		writeFileSync(join(parent, OWNER_LOCK), String(process.pid));
 		await gitOrThrow(["worktree", "add", "--detach", workDir, "HEAD"], repoRoot);
 		const nm = join(repoRoot, "node_modules");
 		if (existsSync(nm) && !existsSync(join(workDir, "node_modules"))) {
@@ -132,14 +139,17 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 				}
 				await git(["worktree", "remove", "--force", workDir], repoRoot);
 				await git(["worktree", "prune"], repoRoot);
+				rmSync(parent, { recursive: true, force: true });
 			},
 		};
 	},
 };
 
 // Reap sandbox worktrees left behind by an INTERRUPTED run (a force-kill skips the
-// `finally { discard() }`). Removes every worktree whose path carries the chit-sbx
-// marker, then prunes. Returns the paths removed. This is the `chit cleanup` path.
+// `finally { discard() }`). Considers only worktrees carrying the chit-sbx marker
+// and -- crucially -- skips any whose owning run is still alive, so running
+// `chit cleanup` mid-run cannot pull a live sandbox out from under it. Returns the
+// paths removed. This is the `chit cleanup` path.
 export async function reapStaleSandboxes(originCwd: string): Promise<string[]> {
 	const top = await git(["rev-parse", "--show-toplevel"], originCwd);
 	if (!top.ok) return [];
@@ -151,9 +161,35 @@ export async function reapStaleSandboxes(originCwd: string): Promise<string[]> {
 		if (!line.startsWith("worktree ")) continue;
 		const path = line.slice("worktree ".length).trim();
 		if (!path.includes("chit-sbx-")) continue;
+		// A live owner means the run is still using this sandbox -- leave it. A missing
+		// lock means a pre-lock or already-orphaned sandbox, which is safe to reap.
+		if (ownerAlive(dirname(path))) continue;
 		const r = await git(["worktree", "remove", "--force", path], repoRoot);
-		if (r.ok) removed.push(path);
+		if (r.ok) {
+			removed.push(path);
+			rmSync(dirname(path), { recursive: true, force: true });
+		}
 	}
 	await git(["worktree", "prune"], repoRoot);
 	return removed;
+}
+
+// Does the sandbox under `parent` still have a living owner? Reads the pid lock and
+// probes it. No lock -> treat as not alive (reapable).
+function ownerAlive(parent: string): boolean {
+	const lock = join(parent, OWNER_LOCK);
+	if (!existsSync(lock)) return false;
+	const pid = Number.parseInt(readFileSync(lock, "utf-8").trim(), 10);
+	return Number.isInteger(pid) && isProcessAlive(pid);
+}
+
+// signal 0 probes a pid without touching it: no throw -> alive; EPERM -> alive but
+// owned by another user; ESRCH (or anything else) -> gone.
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return (e as { code?: string }).code === "EPERM";
+	}
 }

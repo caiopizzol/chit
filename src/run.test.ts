@@ -59,6 +59,23 @@ describe("runOneShot", () => {
 		expect(r.scope).toBe("feat-x");
 	});
 
+	test("derives the per-call timeout from the routine's limits and passes it to the adapter", async () => {
+		// default: no limits -> the built-in 30-minute per-call bound
+		const def = fakeAdapter();
+		await runOneShot(routineFrom(GRILLER), { idea: "x" }, deps(def));
+		expect(def.calls[0]?.timeoutMs).toBe(30 * 60_000);
+
+		// numeric override flows straight through
+		const limited = fakeAdapter();
+		await runOneShot(routineFrom({ ...GRILLER, limits: { callTimeoutMinutes: 5 } }), { idea: "x" }, deps(limited));
+		expect(limited.calls[0]?.timeoutMs).toBe(5 * 60_000);
+
+		// "none" means no bound: the adapter is called without a timeout
+		const unbounded = fakeAdapter();
+		await runOneShot(routineFrom({ ...GRILLER, limits: { callTimeoutMinutes: "none" } }), { idea: "x" }, deps(unbounded));
+		expect(unbounded.calls[0]?.timeoutMs).toBeUndefined();
+	});
+
 	test("a failing adapter fails the run and stops before later steps", async () => {
 		const adapter: RunDeps["adapter"] = {
 			async call() {

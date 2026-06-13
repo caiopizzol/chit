@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
-import { fakeSandboxFactory } from "./sandbox.ts";
+import { fakeSandboxFactory, gitWorktreeSandboxFactory } from "./sandbox.ts";
 
 let dir: string;
 
@@ -166,10 +166,40 @@ describe("chit trace", () => {
 });
 
 describe("chit cleanup", () => {
+	const temps: string[] = [];
+	afterAll(() => {
+		for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
+	});
+
 	test("reports when there are no stale sandboxes (non-git cwd)", async () => {
 		const { deps, out } = harness();
 		expect(await runCli(["cleanup"], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/no stale sandboxes/);
+	});
+
+	test("removes a leftover sandbox in a git repo and reports it", async () => {
+		const repo = mkdtempSync(join(tmpdir(), "chit-cli-clean-"));
+		temps.push(repo);
+		const sh = (cmd: string) => {
+			const r = Bun.spawnSync(["sh", "-c", cmd], { cwd: repo });
+			if (r.exitCode !== 0) throw new Error(`${cmd}: ${new TextDecoder().decode(r.stderr)}`);
+		};
+		sh("git init -q && git config user.email t@t.co && git config user.name tester");
+		writeFileSync(join(repo, "a.txt"), "hi\n");
+		sh("git add -A && git commit -q -m init");
+
+		// leave an orphaned sandbox behind: created, then its owning process exits
+		const sb = await gitWorktreeSandboxFactory.create(repo, "leak");
+		const ghost = Bun.spawn(["sh", "-c", "exit 0"]);
+		const deadPid = ghost.pid;
+		await ghost.exited;
+		writeFileSync(join(dirname(sb.workDir), "owner.pid"), String(deadPid));
+
+		const { deps, out } = harness();
+		deps.cwd = repo;
+		expect(await runCli(["cleanup"], deps)).toBe(0);
+		expect(out.join("\n")).toMatch(/removed 1 stale sandbox/);
+		expect(existsSync(sb.workDir)).toBe(false);
 	});
 });
 

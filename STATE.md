@@ -159,12 +159,29 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] `chit cleanup`: reapStaleSandboxes removes sandbox worktrees left by an interrupted run
       (force-kill skips finally-discard). Tested (real git) + CLI. 112 tests, typecheck clean.
 
-## NEXT: configurable limits (agreed model -- high default, NOT unlimited)
-- per-routine `limits` { callTimeoutMinutes, runTimeoutMinutes } with explicit "none" opt-out,
-  high defaults (e.g. 30m call / 120m run), separate call vs whole-run timeout, always keep
-  maxIterations. Unlimited-without-visibility is the pain we're solving; now that progress +
-  cleanup exist, a higher/explicit timeout is safe. (Currently: hidden 10m per-call constant.)
-- then: cancel (Ctrl-C -> discard sandbox cleanly, signal-aware), cost/token budget.
+## Increment 10 COMPLETE — configurable limits + cleanup hardening
+- [x] per-routine `limits` { callTimeoutMinutes, runTimeoutMinutes }, each a positive number of
+      minutes or "none" to opt out. High defaults (30m call / 120m run); maxIterations always kept.
+      Replaced the hidden 10m per-call constant: the per-call bound flows manifest -> adapter
+      (effectiveCallTimeoutMs); the whole-run bound drives the converge wall-time
+      (effectiveRunTimeoutMs; CLI no longer hardcodes 30m). (+ manifest/run/adapter tests.)
+- [x] inspect SURFACES the effective bounds ("limits: per call 30m, whole run 120m") so a bound is
+      never invisible -- the whole-run line shows only on the sandboxed/loop path (a text run has no
+      whole-run bound). planning + implementation-review examples carry a `limits` block as the
+      in-repo demo. CONTRACT-V2 + README document it.
+- [x] HARDENED `chit cleanup`: a sandbox writes an owner.pid liveness lock; reap SKIPS any sandbox
+      whose owner is still alive (process.kill(pid,0)), so a cleanup mid-run cannot pull a live
+      worktree out from under it. Also fixed a latent leak: discard + reap now remove the tmp PARENT
+      dir (old code left empty chit-sbx-* husks forever; clean-room verified 0 husks after a full
+      suite run). Tests: dead-owner reaped, live-owner skipped (real git + real pid), CLI removal path.
+- [x] 124 tests, typecheck clean.
+
+## NEXT: cancel (Ctrl-C) + E2E acceptance matrix
+- signal-aware cancel: trap SIGINT -> stop the active claude/check process, discard the sandbox
+  cleanly (no leftover worktree), write a "cancelled" receipt. The owner.pid lock + parent-dir
+  cleanup land cleanly here.
+- then E2E acceptance matrix (text / planning / single-pass sandboxed / loop / check-only /
+  composition / apply path / interrupted run), persisted progress in receipts, routine scaffolding.
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed

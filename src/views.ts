@@ -6,7 +6,7 @@
 
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
-import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
+import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
 
@@ -99,6 +99,17 @@ export function formatInspect(routine: ResolvedRoutine): string {
 	} else if (m.output !== undefined) {
 		out.push(`output: ${m.output}`);
 	}
+
+	// Make the time bounds legible: the per-call timeout applies to any call; the
+	// whole-run bound is enforced only on the sandboxed/loop path, so only show it there.
+	const callMs = effectiveCallTimeoutMs(m);
+	let limitsLine = `limits: per call ${callMs === undefined ? "none" : `${callMs / 60_000}m`}`;
+	if (isSandboxed(m)) {
+		const runMs = effectiveRunTimeoutMs(m);
+		limitsLine += `, whole run ${runMs === undefined ? "none" : `${runMs / 60_000}m`}`;
+	}
+	out.push(limitsLine);
+
 	if (isSandboxed(m)) {
 		out.push("");
 		out.push("note: runs in a git-worktree sandbox -- dry run by default (shows the diff,");

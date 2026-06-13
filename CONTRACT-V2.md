@@ -12,10 +12,11 @@ One file format. No `policy` field. Behavior is **derived from structure**, not 
   "participants": { "<id>": { "agent": "...", "filesystem": "read-only|read-write|none", "instructions": "..." } },
   "steps": [ ... ],
   "repeat": { "until": "checks-pass", "maxIterations": 3 },
-  "output": "<stepId>"
+  "output": "<stepId>",
+  "limits": { "callTimeoutMinutes": 30, "runTimeoutMinutes": 120 }
 }
 ```
-`repeat` and `output` are optional. `participants` is omitted by a composition (it has none of its own).
+`repeat`, `output`, and `limits` are optional. `participants` is omitted by a composition (it has none of its own).
 
 ## Step kinds
 
@@ -34,6 +35,16 @@ One file format. No `policy` field. Behavior is **derived from structure**, not 
 
 A `check` command is arbitrary process execution (`bun test`, deploy scripts) and can write files, so a
 routine that runs ANY check gets the worktree boundary too -- not just one with a read-write participant.
+
+## Limits (operator control over wall-time)
+
+Optional. Two independent bounds in minutes, plus the loop's existing `maxIterations`:
+
+- `callTimeoutMinutes`: kill any single participant call that runs past this. Default **30**.
+- `runTimeoutMinutes`: fail the whole run once it passes this (checked before each loop iteration). Default **120**.
+
+Set either to `"none"` to drop that bound. The defaults are deliberately high: the bound exists to catch a
+hung call or a runaway loop, not to cut off honest slow work. `maxIterations` always applies regardless.
 
 ## Rules (few, enforced at resolve, with clear errors)
 

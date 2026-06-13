@@ -35,5 +35,6 @@
 			]
 		}
 	],
-	"repeat": { "until": "checks-pass", "maxIterations": 3 }
+	"repeat": { "until": "checks-pass", "maxIterations": 3 },
+	"limits": { "runTimeoutMinutes": 60 }
 }

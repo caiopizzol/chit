@@ -62,6 +62,14 @@ export interface Repeat {
 	maxIterations?: number;
 }
 
+// Time bounds, in minutes, with explicit "none" to opt out. High by default --
+// the bound exists to catch a stuck call/run, not to cut off honest slow work.
+// maxIterations is always kept regardless. Separate per-call vs whole-run bounds.
+export interface Limits {
+	callTimeoutMinutes?: number | "none";
+	runTimeoutMinutes?: number | "none";
+}
+
 export interface Manifest {
 	id: string;
 	description?: string;
@@ -70,6 +78,22 @@ export interface Manifest {
 	steps: Step[];
 	repeat?: Repeat;
 	output?: string;
+	limits?: Limits;
+}
+
+const DEFAULT_CALL_TIMEOUT_MIN = 30;
+const DEFAULT_RUN_TIMEOUT_MIN = 120;
+
+// Effective per-call timeout in ms; undefined means no bound ("none").
+export function effectiveCallTimeoutMs(m: Manifest): number | undefined {
+	const v = m.limits?.callTimeoutMinutes ?? DEFAULT_CALL_TIMEOUT_MIN;
+	return v === "none" ? undefined : v * 60_000;
+}
+
+// Effective whole-run wall-time in ms; undefined means no bound ("none").
+export function effectiveRunTimeoutMs(m: Manifest): number | undefined {
+	const v = m.limits?.runTimeoutMinutes ?? DEFAULT_RUN_TIMEOUT_MIN;
+	return v === "none" ? undefined : v * 60_000;
 }
 
 // --- derived behavior (the user never writes these) ---
@@ -242,7 +266,7 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	if (raw.description !== undefined && typeof raw.description !== "string") {
 		throw new ManifestError(source, "`description` must be a string");
 	}
-	requireKeys(raw, new Set(["id", "description", "inputs", "participants", "steps", "repeat", "output"]), source);
+	requireKeys(raw, new Set(["id", "description", "inputs", "participants", "steps", "repeat", "output", "limits"]), source);
 
 	const inputs = parseInputs(raw.inputs, source);
 	const participants = parseParticipants(raw.participants, source);
@@ -284,6 +308,26 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		output = raw.output;
 	}
 
+	let limits: Limits | undefined;
+	if (raw.limits !== undefined) {
+		if (!isObject(raw.limits)) throw new ManifestError(`${source}.limits`, "must be an object");
+		requireKeys(raw.limits, new Set(["callTimeoutMinutes", "runTimeoutMinutes"]), `${source}.limits`);
+		const parseLimit = (v: unknown, name: string): number | "none" | undefined => {
+			if (v === undefined) return undefined;
+			if (v === "none") return "none";
+			if (typeof v !== "number" || !(v > 0)) {
+				throw new ManifestError(`${source}.limits`, `\`${name}\` must be a positive number of minutes or "none"`);
+			}
+			return v;
+		};
+		const call = parseLimit(raw.limits.callTimeoutMinutes, "callTimeoutMinutes");
+		const run = parseLimit(raw.limits.runTimeoutMinutes, "runTimeoutMinutes");
+		limits = {
+			...(call !== undefined && { callTimeoutMinutes: call }),
+			...(run !== undefined && { runTimeoutMinutes: run }),
+		};
+	}
+
 	return {
 		id: raw.id,
 		...(typeof raw.description === "string" && { description: raw.description }),
@@ -292,5 +336,6 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		steps,
 		...(repeat !== undefined && { repeat }),
 		...(output !== undefined && { output }),
+		...(limits !== undefined && { limits }),
 	};
 }
