@@ -5,7 +5,12 @@
 // hook (useLive) owns the network, the timer, and the wall-clock stamp; this
 // module only transforms data it is handed.
 
-import type { LiveActivity, LiveActivityRow, LiveEventKind } from "../server/types.ts";
+import type {
+	LiveActivity,
+	LiveActivityRow,
+	LiveEventKind,
+	LiveEventView,
+} from "../server/types.ts";
 import type { LiveCancelOutcome } from "./api.ts";
 
 // Stable identity for a live row across polls. The source tag is part of the
@@ -296,37 +301,114 @@ export function phaseTimeline(row: LiveActivityRow): PhaseTimelineEntry[] {
 	}));
 }
 
-// One drawable line of the selected run's recent-event tail: a formatted age
-// plus the host-built privacy-safe label, ready to render verbatim.
-export interface EventTailEntry {
-	// Stable render identity. The tail is append-only on the wire (the host
-	// evicts from the front only past its 50-entry cap -- MAX_LIVE_EVENTS), so
-	// the absolute wire position plus the kind is a sound key even when a label
-	// repeats; an entry keeps its key as newer events append.
+// --- Selected-block execution feed shaping ---
+
+export type BlockFeedRole = "implementer" | "reviewer" | "checks" | "you";
+
+export interface BlockFeedEntry {
 	key: string;
-	age: string;
+	time: string;
 	label: string;
-	kind: LiveEventKind;
+	kind: LiveEventKind | "phase";
+	active: boolean;
 }
 
-// How many tail entries the detail draws. The wire tail is already bounded
-// host-side; this is the smaller "what is it doing right now" slice -- the
-// newest few lines, not a transcript.
-export const EVENT_TAIL_DRAW_LIMIT = 8;
+// Keep the block feed compact. The host-side live tail is already bounded; this
+// is the focused slice for the selected block, not a transcript.
+export const BLOCK_FEED_DRAW_LIMIT = 10;
 
-// The bounded drawable tail for a row, oldest first (the wire order), so the
-// section reads top-to-bottom toward the newest event. Empty when the row
-// carries no tail (background one-shots before their first event, older
-// servers) so the detail renders nothing rather than an empty frame.
-export function eventTail(row: LiveActivityRow): EventTailEntry[] {
-	const events = row.recentEvents ?? [];
-	const start = Math.max(0, events.length - EVENT_TAIL_DRAW_LIMIT);
-	return events.slice(start).map((e, i) => ({
-		key: `${start + i}-${e.kind}`,
-		age: formatAge(e.ageMs),
-		label: e.label,
-		kind: e.kind,
-	}));
+function roleFromIdentifier(text: string | undefined): Exclude<BlockFeedRole, "you"> | undefined {
+	if (!text) return undefined;
+	const words = text
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter(Boolean);
+	for (const word of words) {
+		if (word === "check" || word === "checks" || word.startsWith("check")) return "checks";
+		if (word === "review" || word === "rev" || word.startsWith("review")) return "reviewer";
+		if (
+			word === "implement" ||
+			word === "implementer" ||
+			word === "impl" ||
+			word.startsWith("implement") ||
+			word === "plan" ||
+			word.startsWith("planning")
+		) {
+			return "implementer";
+		}
+	}
+	return undefined;
+}
+
+function roleFromActiveRow(row: LiveActivityRow): Exclude<BlockFeedRole, "you"> | undefined {
+	const active = activeRole(row);
+	return active === "other" ? undefined : active;
+}
+
+function eventRole(
+	event: LiveEventView,
+	row: LiveActivityRow,
+): Exclude<BlockFeedRole, "you"> | undefined {
+	return (
+		roleFromIdentifier(event.stepId) ??
+		roleFromIdentifier(event.participantId) ??
+		roleFromIdentifier(event.label) ??
+		roleFromActiveRow(row)
+	);
+}
+
+function phaseEntryRole(phase: string): Exclude<BlockFeedRole, "you"> | "other" {
+	return roleFromIdentifier(phase) ?? "other";
+}
+
+function eventLabel(event: LiveEventView): string {
+	return event.stepId && event.kind === "adapter.event"
+		? `${event.stepId}: ${event.label}`
+		: event.label;
+}
+
+export function blockFeed(row: LiveActivityRow, selectedBlock: BlockFeedRole): BlockFeedEntry[] {
+	if (selectedBlock === "you") return [];
+
+	const entries: BlockFeedEntry[] = [];
+	if (row.source === "foreground") {
+		for (const [i, phase] of (row.phases ?? []).entries()) {
+			if (phaseEntryRole(phase.phase) !== selectedBlock) continue;
+			entries.push({
+				key: `phase-${i}-${phase.status}`,
+				time: formatAge(phase.elapsedMs),
+				label: `${phase.status === "active" ? "phase active" : "phase done"} / ${phase.phase}`,
+				kind: "phase",
+				active: phase.status === "active",
+			});
+		}
+	}
+
+	if (activeRole(row) === selectedBlock && !entries.some((entry) => entry.active)) {
+		entries.push({
+			key: "phase-current",
+			time: formatAge(row.phaseElapsedMs),
+			label: `phase active / ${concisePhase(row)}`,
+			kind: "phase",
+			active: true,
+		});
+	}
+
+	for (const [i, event] of (row.recentEvents ?? []).entries()) {
+		if (eventRole(event, row) !== selectedBlock) continue;
+		entries.push({
+			key: `event-${i}-${event.kind}`,
+			time: formatAge(event.ageMs),
+			label: eventLabel(event),
+			kind: event.kind,
+			active: false,
+		});
+	}
+
+	const capped = entries.slice(Math.max(0, entries.length - BLOCK_FEED_DRAW_LIMIT));
+	const active = entries.find((entry) => entry.active);
+	if (!active || capped.some((entry) => entry.key === active.key)) return capped;
+	return [active, ...capped.slice(Math.max(0, capped.length - (BLOCK_FEED_DRAW_LIMIT - 1)))];
 }
 
 // Budget-relative warmth for the current phase: "warm" once the phase has

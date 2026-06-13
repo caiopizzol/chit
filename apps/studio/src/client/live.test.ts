@@ -13,6 +13,8 @@ import type { LiveCancelOutcome } from "./api.ts";
 import {
 	activeRole,
 	agentBlockViews,
+	BLOCK_FEED_DRAW_LIMIT,
+	blockFeed,
 	budgetWarmth,
 	cancelAvailable,
 	cancelMessage,
@@ -20,8 +22,6 @@ import {
 	concisePhase,
 	detailAges,
 	diffActivity,
-	EVENT_TAIL_DRAW_LIMIT,
-	eventTail,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
@@ -489,55 +489,158 @@ describe("phaseTimeline", () => {
 	});
 });
 
-describe("eventTail", () => {
+describe("blockFeed", () => {
 	function ev(over: Partial<LiveEventView> = {}): LiveEventView {
-		return { ageMs: 5_000, kind: "adapter.event", label: "impl item", ...over };
+		return { ageMs: 5_000, kind: "adapter.event", label: "assistant", ...over };
 	}
 
-	test("an absent or empty tail yields no entries", () => {
-		expect(eventTail(fg({ recentEvents: undefined }))).toEqual([]);
-		expect(eventTail(bg({ recentEvents: [] }))).toEqual([]);
-	});
-
-	test("maps events oldest-first with formatted ages and verbatim labels", () => {
+	test("filters the refreshed event tail to the selected block", () => {
 		const row = fg({
+			phase: "implementing",
+			phaseElapsedMs: 12_000,
 			recentEvents: [
-				ev({ ageMs: 65_000, kind: "step.started", label: "step impl started" }),
-				ev({ ageMs: 12_000, kind: "step.completed", label: "step impl completed (3000ms)" }),
+				ev({
+					kind: "step.started",
+					label: "step implement started",
+					stepId: "implement",
+					participantId: "impl",
+				}),
+				ev({
+					ageMs: 2_000,
+					kind: "adapter.event",
+					label: "tool.start",
+					stepId: "implement",
+					participantId: "impl",
+				}),
+				ev({
+					ageMs: 1_000,
+					kind: "step.started",
+					label: "step review started",
+					stepId: "review",
+					participantId: "rev",
+				}),
 			],
 		});
-		expect(eventTail(row)).toEqual([
-			{ key: "0-step.started", age: "1m 5s", label: "step impl started", kind: "step.started" },
+		expect(blockFeed(row, "implementer")).toEqual([
 			{
-				key: "1-step.completed",
-				age: "12s",
-				label: "step impl completed (3000ms)",
-				kind: "step.completed",
+				key: "phase-current",
+				time: "12s",
+				label: "phase active / implementing",
+				kind: "phase",
+				active: true,
+			},
+			{
+				key: "event-0-step.started",
+				time: "5s",
+				label: "step implement started",
+				kind: "step.started",
+				active: false,
+			},
+			{
+				key: "event-1-adapter.event",
+				time: "2s",
+				label: "implement: tool.start",
+				kind: "adapter.event",
+				active: false,
+			},
+		]);
+		expect(blockFeed(row, "reviewer").map((entry) => entry.label)).toEqual(["step review started"]);
+	});
+
+	test("uses foreground phase history and does not duplicate the active phase", () => {
+		const row = fg({
+			phase: "reviewing",
+			phaseElapsedMs: 4_000,
+			phases: [
+				{ phase: "implementing", status: "completed", elapsedMs: 22_000 },
+				{ phase: "reviewing", status: "active", elapsedMs: 4_000 },
+			],
+		});
+		expect(blockFeed(row, "reviewer")).toEqual([
+			{
+				key: "phase-1-active",
+				time: "4s",
+				label: "phase active / reviewing",
+				kind: "phase",
+				active: true,
+			},
+		]);
+		expect(blockFeed(row, "implementer")).toEqual([
+			{
+				key: "phase-0-completed",
+				time: "22s",
+				label: "phase done / implementing",
+				kind: "phase",
+				active: false,
 			},
 		]);
 	});
 
-	test("draws only the newest entries when the tail exceeds the bound", () => {
-		const events = Array.from({ length: EVENT_TAIL_DRAW_LIMIT + 4 }, (_, i) =>
-			ev({ label: `event ${i}` }),
+	test("shows a checks phase from the row even when no check events are available yet", () => {
+		expect(
+			blockFeed(fg({ phase: "running required checks", phaseElapsedMs: 9_000 }), "checks"),
+		).toEqual([
+			{
+				key: "phase-current",
+				time: "9s",
+				label: "phase active / running required checks",
+				kind: "phase",
+				active: true,
+			},
+		]);
+	});
+
+	test("routes events by structural ids before falling back to labels", () => {
+		const row = fg({
+			phase: "implementing",
+			recentEvents: [
+				ev({
+					kind: "adapter.event",
+					label: "review payload available",
+					stepId: "implement",
+					participantId: "implementer",
+				}),
+			],
+		});
+		expect(blockFeed(row, "implementer").map((entry) => entry.label)).toContain(
+			"implement: review payload available",
 		);
-		const drawn = eventTail(fg({ recentEvents: events }));
-		expect(drawn).toHaveLength(EVENT_TAIL_DRAW_LIMIT);
-		expect(drawn[0].label).toBe("event 4");
-		expect(drawn[drawn.length - 1].label).toBe(`event ${EVENT_TAIL_DRAW_LIMIT + 3}`);
+		expect(blockFeed(row, "reviewer")).toEqual([]);
 	});
 
-	test("keys stay stable as the tail appends, and stay unique when labels repeat", () => {
-		const events = [ev({ label: "impl item" }), ev({ label: "impl item" })];
-		const before = eventTail(fg({ recentEvents: events }));
-		expect(new Set(before.map((e) => e.key)).size).toBe(2);
-		const after = eventTail(fg({ recentEvents: [...events, ev({ label: "impl item" })] }));
-		expect(after.slice(0, 2).map((e) => e.key)).toEqual(before.map((e) => e.key));
+	test("does not route loose rev substrings as reviewer labels", () => {
+		const row = bg({
+			display: "queued",
+			recentEvents: [ev({ label: "preview diff" }), ev({ label: "revert check skipped" })],
+		});
+		expect(blockFeed(row, "reviewer")).toEqual([]);
 	});
 
-	test("an underivable age renders the placeholder, never a fabricated zero", () => {
-		const drawn = eventTail(fg({ recentEvents: [ev({ ageMs: Number.NaN }), ev({ ageMs: -1 })] }));
-		expect(drawn.map((e) => e.age)).toEqual(["-", "-"]);
+	test("untagged events fall back to the active block instead of disappearing", () => {
+		const row = fg({
+			phase: "implementing",
+			phaseElapsedMs: 3_000,
+			recentEvents: [ev({ label: "tool.start" })],
+		});
+		expect(blockFeed(row, "implementer").map((entry) => entry.label)).toEqual([
+			"phase active / implementing",
+			"tool.start",
+		]);
+	});
+
+	test("caps to the newest selected-block feed rows", () => {
+		const recentEvents = Array.from({ length: BLOCK_FEED_DRAW_LIMIT + 3 }, (_, i) =>
+			ev({ label: `tool.${i}`, stepId: "implement" }),
+		);
+		const rows = blockFeed(fg({ recentEvents }), "implementer");
+		expect(rows).toHaveLength(BLOCK_FEED_DRAW_LIMIT);
+		expect(rows[0]?.label).toBe("phase active / implementing");
+		expect(rows[1]?.label).toBe("implement: tool.4");
+		expect(rows[rows.length - 1]?.label).toBe(`implement: tool.${BLOCK_FEED_DRAW_LIMIT + 2}`);
+	});
+
+	test("the operator gate has no execution feed", () => {
+		expect(blockFeed(fg({ recentEvents: [ev({ stepId: "implement" })] }), "you")).toEqual([]);
 	});
 });
 
