@@ -11,7 +11,9 @@ import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
 import type { RunReceipt } from "./run.ts";
 
-// A stored receipt is one of the three policy shapes; `policy` discriminates them.
+// A stored receipt is one of three shapes (text run / sandboxed loop / composition).
+// Its `policy` field is an INTERNAL per-kind discriminator tag, not the v1 manifest
+// policy (manifests have none) -- the user never sees it.
 export type AnyReceipt = RunReceipt | ConvergeReceipt | FlowReceipt;
 
 export function runsDir(cwd: string): string {

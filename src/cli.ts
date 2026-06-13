@@ -22,7 +22,7 @@ import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } f
 export interface CliDeps {
 	cwd: string;
 	adapter: Adapter;
-	// For converge: the check seam and the write-safety sandbox.
+	// For sandboxed routines: the check seam and the write-safety sandbox.
 	checkRunner: CheckRunner;
 	sandboxFactory: SandboxFactory;
 	now: () => number;
@@ -38,11 +38,13 @@ const USAGE = `chit -- run declared routines
   chit run <routine> [opts]           run a routine and print its output
       --input <name>=<value>          supply an input (repeatable)
       --scope <name>                  name the run's scope (session grouping)
-      --apply                         (converge) apply the result to your tree; default is a dry run
+      --apply                         (sandboxed routines) apply the result to your tree; default is a dry run
   chit trace <run-id>                 show the receipt for a past run
 
-A routine is a declared workflow. Its manifest is the source of truth for inputs,
-participants, steps, and policy; config only names it.`;
+A routine is a declared workflow. Its manifest is the source of truth: inputs,
+participants, ordered steps, and an optional repeat. Config only names it. How it
+runs is derived from the shape -- routine steps compose, a repeat loops, and a
+read-write participant or a check runs it in a sandbox.`;
 
 function parseRunArgs(rest: string[]): {
 	id?: string;
@@ -176,7 +178,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			if (isSandboxed(routine.manifest)) {
 				// A routine that writes or runs checks executes inside a sandbox (a git
 				// worktree): edits land on the copy, not your tree. Dry run by default
-				// (show the diff, discard it); `--apply` writes a converged result back.
+				// (show the diff, discard it); `--apply` writes the result back.
 				const result = await runConvergeInSandbox(
 					routine,
 					validation.values,
@@ -195,7 +197,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				);
 				saveReceipt(deps.cwd, result.receipt);
 				const r = result.receipt;
-				deps.out(`converge: ${r.status} after ${r.iterations.length} iteration(s)`);
+				deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
 				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
 				if (r.status === "converged") {
 					deps.out(

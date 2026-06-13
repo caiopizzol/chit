@@ -127,7 +127,7 @@ describe("chit run", () => {
 		const { deps, out } = harness({ sandboxDiff: "diff --git a/x b/x\n+change" });
 		expect(await runCli(["run", "impl-review", "--input", "task=x"], deps)).toBe(0);
 		const text = out.join("\n");
-		expect(text).toContain("converge: converged");
+		expect(text).toContain("run converged");
 		expect(text).toContain("diff --git");
 		expect(text).toMatch(/dry run -- sandbox discarded/);
 	});

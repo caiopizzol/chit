@@ -1,4 +1,5 @@
-// Execute a converge routine: run its ordered steps repeatedly until every check
+// The sandboxed execution path (internally "converge"). Run the routine's ordered
+// steps repeatedly until every check
 // step passes, or maxIterations is hit. State threads across iterations through a
 // persistent context -- a check step's combined failing output becomes its
 // `output`, so the NEXT iteration's call steps can reference {{ steps.verify.output }}
