@@ -4,6 +4,12 @@
 // spawns command+args directly with nothing to shell-escape.
 
 import type { Check } from "./manifest.ts";
+import { spawnCapture } from "./proc.ts";
+
+// A hung check (an accidentally interactive command, an infinite test) must not
+// block the loop. A timed-out check is reported as a failure, so the loop keeps
+// its bound and feeds the timeout forward like any other failing check.
+const CHECK_TIMEOUT_MS = 5 * 60_000;
 
 export interface CheckResult {
 	ok: boolean;
@@ -37,12 +43,10 @@ export function fakeCheckRunner(
 
 export const argvCheckRunner: CheckRunner = {
 	async run(check, cwd) {
-		const proc = Bun.spawn([check.command, ...check.args], { cwd, stdout: "pipe", stderr: "pipe" });
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-		return { ok: exitCode === 0, exitCode, output: `${stdout}${stderr}`.trim() };
+		const r = await spawnCapture([check.command, ...check.args], { cwd, timeoutMs: CHECK_TIMEOUT_MS });
+		if (r.timedOut) {
+			return { ok: false, exitCode: 124, output: `check timed out after ${CHECK_TIMEOUT_MS}ms` };
+		}
+		return { ok: r.exitCode === 0, exitCode: r.exitCode ?? -1, output: `${r.stdout}${r.stderr}`.trim() };
 	},
 };

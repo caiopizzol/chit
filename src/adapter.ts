@@ -7,6 +7,11 @@
 // proof is the product shape, not a new runtime.
 
 import type { Filesystem } from "./manifest.ts";
+import { spawnCapture } from "./proc.ts";
+
+// A hung model call must never block a run forever (it would defeat the loop's
+// bounds). Five minutes is generous for one print-mode call.
+const CALL_TIMEOUT_MS = 5 * 60_000;
 
 export interface AdapterRequest {
 	agent: string;
@@ -58,20 +63,13 @@ export const claudeCliAdapter: Adapter = {
 				: req.filesystem === "read-only"
 					? ["claude", "-p", "--permission-mode", "plan"]
 					: ["claude", "-p", "--tools", ""];
-		const proc = Bun.spawn(args, {
-			cwd: req.cwd,
-			stdin: new TextEncoder().encode(composed),
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [output, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-		if (exitCode !== 0) {
-			throw new Error(`claude exited ${exitCode}: ${stderr.trim() || "(no stderr)"}`);
+		const r = await spawnCapture(args, { cwd: req.cwd, stdin: composed, timeoutMs: CALL_TIMEOUT_MS });
+		if (r.timedOut) {
+			throw new Error(`claude call timed out after ${CALL_TIMEOUT_MS}ms`);
 		}
-		return { output: output.trim() };
+		if (r.exitCode !== 0) {
+			throw new Error(`claude exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);
+		}
+		return { output: r.stdout.trim() };
 	},
 };

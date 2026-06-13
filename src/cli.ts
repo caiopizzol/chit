@@ -138,6 +138,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						now: deps.now,
 						newRunId: deps.newRunId,
 						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
+						maxWallMs: 30 * 60_000,
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},

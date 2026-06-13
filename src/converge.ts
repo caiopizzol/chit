@@ -68,6 +68,9 @@ export interface ConvergeDeps {
 	newRunId: () => string;
 	// Override for the manifest's maxIterations (e.g. a config default). Clamped.
 	maxIterations?: number;
+	// A hard wall-time bound for the whole loop; checked before each iteration. With
+	// the per-call timeout this keeps a slow-but-not-hung run from running unbounded.
+	maxWallMs?: number;
 	diffProvider?: () => Promise<string> | string;
 }
 
@@ -106,6 +109,10 @@ export async function runConverge(
 	let converged = false;
 
 	for (let n = 1; n <= maxIterations && runError === undefined && !converged; n++) {
+		if (deps.maxWallMs !== undefined && deps.now() - startedAt >= deps.maxWallMs) {
+			runError = `exceeded max wall-time of ${deps.maxWallMs}ms after ${n - 1} iteration(s)`;
+			break;
+		}
 		ctx.iteration = n;
 		const stepReceipts: ConvergeStepReceipt[] = [];
 		let allChecksPassed = true;

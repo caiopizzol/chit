@@ -111,6 +111,21 @@ describe("runConverge", () => {
 		expect(r.scope).toBe("feat-x");
 		expect(r.maxIterations).toBe(3);
 	});
+
+	test("aborts before exhausting iterations when the wall-time budget is exceeded", async () => {
+		// each clock read advances 1s; the budget is small enough to stop the loop
+		// well before its 10-iteration cap, even though checks keep failing.
+		let t = 0;
+		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "still failing" }));
+		const r = await runConverge(routineFrom({ ...CONVERGE, maxIterations: 10 }), { task: "x" }, {
+			...deps({ checkRunner }),
+			now: () => (t += 1000),
+			maxWallMs: 1500,
+		});
+		expect(r.status).toBe("failed");
+		expect(r.error).toMatch(/exceeded max wall-time/);
+		expect(r.iterations.length).toBeLessThan(10);
+	});
 });
 
 describe("effectiveMaxIterations", () => {

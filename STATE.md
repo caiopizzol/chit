@@ -70,11 +70,21 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       discarded -> origin untouched, no leftover worktree, receipt run-12c4ae18 traces correctly.
 - [x] 87 tests pass, typecheck clean.
 
-## Still deferred (NOT in the smallest-loop scope; see other-model points 4,5,8,9,10)
-- routine composition (grill -> plan -> implementation-review)   <-- the recommended NEXT slice
-- durable in-progress state / resume; live progress + pause/stop
-- per-call timeout / cost + wall-time budgets; richer evidence in receipts
-- `--full` trace flag (decide receipt body-storage policy first)
+## Increment 4 COMPLETE — safety bounds + doc fixes
+- [x] proc.ts spawnCapture(timeoutMs): kills a hung process; tested (sleep + short timeout).
+- [x] adapter + argv check-runner route through it: per-call timeout (5 min). A hung model call
+      or hung check can no longer block a run.
+- [x] converge maxWallMs guard (CLI default 30 min): aborts before exhausting iterations; tested.
+- [x] README fixes: removed stale "converge execution" from not-here; clarified per-participant
+      claude-permission enforcement (plan/acceptEdits/none) vs the stronger worktree write-safety;
+      noted the timeouts. 92 tests, typecheck clean.
+
+## Next: STRESS the loop, THEN compose (other model's sequence)
+- [ ] run implementation-review against a small REAL code change (observational; product quality
+      under realistic pressure is not yet proven -- only the mechanism is).
+- [ ] {{ diff }} prompt-budget: cap large diffs fed to review prompts (a "soon" risk).
+- [ ] THEN routine composition (grill -> plan -> implementation-review).
+- deferred still: durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out.
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, converge execution, config editor, multi-provider adapters,

@@ -21,6 +21,7 @@ export interface ConvergeRunDeps {
 	now: () => number;
 	newRunId: () => string;
 	maxIterations?: number;
+	maxWallMs?: number;
 	// Apply the diff back to origin on success. Default behavior (false) is a
 	// dry-run: run, show the diff, discard. The caller gates this on confirm.
 	apply: boolean;
@@ -53,6 +54,7 @@ export async function runConvergeInSandbox(
 				now: deps.now,
 				newRunId: () => runId,
 				...(deps.maxIterations !== undefined && { maxIterations: deps.maxIterations }),
+				...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 				diffProvider: () => sandbox.diff(),
 			},
 			opts,

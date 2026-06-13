@@ -48,16 +48,20 @@ deterministic and free.
   runs read-write steps there, runs checks, and loops until they pass. It is a **dry run by
   default** (show the diff, discard); pass `--apply` to write a converged result back. Your real
   tree is never touched without `--apply`.
-- **Filesystem permissions are requested, not enforced.** A participant's `filesystem` is
-  shown and passed to the adapter, but nothing sandboxes the model. A "read-only" routine is
-  read-only because it was *instructed* to be, not because chit-minimal stops a write.
+- **Two safety layers, and they are not the same strength.** A participant's `filesystem` maps to
+  a claude permission mode (read-only -> `plan`, read-write -> `acceptEdits`, none -> no tools):
+  that is claude-level, not an OS sandbox, and only as strong as claude's permission system.
+  Converge **write safety** is the strong one and is enforced: read-write steps run inside a
+  disposable git worktree, so your real tree is never changed without `--apply`.
+- **Model calls and checks have a per-call timeout; the loop has a wall-time bound.** A hung call
+  or check can't block a run, and a slow run is capped.
 - **Receipts store inputs and the final output in plaintext** under `.chit/runs` (gitignored),
   not per-step transcripts. Whether the body should be stored by default is an open question.
 
 ## Deliberately not here
 
-Studio, MCP tools, plan/batch, a config editor, multi-provider adapters,
-converge execution. They come back only once this read-and-run loop feels obvious.
+Studio, MCP tools, plan/batch, a config editor, multi-provider adapters, routine
+composition, durable resume, live progress. They come back once the single loop is solid.
 
 ## Layout
 
@@ -67,6 +71,7 @@ src/config.ts     thin routine config (names + manifest path + defaults)
 src/routine.ts    resolve a routine: config + bound manifest + digest
 src/inputs.ts     validate operator inputs
 src/template.ts   {{ inputs.x }} / {{ steps.y.output }} rendering
+src/proc.ts         spawn + capture with a timeout (shared by adapter & checks)
 src/adapter.ts      the one model-call seam (fake for tests, claude CLI for real)
 src/check-runner.ts the check seam (fake for tests, real argv spawn)
 src/sandbox.ts      write-safety seam (fake for tests, real git worktree)
