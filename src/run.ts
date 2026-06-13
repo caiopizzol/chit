@@ -1,14 +1,12 @@
-// Execute a one-shot routine: run its steps in order, calling the adapter for
-// `call` steps and assembling text for `format` steps, then return a receipt of
-// what happened. The executor itself does no disk IO and takes an injected clock
-// and id -- so it is fully deterministic under test with a fake adapter.
+// Run a non-sandboxed execution routine (pure call/format, read-only, no checks)
+// once in the cwd, and return a receipt. This is the "text" path -- grill, plan.
+// No disk IO; injected clock and id, so it is deterministic under test.
 //
-// Converge execution is intentionally NOT here. A converge routine can be listed
-// and inspected; running its loop (and the digest/drift safety that guards it) is
-// the hardened runtime's job, not this proof's.
+// (Sandboxed execution -- anything with checks or a read-write participant -- and
+// composition go through converge.ts and flow.ts. Dispatch in cli.ts picks one.)
 
 import type { Adapter } from "./adapter.ts";
-import type { OneShotManifest } from "./manifest.ts";
+import type { Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -25,6 +23,8 @@ export interface StepReceipt {
 export interface RunReceipt {
 	runId: string;
 	routineId: string;
+	// Internal receipt-kind tag (the manifest has no policy); discriminates the
+	// stored-receipt union. "one-shot" = a single text run.
 	policy: "one-shot";
 	scope?: string;
 	digest: string;
@@ -51,10 +51,7 @@ export async function runOneShot(
 	deps: RunDeps,
 	opts: { scope?: string } = {},
 ): Promise<RunReceipt> {
-	if (routine.manifest.policy !== "one-shot") {
-		throw new Error("runOneShot called with a non-one-shot routine");
-	}
-	const manifest: OneShotManifest = routine.manifest;
+	const manifest: Manifest = routine.manifest;
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
 
@@ -68,32 +65,27 @@ export async function runOneShot(
 			if (step.kind === "call") {
 				const participant = manifest.participants[step.call];
 				if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
-				const prompt = renderTemplate(step.prompt, ctx);
 				const result = await deps.adapter.call({
 					agent: participant.agent,
 					instructions: participant.instructions,
-					prompt,
+					prompt: renderTemplate(step.prompt, ctx),
 					filesystem: participant.filesystem,
 					cwd: deps.cwd,
 				});
 				ctx.steps[step.id] = { output: result.output };
-				steps.push({
-					id: step.id,
-					kind: "call",
-					participant: step.call,
-					agent: participant.agent,
-					status: "ok",
-					elapsedMs: deps.now() - stepStart,
-				});
-			} else {
+				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, status: "ok", elapsedMs: deps.now() - stepStart });
+			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
 				steps.push({ id: step.id, kind: "format", status: "ok", elapsedMs: deps.now() - stepStart });
+			} else {
+				// A non-sandboxed text routine has only call/format steps (dispatch guarantees it).
+				throw new Error(`runOneShot cannot run a ${step.kind} step (${step.id})`);
 			}
 		} catch (e) {
 			failed = (e as Error).message;
 			steps.push({
 				id: step.id,
-				kind: step.kind,
+				kind: step.kind === "call" ? "call" : "format",
 				...(step.kind === "call" && { participant: step.call }),
 				status: "failed",
 				elapsedMs: deps.now() - stepStart,
@@ -104,7 +96,8 @@ export async function runOneShot(
 	}
 
 	const finishedAt = deps.now();
-	const output = ctx.steps[manifest.output]?.output;
+	const outputId = manifest.output ?? manifest.steps.at(-1)?.id;
+	const output = outputId !== undefined ? ctx.steps[outputId]?.output : undefined;
 	return {
 		runId,
 		routineId: routine.id,

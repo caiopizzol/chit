@@ -8,7 +8,6 @@ import { type FakeSandbox, fakeSandbox } from "./sandbox.ts";
 
 const CONVERGE = {
 	id: "impl-review",
-	policy: "converge",
 	inputs: { task: { type: "string" } },
 	participants: {
 		builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
@@ -19,7 +18,7 @@ const CONVERGE = {
 		{ id: "critique", call: "critic", prompt: "Review this diff:\n{{ diff }}" },
 		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
 	],
-	maxIterations: 2,
+	repeat: { until: "checks-pass", maxIterations: 2 },
 };
 
 function routineFrom(raw: unknown): ResolvedRoutine {

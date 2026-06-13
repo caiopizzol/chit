@@ -19,7 +19,7 @@ import type { CheckRunner } from "./check-runner.ts";
 import type { ConvergeReceipt } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { validateInputs } from "./inputs.ts";
-import type { FlowManifest, Policy } from "./manifest.ts";
+import { isComposition, isSandboxed, type Manifest } from "./manifest.ts";
 import { type ResolvedRoutine, resolveRoutine, RoutineError } from "./routine.ts";
 import { type RunReceipt, runOneShot } from "./run.ts";
 import type { SandboxFactory } from "./sandbox.ts";
@@ -59,47 +59,42 @@ export function resolveFlow(
 	flowRoutine: ResolvedRoutine,
 	resolve: (id: string) => ResolvedRoutine,
 ): ResolvedFlow {
-	if (flowRoutine.manifest.policy !== "flow") {
-		throw new Error("resolveFlow called with a non-flow routine");
+	if (!isComposition(flowRoutine.manifest)) {
+		throw new Error("resolveFlow called with a non-composition routine");
 	}
-	const manifest: FlowManifest = flowRoutine.manifest;
+	const manifest: Manifest = flowRoutine.manifest;
 	const steps: ResolvedFlowStep[] = [];
 	const priorIds = new Set<string>();
 
 	for (const [i, step] of manifest.steps.entries()) {
+		if (step.kind !== "routine") throw new Error("composition step must be a routine step");
 		const isLast = i === manifest.steps.length - 1;
 		let sub: ResolvedRoutine;
 		try {
 			sub = resolve(step.routine);
 		} catch (e) {
-			throw new RoutineError(`flow ${JSON.stringify(flowRoutine.id)} step ${JSON.stringify(step.id)}: ${(e as Error).message}`);
+			throw new RoutineError(`composition ${JSON.stringify(flowRoutine.id)} step ${JSON.stringify(step.id)}: ${(e as Error).message}`);
 		}
-		if (sub.manifest.policy === "flow") {
-			throw new RoutineError(`flow step ${JSON.stringify(step.id)}: nested flows are not supported in v1 (${JSON.stringify(step.routine)} is a flow)`);
+		if (isComposition(sub.manifest)) {
+			throw new RoutineError(`composition step ${JSON.stringify(step.id)}: ${JSON.stringify(step.routine)} is itself a composition -- nested composition is not supported (call execution routines only)`);
 		}
 		for (const template of Object.values(step.inputs)) {
 			for (const ref of stepRefs(template)) {
 				if (!priorIds.has(ref)) {
-					throw new RoutineError(`flow step ${JSON.stringify(step.id)}: input references step ${JSON.stringify(ref)}, which is not an earlier step`);
+					throw new RoutineError(`composition step ${JSON.stringify(step.id)}: input references step ${JSON.stringify(ref)}, which is not an earlier step`);
 				}
 			}
 			for (const ref of inputRefs(template)) {
 				if (!(ref in manifest.inputs)) {
-					throw new RoutineError(`flow step ${JSON.stringify(step.id)}: input references {{ inputs.${ref} }}, which is not a declared flow input`);
+					throw new RoutineError(`composition step ${JSON.stringify(step.id)}: input references {{ inputs.${ref} }}, which is not a declared input`);
 				}
 			}
 		}
-		if (sub.manifest.policy === "converge") {
-			// "Must be last" also enforces "at most one": only the final step may be
-			// converge, so a second converge step is necessarily not-last and is caught here.
-			if (!isLast) {
-				throw new RoutineError(`flow ${JSON.stringify(flowRoutine.id)}: the converge step ${JSON.stringify(step.id)} must be the last step (a flow has at most one converge step)`);
-			}
-		} else {
-			const writer = Object.values(sub.manifest.participants).find((p) => p.filesystem === "read-write");
-			if (writer !== undefined) {
-				throw new RoutineError(`flow step ${JSON.stringify(step.id)} (${JSON.stringify(sub.id)}): a one-shot flow step must be read-only -- participant ${JSON.stringify(writer.id)} is read-write, and one-shot steps run in your tree unsandboxed. Only the terminal converge step may write.`);
-			}
+		// A sandboxed sub-routine (writes or runs checks) must be the LAST step, and a
+		// composition has at most one (a non-last sandboxed step is caught here). Earlier
+		// steps must be pure read-only/text, so the composition adds no write surface.
+		if (isSandboxed(sub.manifest) && !isLast) {
+			throw new RoutineError(`composition ${JSON.stringify(flowRoutine.id)}: step ${JSON.stringify(step.id)} (${JSON.stringify(sub.id)}) writes or runs checks, so it must be the LAST step; earlier steps must be read-only/text.`);
 		}
 		steps.push({ id: step.id, inputs: step.inputs, routine: sub });
 		priorIds.add(step.id);
@@ -110,7 +105,8 @@ export function resolveFlow(
 export interface FlowStepReceipt {
 	id: string;
 	routine: string;
-	policy: Policy;
+	// The sub-run's receipt kind: "converge" for a sandboxed sub-routine, else "one-shot".
+	policy: "one-shot" | "converge";
 	subRunId: string;
 	status: string;
 	elapsedMs: number;
@@ -168,7 +164,10 @@ export async function runFlow(
 
 	for (const step of resolved.steps) {
 		const stepStart = deps.now();
-		const policy = step.routine.manifest.policy;
+		// Derived: a sub-routine that writes or runs checks is sandboxed (-> converge path);
+		// otherwise it is a pure text run (-> one-shot path).
+		const sandboxed = isSandboxed(step.routine.manifest);
+		const policy: "one-shot" | "converge" = sandboxed ? "converge" : "one-shot";
 
 		const mapped: Record<string, string> = {};
 		for (const [name, template] of Object.entries(step.inputs)) mapped[name] = renderTemplate(template, ctx);
@@ -180,7 +179,7 @@ export async function runFlow(
 			break;
 		}
 
-		if (policy === "converge") {
+		if (sandboxed) {
 			const r = await runConvergeInSandbox(
 				step.routine,
 				validation.values,

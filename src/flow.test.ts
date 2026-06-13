@@ -11,9 +11,9 @@ function routine(raw: { id: string; [key: string]: unknown }): ResolvedRoutine {
 	return { id: raw.id, manifestPath: `${raw.id}.json`, manifestAbs: `/${raw.id}.json`, manifest, digest: `sha256:${raw.id}` };
 }
 
+// Text sub-routines (read-only, no checks -> run in cwd).
 const GRILL = routine({
 	id: "grill",
-	policy: "one-shot",
 	inputs: { idea: { type: "string" } },
 	participants: { g: { agent: "claude", instructions: "Inspect.", filesystem: "read-only" } },
 	steps: [{ id: "out", call: "g", prompt: "grill {{ inputs.idea }}" }],
@@ -21,15 +21,14 @@ const GRILL = routine({
 });
 const PLAN = routine({
 	id: "plan",
-	policy: "one-shot",
 	inputs: { goal: { type: "string" } },
 	participants: { p: { agent: "claude", instructions: "Plan.", filesystem: "read-only" } },
 	steps: [{ id: "out", call: "p", prompt: "plan {{ inputs.goal }}" }],
 	output: "out",
 });
+// A sandboxed loop sub-routine (checks + read-write -> worktree).
 const IMPL = routine({
 	id: "impl",
-	policy: "converge",
 	inputs: { task: { type: "string" } },
 	participants: {
 		builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
@@ -39,19 +38,17 @@ const IMPL = routine({
 		{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
 		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
 	],
+	repeat: { until: "checks-pass", maxIterations: 3 },
 });
-const WRITEY_ONESHOT = routine({
+// A sandboxed single-pass sub-routine (read-write, no repeat).
+const WRITEY = routine({
 	id: "writey",
-	policy: "one-shot",
-	inputs: {},
 	participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
 	steps: [{ id: "out", call: "w", prompt: "do it" }],
-	output: "out",
 });
 
 const FLOW = routine({
 	id: "feature-flow",
-	policy: "flow",
 	inputs: { idea: { type: "string" } },
 	steps: [
 		{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idea }}" } },
@@ -60,7 +57,7 @@ const FLOW = routine({
 	],
 });
 
-const REGISTRY: Record<string, ResolvedRoutine> = { grill: GRILL, plan: PLAN, impl: IMPL, writey: WRITEY_ONESHOT, "feature-flow": FLOW };
+const REGISTRY: Record<string, ResolvedRoutine> = { grill: GRILL, plan: PLAN, impl: IMPL, writey: WRITEY, "feature-flow": FLOW };
 function resolver(over: Record<string, ResolvedRoutine> = {}) {
 	const reg = { ...REGISTRY, ...over };
 	return (id: string): ResolvedRoutine => {
@@ -71,7 +68,7 @@ function resolver(over: Record<string, ResolvedRoutine> = {}) {
 }
 
 describe("resolveFlow (graph rules)", () => {
-	test("resolves a valid grill -> plan -> impl flow", () => {
+	test("resolves a valid grill -> plan -> impl composition", () => {
 		const rf = resolveFlow(FLOW, resolver());
 		expect(rf.steps.map((s) => [s.id, s.routine.id])).toEqual([
 			["grill", "grill"],
@@ -80,65 +77,61 @@ describe("resolveFlow (graph rules)", () => {
 		]);
 	});
 
-	test("rejects a read-write one-shot step (would write the caller tree)", () => {
-		const f = routine({ id: "f", policy: "flow", inputs: {}, steps: [{ id: "w", routine: "writey", inputs: {} }] });
-		expect(() => resolveFlow(f, resolver())).toThrow(/must be read-only/);
+	test("allows a single sandboxed sub-routine when it is last", () => {
+		const f = routine({ id: "f", inputs: { task: { type: "string" } }, steps: [{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.task }}" } }] });
+		expect(() => resolveFlow(f, resolver())).not.toThrow();
 	});
 
-	test("rejects a converge step that is not last", () => {
+	test("rejects a sandboxed (write/check) sub-routine that is not last", () => {
 		const f = routine({
 			id: "f",
-			policy: "flow",
+			inputs: {},
+			steps: [
+				{ id: "w", routine: "writey", inputs: {} },
+				{ id: "g", routine: "grill", inputs: { idea: "x" } },
+			],
+		});
+		expect(() => resolveFlow(f, resolver())).toThrow(/must be the LAST step/);
+	});
+
+	test("rejects a converge (looping) sub-routine that is not last", () => {
+		const f = routine({
+			id: "f",
 			inputs: { task: { type: "string" } },
 			steps: [
 				{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.task }}" } },
 				{ id: "grill", routine: "grill", inputs: { idea: "x" } },
 			],
 		});
-		expect(() => resolveFlow(f, resolver())).toThrow(/must be the last step/);
-	});
-
-	test("rejects more than one converge step (the non-last one fails the must-be-last rule)", () => {
-		const f = routine({
-			id: "f",
-			policy: "flow",
-			inputs: { task: { type: "string" } },
-			steps: [
-				{ id: "a", routine: "impl", inputs: { task: "{{ inputs.task }}" } },
-				{ id: "b", routine: "impl", inputs: { task: "{{ inputs.task }}" } },
-			],
-		});
-		expect(() => resolveFlow(f, resolver())).toThrow(/must be the last step.*at most one converge/);
+		expect(() => resolveFlow(f, resolver())).toThrow(/must be the LAST step/);
 	});
 
 	test("rejects an unknown sub-routine", () => {
-		const f = routine({ id: "f", policy: "flow", inputs: {}, steps: [{ id: "x", routine: "ghost", inputs: {} }] });
+		const f = routine({ id: "f", inputs: {}, steps: [{ id: "x", routine: "ghost", inputs: {} }] });
 		expect(() => resolveFlow(f, resolver())).toThrow(/unknown routine "ghost"/);
 	});
 
 	test("rejects an input referencing a non-earlier step", () => {
 		const f = routine({
 			id: "f",
-			policy: "flow",
 			inputs: {},
 			steps: [{ id: "plan", routine: "plan", inputs: { goal: "{{ steps.grill.output }}" } }],
 		});
 		expect(() => resolveFlow(f, resolver())).toThrow(/not an earlier step/);
 	});
 
-	test("rejects an input referencing an undeclared flow input (a typo)", () => {
+	test("rejects an input referencing an undeclared input (a typo)", () => {
 		const f = routine({
 			id: "f",
-			policy: "flow",
 			inputs: { idea: { type: "string" } },
 			steps: [{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idae }}" } }],
 		});
-		expect(() => resolveFlow(f, resolver())).toThrow(/not a declared flow input/);
+		expect(() => resolveFlow(f, resolver())).toThrow(/not a declared input/);
 	});
 
-	test("rejects a nested flow", () => {
-		const f = routine({ id: "f", policy: "flow", inputs: {}, steps: [{ id: "n", routine: "feature-flow", inputs: {} }] });
-		expect(() => resolveFlow(f, resolver())).toThrow(/nested flows are not supported/);
+	test("rejects nested composition", () => {
+		const f = routine({ id: "f", inputs: {}, steps: [{ id: "n", routine: "feature-flow", inputs: {} }] });
+		expect(() => resolveFlow(f, resolver())).toThrow(/nested composition is not supported/);
 	});
 });
 
@@ -166,25 +159,22 @@ describe("runFlow (execution)", () => {
 			["impl", "impl", "converged"],
 		]);
 		// plan's prompt saw grill's output; impl's task saw plan's output
-		const planPrompt = adapter.calls[1]?.prompt ?? "";
-		expect(planPrompt).toContain("plan OUT[grill dark mode]");
-		const implBuild = adapter.calls[2]?.prompt ?? "";
-		expect(implBuild).toContain("OUT[plan OUT[grill dark mode]]");
+		expect(adapter.calls[1]?.prompt ?? "").toContain("plan OUT[grill dark mode]");
+		expect(adapter.calls[2]?.prompt ?? "").toContain("OUT[plan OUT[grill dark mode]]");
 	});
 
-	test("a flow ending in converge returns the terminal diff and apply flag", async () => {
+	test("a composition ending in a sandboxed step returns the terminal diff and apply flag", async () => {
 		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, deps({ apply: true }));
 		expect(res.terminalDiff).toBe("the diff");
 		expect(res.applied).toBe(true);
 		expect(res.subReceipts).toHaveLength(3);
 	});
 
-	test("stops and fails the flow when a step does not succeed", async () => {
+	test("stops and fails the composition when a step does not succeed", async () => {
 		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "fail" }));
 		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, deps({ checkRunner }));
 		expect(res.receipt.status).toBe("failed");
 		expect(res.receipt.error).toMatch(/impl.*did-not-converge/);
-		// all three steps ran; impl is the failing terminal one
 		expect(res.receipt.steps.at(-1)).toMatchObject({ id: "impl", status: "did-not-converge" });
 		expect(res.applied).toBe(false);
 	});
@@ -192,7 +182,6 @@ describe("runFlow (execution)", () => {
 	test("fails a step whose mapped inputs are invalid for the sub-routine", async () => {
 		const f = routine({
 			id: "f",
-			policy: "flow",
 			inputs: {},
 			steps: [{ id: "plan", routine: "plan", inputs: {} }], // plan needs `goal`
 		});
@@ -201,11 +190,10 @@ describe("runFlow (execution)", () => {
 		expect(res.receipt.error).toMatch(/missing required input "goal"/);
 	});
 
-	test("forwards the sub-routine's config maxIterations default into the converge sub-run", async () => {
+	test("forwards the sub-routine's config maxIterations default into the sandboxed sub-run", async () => {
 		const implCapped: ResolvedRoutine = { ...IMPL, defaults: { maxIterations: 7 } };
 		const f = routine({
 			id: "f",
-			policy: "flow",
 			inputs: { task: { type: "string" } },
 			steps: [{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.task }}" } }],
 		});
@@ -216,7 +204,7 @@ describe("runFlow (execution)", () => {
 		expect(sub.maxIterations).toBe(7);
 	});
 
-	test("propagates the flow scope to every sub-run", async () => {
+	test("propagates the composition scope to every sub-run", async () => {
 		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, deps(), { scope: "feat-z" });
 		expect(res.receipt.scope).toBe("feat-z");
 		expect(res.subReceipts).toHaveLength(3);

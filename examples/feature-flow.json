@@ -1,6 +1,5 @@
 {
 	"id": "feature-flow",
-	"policy": "flow",
 	"description": "Grill an idea, plan it, then implement-and-verify it -- one composed routine.",
 	"inputs": {
 		"idea": { "type": "string", "required": true, "description": "the feature idea to take from question to code" }

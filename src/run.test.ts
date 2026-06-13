@@ -11,7 +11,6 @@ function routineFrom(raw: unknown): ResolvedRoutine {
 
 const GRILLER = {
 	id: "griller",
-	policy: "one-shot",
 	inputs: { idea: { type: "string" } },
 	participants: { griller: { agent: "claude", instructions: "Read-only.", filesystem: "read-only" } },
 	steps: [

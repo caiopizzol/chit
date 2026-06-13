@@ -20,7 +20,6 @@ function routineFrom(raw: unknown, extra: Partial<ResolvedRoutine> = {}): Resolv
 
 const ONE_SHOT = {
 	id: "feature-griller",
-	policy: "one-shot",
 	description: "Question a feature idea.",
 	inputs: { idea: { type: "string" }, context: { type: "string", required: false, description: "background" } },
 	participants: { griller: { agent: "claude", instructions: "Read-only.", filesystem: "read-only" } },
@@ -33,7 +32,6 @@ const ONE_SHOT = {
 
 const CONVERGE = {
 	id: "impl-review",
-	policy: "converge",
 	description: "Implement and review.",
 	inputs: { task: { type: "string" } },
 	participants: {
@@ -45,20 +43,20 @@ const CONVERGE = {
 		{ id: "critique", call: "critic", prompt: "{{ steps.build.output }}" },
 		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
 	],
-	maxIterations: 3,
+	repeat: { until: "checks-pass", maxIterations: 3 },
 };
 
 describe("formatRoutineList", () => {
-	test("lists id, policy, and description", () => {
+	test("lists id, kind, and description", () => {
 		const out = formatRoutineList([
-			{ id: "feature-griller", policy: "one-shot", description: "Question an idea." },
-			{ id: "impl-review", policy: "converge" },
+			{ id: "feature-griller", kind: "text", description: "Question an idea." },
+			{ id: "impl-review", kind: "loop" },
 		]);
 		expect(out).toContain("feature-griller");
-		expect(out).toContain("one-shot");
+		expect(out).toContain("text");
 		expect(out).toContain("Question an idea.");
 		expect(out).toContain("impl-review");
-		expect(out).toContain("converge");
+		expect(out).toContain("loop");
 	});
 
 	test("explains the empty case", () => {
@@ -67,9 +65,9 @@ describe("formatRoutineList", () => {
 });
 
 describe("formatInspect", () => {
-	test("one-shot: shows inputs, participants, steps, and binding", () => {
+	test("text: shows inputs, participants, steps, and binding", () => {
 		const out = formatInspect(routineFrom(ONE_SHOT));
-		expect(out).toContain("feature-griller  (one-shot)");
+		expect(out).toContain("feature-griller  (text)");
 		expect(out).toContain("idea");
 		expect(out).toContain("required");
 		expect(out).toContain("context");
@@ -82,9 +80,9 @@ describe("formatInspect", () => {
 		expect(out).toContain("sha256:aaaaaaaaaaaa");
 	});
 
-	test("converge: shows steps (including checks) and the live-sandbox note, no fixed roles", () => {
+	test("loop: shows steps (including checks) and the live-sandbox note, no fixed roles", () => {
 		const out = formatInspect(routineFrom(CONVERGE));
-		expect(out).toContain("impl-review  (converge)");
+		expect(out).toContain("impl-review  (loop)");
 		expect(out).toContain("call builder");
 		expect(out).toContain("call critic");
 		expect(out).toContain("check: bun test");

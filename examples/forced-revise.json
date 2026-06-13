@@ -1,6 +1,5 @@
 {
 	"id": "forced-revise",
-	"policy": "converge",
 	"description": "Forces a real multi-iteration recovery: the builder can only learn the required content from the failing check, so it must revise after iteration 1.",
 	"inputs": {},
 	"participants": {
@@ -21,5 +20,5 @@
 			"check": [{ "command": "grep", "args": ["-qxF", "open-sesame-42", "src/secret.txt"] }]
 		}
 	],
-	"maxIterations": 4
+	"repeat": { "until": "checks-pass", "maxIterations": 4 }
 }

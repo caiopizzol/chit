@@ -8,12 +8,11 @@ import {
 	MAX_DIFF_PROMPT_CHARS,
 	runConverge,
 } from "./converge.ts";
-import { type ConvergeManifest, parseManifest } from "./manifest.ts";
+import { type Manifest, parseManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 
 const CONVERGE = {
 	id: "impl-review",
-	policy: "converge",
 	inputs: { task: { type: "string" } },
 	participants: {
 		builder: { agent: "codex", instructions: "Build.", filesystem: "read-write" },
@@ -28,7 +27,7 @@ const CONVERGE = {
 		{ id: "critique", call: "critic", prompt: "Review {{ steps.build.output }}" },
 		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
 	],
-	maxIterations: 3,
+	repeat: { until: "checks-pass", maxIterations: 3 },
 };
 
 function routineFrom(raw: unknown): ResolvedRoutine {
@@ -93,7 +92,7 @@ describe("runConverge", () => {
 
 	test("does-not-converge when checks never pass, bounded by maxIterations", async () => {
 		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "still failing" }));
-		const r = await runConverge(routineFrom({ ...CONVERGE, maxIterations: 2 }), { task: "x" }, deps({ checkRunner }));
+		const r = await runConverge(routineFrom({ ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 2 } }), { task: "x" }, deps({ checkRunner }));
 		expect(r.status).toBe("did-not-converge");
 		expect(r.iterations).toHaveLength(2);
 		expect(r.iterations.every((it) => !it.allChecksPassed)).toBe(true);
@@ -123,7 +122,7 @@ describe("runConverge", () => {
 		// well before its 10-iteration cap, even though checks keep failing.
 		let t = 0;
 		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "still failing" }));
-		const r = await runConverge(routineFrom({ ...CONVERGE, maxIterations: 10 }), { task: "x" }, {
+		const r = await runConverge(routineFrom({ ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 10 } }), { task: "x" }, {
 			...deps({ checkRunner }),
 			now: () => (t += 1000),
 			maxWallMs: 1500,
@@ -163,12 +162,13 @@ describe("diff prompt budget", () => {
 });
 
 describe("effectiveMaxIterations", () => {
-	const m = (max?: number) => parseManifest({ ...CONVERGE, ...(max !== undefined && { maxIterations: max }) }, "m") as ConvergeManifest;
+	const m = (max?: number) =>
+		parseManifest({ ...CONVERGE, repeat: { until: "checks-pass", ...(max !== undefined && { maxIterations: max }) } }, "m") as Manifest;
 
 	test("override beats manifest beats default, and clamps to the ceiling", () => {
 		expect(effectiveMaxIterations(m(3))).toBe(3);
 		expect(effectiveMaxIterations(m(3), 7)).toBe(7);
-		const noMax = parseManifest({ ...CONVERGE, maxIterations: undefined }, "m") as ConvergeManifest;
+		const noMax = parseManifest({ ...CONVERGE, repeat: { until: "checks-pass" } }, "m") as Manifest;
 		expect(effectiveMaxIterations(noMax)).toBe(5);
 		expect(effectiveMaxIterations(m(3), 999)).toBe(20);
 	});

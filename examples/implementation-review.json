@@ -1,6 +1,5 @@
 {
 	"id": "implementation-review",
-	"policy": "converge",
 	"description": "Implement a code slice, review it, and verify with checks until it passes.",
 	"inputs": {
 		"task": { "type": "string", "required": true, "description": "the slice to implement" }
@@ -36,5 +35,5 @@
 			]
 		}
 	],
-	"maxIterations": 3
+	"repeat": { "until": "checks-pass", "maxIterations": 3 }
 }

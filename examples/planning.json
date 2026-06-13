@@ -1,6 +1,5 @@
 {
 	"id": "planning",
-	"policy": "one-shot",
 	"description": "Turn a goal into a small, ordered implementation plan grounded in the repo.",
 	"inputs": {
 		"goal": { "type": "string", "required": true, "description": "what you want built" }

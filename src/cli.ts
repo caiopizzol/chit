@@ -12,6 +12,7 @@ import { runConvergeInSandbox } from "./converge-run.ts";
 import { loadConfig } from "./config.ts";
 import { resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
+import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import type { SandboxFactory } from "./sandbox.ts";
@@ -93,10 +94,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const items: RoutineListItem[] = Object.entries(config.routines).map(([id, entry]) => {
 				try {
 					const r = resolveRoutine(config, id, deps.cwd);
-					return { id, policy: r.manifest.policy, description: r.description };
+					return { id, kind: kindLabel(r.manifest), description: r.description };
 				} catch {
 					// A broken manifest should not hide the rest of the menu.
-					return { id, policy: "one-shot" as const, description: entry.description ?? "(manifest error -- run `chit inspect` for detail)" };
+					return { id, kind: "?", description: entry.description ?? "(manifest error -- run `chit inspect` for detail)" };
 				}
 			});
 			deps.out(formatRoutineList(items));
@@ -124,7 +125,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return 1;
 			}
 
-			if (routine.manifest.policy === "flow") {
+			if (isComposition(routine.manifest)) {
 				let resolvedFlow: ReturnType<typeof resolveFlow>;
 				try {
 					resolvedFlow = resolveFlow(routine, (id) => resolveRoutine(config, id, deps.cwd));
@@ -172,10 +173,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return 0;
 			}
 
-			if (routine.manifest.policy === "converge") {
-				// Real converge runs inside a sandbox (a git worktree); read-write steps edit
-				// the copy, not your tree. Default is a dry run: show the diff, discard it.
-				// `--apply` writes a converged result back.
+			if (isSandboxed(routine.manifest)) {
+				// A routine that writes or runs checks executes inside a sandbox (a git
+				// worktree): edits land on the copy, not your tree. Dry run by default
+				// (show the diff, discard it); `--apply` writes a converged result back.
 				const result = await runConvergeInSandbox(
 					routine,
 					validation.values,

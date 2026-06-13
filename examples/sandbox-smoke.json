@@ -1,6 +1,5 @@
 {
 	"id": "sandbox-smoke",
-	"policy": "converge",
 	"description": "Tiny real converge smoke: a builder creates a file, a check verifies it, in a sandbox.",
 	"inputs": {},
 	"participants": {
@@ -21,5 +20,5 @@
 			"check": [{ "command": "grep", "args": ["-qx", "banana", "smoke.txt"] }]
 		}
 	],
-	"maxIterations": 3
+	"repeat": { "until": "checks-pass", "maxIterations": 3 }
 }

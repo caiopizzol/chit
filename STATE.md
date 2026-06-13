@@ -11,7 +11,8 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
   with the hardened monorepo's workspaces/CI.
 - **Manifest is the source of truth** for inputs, participants, steps, policy, prompts, checks.
   **Config only names routines** and points at a manifest. Inputs are never duplicated into config.
-- **one-shot vs converge are execution policies**, not separate user-facing product families.
+- **v2: NO `policy` field.** Behavior is DERIVED from shape (routine steps -> composition; `repeat`
+  -> loop; read-write participant or any check step -> sandboxed). The user writes one shape.
 - **Execution boundary**: one-shot AND converge both run for real via a thin `claude` CLI adapter
   (no secrets, no HTTP). Converge edits inside a disposable git worktree (dry-run by default,
   `--apply` to write back); the hardened digest/drift machinery is NOT reimplemented here.
@@ -126,10 +127,23 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] resolveFlow now also validates `{{ inputs.X }}` refs against the declared flow inputs (a typo
       is caught at resolve, not silently rendered empty). 108 tests, typecheck clean.
 
+## Increment 7 COMPLETE — v2 manifest (one shape, derived behavior) [BREAKING]
+- [x] removed `policy`. Manifest = inputs + participants + steps + optional repeat + output.
+      Step kinds: call / format / check / routine. CONTRACT-V2.md is the spec.
+- [x] derived: routine steps -> composition; `repeat` -> loop; read-write participant OR any
+      check step -> sandboxed (worktree); pure read-only call/format -> cwd. (D broadened: checks
+      are arbitrary process execution, so they get the boundary too.)
+- [x] rules at resolve: no step mixing; repeat needs a check + non-composition; output names a
+      text step (not check); composition calls execution routines only (no nesting), at most one
+      sandboxed sub-routine and it must be last.
+- [x] executors reused via dispatch (text -> runOneShot/cwd; sandboxed -> runConverge/worktree,
+      maxIter from repeat or 1; composition -> runFlow). All examples + tests converted.
+- [x] 108 tests, typecheck clean. CLI smoke: routines shows text/loop/composition; inspect/run derive.
+
 ## Deferred still
 durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out,
-nested flows / multiple converge steps (the shared-flow-sandbox model).
-NEXT high-value: live progress/streaming (the 12.5-min blind wait is the clearest pain).
+nested composition / multiple sandboxed steps (the shared-flow-sandbox model), `repeat.from`.
+NEXT high-value: live progress/streaming (the multi-minute blind wait is the clearest pain).
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,

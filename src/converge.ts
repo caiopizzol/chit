@@ -10,7 +10,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
-import type { ConvergeManifest } from "./manifest.ts";
+import type { Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -88,8 +88,11 @@ export function capDiffForPrompt(diff: string): string {
 	return `${diff.slice(0, MAX_DIFF_PROMPT_CHARS)}\n... [diff truncated for prompt budget: ${diff.length} chars total]`;
 }
 
-export function effectiveMaxIterations(manifest: ConvergeManifest, override?: number): number {
-	const chosen = override ?? manifest.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+// A sandboxed execution routine with no `repeat` runs exactly once; with `repeat`
+// it loops up to its maxIterations (config override beats manifest beats default).
+export function effectiveMaxIterations(manifest: Manifest, override?: number): number {
+	if (manifest.repeat === undefined) return 1;
+	const chosen = override ?? manifest.repeat.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 	return Math.max(1, Math.min(ITERATION_CEILING, chosen));
 }
 
@@ -99,10 +102,7 @@ export async function runConverge(
 	deps: ConvergeDeps,
 	opts: { scope?: string } = {},
 ): Promise<ConvergeReceipt> {
-	if (routine.manifest.policy !== "converge") {
-		throw new Error("runConverge called with a non-converge routine");
-	}
-	const manifest: ConvergeManifest = routine.manifest;
+	const manifest: Manifest = routine.manifest;
 	const maxIterations = effectiveMaxIterations(manifest, deps.maxIterations);
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
@@ -154,7 +154,7 @@ export async function runConverge(
 				} else if (step.kind === "format") {
 					ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
 					stepReceipts.push({ id: step.id, kind: "format", status: "ok", elapsedMs: deps.now() - stepStart });
-				} else {
+				} else if (step.kind === "check") {
 					const checks: CheckReceipt[] = [];
 					const failures: string[] = [];
 					let stepPassed = true;
@@ -178,12 +178,15 @@ export async function runConverge(
 						elapsedMs: deps.now() - stepStart,
 						checks,
 					});
+				} else {
+					// An execution routine has no `routine` steps (those are a composition).
+					throw new Error(`runConverge cannot run a ${step.kind} step (${step.id})`);
 				}
 			} catch (e) {
 				runError = (e as Error).message;
 				stepReceipts.push({
 					id: step.id,
-					kind: step.kind,
+					kind: step.kind === "routine" ? "check" : step.kind,
 					...(step.kind === "call" && { participant: step.call }),
 					status: "failed",
 					elapsedMs: deps.now() - stepStart,

@@ -11,7 +11,6 @@ let dir: string;
 
 const GRILLER = {
 	id: "feature-griller",
-	policy: "one-shot",
 	description: "Question a feature idea.",
 	inputs: { idea: { type: "string" }, context: { type: "string", required: false } },
 	participants: { griller: { agent: "claude", instructions: "Read-only.", filesystem: "read-only" } },
@@ -24,7 +23,6 @@ const GRILLER = {
 
 const REVIEW = {
 	id: "impl-review",
-	policy: "converge",
 	inputs: { task: { type: "string" } },
 	participants: {
 		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
@@ -35,6 +33,7 @@ const REVIEW = {
 		{ id: "critique", call: "critic", prompt: "{{ steps.build.output }}" },
 		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
 	],
+	repeat: { until: "checks-pass", maxIterations: 3 },
 };
 
 beforeAll(() => {
@@ -72,23 +71,23 @@ function harness(over: { adapter?: Adapter; checkRunner?: CheckRunner; sandboxDi
 }
 
 describe("chit routines", () => {
-	test("lists both routines with their policies", async () => {
+	test("lists both routines with their derived kinds", async () => {
 		const { deps, out } = harness();
 		expect(await runCli(["routines"], deps)).toBe(0);
 		const text = out.join("\n");
 		expect(text).toContain("feature-griller");
-		expect(text).toContain("one-shot");
+		expect(text).toContain("text");
 		expect(text).toContain("impl-review");
-		expect(text).toContain("converge");
+		expect(text).toContain("loop");
 	});
 });
 
 describe("chit inspect", () => {
-	test("inspects a one-shot routine", async () => {
+	test("inspects a text routine", async () => {
 		const { deps, out } = harness();
 		expect(await runCli(["inspect", "feature-griller"], deps)).toBe(0);
 		const text = out.join("\n");
-		expect(text).toContain("feature-griller  (one-shot)");
+		expect(text).toContain("feature-griller  (text)");
 		expect(text).toContain("idea");
 		expect(text).toContain("call griller");
 	});

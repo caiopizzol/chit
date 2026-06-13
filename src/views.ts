@@ -6,7 +6,7 @@
 
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
-import type { Manifest } from "./manifest.ts";
+import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
 
@@ -20,7 +20,7 @@ function shortDigest(d: string): string {
 
 export interface RoutineListItem {
 	id: string;
-	policy: Manifest["policy"];
+	kind: string;
 	description?: string;
 }
 
@@ -28,7 +28,7 @@ export function formatRoutineList(items: RoutineListItem[]): string {
 	if (items.length === 0) return "No routines configured. Add some under `routines` in chit.config.json.";
 	const w = Math.max(...items.map((i) => i.id.length));
 	const lines = items.map(
-		(i) => `  ${pad(i.id, w)}  ${pad(i.policy, 9)}  ${i.description ?? ""}`.trimEnd(),
+		(i) => `  ${pad(i.id, w)}  ${pad(i.kind, 12)}  ${i.description ?? ""}`.trimEnd(),
 	);
 	return [`routines (${items.length}):`, ...lines].join("\n");
 }
@@ -36,7 +36,7 @@ export function formatRoutineList(items: RoutineListItem[]): string {
 export function formatInspect(routine: ResolvedRoutine): string {
 	const m = routine.manifest;
 	const out: string[] = [];
-	out.push(`${routine.id}  (${m.policy})`);
+	out.push(`${routine.id}  (${kindLabel(m)})`);
 	if (routine.description) out.push(routine.description);
 	out.push("");
 
@@ -54,15 +54,16 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		out.push("");
 	}
 
-	if (m.policy === "flow") {
+	if (isComposition(m)) {
 		out.push("steps:");
 		m.steps.forEach((s, i) => {
+			if (s.kind !== "routine") return;
 			const ins = Object.keys(s.inputs);
 			out.push(`  ${i + 1}. ${pad(s.id, 10)} -> ${pad(s.routine, 22)}${ins.length ? `inputs: ${ins.join(", ")}` : ""}`.trimEnd());
 		});
 		out.push("");
-		out.push("note: runs each routine in order, passing outputs forward. A terminal converge");
-		out.push("      step (if any) is sandboxed; --apply writes its result back.");
+		out.push("note: runs each routine in order, passing outputs forward. A terminal sandboxed");
+		out.push("      step (if any) writes only its own worktree; --apply writes the result back.");
 		out.push("");
 		out.push(`manifest: ${routine.manifestPath}`);
 		out.push(`digest:   ${shortDigest(routine.digest)}`);
@@ -70,14 +71,15 @@ export function formatInspect(routine: ResolvedRoutine): string {
 	}
 
 	const pnames = Object.keys(m.participants);
-	const pw = Math.max(...pnames.map((n) => n.length));
-	out.push("participants:");
-	for (const [id, p] of Object.entries(m.participants)) {
-		out.push(`  ${pad(id, pw)}  ${pad(p.agent, 8)}  filesystem: ${p.filesystem}`);
+	if (pnames.length > 0) {
+		const pw = Math.max(...pnames.map((n) => n.length));
+		out.push("participants:");
+		for (const [id, p] of Object.entries(m.participants)) {
+			out.push(`  ${pad(id, pw)}  ${pad(p.agent, 8)}  filesystem: ${p.filesystem}`);
+		}
+		out.push("");
 	}
-	out.push("");
 
-	// Both policies are ordered steps; checks are just a step kind.
 	out.push("steps:");
 	m.steps.forEach((s, i) => {
 		const what =
@@ -85,17 +87,22 @@ export function formatInspect(routine: ResolvedRoutine): string {
 				? `call ${s.call}`
 				: s.kind === "format"
 					? "format"
-					: `check: ${s.checks.map((c) => [c.command, ...c.args].join(" ")).join(", ")}`;
+					: s.kind === "check"
+						? `check: ${s.checks.map((c) => [c.command, ...c.args].join(" ")).join(", ")}`
+						: "routine";
 		out.push(`  ${i + 1}. ${pad(s.id, 10)} ${what}`);
 	});
-	if (m.policy === "one-shot") {
+
+	if (m.repeat !== undefined) {
+		const mi = routine.defaults?.maxIterations ?? m.repeat.maxIterations;
+		out.push(`loop:   repeat the steps until all checks pass${mi !== undefined ? `, max ${mi} iterations` : ""}`);
+	} else if (m.output !== undefined) {
 		out.push(`output: ${m.output}`);
-	} else {
-		const mi = routine.defaults?.maxIterations ?? m.maxIterations;
-		out.push(`loop:   repeat the steps until all check steps pass${mi !== undefined ? `, max ${mi} iterations` : ""}`);
+	}
+	if (isSandboxed(m)) {
 		out.push("");
-		out.push("note: `chit run` executes this live in a git-worktree sandbox -- dry run by default");
-		out.push("      (shows the diff, discards it); pass --apply to write a converged result back.");
+		out.push("note: runs in a git-worktree sandbox -- dry run by default (shows the diff,");
+		out.push("      discards it); pass --apply to write a result back to your tree.");
 	}
 	out.push("");
 	out.push(`manifest: ${routine.manifestPath}`);

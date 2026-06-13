@@ -4,7 +4,6 @@ import { validateInputs } from "./inputs.ts";
 
 const manifest = {
 	id: "griller",
-	policy: "one-shot",
 	inputs: {
 		idea: { type: "string", required: true },
 		context: { type: "string", required: false, description: "extra background" },

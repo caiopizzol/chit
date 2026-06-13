@@ -1,6 +1,5 @@
 {
 	"id": "feature-griller",
-	"policy": "one-shot",
 	"description": "Question a feature idea before implementation: surface the decisions and risks that should be settled first.",
 	"inputs": {
 		"idea": { "type": "string", "required": true, "description": "the feature idea to interrogate" },
