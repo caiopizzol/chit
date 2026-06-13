@@ -79,11 +79,18 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       claude-permission enforcement (plan/acceptEdits/none) vs the stronger worktree write-safety;
       noted the timeouts. 92 tests, typecheck clean.
 
-## Next: STRESS the loop, THEN compose (other model's sequence)
-- [ ] run implementation-review against a small REAL code change (observational; product quality
-      under realistic pressure is not yet proven -- only the mechanism is).
-- [ ] {{ diff }} prompt-budget: cap large diffs fed to review prompts (a "soon" risk).
-- [ ] THEN routine composition (grill -> plan -> implementation-review).
+## STRESS TEST PASSED — real source-editing converge
+- [x] implementation-review (diff-aware critic via {{ diff }}) vs a real task: builder created
+      src/greet.ts + src/greet.test.ts, critic reviewed the diff, real `bun run typecheck` AND
+      `bun test` passed in the sandbox, converged in 1 iteration (~2 min), origin untouched,
+      no leftover worktree. Receipt run-3562f9d0.
+- CAVEAT: it converged first-try, so a REAL multi-iteration fail->feedback->revise was not
+  exercised here (that path is proven only by the fake-backed converge tests). Critic took ~90s;
+  diff size will grow critic cost -- the {{ diff }} budget cap is still worth doing.
+
+## Next (loop is now stressed + safe)
+- [ ] {{ diff }} prompt-budget: cap/elide large diffs fed to review prompts.
+- [ ] routine composition (grill -> plan -> implementation-review)  <-- now unblocked.
 - deferred still: durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out.
 
 ## Not in scope (deferred on purpose)

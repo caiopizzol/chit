@@ -26,7 +26,7 @@
 		{
 			"id": "critique",
 			"call": "critic",
-			"prompt": "Review this work for the task \"{{ inputs.task }}\":\n\n{{ steps.build.output }}\n\nCall out correctness and scope problems. Be brief."
+			"prompt": "Review the current diff for the task \"{{ inputs.task }}\":\n\n{{ diff }}\n\nCall out correctness and scope problems. Be brief. Do not edit files."
 		},
 		{
 			"id": "verify",
