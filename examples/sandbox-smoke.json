@@ -1,0 +1,25 @@
+{
+	"id": "sandbox-smoke",
+	"policy": "converge",
+	"description": "Tiny real converge smoke: a builder creates a file, a check verifies it, in a sandbox.",
+	"inputs": {},
+	"participants": {
+		"builder": {
+			"agent": "claude",
+			"instructions": "You create or edit files to satisfy the task. Make the smallest possible change and stop.",
+			"filesystem": "read-write"
+		}
+	},
+	"steps": [
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Create a file named smoke.txt in the current working directory whose entire contents are exactly the single word:\nbanana\n(no other text, a single trailing newline is fine).\n\nThis is iteration {{ iteration }}. If the check failed last time, here is why:\n{{ steps.verify.output }}"
+		},
+		{
+			"id": "verify",
+			"check": [{ "command": "grep", "args": ["-qx", "banana", "smoke.txt"] }]
+		}
+	],
+	"maxIterations": 3
+}

@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
+import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
+import { fakeSandboxFactory } from "./sandbox.ts";
 
 let dir: string;
 
@@ -53,12 +55,14 @@ beforeAll(() => {
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-function harness(adapter: Adapter = fakeAdapter()) {
+function harness(over: { adapter?: Adapter; checkRunner?: CheckRunner; sandboxDiff?: string } = {}) {
 	const out: string[] = [];
 	const err: string[] = [];
 	const deps: CliDeps = {
 		cwd: dir,
-		adapter,
+		adapter: over.adapter ?? fakeAdapter(),
+		checkRunner: over.checkRunner ?? fakeCheckRunner(),
+		sandboxFactory: fakeSandboxFactory({ diff: over.sandboxDiff ?? "diff --git a/x b/x" }),
 		now: () => 0,
 		newRunId: () => "run-test",
 		out: (l) => out.push(l),
@@ -107,7 +111,7 @@ describe("chit inspect", () => {
 
 describe("chit run", () => {
 	test("runs a one-shot routine and prints output plus a run id", async () => {
-		const { deps, out } = harness(fakeAdapter((req) => `GRILLED:${req.prompt}`));
+		const { deps, out } = harness({ adapter: fakeAdapter((req) => `GRILLED:${req.prompt}`) });
 		expect(await runCli(["run", "feature-griller", "--input", "idea=dark mode"], deps)).toBe(0);
 		const text = out.join("\n");
 		expect(text).toContain("GRILLED:Idea: dark mode");
@@ -120,10 +124,19 @@ describe("chit run", () => {
 		expect(err.join("\n")).toMatch(/missing required input "idea"/);
 	});
 
-	test("refuses to live-run a converge routine (gated on write-safety)", async () => {
-		const { deps, err } = harness();
-		expect(await runCli(["run", "impl-review", "--input", "task=x"], deps)).toBe(1);
-		expect(err.join("\n")).toMatch(/gated until the write-safety slice/);
+	test("runs a converge routine in a sandbox as a dry run by default", async () => {
+		const { deps, out } = harness({ sandboxDiff: "diff --git a/x b/x\n+change" });
+		expect(await runCli(["run", "impl-review", "--input", "task=x"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("converge: converged");
+		expect(text).toContain("diff --git");
+		expect(text).toMatch(/dry run -- sandbox discarded/);
+	});
+
+	test("applies a converged converge run with --apply", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["run", "impl-review", "--input", "task=x", "--apply"], deps)).toBe(0);
+		expect(out.join("\n")).toMatch(/applied to/);
 	});
 
 	test("rejects a malformed --input", async () => {
@@ -135,7 +148,7 @@ describe("chit run", () => {
 
 describe("chit trace", () => {
 	test("traces a run after it has executed", async () => {
-		const run = harness(fakeAdapter(() => "report body"));
+		const run = harness({ adapter: fakeAdapter(() => "report body") });
 		await runCli(["run", "feature-griller", "--input", "idea=x"], run.deps);
 
 		const { deps, out } = harness();

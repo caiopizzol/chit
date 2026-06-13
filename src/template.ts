@@ -3,6 +3,7 @@
 //   {{ inputs.<name> }}        -- an operator-supplied input
 //   {{ steps.<id>.output }}    -- the output of a step
 //   {{ iteration }}            -- the converge loop iteration number (1-based)
+//   {{ diff }}                 -- the current sandbox diff during a converge loop
 // Anything else throws, so a typo surfaces as a clear error instead of leaking
 // an empty hole or an unrendered brace into a model prompt.
 //
@@ -22,6 +23,7 @@ export interface RenderContext {
 	inputs: Record<string, string>;
 	steps: Record<string, { output: string }>;
 	iteration?: number;
+	diff?: string;
 }
 
 const REF_RE = /\{\{\s*([^}]*?)\s*\}\}/g;
@@ -32,6 +34,10 @@ export function renderTemplate(template: string, ctx: RenderContext): string {
 		if (expr === "iteration") {
 			if (ctx.iteration === undefined) throw new TemplateError("{{ iteration }} is only valid inside a converge loop");
 			return String(ctx.iteration);
+		}
+		if (expr === "diff") {
+			if (ctx.diff === undefined) throw new TemplateError("{{ diff }} is only valid inside a converge loop with a diff provider");
+			return ctx.diff;
 		}
 		const parts = expr.split(".");
 		if (parts[0] === "inputs" && parts.length === 2 && parts[1]) {

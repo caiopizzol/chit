@@ -44,14 +44,21 @@ export function fakeAdapter(reply: (req: AdapterRequest) => string = () => "ok")
 
 // The real adapter. Composes instructions + prompt and pipes them to `claude -p`
 // (print mode: one non-interactive response, then exit), reading stdout as the
-// participant's output. Runs in the routine's cwd.
+// participant's output. Runs in the routine's cwd. For write-capable participants
+// we use acceptEdits, but live converge passes a sandbox cwd, never the caller cwd.
 export const claudeCliAdapter: Adapter = {
 	async call(req) {
 		if (req.agent !== "claude") {
 			throw new Error(`chit-minimal only wires the "claude" agent so far (got "${req.agent}")`);
 		}
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
-		const proc = Bun.spawn(["claude", "-p"], {
+		const args =
+			req.filesystem === "read-write"
+				? ["claude", "-p", "--permission-mode", "acceptEdits"]
+				: req.filesystem === "read-only"
+					? ["claude", "-p", "--permission-mode", "plan"]
+					: ["claude", "-p", "--tools", ""];
+		const proc = Bun.spawn(args, {
 			cwd: req.cwd,
 			stdin: new TextEncoder().encode(composed),
 			stdout: "pipe",

@@ -50,7 +50,14 @@ export interface ConvergeReceipt {
 	elapsedMs: number;
 	status: "converged" | "did-not-converge" | "failed";
 	iterations: IterationReceipt[];
+	sandbox?: SandboxReceipt;
 	error?: string;
+}
+
+export interface SandboxReceipt {
+	workDir: string;
+	status: string[];
+	diffStat?: string;
 }
 
 export interface ConvergeDeps {
@@ -61,6 +68,7 @@ export interface ConvergeDeps {
 	newRunId: () => string;
 	// Override for the manifest's maxIterations (e.g. a config default). Clamped.
 	maxIterations?: number;
+	diffProvider?: () => Promise<string> | string;
 }
 
 const DEFAULT_MAX_ITERATIONS = 5;
@@ -87,7 +95,7 @@ export async function runConverge(
 
 	// Persistent across iterations: every step id pre-seeded to "" so a
 	// cross-iteration reference renders empty on iteration 1 (a typo'd id still throws).
-	const ctx: { inputs: Record<string, string>; steps: Record<string, { output: string }>; iteration: number } = {
+	const ctx: { inputs: Record<string, string>; steps: Record<string, { output: string }>; iteration: number; diff?: string } = {
 		inputs: values,
 		steps: Object.fromEntries(manifest.steps.map((s) => [s.id, { output: "" }])),
 		iteration: 0,
@@ -105,6 +113,7 @@ export async function runConverge(
 		for (const step of manifest.steps) {
 			const stepStart = deps.now();
 			try {
+				if (deps.diffProvider !== undefined) ctx.diff = await deps.diffProvider();
 				if (step.kind === "call") {
 					const participant = manifest.participants[step.call];
 					if (participant === undefined) throw new Error(`participant ${step.call} vanished`);

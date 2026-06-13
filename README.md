@@ -44,9 +44,10 @@ deterministic and free.
 - **Loops are step-based, not fixed roles.** A converge routine is ordered steps (`call` /
   `format` / `check`); "build"/"critique" are step ids and "builder"/"critic" participant names.
   There is no built-in implementer/reviewer slot.
-- **Converge's loop is proven but not yet live.** The executor loops until checks pass, feeding
-  failing check output forward (proven under test, fake-backed). Live `chit run` is gated until a
-  write-safety slice, because a read-write step would edit your files unsandboxed.
+- **Converge runs live, inside a sandbox.** `chit run <converge>` creates a git-worktree copy,
+  runs read-write steps there, runs checks, and loops until they pass. It is a **dry run by
+  default** (show the diff, discard); pass `--apply` to write a converged result back. Your real
+  tree is never touched without `--apply`.
 - **Filesystem permissions are requested, not enforced.** A participant's `filesystem` is
   shown and passed to the adapter, but nothing sandboxes the model. A "read-only" routine is
   read-only because it was *instructed* to be, not because chit-minimal stops a write.
@@ -68,8 +69,10 @@ src/inputs.ts     validate operator inputs
 src/template.ts   {{ inputs.x }} / {{ steps.y.output }} rendering
 src/adapter.ts      the one model-call seam (fake for tests, claude CLI for real)
 src/check-runner.ts the check seam (fake for tests, real argv spawn)
+src/sandbox.ts      write-safety seam (fake for tests, real git worktree)
 src/run.ts          one-shot executor -> receipt (deterministic, no IO)
 src/converge.ts     converge loop executor -> iteration receipt (deterministic, no IO)
+src/converge-run.ts orchestrates a converge run in a sandbox (apply-on-confirm)
 src/store.ts        receipts on disk under .chit/runs (one-shot | converge)
 src/views.ts        routine list / inspect / trace rendering
 src/cli.ts          the four verbs

@@ -29,20 +29,23 @@ Proven by `converge.test.ts`: checks fail on iteration 1 -> failure fed forward 
 sees it on iteration 2 -> checks pass -> `converged`. Plus `did-not-converge` (bounded) and
 `failed` (a thrown call). All fake-backed, deterministic, no real calls.
 
-## The one slice still missing: write-safety, then live execution
+## Write-safety + live execution: DONE (increment 3)
 
-Live `chit run <converge>` still refuses, on purpose. A meaningful converge loop needs the
-build step to **edit files** (so checks change between iterations) - and a read-write step
-editing the real cwd in a loop, unsandboxed, is the exact thing prior reviews said not to do.
+Live `chit run <converge>` now runs, safely:
+1. **Sandbox** (`sandbox.ts`): a git worktree of the cwd (node_modules symlinked). Read-write steps
+   edit the copy; the original is never touched. `diff` / `apply` / `discard` via git.
+2. **Permission-aware adapter**: `claude -p --permission-mode acceptEdits` for read-write steps
+   (in the sandbox cwd), `plan` for read-only. A `{{ diff }}` template var + `diffProvider` give
+   review steps the real sandbox diff.
+3. **Apply-on-confirm** (`converge-run.ts`): dry run by default (show the diff, discard); `--apply`
+   writes a converged result back. A run that did not converge is never applied.
 
-Next slice:
-1. **Sandbox.** Run the loop in a throwaway copy / git worktree of the cwd, so the original is
-   never touched. Show the resulting diff at the end; apply only on explicit confirm.
-2. **A real editing adapter.** The current `claude -p` adapter does not grant edit permissions.
-   Real converge needs an adapter that can edit within the sandbox, plus a way to surface "what
-   changed" to the reviewer (a real diff, replacing the text-only `{{ steps.build.output }}` the
-   fake prototype reviews).
-3. Then lift the `cli.ts` converge gate.
+Proven by a real end-to-end smoke (`sandbox-smoke`): real claude created a file in the sandbox, a
+real `grep` check passed, the loop converged, the diff was shown, and the origin was left untouched.
 
-Until that lands, converge is fully **configurable and inspectable**, its loop logic is **proven**,
-but it does not run against your real files from the CLI.
+## The next slice: routine composition
+
+End-to-end orchestration is more than one loop: `grill -> plan -> implementation-review -> ...`.
+Today each routine is standalone. Next is letting one routine call another and pass artifacts
+forward. Everything after that (durable resume, live progress/pause, budgets/timeouts, richer
+evidence in receipts, parallel fan-out) is deliberately later - none of it blocks the single loop.

@@ -56,11 +56,25 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] example implementation-review.json rewritten step-based; inspect renders it.
 - [x] 77 tests pass, typecheck clean. Proven: fail -> feedback -> converge (converge.test.ts).
 
-## Gated on purpose (the next slice)
-- Live `chit run <converge>` still REFUSES: a read-write step edits files unsandboxed. The
-  write-safety slice (run in a temp copy / git worktree, then show/apply the diff) is next,
-  plus a real claude adapter that can actually edit under that sandbox.
-- `--full` trace flag: decide receipt storage policy first.
+## Increment 3 COMPLETE — write-safe live converge (the real end-to-end loop)
+- [x] Sandbox seam (sandbox.ts): fakeSandbox + gitWorktreeSandboxFactory (real git worktree,
+      node_modules symlinked, diff/apply/discard). Tested against a throwaway git repo.
+- [x] runConvergeInSandbox (converge-run.ts): create sandbox -> run loop with cwd=sandbox ->
+      show diff -> apply ONLY if converged AND --apply, else discard. Always tears down. Tested with fakes.
+- [x] adapter is permission-aware (acceptEdits / plan / none) and runs in the sandbox cwd.
+- [x] {{ diff }} template var + diffProvider thread the live sandbox diff to review steps.
+- [x] CLI: `chit run <converge>` runs live; DRY-RUN by default (discard), `--apply` writes back.
+- [x] trace shows iterations, per-check results, and the diffstat.
+- [x] REAL end-to-end smoke PASSED: `chit run sandbox-smoke` -> real claude created smoke.txt in a
+      git-worktree sandbox -> real `grep` check passed -> converged 1 iter -> diff shown -> dry-run
+      discarded -> origin untouched, no leftover worktree, receipt run-12c4ae18 traces correctly.
+- [x] 87 tests pass, typecheck clean.
+
+## Still deferred (NOT in the smallest-loop scope; see other-model points 4,5,8,9,10)
+- routine composition (grill -> plan -> implementation-review)   <-- the recommended NEXT slice
+- durable in-progress state / resume; live progress + pause/stop
+- per-call timeout / cost + wall-time budgets; richer evidence in receipts
+- `--full` trace flag (decide receipt body-storage policy first)
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, converge execution, config editor, multi-provider adapters,

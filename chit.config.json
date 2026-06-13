@@ -12,6 +12,10 @@
 			"manifestPath": "examples/implementation-review.json",
 			"description": "Implement, review, and verify a code slice.",
 			"defaults": { "maxIterations": 3 }
+		},
+		"sandbox-smoke": {
+			"manifestPath": "examples/sandbox-smoke.json",
+			"description": "Tiny real converge smoke (creates smoke.txt in a sandbox)."
 		}
 	}
 }

@@ -1,0 +1,100 @@
+import { describe, expect, test } from "bun:test";
+import { type Adapter, fakeAdapter } from "./adapter.ts";
+import { fakeCheckRunner } from "./check-runner.ts";
+import { type ConvergeRunDeps, runConvergeInSandbox } from "./converge-run.ts";
+import { parseManifest } from "./manifest.ts";
+import type { ResolvedRoutine } from "./routine.ts";
+import { type FakeSandbox, fakeSandbox } from "./sandbox.ts";
+
+const CONVERGE = {
+	id: "impl-review",
+	policy: "converge",
+	inputs: { task: { type: "string" } },
+	participants: {
+		builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
+		critic: { agent: "claude", instructions: "Review {{ diff }}.", filesystem: "read-only" },
+	},
+	steps: [
+		{ id: "build", call: "builder", prompt: "{{ inputs.task }} {{ iteration }}" },
+		{ id: "critique", call: "critic", prompt: "Review this diff:\n{{ diff }}" },
+		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+	],
+	maxIterations: 2,
+};
+
+function routineFrom(raw: unknown): ResolvedRoutine {
+	const manifest = parseManifest(raw, "m.json");
+	return { id: (raw as { id: string }).id, manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:test" };
+}
+
+function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {}) {
+	let sandbox: FakeSandbox | undefined;
+	const adapter = over.adapter ?? fakeAdapter((req) => `${req.agent}|${req.prompt}`);
+	let t = 0;
+	const deps: ConvergeRunDeps = {
+		sandboxFactory: {
+			async create() {
+				sandbox = fakeSandbox({ workDir: "/sandbox", diff: over.sandboxDiff ?? "diff body" });
+				return sandbox;
+			},
+		},
+		adapter,
+		checkRunner: over.checkRunner ?? fakeCheckRunner(),
+		cwd: "/origin",
+		now: () => ++t,
+		newRunId: () => "run-s",
+		apply: over.apply ?? false,
+	};
+	return { deps, adapter: adapter as ReturnType<typeof fakeAdapter>, sandbox: () => sandbox };
+}
+
+describe("runConvergeInSandbox", () => {
+	test("runs the loop in the sandbox workDir, not the origin", async () => {
+		const h = harness();
+		await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(h.adapter.calls.every((c) => c.cwd === "/sandbox")).toBe(true);
+	});
+
+	test("dry-run by default: converges, shows the diff, does NOT apply, always discards", async () => {
+		const h = harness({ apply: false });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("converged");
+		expect(res.diff).toBe("diff body");
+		expect(res.applied).toBe(false);
+		expect(h.sandbox()?.applied).toBe(false);
+		expect(h.sandbox()?.discarded).toBe(true);
+		expect(res.receipt.sandbox?.workDir).toBe("/sandbox");
+	});
+
+	test("applies on confirm when the run converged", async () => {
+		const h = harness({ apply: true });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.applied).toBe(true);
+		expect(h.sandbox()?.applied).toBe(true);
+		expect(h.sandbox()?.discarded).toBe(true);
+	});
+
+	test("never applies a run that did not converge, even with apply=true", async () => {
+		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "fail" }));
+		const h = harness({ apply: true, checkRunner });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("did-not-converge");
+		expect(res.applied).toBe(false);
+		expect(h.sandbox()?.applied).toBe(false);
+		expect(h.sandbox()?.discarded).toBe(true);
+	});
+
+	test("discards the sandbox even when the loop throws", async () => {
+		const adapter: Adapter = {
+			async call() {
+				throw new Error("boom");
+			},
+		};
+		const h = harness({ adapter });
+		// a thrown adapter is captured as a failed run, not a thrown orchestration
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("failed");
+		expect(h.sandbox()?.discarded).toBe(true);
+		expect(h.sandbox()?.applied).toBe(false);
+	});
+});

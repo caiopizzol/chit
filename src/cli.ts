@@ -7,16 +7,22 @@
 // real model calls in tests.
 
 import type { Adapter } from "./adapter.ts";
+import type { CheckRunner } from "./check-runner.ts";
+import { runConvergeInSandbox } from "./converge-run.ts";
 import { loadConfig } from "./config.ts";
 import { validateInputs } from "./inputs.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
+import type { SandboxFactory } from "./sandbox.ts";
 import { saveReceipt, loadReceipt } from "./store.ts";
 import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } from "./views.ts";
 
 export interface CliDeps {
 	cwd: string;
 	adapter: Adapter;
+	// For converge: the check seam and the write-safety sandbox.
+	checkRunner: CheckRunner;
+	sandboxFactory: SandboxFactory;
 	now: () => number;
 	newRunId: () => string;
 	out: (line: string) => void;
@@ -30,36 +36,46 @@ const USAGE = `chit -- run declared routines
   chit run <routine> [opts]           run a routine and print its output
       --input <name>=<value>          supply an input (repeatable)
       --scope <name>                  name the run's scope (session grouping)
+      --apply                         (converge) apply the result to your tree; default is a dry run
   chit trace <run-id>                 show the receipt for a past run
 
 A routine is a declared workflow. Its manifest is the source of truth for inputs,
 participants, steps, and policy; config only names it.`;
 
-function parseRunArgs(rest: string[]): { id?: string; inputs: Record<string, string>; scope?: string; error?: string } {
+function parseRunArgs(rest: string[]): {
+	id?: string;
+	inputs: Record<string, string>;
+	scope?: string;
+	apply: boolean;
+	error?: string;
+} {
 	const inputs: Record<string, string> = {};
 	let id: string | undefined;
 	let scope: string | undefined;
+	let apply = false;
 	for (let i = 0; i < rest.length; i++) {
 		const a = rest[i];
 		if (a === "--input") {
 			const pair = rest[++i];
 			if (pair === undefined || !pair.includes("=")) {
-				return { id, inputs, error: "--input expects <name>=<value>" };
+				return { id, inputs, apply, error: "--input expects <name>=<value>" };
 			}
 			const eq = pair.indexOf("=");
 			inputs[pair.slice(0, eq)] = pair.slice(eq + 1);
 		} else if (a === "--scope") {
 			scope = rest[++i];
-			if (scope === undefined) return { id, inputs, error: "--scope expects a value" };
+			if (scope === undefined) return { id, inputs, apply, error: "--scope expects a value" };
+		} else if (a === "--apply") {
+			apply = true;
 		} else if (a?.startsWith("--")) {
-			return { id, inputs, error: `unknown option ${a}` };
+			return { id, inputs, apply, error: `unknown option ${a}` };
 		} else if (id === undefined) {
 			id = a;
 		} else {
-			return { id, inputs, error: `unexpected argument ${JSON.stringify(a)}` };
+			return { id, inputs, apply, error: `unexpected argument ${JSON.stringify(a)}` };
 		}
 	}
-	return { id, inputs, ...(scope !== undefined && { scope }) };
+	return { id, inputs, apply, ...(scope !== undefined && { scope }) };
 }
 
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
@@ -107,13 +123,38 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return 1;
 			}
 
-			if (routine.manifest.policy !== "one-shot") {
-				// The step-based converge executor exists and is proven under test, but the
-				// live CLI does not run it yet: a read-write step edits files unsandboxed, and
-				// that write-safety slice is deliberately next. `inspect` shows the loop.
-				deps.err(
-					`routine ${JSON.stringify(args.id)} is converge. Its executor works (see tests), but live \`chit run\` is gated until the write-safety slice. Try \`chit inspect ${args.id}\`.`,
+			if (routine.manifest.policy === "converge") {
+				// Real converge runs inside a sandbox (a git worktree); read-write steps edit
+				// the copy, not your tree. Default is a dry run: show the diff, discard it.
+				// `--apply` writes a converged result back.
+				const result = await runConvergeInSandbox(
+					routine,
+					validation.values,
+					{
+						sandboxFactory: deps.sandboxFactory,
+						adapter: deps.adapter,
+						checkRunner: deps.checkRunner,
+						cwd: deps.cwd,
+						now: deps.now,
+						newRunId: deps.newRunId,
+						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
+						apply: args.apply,
+					},
+					args.scope !== undefined ? { scope: args.scope } : {},
 				);
+				saveReceipt(deps.cwd, result.receipt);
+				const r = result.receipt;
+				deps.out(`converge: ${r.status} after ${r.iterations.length} iteration(s)`);
+				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
+				if (r.status === "converged") {
+					deps.out(
+						result.applied
+							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
+							: `\ndry run -- sandbox discarded. re-run with --apply to keep these changes.  run ${r.runId}`,
+					);
+					return 0;
+				}
+				deps.err(`\nrun ${r.runId} ${r.status}${r.error ? `: ${r.error}` : ""}`);
 				return 1;
 			}
 

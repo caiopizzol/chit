@@ -109,6 +109,10 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt): string {
 				if (s.error) out.push(`      error: ${s.error}`);
 			}
 		}
+		if (r.sandbox?.diffStat) {
+			out.push("changes:");
+			for (const line of r.sandbox.diffStat.split("\n")) out.push(`  ${line}`);
+		}
 		if (r.status === "failed") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
 	}
