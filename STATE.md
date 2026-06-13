@@ -152,10 +152,23 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       sandbox; dry-run discarded; origin clean; no leftover worktree.
 - known edge: force-killing a sandboxed run mid-flight skips its worktree cleanup (leak); add a guard.
 
+## Increment 9 — operator control, step 1: live progress + cleanup
+- [x] live progress: executors emit step/iteration/check/sub-routine events through an optional
+      onProgress sink; the bin streams them to stderr as they happen (result stays on stdout).
+      Verified on a real run (creating sandbox -> iteration 1 -> call builder -> check ... -> ok).
+- [x] `chit cleanup`: reapStaleSandboxes removes sandbox worktrees left by an interrupted run
+      (force-kill skips finally-discard). Tested (real git) + CLI. 112 tests, typecheck clean.
+
+## NEXT: configurable limits (agreed model -- high default, NOT unlimited)
+- per-routine `limits` { callTimeoutMinutes, runTimeoutMinutes } with explicit "none" opt-out,
+  high defaults (e.g. 30m call / 120m run), separate call vs whole-run timeout, always keep
+  maxIterations. Unlimited-without-visibility is the pain we're solving; now that progress +
+  cleanup exist, a higher/explicit timeout is safe. (Currently: hidden 10m per-call constant.)
+- then: cancel (Ctrl-C -> discard sandbox cleanly, signal-aware), cost/token budget.
+
 ## Deferred still
-durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out,
-nested composition / multiple sandboxed steps (the shared-flow-sandbox model), `repeat.from`.
-NEXT high-value: live progress/streaming (the ~13-min blind wait on a real flow is the clearest pain).
+durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed
+steps (shared-flow-sandbox), `repeat.from`.
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,
