@@ -20,6 +20,10 @@
 		"forced-revise": {
 			"manifestPath": "examples/forced-revise.json",
 			"description": "Forces a real multi-iteration recovery (learn-from-failing-check)."
+		},
+		"feature-flow": {
+			"manifestPath": "examples/feature-flow.json",
+			"description": "Composed: grill -> plan -> implementation-review."
 		}
 	}
 }

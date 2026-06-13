@@ -10,7 +10,7 @@
 //                participant names, nothing more. Roles are examples, not runtime.
 
 export type Filesystem = "read-only" | "read-write" | "none";
-export type Policy = "one-shot" | "converge";
+export type Policy = "one-shot" | "converge" | "flow";
 
 const FILESYSTEMS = new Set<Filesystem>(["read-only", "read-write", "none"]);
 
@@ -79,7 +79,26 @@ export interface ConvergeManifest {
 	maxIterations?: number;
 }
 
-export type Manifest = OneShotManifest | ConvergeManifest;
+// A flow composes OTHER routines: each step invokes a configured routine, mapping
+// the flow's inputs and earlier steps' outputs into that routine's inputs. A flow
+// has no participants of its own. The referenced routine ids, the no-cycles rule,
+// and the "at most one converge step, and it must be last" rule are config-aware,
+// so they are checked at RESOLVE time, not in this pure parse.
+export interface FlowStep {
+	id: string;
+	routine: string;
+	inputs: Record<string, string>;
+}
+
+export interface FlowManifest {
+	id: string;
+	description?: string;
+	policy: "flow";
+	inputs: Record<string, InputSpec>;
+	steps: FlowStep[];
+}
+
+export type Manifest = OneShotManifest | ConvergeManifest | FlowManifest;
 
 export class ManifestError extends Error {
 	constructor(
@@ -222,19 +241,59 @@ function parseSteps(
 	return out;
 }
 
+function parseFlowSteps(raw: unknown, source: string): FlowStep[] {
+	if (!Array.isArray(raw)) throw new ManifestError(source, "`steps` must be an array");
+	if (raw.length === 0) throw new ManifestError(source, "`steps` must not be empty");
+	const out: FlowStep[] = [];
+	const seen = new Set<string>();
+	for (const [i, s] of raw.entries()) {
+		const where = `${source}.steps[${i}]`;
+		if (!isObject(s)) throw new ManifestError(where, "must be an object");
+		if (typeof s.id !== "string" || !s.id) throw new ManifestError(where, "`id` must be a non-empty string");
+		if (seen.has(s.id)) throw new ManifestError(where, `duplicate step id "${s.id}"`);
+		seen.add(s.id);
+		requireKeys(s, new Set(["id", "routine", "inputs"]), where);
+		if (typeof s.routine !== "string" || !s.routine) {
+			throw new ManifestError(where, "`routine` must be a non-empty routine id");
+		}
+		const inputs: Record<string, string> = {};
+		if (s.inputs !== undefined) {
+			if (!isObject(s.inputs)) throw new ManifestError(`${where}.inputs`, "must be an object");
+			for (const [k, v] of Object.entries(s.inputs)) {
+				if (typeof v !== "string") throw new ManifestError(`${where}.inputs.${k}`, "must be a string template");
+				inputs[k] = v;
+			}
+		}
+		out.push({ id: s.id, routine: s.routine, inputs });
+	}
+	return out;
+}
+
 export function parseManifest(raw: unknown, source: string): Manifest {
 	if (!isObject(raw)) throw new ManifestError(source, "manifest must be an object");
 	if (typeof raw.id !== "string" || !raw.id) {
 		throw new ManifestError(source, "`id` must be a non-empty string");
 	}
-	if (raw.policy !== "one-shot" && raw.policy !== "converge") {
-		throw new ManifestError(source, '`policy` must be "one-shot" or "converge"');
+	if (raw.policy !== "one-shot" && raw.policy !== "converge" && raw.policy !== "flow") {
+		throw new ManifestError(source, '`policy` must be "one-shot", "converge", or "flow"');
 	}
 	if (raw.description !== undefined && typeof raw.description !== "string") {
 		throw new ManifestError(source, "`description` must be a string");
 	}
 	const description = typeof raw.description === "string" ? raw.description : undefined;
 	const inputs = parseInputs(raw.inputs, source);
+
+	if (raw.policy === "flow") {
+		requireKeys(raw, new Set(["id", "policy", "description", "inputs", "steps"]), source);
+		return {
+			id: raw.id,
+			...(description !== undefined && { description }),
+			policy: "flow",
+			inputs,
+			steps: parseFlowSteps(raw.steps, source),
+		};
+	}
+
 	const participants = parseParticipants(raw.participants, source);
 
 	if (raw.policy === "one-shot") {

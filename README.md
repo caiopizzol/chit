@@ -31,7 +31,7 @@ bun run src/index.ts routines
 bun run src/index.ts inspect feature-griller
 bun run src/index.ts run feature-griller --input idea="add dark mode"
 bun run src/index.ts trace <run-id>
-bun test                          # 92 tests, no real model calls (fake adapter)
+bun test                          # fast, all fake-backed (no real model calls)
 ```
 
 `run` executes for real by shelling out to the `claude` CLI (already on your

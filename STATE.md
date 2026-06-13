@@ -12,9 +12,9 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - **Manifest is the source of truth** for inputs, participants, steps, policy, prompts, checks.
   **Config only names routines** and points at a manifest. Inputs are never duplicated into config.
 - **one-shot vs converge are execution policies**, not separate user-facing product families.
-- **Execution boundary**: one-shot runs for real via a thin adapter that shells out to the `claude`
-  CLI (already installed; no new secrets, no HTTP). Converge is inspectable; its *execution* is
-  deferred (the hardened loop/digest/drift machinery is NOT reimplemented here).
+- **Execution boundary**: one-shot AND converge both run for real via a thin `claude` CLI adapter
+  (no secrets, no HTTP). Converge edits inside a disposable git worktree (dry-run by default,
+  `--apply` to write back); the hardened digest/drift machinery is NOT reimplemented here.
 - Adapter is an injectable interface so the run flow is testable with a fake (no real model calls in tests).
 
 ## Public surface
@@ -99,11 +99,24 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       Closes the "revise-after-failed-checks not field-tested" gap.
 - [x] 94 tests, typecheck clean.
 
-## Next: routine composition (now genuinely unblocked)
-- one routine calls/feeds another: grill -> plan -> implementation-review, passing outputs
-  forward, with a chained receipt. Design first (config/manifest shape, output passing, receipts),
-  then build. See the proposed design before coding.
-- deferred still: durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out.
+## Increment 6 COMPLETE — routine composition (flows), Option-1 contract
+- [x] `policy: "flow"`: steps invoke OTHER routines, mapping inputs/outputs via the existing
+      templating. Structural parse only; graph checks are config-aware (resolveFlow). flow.ts.
+- [x] Option-1 contract enforced at resolve: sub-routines are one-shot|converge (no nested flows
+      -> no cycles); at most one converge step and it MUST be last; one-shot steps must be
+      READ-ONLY (they run in the caller cwd unsandboxed -- the terminal converge is the only writer).
+- [x] runFlow: runs each sub-routine in order, passes outputs forward, chains receipts. The terminal
+      converge inherits dry-run-by-default + --apply. Fake-backed, tested (output passing, terminal
+      diff/apply, failure propagation, invalid mapped inputs).
+- [x] FlowReceipt is body-free (step/sub-run ids, statuses); one-shot SUB-receipts still hold their
+      output bodies (documented -- the honest version of "body-free").
+- [x] store/views/cli handle the third receipt shape; inspect shows the routine chain; trace shows it.
+- [x] example feature-flow = grill -> plan -> implementation-review. 105 tests, typecheck clean.
+- [ ] real end-to-end smoke (grill -> plan -> impl) PENDING in this turn.
+
+## Deferred still
+durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out,
+nested flows / multiple converge steps (the shared-flow-sandbox model).
 
 ## Not in scope (deferred on purpose)
 Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,

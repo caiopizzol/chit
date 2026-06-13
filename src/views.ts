@@ -5,6 +5,7 @@
 // happened" from here, the product model is working.
 
 import type { ConvergeReceipt } from "./converge.ts";
+import type { FlowReceipt } from "./flow.ts";
 import type { Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
@@ -53,6 +54,21 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		out.push("");
 	}
 
+	if (m.policy === "flow") {
+		out.push("steps:");
+		m.steps.forEach((s, i) => {
+			const ins = Object.keys(s.inputs);
+			out.push(`  ${i + 1}. ${pad(s.id, 10)} -> ${pad(s.routine, 22)}${ins.length ? `inputs: ${ins.join(", ")}` : ""}`.trimEnd());
+		});
+		out.push("");
+		out.push("note: runs each routine in order, passing outputs forward. A terminal converge");
+		out.push("      step (if any) is sandboxed; --apply writes its result back.");
+		out.push("");
+		out.push(`manifest: ${routine.manifestPath}`);
+		out.push(`digest:   ${shortDigest(routine.digest)}`);
+		return out.join("\n");
+	}
+
 	const pnames = Object.keys(m.participants);
 	const pw = Math.max(...pnames.map((n) => n.length));
 	out.push("participants:");
@@ -87,13 +103,24 @@ export function formatInspect(routine: ResolvedRoutine): string {
 	return out.join("\n");
 }
 
-export function formatTrace(r: RunReceipt | ConvergeReceipt): string {
+export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): string {
 	const out: string[] = [];
 	out.push(`${r.runId}  ${r.routineId}  ${r.status}`);
 	if (r.scope) out.push(`scope:    ${r.scope}`);
 	out.push(`elapsed:  ${r.elapsedMs}ms`);
 	out.push(`digest:   ${shortDigest(r.digest)}`);
 	const inputKeys = Object.keys(r.inputs);
+
+	if (r.policy === "flow") {
+		out.push(`inputs:   ${inputKeys.length > 0 ? inputKeys.join(", ") : "none"}`);
+		out.push("steps:");
+		const w = Math.max(1, ...r.steps.map((s) => s.id.length));
+		for (const s of r.steps) {
+			out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${s.elapsedMs}ms  ${s.subRunId || "-"}`);
+		}
+		if (r.status === "failed") out.push(`error:    ${r.error ?? "(unknown)"}`);
+		return out.join("\n");
+	}
 	out.push(`inputs:   ${inputKeys.length > 0 ? inputKeys.join(", ") : "none"}`);
 
 	if (r.policy === "converge") {

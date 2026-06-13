@@ -10,6 +10,7 @@ import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { loadConfig } from "./config.ts";
+import { resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
@@ -121,6 +122,54 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			if (!validation.ok) {
 				for (const e of validation.errors) deps.err(`input error: ${e}`);
 				return 1;
+			}
+
+			if (routine.manifest.policy === "flow") {
+				let resolvedFlow: ReturnType<typeof resolveFlow>;
+				try {
+					resolvedFlow = resolveFlow(routine, (id) => resolveRoutine(config, id, deps.cwd));
+				} catch (e) {
+					return fail(deps, (e as Error).message);
+				}
+				const result = await runFlow(
+					resolvedFlow,
+					validation.values,
+					{
+						adapter: deps.adapter,
+						checkRunner: deps.checkRunner,
+						sandboxFactory: deps.sandboxFactory,
+						cwd: deps.cwd,
+						now: deps.now,
+						newRunId: deps.newRunId,
+						maxWallMs: 30 * 60_000,
+						apply: args.apply,
+					},
+					args.scope !== undefined ? { scope: args.scope } : {},
+				);
+				saveReceipt(deps.cwd, result.receipt);
+				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
+				const r = result.receipt;
+				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
+				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.routine}: ${s.status}`);
+				if (r.status === "failed") {
+					deps.err(`\nrun ${r.runId} failed: ${r.error ?? "(unknown)"}`);
+					return 1;
+				}
+				if (result.terminalDiff !== undefined) {
+					deps.out(result.terminalDiff.trim() ? `\n${result.terminalDiff}` : "\n(no changes produced)");
+					deps.out(
+						result.applied
+							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
+							: `\ndry run -- sandbox discarded. re-run with --apply to keep these changes.  run ${r.runId}`,
+					);
+					return 0;
+				}
+				const lastSub = result.subReceipts.at(-1);
+				if (lastSub !== undefined && "output" in lastSub && lastSub.output !== undefined) {
+					deps.out(`\n${lastSub.output}`);
+				}
+				deps.out(`\nrun ${r.runId}  (chit trace ${r.runId})`);
+				return 0;
 			}
 
 			if (routine.manifest.policy === "converge") {

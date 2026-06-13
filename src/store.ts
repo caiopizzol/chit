@@ -8,10 +8,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConvergeReceipt } from "./converge.ts";
+import type { FlowReceipt } from "./flow.ts";
 import type { RunReceipt } from "./run.ts";
 
-// A stored receipt is either policy's shape; `policy` discriminates them.
-export type AnyReceipt = RunReceipt | ConvergeReceipt;
+// A stored receipt is one of the three policy shapes; `policy` discriminates them.
+export type AnyReceipt = RunReceipt | ConvergeReceipt | FlowReceipt;
 
 export function runsDir(cwd: string): string {
 	return join(cwd, ".chit", "runs");
