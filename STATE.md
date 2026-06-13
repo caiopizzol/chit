@@ -88,11 +88,25 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
   exercised here (that path is proven only by the fake-backed converge tests). Critic took ~90s;
   diff size will grow critic cost -- the {{ diff }} budget cap is still worth doing.
 
-## Next (loop is now stressed + safe)
-- [ ] {{ diff }} prompt-budget: cap/elide large diffs fed to review prompts.
-- [ ] routine composition (grill -> plan -> implementation-review)  <-- now unblocked.
+## Increment 5 COMPLETE — honest + bounded single loop
+- [x] fixed stale wording: inspect note (was "gated", now describes live sandbox + dry-run),
+      README test count (62 -> 92), STATE "Not in scope" (dropped converge execution; corrected
+      the filesystem-permission wording).
+- [x] {{ diff }} prompt-budget cap (capDiffForPrompt, 20k chars + truncation note); tested.
+- [x] REAL multi-iteration recovery field-tested: `forced-revise` -> builder cannot guess the
+      required content, check fails iteration 1, learns it from the failing check, fixes it,
+      converges iteration 2. Receipt run-e151ed72 (iter1 check fail, iter2 check ok). Origin clean.
+      Closes the "revise-after-failed-checks not field-tested" gap.
+- [x] 94 tests, typecheck clean.
+
+## Next: routine composition (now genuinely unblocked)
+- one routine calls/feeds another: grill -> plan -> implementation-review, passing outputs
+  forward, with a chained receipt. Design first (config/manifest shape, output passing, receipts),
+  then build. See the proposed design before coding.
 - deferred still: durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out.
 
 ## Not in scope (deferred on purpose)
-Studio, MCP, plan/batch, converge execution, config editor, multi-provider adapters,
-filesystem-permission enforcement (shown + passed to adapter, not enforced yet).
+Studio, MCP, plan/batch, a config editor, multi-provider adapters, routine composition,
+durable resume, live progress. (Per-participant `filesystem` maps to a claude permission
+mode -- claude-level, not an OS sandbox; converge WRITE safety is enforced by the
+disposable git worktree.)

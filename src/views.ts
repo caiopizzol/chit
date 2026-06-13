@@ -78,8 +78,8 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		const mi = routine.defaults?.maxIterations ?? m.maxIterations;
 		out.push(`loop:   repeat the steps until all check steps pass${mi !== undefined ? `, max ${mi} iterations` : ""}`);
 		out.push("");
-		out.push("note: converge has a working step-based executor (proven under test); live `chit run`");
-		out.push("      is gated until a write-safety slice lands (a read-write step edits files unsandboxed).");
+		out.push("note: `chit run` executes this live in a git-worktree sandbox -- dry run by default");
+		out.push("      (shows the diff, discards it); pass --apply to write a converged result back.");
 	}
 	out.push("");
 	out.push(`manifest: ${routine.manifestPath}`);

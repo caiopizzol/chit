@@ -16,6 +16,10 @@
 		"sandbox-smoke": {
 			"manifestPath": "examples/sandbox-smoke.json",
 			"description": "Tiny real converge smoke (creates smoke.txt in a sandbox)."
+		},
+		"forced-revise": {
+			"manifestPath": "examples/forced-revise.json",
+			"description": "Forces a real multi-iteration recovery (learn-from-failing-check)."
 		}
 	}
 }

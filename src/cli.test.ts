@@ -93,13 +93,13 @@ describe("chit inspect", () => {
 		expect(text).toContain("call griller");
 	});
 
-	test("inspects a converge routine as ordered steps and notes execution is gated", async () => {
+	test("inspects a converge routine as ordered steps and notes live sandboxed execution", async () => {
 		const { deps, out } = harness();
 		expect(await runCli(["inspect", "impl-review"], deps)).toBe(0);
 		const text = out.join("\n");
 		expect(text).toContain("call builder");
 		expect(text).toContain("check: bun test");
-		expect(text).toMatch(/working step-based executor/);
+		expect(text).toMatch(/git-worktree sandbox/);
 	});
 
 	test("refuses an unknown routine with a helpful error", async () => {

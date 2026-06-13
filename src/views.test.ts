@@ -82,14 +82,14 @@ describe("formatInspect", () => {
 		expect(out).toContain("sha256:aaaaaaaaaaaa");
 	});
 
-	test("converge: shows steps (including checks) and the gated-execution note, no fixed roles", () => {
+	test("converge: shows steps (including checks) and the live-sandbox note, no fixed roles", () => {
 		const out = formatInspect(routineFrom(CONVERGE));
 		expect(out).toContain("impl-review  (converge)");
 		expect(out).toContain("call builder");
 		expect(out).toContain("call critic");
 		expect(out).toContain("check: bun test");
 		expect(out).toContain("max 3 iterations");
-		expect(out).toMatch(/working step-based executor/);
+		expect(out).toMatch(/git-worktree sandbox/);
 		expect(out).not.toContain("implementer=");
 	});
 

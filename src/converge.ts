@@ -77,6 +77,17 @@ export interface ConvergeDeps {
 const DEFAULT_MAX_ITERATIONS = 5;
 const ITERATION_CEILING = 20;
 
+// The sandbox diff is fed into review prompts via {{ diff }}. A large diff is a
+// prompt-budget (token + latency) risk, so cap what reaches the model. The full
+// diff is still shown to the operator and stored in the diffstat; only the prompt
+// copy is bounded.
+export const MAX_DIFF_PROMPT_CHARS = 20_000;
+
+export function capDiffForPrompt(diff: string): string {
+	if (diff.length <= MAX_DIFF_PROMPT_CHARS) return diff;
+	return `${diff.slice(0, MAX_DIFF_PROMPT_CHARS)}\n... [diff truncated for prompt budget: ${diff.length} chars total]`;
+}
+
 export function effectiveMaxIterations(manifest: ConvergeManifest, override?: number): number {
 	const chosen = override ?? manifest.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 	return Math.max(1, Math.min(ITERATION_CEILING, chosen));
@@ -120,7 +131,7 @@ export async function runConverge(
 		for (const step of manifest.steps) {
 			const stepStart = deps.now();
 			try {
-				if (deps.diffProvider !== undefined) ctx.diff = await deps.diffProvider();
+				if (deps.diffProvider !== undefined) ctx.diff = capDiffForPrompt(await deps.diffProvider());
 				if (step.kind === "call") {
 					const participant = manifest.participants[step.call];
 					if (participant === undefined) throw new Error(`participant ${step.call} vanished`);

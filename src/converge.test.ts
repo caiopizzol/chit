@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { fakeCheckRunner } from "./check-runner.ts";
-import { type ConvergeDeps, effectiveMaxIterations, runConverge } from "./converge.ts";
+import {
+	capDiffForPrompt,
+	type ConvergeDeps,
+	effectiveMaxIterations,
+	MAX_DIFF_PROMPT_CHARS,
+	runConverge,
+} from "./converge.ts";
 import { type ConvergeManifest, parseManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 
@@ -125,6 +131,34 @@ describe("runConverge", () => {
 		expect(r.status).toBe("failed");
 		expect(r.error).toMatch(/exceeded max wall-time/);
 		expect(r.iterations.length).toBeLessThan(10);
+	});
+});
+
+describe("diff prompt budget", () => {
+	test("capDiffForPrompt passes small diffs through and bounds large ones", () => {
+		expect(capDiffForPrompt("small diff")).toBe("small diff");
+		const big = "y".repeat(MAX_DIFF_PROMPT_CHARS * 2);
+		const capped = capDiffForPrompt(big);
+		// the contract is a BOUNDED output (~limit + a short note), not merely shorter
+		expect(capped.length).toBeLessThan(big.length);
+		expect(capped.length).toBeLessThanOrEqual(MAX_DIFF_PROMPT_CHARS + 100);
+		expect(capped).toMatch(/diff truncated for prompt budget/);
+	});
+
+	test("a large {{ diff }} reaches the model capped, not whole", async () => {
+		const routine = routineFrom({
+			...CONVERGE,
+			steps: [
+				{ id: "build", call: "builder", prompt: "diff:\n{{ diff }}" },
+				{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+			],
+		});
+		const huge = "x".repeat(MAX_DIFF_PROMPT_CHARS + 5000);
+		const adapter = fakeAdapter((req) => req.prompt);
+		await runConverge(routine, { task: "x" }, { ...deps({}), adapter, diffProvider: () => huge });
+		const seen = adapter.calls[0]?.prompt ?? "";
+		expect(seen.length).toBeLessThan(huge.length);
+		expect(seen).toContain("diff truncated for prompt budget");
 	});
 });
 

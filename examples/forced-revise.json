@@ -1,0 +1,25 @@
+{
+	"id": "forced-revise",
+	"policy": "converge",
+	"description": "Forces a real multi-iteration recovery: the builder can only learn the required content from the failing check, so it must revise after iteration 1.",
+	"inputs": {},
+	"participants": {
+		"builder": {
+			"agent": "claude",
+			"instructions": "You create or edit files to make the check that runs after you pass. Make the smallest change.",
+			"filesystem": "read-write"
+		}
+	},
+	"steps": [
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Create or fix the file src/secret.txt so the check after this step passes.\n\nThis is iteration {{ iteration }}. On iteration 1 you do NOT know the exact required contents, so make a plausible guess and write the file.\n\nIf the check failed last time, the failing command below reveals exactly what is required -- read it and make src/secret.txt contain precisely that single line:\n{{ steps.verify.output }}"
+		},
+		{
+			"id": "verify",
+			"check": [{ "command": "grep", "args": ["-qxF", "open-sesame-42", "src/secret.txt"] }]
+		}
+	],
+	"maxIterations": 4
+}
