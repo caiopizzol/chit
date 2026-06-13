@@ -59,11 +59,12 @@ machine, no API keys, no HTTP). Tests inject fakes, so they stay deterministic a
   not an OS sandbox. The strong, enforced one is the worktree: a sandboxed routine cannot reach your
   tree without `--apply`. A `check` is arbitrary process execution, so any routine with a check is
   sandboxed too.
-- **Time bounds are configurable per routine (`limits`).** `callTimeoutMinutes` (default 30) bounds any
-  single model call or check; `runTimeoutMinutes` (default 120) bounds the whole run's wall-time -- a
-  single pass, a loop, or a whole composition. Set either to `"none"` to opt out; defaults are high on
-  purpose, to catch a hang, not to cut off honest slow work. A composition takes only `runTimeoutMinutes`
-  (it makes no calls of its own).
+- **Time bounds are configurable per routine (`limits`).** `callTimeoutMinutes` (default 30) is a hard
+  bound on any single model call or check -- the subprocess is killed once it is exceeded.
+  `runTimeoutMinutes` (default 120) is a cooperative run budget: it is checked before each step, loop
+  iteration, and sub-routine, so a run stops once it is over budget, though a call already in flight still
+  finishes under its own `callTimeoutMinutes`. Set either to `"none"` to opt out; defaults are high on
+  purpose, to catch a hang, not honest slow work. A composition takes only `runTimeoutMinutes`.
 - **Receipts store inputs and the final output in plaintext** under `.chit/runs` (gitignored),
   not per-step transcripts. Whether the body should be stored by default is an open question.
 

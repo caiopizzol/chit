@@ -48,6 +48,10 @@ Set either to `"none"` to drop that bound. Defaults are deliberately high: the b
 runaway loop, not honest slow work. `maxIterations` always applies regardless. A composition makes no direct
 calls, so `callTimeoutMinutes` is not valid there -- set it on the routines it calls.
 
+`callTimeoutMinutes` is a **hard** kill (the subprocess is terminated). `runTimeoutMinutes` is a
+**cooperative** budget: a unit already running finishes under its own `callTimeoutMinutes`, and the run
+stops at the next checkpoint. A real mid-call deadline waits on the cancellation work.
+
 ## Rules (few, enforced at resolve, with clear errors)
 
 1. A routine's steps are EITHER all `routine` steps OR a mix of call/format/check — **not both**. Keeps
