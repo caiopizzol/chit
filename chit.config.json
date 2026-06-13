@@ -1,0 +1,17 @@
+{
+	"routines": {
+		"feature-griller": {
+			"manifestPath": "examples/feature-griller.json",
+			"description": "Question a feature idea before implementation."
+		},
+		"planning": {
+			"manifestPath": "examples/planning.json",
+			"description": "Turn a goal into a small, ordered implementation plan."
+		},
+		"implementation-review": {
+			"manifestPath": "examples/implementation-review.json",
+			"description": "Implement, review, and verify a code slice.",
+			"defaults": { "maxIterations": 3 }
+		}
+	}
+}

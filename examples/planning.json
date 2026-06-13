@@ -1,0 +1,24 @@
+{
+	"id": "planning",
+	"policy": "one-shot",
+	"description": "Turn a goal into a small, ordered implementation plan grounded in the repo.",
+	"inputs": {
+		"goal": { "type": "string", "required": true, "description": "what you want built" }
+	},
+	"participants": {
+		"planner": {
+			"agent": "claude",
+			"instructions": "You design a small, sequential implementation plan for a software goal. Inspect the repo at your cwd read-only to ground every step in real files. You write nothing.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "plan",
+			"call": "planner",
+			"prompt": "Goal:\n{{ inputs.goal }}\n\nInspect the repo at your cwd read-only. Return a numbered plan of small steps. For each step: a one-line title, the files it touches, and how it is verified. Prefer more small steps over one large one. Do not edit files."
+		},
+		{ "id": "out", "format": "{{ steps.plan.output }}" }
+	],
+	"output": "out"
+}

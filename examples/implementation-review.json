@@ -1,0 +1,26 @@
+{
+	"id": "implementation-review",
+	"policy": "converge",
+	"description": "Implement a code slice, review it, and verify with checks until it passes.",
+	"inputs": {
+		"task": { "type": "string", "required": true, "description": "the slice to implement" }
+	},
+	"participants": {
+		"implementer": {
+			"agent": "claude",
+			"instructions": "You implement a small, well-scoped code slice and keep going until the reviewer and checks pass.",
+			"filesystem": "read-write"
+		},
+		"reviewer": {
+			"agent": "claude",
+			"instructions": "You review the implementer's diff for correctness and scope. You do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"loop": { "implementer": "implementer", "reviewer": "reviewer" },
+	"checks": [
+		{ "command": "bun", "args": ["run", "typecheck"] },
+		{ "command": "bun", "args": ["test"] }
+	],
+	"maxIterations": 3
+}
