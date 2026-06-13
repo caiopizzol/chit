@@ -112,7 +112,12 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       output bodies (documented -- the honest version of "body-free").
 - [x] store/views/cli handle the third receipt shape; inspect shows the routine chain; trace shows it.
 - [x] example feature-flow = grill -> plan -> implementation-review. 105 tests, typecheck clean.
-- [ ] real end-to-end smoke (grill -> plan -> impl) PENDING in this turn.
+- [x] REAL end-to-end smoke PASSED: `chit run feature-flow --input idea=...` ran grill -> plan ->
+      impl for real; output passed forward each step; the terminal converge built double.ts + a
+      passing test in its sandbox (real typecheck+test), converged, dry-run discarded. Origin clean,
+      no leftover worktree. Flow receipt run-9cf66a34 chains sub-runs (run-1b2ec16d, run-dbcc94aa,
+      run-f5111fa3); `chit trace <subRunId>` works per step. NOTE: ~12.5 min wall-clock (3 real
+      model calls + a converge loop) -- reinforces that live progress + budgets are the real next needs.
 
 ## Deferred still
 durable resume, live progress/pause, cost budgets, richer receipts, parallel fan-out,
