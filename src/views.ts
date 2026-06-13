@@ -18,6 +18,11 @@ function shortDigest(d: string): string {
 	return d.length > 19 ? `${d.slice(0, 19)}…` : d;
 }
 
+// Render an effective timeout (ms) as a minutes label, or "none" when unbounded.
+function minutesLabel(ms: number | undefined): string {
+	return ms === undefined ? "none" : `${ms / 60_000}m`;
+}
+
 export interface RoutineListItem {
 	id: string;
 	kind: string;
@@ -62,6 +67,9 @@ export function formatInspect(routine: ResolvedRoutine): string {
 			out.push(`  ${i + 1}. ${pad(s.id, 10)} -> ${pad(s.routine, 22)}${ins.length ? `inputs: ${ins.join(", ")}` : ""}`.trimEnd());
 		});
 		out.push("");
+		// A composition has no direct calls, so only the whole-flow wall-time bound applies.
+		out.push(`limits: whole run ${minutesLabel(effectiveRunTimeoutMs(m))}`);
+		out.push("");
 		out.push("note: runs each routine in order, passing outputs forward. A terminal sandboxed");
 		out.push("      step (if any) writes only its own worktree; --apply writes the result back.");
 		out.push("");
@@ -100,15 +108,9 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		out.push(`output: ${m.output}`);
 	}
 
-	// Make the time bounds legible: the per-call timeout applies to any call; the
-	// whole-run bound is enforced only on the sandboxed/loop path, so only show it there.
-	const callMs = effectiveCallTimeoutMs(m);
-	let limitsLine = `limits: per call ${callMs === undefined ? "none" : `${callMs / 60_000}m`}`;
-	if (isSandboxed(m)) {
-		const runMs = effectiveRunTimeoutMs(m);
-		limitsLine += `, whole run ${runMs === undefined ? "none" : `${runMs / 60_000}m`}`;
-	}
-	out.push(limitsLine);
+	// Make the time bounds legible. Both apply to an execution routine: the per-call
+	// bound caps any single call or check, the whole-run bound caps the run's wall-time.
+	out.push(`limits: per call ${minutesLabel(effectiveCallTimeoutMs(m))}, whole run ${minutesLabel(effectiveRunTimeoutMs(m))}`);
 
 	if (isSandboxed(m)) {
 		out.push("");

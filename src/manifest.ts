@@ -322,6 +322,15 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		};
 		const call = parseLimit(raw.limits.callTimeoutMinutes, "callTimeoutMinutes");
 		const run = parseLimit(raw.limits.runTimeoutMinutes, "runTimeoutMinutes");
+		// A composition makes no direct calls of its own (its sub-routines do), so a
+		// per-call bound here would be inert. Reject it instead of silently ignoring it;
+		// `runTimeoutMinutes` is valid (it bounds the whole flow's wall-time).
+		if (composition && call !== undefined) {
+			throw new ManifestError(
+				source,
+				"`limits.callTimeoutMinutes` is not valid on a composition (it makes no direct calls -- set it on the sub-routines it calls). Use `runTimeoutMinutes` to bound the whole flow.",
+			);
+		}
 		limits = {
 			...(call !== undefined && { callTimeoutMinutes: call }),
 			...(run !== undefined && { runTimeoutMinutes: run }),

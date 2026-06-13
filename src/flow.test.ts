@@ -218,4 +218,23 @@ describe("runFlow (execution)", () => {
 		expect(res.subReceipts).toHaveLength(3);
 		for (const sub of res.subReceipts) expect(sub.scope).toBe("feat-z");
 	});
+
+	test("enforces a whole-flow wall-time budget from the composition's limits", async () => {
+		const f = routine({
+			id: "budgeted",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "plan", routine: "plan", inputs: { goal: "{{ steps.grill.output }}" } },
+			],
+			limits: { runTimeoutMinutes: 1 },
+		});
+		// clock advances 10s per read; by the 2nd step the 1-minute flow budget is blown
+		let i = 0;
+		const clock = () => (i += 10_000);
+		const res = await runFlow(resolveFlow(f, resolver()), { idea: "x" }, { ...deps(), now: clock });
+		expect(res.receipt.status).toBe("failed");
+		expect(res.receipt.error).toMatch(/flow wall-time/);
+		expect(res.receipt.steps.map((s) => s.id)).toEqual(["grill"]); // plan never started
+	});
 });

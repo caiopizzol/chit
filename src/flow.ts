@@ -19,7 +19,7 @@ import type { CheckRunner } from "./check-runner.ts";
 import type { ConvergeReceipt } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { validateInputs } from "./inputs.ts";
-import { isComposition, isSandboxed, type Manifest } from "./manifest.ts";
+import { effectiveRunTimeoutMs, isComposition, isSandboxed, type Manifest } from "./manifest.ts";
 import { type ResolvedRoutine, resolveRoutine, RoutineError } from "./routine.ts";
 import { type RunReceipt, runOneShot } from "./run.ts";
 import type { SandboxFactory } from "./sandbox.ts";
@@ -156,6 +156,11 @@ export async function runFlow(
 ): Promise<FlowRunResult> {
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
+	// Whole-flow wall-time budget: an explicit deps override, else the composition's
+	// own `runTimeoutMinutes`, else the default. Checked before starting each step, so
+	// a flow that blows its budget stops rather than launching the next sub-routine.
+	// (Each sub-run is still bounded by its own limits; this caps the flow as a whole.)
+	const maxWallMs = deps.maxWallMs ?? effectiveRunTimeoutMs(resolved.flow.manifest);
 	const ctx = { inputs: values, steps: {} as Record<string, { output: string }> };
 	const stepReceipts: FlowStepReceipt[] = [];
 	const subReceipts: Array<RunReceipt | ConvergeReceipt> = [];
@@ -164,6 +169,10 @@ export async function runFlow(
 	let applied: boolean | undefined;
 
 	for (const step of resolved.steps) {
+		if (maxWallMs !== undefined && deps.now() - startedAt >= maxWallMs) {
+			failed = `exceeded flow wall-time of ${maxWallMs}ms before step ${step.id}`;
+			break;
+		}
 		const stepStart = deps.now();
 		deps.onProgress?.(`step ${step.id} -> ${step.routine.id}`);
 		// Derived: a sub-routine that writes or runs checks is sandboxed (-> converge path);

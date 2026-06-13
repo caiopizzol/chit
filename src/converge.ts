@@ -169,7 +169,7 @@ export async function runConverge(
 					let stepPassed = true;
 					for (const cmd of step.checks) {
 						const checkStart = deps.now();
-						const res = await deps.checkRunner.run(cmd, deps.cwd);
+						const res = await deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs);
 						const label = [cmd.command, ...cmd.args].join(" ");
 							deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"}`);
 						checks.push({ command: label, ok: res.ok, elapsedMs: deps.now() - checkStart });

@@ -46,6 +46,16 @@ const CONVERGE = {
 	repeat: { until: "checks-pass", maxIterations: 3 },
 };
 
+const COMPOSE = {
+	id: "feature-flow",
+	description: "Grill then implement.",
+	inputs: { idea: { type: "string" } },
+	steps: [
+		{ id: "grill", routine: "feature-griller", inputs: { idea: "{{ inputs.idea }}" } },
+		{ id: "impl", routine: "impl-review", inputs: { task: "{{ steps.grill.output }}" } },
+	],
+};
+
 describe("formatRoutineList", () => {
 	test("lists id, kind, and description", () => {
 		const out = formatRoutineList([
@@ -76,7 +86,7 @@ describe("formatInspect", () => {
 		expect(out).toContain("filesystem: read-only");
 		expect(out).toContain("call griller");
 		expect(out).toContain("output: out");
-		expect(out).toContain("limits: per call 30m"); // default, no whole-run bound shown for a text routine
+		expect(out).toContain("limits: per call 30m, whole run 120m"); // both bounds apply to an execution routine
 		expect(out).toContain("manifest: examples/m.json");
 		expect(out).toContain("sha256:aaaaaaaaaaaa");
 	});
@@ -105,6 +115,13 @@ describe("formatInspect", () => {
 		const none = formatInspect(routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none", runTimeoutMinutes: "none" } }));
 		expect(none).toContain("per call none");
 		expect(none).toContain("whole run none");
+	});
+
+	test("composition: shows the whole-flow budget and no per-call bound", () => {
+		const out = formatInspect(routineFrom(COMPOSE));
+		expect(out).toContain("feature-flow  (composition)");
+		expect(out).toContain("limits: whole run 120m");
+		expect(out).not.toContain("per call"); // a composition makes no direct calls
 	});
 });
 

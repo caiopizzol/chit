@@ -185,6 +185,16 @@ describe("parseManifest -- limits", () => {
 	test('rejects a string timeout that is not "none"', () => {
 		expect(() => parse({ ...TEXT, limits: { runTimeoutMinutes: "lots" } })).toThrow(/positive number of minutes or "none"/);
 	});
+
+	test("rejects callTimeoutMinutes on a composition (it makes no direct calls)", () => {
+		expect(() => parse({ ...COMP, limits: { callTimeoutMinutes: 30 } })).toThrow(/not valid on a composition/);
+	});
+
+	test("allows runTimeoutMinutes on a composition (the whole-flow budget)", () => {
+		const m = parse({ ...COMP, limits: { runTimeoutMinutes: 90 } });
+		expect(m.limits).toEqual({ runTimeoutMinutes: 90 });
+		expect(effectiveRunTimeoutMs(m)).toBe(90 * 60_000);
+	});
 });
 
 describe("effective timeouts", () => {

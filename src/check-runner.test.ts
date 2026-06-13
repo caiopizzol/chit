@@ -18,6 +18,12 @@ describe("fakeCheckRunner", () => {
 	test("defaults to passing", async () => {
 		expect(await fakeCheckRunner().run(check, "/x")).toEqual({ ok: true, exitCode: 0, output: "" });
 	});
+
+	test("records the per-call timeout it was handed", async () => {
+		const runner = fakeCheckRunner();
+		await runner.run(check, "/work", 90_000);
+		expect(runner.calls[0]).toEqual({ check, cwd: "/work", timeoutMs: 90_000 });
+	});
 });
 
 describe("argvCheckRunner", () => {
@@ -32,5 +38,13 @@ describe("argvCheckRunner", () => {
 		expect(r.ok).toBe(false);
 		expect(r.exitCode).toBe(3);
 		expect(r.output).toContain("nope");
+	});
+
+	test("kills and fails a check that exceeds the timeout", async () => {
+		const start = Date.now();
+		const r = await argvCheckRunner.run({ command: "sleep", args: ["5"] }, process.cwd(), 150);
+		expect(r.ok).toBe(false);
+		expect(r.output).toMatch(/timed out/);
+		expect(Date.now() - start).toBeLessThan(2500); // killed near the timeout, not after 5s
 	});
 });

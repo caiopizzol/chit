@@ -91,6 +91,17 @@ describe("runOneShot", () => {
 		expect(r.steps[0]?.status).toBe("failed");
 	});
 
+	test("enforces runTimeoutMinutes as a whole-run wall-time bound", async () => {
+		const limited = routineFrom({ ...GRILLER, limits: { runTimeoutMinutes: 1 } });
+		// clock advances 20s per read; by the 2nd step the 1-minute budget is blown
+		let i = 0;
+		const clock = () => (i += 20_000);
+		const r = await runOneShot(limited, { idea: "x" }, { adapter: fakeAdapter(), cwd: "/work", now: clock, newRunId: () => "run-1" });
+		expect(r.status).toBe("failed");
+		expect(r.error).toMatch(/wall-time/);
+		expect(r.steps.map((s) => s.id)).toEqual(["grill"]); // the format step never ran
+	});
+
 	test("a template error in a format step fails the run", async () => {
 		const bad = {
 			...GRILLER,

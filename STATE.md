@@ -176,6 +176,21 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       suite run). Tests: dead-owner reaped, live-owner skipped (real git + real pid), CLI removal path.
 - [x] 124 tests, typecheck clean.
 
+## Increment 10.1 — limits coherence (review follow-ups)
+- [x] composition limits were accepted but inert. Now: `callTimeoutMinutes` is REJECTED on a composition
+      (it makes no direct calls -- set it on the sub-routines); `runTimeoutMinutes` is ENFORCED as a
+      whole-flow wall-time budget (checked before each sub-routine) and SHOWN in inspect.
+- [x] `runTimeoutMinutes` now also enforced on text runs (was inert there) -- one rule: it bounds any
+      run's wall-time (text / loop / composition). Inspect shows both bounds on every execution routine.
+- [x] checks now honor the configurable per-call bound: threaded effectiveCallTimeoutMs into
+      CheckRunner.run; removed the hidden CHECK_TIMEOUT_MS (5m) constant -- the same anti-pattern this
+      increment removed for calls. "none" -> unbounded checks. README's "a hung call or check" is now true.
+      TRADE-OFF: one knob (callTimeoutMinutes) governs both calls and checks; a separate
+      checkTimeoutMinutes is deferred (YAGNI). Default 30m covers both.
+- [x] CONTRACT-V2 destaled (was framed as "proposal, not yet built" / "confirm before I build").
+- [x] 132 tests, typecheck clean. Real inspect confirms: composition shows "whole run 120m" only; a
+      text routine shows "per call 45m, whole run 120m".
+
 ## NEXT: cancel (Ctrl-C) + E2E acceptance matrix
 - signal-aware cancel: trap SIGINT -> stop the active claude/check process, discard the sandbox
   cleanly (no leftover worktree), write a "cancelled" receipt. The owner.pid lock + parent-dir

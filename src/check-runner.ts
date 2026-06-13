@@ -7,9 +7,11 @@ import type { Check } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
 
 // A hung check (an accidentally interactive command, an infinite test) must not
-// block the loop. A timed-out check is reported as a failure, so the loop keeps
-// its bound and feeds the timeout forward like any other failing check.
-const CHECK_TIMEOUT_MS = 5 * 60_000;
+// block the loop. A timed-out check is reported as a failure, so the loop keeps its
+// bound and feeds the timeout forward like any other failing check. The bound is the
+// routine's per-call limit (manifest `limits.callTimeoutMinutes`), the same one a
+// model call gets -- a check is just another per-step subprocess. Undefined means the
+// routine opted out with "none".
 
 export interface CheckResult {
 	ok: boolean;
@@ -18,11 +20,11 @@ export interface CheckResult {
 }
 
 export interface CheckRunner {
-	run(check: Check, cwd: string): Promise<CheckResult>;
+	run(check: Check, cwd: string, timeoutMs?: number): Promise<CheckResult>;
 }
 
 export interface FakeCheckRunner extends CheckRunner {
-	calls: Array<{ check: Check; cwd: string }>;
+	calls: Array<{ check: Check; cwd: string; timeoutMs?: number }>;
 }
 
 // Scripted by call index so a test can make a check fail on iteration 1 and pass
@@ -30,22 +32,22 @@ export interface FakeCheckRunner extends CheckRunner {
 export function fakeCheckRunner(
 	script: (check: Check, callIndex: number) => CheckResult = () => ({ ok: true, exitCode: 0, output: "" }),
 ): FakeCheckRunner {
-	const calls: Array<{ check: Check; cwd: string }> = [];
+	const calls: Array<{ check: Check; cwd: string; timeoutMs?: number }> = [];
 	return {
 		calls,
-		async run(check, cwd) {
+		async run(check, cwd, timeoutMs) {
 			const result = script(check, calls.length);
-			calls.push({ check, cwd });
+			calls.push({ check, cwd, ...(timeoutMs !== undefined && { timeoutMs }) });
 			return result;
 		},
 	};
 }
 
 export const argvCheckRunner: CheckRunner = {
-	async run(check, cwd) {
-		const r = await spawnCapture([check.command, ...check.args], { cwd, timeoutMs: CHECK_TIMEOUT_MS });
+	async run(check, cwd, timeoutMs) {
+		const r = await spawnCapture([check.command, ...check.args], { cwd, ...(timeoutMs !== undefined && { timeoutMs }) });
 		if (r.timedOut) {
-			return { ok: false, exitCode: 124, output: `check timed out after ${CHECK_TIMEOUT_MS}ms` };
+			return { ok: false, exitCode: 124, output: `check timed out after ${timeoutMs}ms` };
 		}
 		return { ok: r.exitCode === 0, exitCode: r.exitCode ?? -1, output: `${r.stdout}${r.stderr}`.trim() };
 	},

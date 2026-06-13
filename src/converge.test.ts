@@ -117,6 +117,16 @@ describe("runConverge", () => {
 		expect(r.maxIterations).toBe(3);
 	});
 
+	test("hands each check the same per-call timeout a model call gets", async () => {
+		const def = fakeCheckRunner();
+		await runConverge(routineFrom(CONVERGE), { task: "x" }, deps({ checkRunner: def }));
+		expect(def.calls[0]?.timeoutMs).toBe(30 * 60_000); // default per-call bound
+
+		const none = fakeCheckRunner();
+		await runConverge(routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none" } }), { task: "x" }, deps({ checkRunner: none }));
+		expect(none.calls[0]?.timeoutMs).toBeUndefined(); // "none" -> unbounded check
+	});
+
 	test("emits live progress: iteration headers and check results", async () => {
 		const lines: string[] = [];
 		const checkRunner = fakeCheckRunner((_c, i) =>

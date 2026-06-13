@@ -1,6 +1,6 @@
-# Routine v2 — one shape (proposal, not yet built)
+# Routine v2: one shape
 
-One file format. No `policy` field. Behavior is **derived from structure**, not chosen.
+The shipped model. One file format. No `policy` field. Behavior is **derived from structure**, not chosen.
 
 ## The shape
 
@@ -40,11 +40,13 @@ routine that runs ANY check gets the worktree boundary too -- not just one with 
 
 Optional. Two independent bounds in minutes, plus the loop's existing `maxIterations`:
 
-- `callTimeoutMinutes`: kill any single participant call that runs past this. Default **30**.
-- `runTimeoutMinutes`: fail the whole run once it passes this (checked before each loop iteration). Default **120**.
+- `callTimeoutMinutes`: kill any single model call OR check command that runs past this. Default **30**.
+- `runTimeoutMinutes`: fail the whole run once its wall-time passes this -- a single pass, a loop (checked
+  before each iteration), or a whole composition (checked before each sub-routine). Default **120**.
 
-Set either to `"none"` to drop that bound. The defaults are deliberately high: the bound exists to catch a
-hung call or a runaway loop, not to cut off honest slow work. `maxIterations` always applies regardless.
+Set either to `"none"` to drop that bound. Defaults are deliberately high: the bound catches a hang or a
+runaway loop, not honest slow work. `maxIterations` always applies regardless. A composition makes no direct
+calls, so `callTimeoutMinutes` is not valid there -- set it on the routines it calls.
 
 ## Rules (few, enforced at resolve, with clear errors)
 
@@ -65,7 +67,7 @@ hung call or a runaway loop, not to cut off honest slow work. `maxIterations` al
 `policy: one-shot | converge | flow` is gone as a user concept. Internally the runtime keeps the proven
 executors (single / loop / composition) — derivation just picks one. The user learns ONE shape.
 
-## My four calls (where I sharpen the original sketch — confirm before I build)
+## Design calls (where v2 sharpened the original sketch)
 
 - **A. No step mixing** (rule 1). The sketch implied routine-calls could mix freely with call/check; I forbid it.
   This is the single biggest lever between "minimal" and "secret workflow engine."
@@ -77,7 +79,7 @@ executors (single / loop / composition) — derivation just picks one. The user 
   write, so anything that runs commands or can edit gets the worktree boundary; only pure read-only call/format
   routines run in your cwd. This also fixes the current gap where a read-write single-pass routine edits your tree.
 
-## Acceptance (re-prove after the refactor)
+## Acceptance (re-proven after the refactor)
 
 - grill / plan: no repeat, read-only, text output.
 - implementation-review: repeat until checks pass; read-write → sandboxed.

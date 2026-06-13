@@ -6,7 +6,7 @@
 // composition go through converge.ts and flow.ts. Dispatch in cli.ts picks one.)
 
 import type { Adapter } from "./adapter.ts";
-import { effectiveCallTimeoutMs, type Manifest } from "./manifest.ts";
+import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -56,6 +56,10 @@ export async function runOneShot(
 ): Promise<RunReceipt> {
 	const manifest: Manifest = routine.manifest;
 	const callTimeoutMs = effectiveCallTimeoutMs(manifest);
+	// Whole-run wall-time bound (undefined = "none"). Same meaning as on the loop and
+	// composition paths; a text run is short, but keeping the bound here means a routine
+	// that sets runTimeoutMinutes is never silently ignored.
+	const maxWallMs = effectiveRunTimeoutMs(manifest);
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
 
@@ -64,6 +68,10 @@ export async function runOneShot(
 	let failed: string | undefined;
 
 	for (const step of manifest.steps) {
+		if (maxWallMs !== undefined && deps.now() - startedAt >= maxWallMs) {
+			failed = `exceeded max wall-time of ${maxWallMs}ms`;
+			break;
+		}
 		const stepStart = deps.now();
 		try {
 			if (step.kind === "call") {
