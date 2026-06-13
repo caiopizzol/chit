@@ -208,11 +208,24 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       cancelled receipt persisted.
 - [x] 144 tests, typecheck clean.
 
-## NEXT: E2E acceptance matrix
-- the 8-case matrix (text / planning / single-pass sandboxed / loop / check-only / composition /
-  apply path / interrupted run). Then persisted progress in receipts, routine scaffolding.
-- possible follow-up: wire runTimeoutMinutes to the cancellation signal for a HARD run deadline
-  (today it is cooperative; Ctrl-C is the only mid-call abort).
+## Increment 12 COMPLETE — E2E acceptance matrix (real git, faked model)
+- [x] src/acceptance.test.ts: every routine shape driven through the real CLI (runCli) against a REAL
+      git-worktree sandbox and REAL checks, with only the model call faked (a stub that writes files for
+      read-write participants, so real diffs/applies happen). 7 cases:
+      text (cwd, no sandbox) / single-pass sandboxed dry-run (origin untouched) / single-pass --apply
+      (origin written) / loop (check fails -> model fixes -> converges iter 2 -> applies) / check-only
+      (passing check, no changes) / composition (grill text -> impl sandboxed, output forwarded, applied) /
+      interrupted (pre-aborted -> cancelled, worktree discarded, exit 130).
+- [x] all 7 green first try; full suite 151 tests, typecheck clean; no leftover worktrees, 0 temp husks.
+      The shape is boring and reliable across the real cases.
+
+## NEXT: persisted progress in receipts, then routine scaffolding
+- persisted progress: receipts already hold steps/iterations/checks with elapsedMs; consider per-step
+  start timestamps so trace can render a real execution timeline.
+- routine scaffolding/templates (`chit init`).
+- deferred follow-ups: HARD run deadline (wire runTimeoutMinutes to the cancel signal; today cooperative,
+  Ctrl-C is the only mid-call abort); a cancelled/dry-run sandbox receipt still stores its (now-removed)
+  workDir path -- trace does not render it, but the stored JSON could mark it "discarded" (minor, per review).
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed
