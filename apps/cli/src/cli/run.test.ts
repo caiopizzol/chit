@@ -1396,6 +1396,8 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 						kind: "step.completed",
 						label: "step implement completed (1200ms)",
 						stepId: "implement",
+						participantId: "impl",
+						agentId: "claude",
 					},
 				],
 			};
@@ -1406,6 +1408,8 @@ describe("buildStudioLiveSource (Studio live injection shape)", () => {
 			expect(row?.recentEvents?.[0]?.kind).toBe("step.completed");
 			expect(row?.recentEvents?.[0]?.label).toBe("step implement completed (1200ms)");
 			expect(row?.recentEvents?.[0]?.stepId).toBe("implement");
+			expect(row?.recentEvents?.[0]?.participantId).toBe("impl");
+			expect(row?.recentEvents?.[0]?.agentId).toBe("claude");
 			expect(row?.recentEvents?.[0]?.ageMs).toBeGreaterThanOrEqual(3_000);
 			expect(row?.recentEvents?.[0]?.ageMs).toBeLessThan(60_000);
 			expect(JSON.stringify(row?.recentEvents)).not.toContain('"ts"');

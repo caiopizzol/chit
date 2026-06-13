@@ -16,11 +16,11 @@ import { formatTimeout, recipeMeta } from "./configView.ts";
 import {
 	activeRole,
 	agentBlockViews,
+	blockFeed,
 	cancelAvailable,
 	cancelMessage,
 	cancelPending,
 	concisePhase,
-	eventTail,
 	flattenRows,
 	formatAge,
 	headPhaseElapsed,
@@ -142,24 +142,74 @@ function PhaseTimeline({ row }: { row: LiveActivityRow }) {
 	);
 }
 
-// The selected run's recent-event tail: its last few runtime events as quiet
-// one-liners (age + host-built safe label). A glance at "what is it doing right
-// now", not a transcript panel -- rows without a tail render nothing.
-function RecentActivity({ row }: { row: LiveActivityRow }) {
-	const entries = eventTail(row);
-	if (entries.length === 0) return null;
+function blockFeedLineClass(entry: ReturnType<typeof blockFeed>[number], role: LoopRole): string {
+	if (entry.kind === "step.failed") return "block-feed-line--fail";
+	if (role === "implementer") return "block-feed-line--implementer";
+	if (role === "reviewer") return "block-feed-line--reviewer";
+	return "block-feed-line--checks";
+}
+
+function LiveBlockFeed({
+	row,
+	selectedBlock,
+}: {
+	row: LiveActivityRow | null;
+	selectedBlock: LoopRole;
+}) {
+	const entries = row ? blockFeed(row, selectedBlock) : [];
 	return (
-		<section className="live-events">
-			<h4 className="live-events-head">recent activity</h4>
-			<ol className="live-events-list">
-				{entries.map((e) => (
-					<li key={e.key} className="live-event">
-						<span className="live-event-age">{e.age}</span>
-						<span className="live-event-label">{e.label}</span>
-					</li>
-				))}
-			</ol>
+		<section className="block-feed">
+			<div className="block-feed-head">
+				<span>feed</span>
+				<span className="block-feed-role">{selectedBlock}</span>
+				<span>refreshed</span>
+			</div>
+			{entries.length === 0 ? (
+				<p className="block-feed-empty">No events for this block.</p>
+			) : (
+				<ol className="block-feed-list">
+					{entries.map((e) => (
+						<li
+							key={e.key}
+							className={`block-feed-line ${blockFeedLineClass(e, selectedBlock)}${
+								e.active ? " block-feed-line--active" : ""
+							}`}
+						>
+							<span className="block-feed-time">{e.time}</span>
+							<span className="block-feed-kind">{e.kind}</span>
+							<span className="block-feed-label">{e.label}</span>
+						</li>
+					))}
+				</ol>
+			)}
 		</section>
+	);
+}
+
+function LiveWorkspace({
+	row,
+	selectedBlock,
+	onSelectBlock,
+}: {
+	row: LiveActivityRow | null;
+	selectedBlock: LoopRole;
+	onSelectBlock: (role: LoopRole) => void;
+}) {
+	return (
+		<div className="studio-workspace">
+			{row ? (
+				<LoopCanvas
+					blocks={liveLoopBlocks(row)}
+					selectedBlock={selectedBlock}
+					onSelectBlock={onSelectBlock}
+				/>
+			) : (
+				<div className="studio-canvas">
+					<p className="live-muted">Select a live run to inspect it.</p>
+				</div>
+			)}
+			<LiveBlockFeed row={row} selectedBlock={selectedBlock} />
+		</div>
 	);
 }
 
@@ -490,7 +540,6 @@ function LiveInspector({
 			<ActionStrip key={rowKey(row)} row={row} refresh={refresh} />
 			{row.task && <TaskDisclosure task={row.taskFull ?? row.task} />}
 			<PhaseTimeline row={row} />
-			<RecentActivity row={row} />
 			{row.worktreePath && (
 				<p className="live-worktree">
 					<span className="live-worktree-label">worktree</span>
@@ -780,17 +829,11 @@ export function LiveTower() {
 								</>
 							) : (
 								<>
-									{selected ? (
-										<LoopCanvas
-											blocks={liveLoopBlocks(selected)}
-											selectedBlock={selectedBlock}
-											onSelectBlock={setSelectedBlock}
-										/>
-									) : (
-										<div className="studio-canvas">
-											<p className="live-muted">Select a live run to inspect it.</p>
-										</div>
-									)}
+									<LiveWorkspace
+										row={selected}
+										selectedBlock={selectedBlock}
+										onSelectBlock={setSelectedBlock}
+									/>
 									<LiveInspector row={selected} selectedBlock={selectedBlock} refresh={refresh} />
 								</>
 							)}

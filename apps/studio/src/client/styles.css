@@ -744,50 +744,6 @@ header.app .config-btn {
 	width: 24px;
 	text-align: center;
 }
-/* Recent-event tail: the selected run's last few runtime events as quiet
-   one-liners (age + safe label). Same calm mono idiom as the worktree label
-   and the phase timeline -- no panel chrome, no scrolling, no color coding. */
-.live-events {
-	margin: 0 0 18px;
-}
-.live-events-head {
-	margin: 0 0 6px;
-	font-family: "JetBrains Mono", monospace;
-	font-size: 10px;
-	font-weight: 400;
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
-	color: var(--faded);
-}
-.live-events-list {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 3px;
-}
-.live-event {
-	display: flex;
-	align-items: baseline;
-	gap: 10px;
-	font-family: "JetBrains Mono", monospace;
-	font-size: 11.5px;
-	line-height: 1.6;
-}
-.live-event-age {
-	flex: 0 0 auto;
-	min-width: 44px;
-	text-align: right;
-	color: var(--faded);
-}
-.live-event-label {
-	color: var(--carbon);
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 .live-worktree {
 	display: flex;
 	flex-direction: column;
@@ -1022,6 +978,12 @@ header.app .config-btn {
 	grid-template-columns: minmax(0, 1fr) 252px;
 	background: var(--paper);
 }
+.studio-workspace {
+	min-width: 0;
+	min-height: 0;
+	display: grid;
+	grid-template-rows: minmax(220px, 1fr) minmax(126px, 176px);
+}
 .studio-canvas {
 	position: relative;
 	min-height: 0;
@@ -1030,6 +992,80 @@ header.app .config-btn {
 	justify-content: center;
 	overflow: hidden;
 	padding: 28px 34px;
+}
+.block-feed {
+	min-height: 0;
+	overflow-y: auto;
+	border-top: 1px solid var(--console-line);
+	background: var(--console-bg);
+	color: var(--console-fg);
+	padding: 10px 14px 12px;
+}
+.block-feed-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 0 0 8px;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0;
+	color: var(--console-dim);
+}
+.block-feed-role {
+	color: var(--console-fg);
+}
+.block-feed-empty {
+	margin: 0;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12px;
+	color: var(--console-dim);
+}
+.block-feed-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.block-feed-line {
+	display: grid;
+	grid-template-columns: 46px 112px minmax(0, 1fr);
+	gap: 10px;
+	align-items: baseline;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11.5px;
+	line-height: 1.7;
+	color: var(--console-fg);
+}
+.block-feed-time,
+.block-feed-kind {
+	color: var(--console-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.block-feed-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.block-feed-line--active .block-feed-kind {
+	color: var(--console-fg);
+}
+.block-feed-line--implementer .block-feed-label {
+	color: #9aa6ff;
+}
+.block-feed-line--reviewer .block-feed-label {
+	color: #4fd1c5;
+}
+.block-feed-line--checks .block-feed-label {
+	color: #f1c27d;
+}
+.block-feed-line--fail .block-feed-label {
+	color: #ff8b8b;
 }
 .loopwrap {
 	position: relative;
@@ -1347,10 +1383,22 @@ header.app .config-btn {
 		flex: 0 0 auto;
 		grid-template-columns: 1fr;
 	}
+	.studio-workspace {
+		display: block;
+	}
 	.studio-canvas {
 		min-height: 310px;
 		overflow: visible;
 		padding: 24px 16px 40px;
+	}
+	.block-feed {
+		max-height: 220px;
+	}
+	.block-feed-line {
+		grid-template-columns: 44px minmax(0, 1fr);
+	}
+	.block-feed-kind {
+		display: none;
 	}
 	.studio-inspector {
 		border-left: none;
