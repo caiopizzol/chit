@@ -145,6 +145,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		for (const s of r.steps) {
 			out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  ${s.subRunId || "-"}`);
 		}
+		if (r.applyError) out.push(`apply:    could not apply to your tree -- ${r.applyError}`);
 		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
 	}

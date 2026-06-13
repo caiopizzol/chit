@@ -21,6 +21,7 @@ import type { FlowReceipt } from "./flow.ts";
 import type { RunReceipt } from "./run.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 import { loadReceipt } from "./store.ts";
+import { formatTrace } from "./views.ts";
 
 function modelStub(onCall: (req: AdapterRequest, callIndex: number) => string): Adapter {
 	let i = 0;
@@ -328,6 +329,46 @@ describe("acceptance matrix -- failure cases", () => {
 		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
 		expect(receipt.status).toBe("converged");
 		expect(receipt.applyError).toMatch(/could not apply/);
+	});
+
+	test("composition: a terminal apply conflict is visible from the flow run id", async () => {
+		const impl = {
+			id: "impl",
+			inputs: { task: { type: "string" } },
+			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			steps: [{ id: "go", call: "b", prompt: "build {{ inputs.task }}" }],
+		};
+		const flow = {
+			id: "flow",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "griller", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "impl", routine: "impl", inputs: { task: "{{ steps.grill.output }}" } },
+			],
+		};
+		const repo = newRepo(
+			{ griller: GRILLER, impl, flow },
+			{ routines: { griller: { manifestPath: "griller.json" }, impl: { manifestPath: "impl.json" }, flow: { manifestPath: "flow.json" } } },
+		);
+		writeFileSync(join(repo, "seed.txt"), "changed in origin\n"); // dirty origin -> the terminal apply conflicts
+		const adapter = modelStub((req) => {
+			if (req.filesystem === "read-write") {
+				writeFileSync(join(req.cwd, "seed.txt"), "edited in sandbox\n");
+				return "done";
+			}
+			return "GRILLED";
+		});
+		const { deps, err } = harness(repo, adapter);
+		expect(await runCli(["run", "flow", "--input", "idea=x", "--apply"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/could not apply/);
+		expect(readFileSync(join(repo, "seed.txt"), "utf-8")).toBe("changed in origin\n"); // origin uncorrupted
+
+		// the failure is visible from the FLOW run id the CLI points the user to, not just the sub-run
+		const flowReceipt = loadReceipt(repo, "run-accept-0") as FlowReceipt;
+		expect(flowReceipt.policy).toBe("flow");
+		expect(flowReceipt.status).toBe("completed"); // every sub-run succeeded; only the write-back failed
+		expect(flowReceipt.applyError).toMatch(/could not apply/);
+		expect(formatTrace(flowReceipt)).toMatch(/apply:.*could not apply/);
 	});
 
 	test("interrupted in-flight: an abort during a running check cancels and discards", async () => {

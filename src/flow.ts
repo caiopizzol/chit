@@ -127,6 +127,9 @@ export interface FlowReceipt {
 	status: "completed" | "failed" | "cancelled";
 	steps: FlowStepReceipt[];
 	error?: string;
+	// Set when the terminal sandboxed step converged but its write-back to origin failed.
+	// Persisted here so `chit trace <flowRunId>` shows it, not just the sub-run's receipt.
+	applyError?: string;
 }
 
 export interface FlowRunResult {
@@ -275,6 +278,7 @@ export async function runFlow(
 			steps: stepReceipts,
 			...(failed !== undefined && { error: failed }),
 			...(cancelled && { error: "cancelled by operator" }),
+			...(applyError !== undefined && { applyError }),
 		},
 		subReceipts,
 		...(terminalDiff !== undefined && { terminalDiff }),

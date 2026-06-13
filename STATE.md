@@ -255,6 +255,13 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] fixed stale STATE "Not in scope" (it still listed routine composition + live progress, both built).
 - [x] 159 tests (439 expects), typecheck clean, no leftover worktrees / temp husks.
 
+## Increment 15.1 — flow apply-failure visible from the flow run id (review follow-up)
+- [x] 15 fixed standalone runs, but the FLOW receipt did not carry applyError, so `chit trace <flowRunId>`
+      (the id the CLI points the user to) showed "completed" with no apply failure -- only the terminal
+      sub-receipt had it. Now FlowReceipt carries applyError, runFlow persists it, flow trace renders it.
+- [x] acceptance: a composition with a dirty-origin terminal apply -> exit 1, origin uncorrupted, the FLOW
+      receipt has applyError and formatTrace(flowReceipt) shows the apply line. 160 tests, typecheck clean.
+
 ## NEXT: routine scaffolding (`chit init`)
 - the full happy + unhappy E2E story is proven and every run now leaves a receipt; scaffolding is next.
 - still optional/deferred: one real-claude smoke outside CI (the suite fakes the model on purpose);
