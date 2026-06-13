@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
-import { fakeCheckRunner } from "./check-runner.ts";
+import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import {
 	capDiffForPrompt,
 	type ConvergeDeps,
@@ -138,6 +138,42 @@ describe("runConverge", () => {
 		expect(lines.some((l) => l.includes("call builder"))).toBe(true);
 		expect(lines.some((l) => l.includes("check bun test → fail"))).toBe(true);
 		expect(lines.some((l) => l.includes("check bun test → ok"))).toBe(true);
+	});
+
+	test("a pre-aborted signal cancels the run before any iteration", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const r = await runConverge(routineFrom(CONVERGE), { task: "x" }, { ...deps({}), signal: controller.signal });
+		expect(r.status).toBe("cancelled");
+		expect(r.iterations).toHaveLength(0);
+		expect(r.error).toBe("cancelled by operator");
+	});
+
+	test("a call interrupted by the signal cancels the run, recording no partial iteration", async () => {
+		const controller = new AbortController();
+		const adapter: Adapter = {
+			async call() {
+				controller.abort();
+				throw new Error("claude call cancelled");
+			},
+		};
+		const r = await runConverge(routineFrom(CONVERGE), { task: "x" }, { ...deps({ adapter }), signal: controller.signal });
+		expect(r.status).toBe("cancelled");
+		expect(r.iterations).toHaveLength(0); // the interrupted iteration is not recorded
+	});
+
+	test("an aborted check (a flagged result, not a throw) still cancels the run", async () => {
+		const controller = new AbortController();
+		const checkRunner: CheckRunner = {
+			async run() {
+				controller.abort(); // mimic spawnCapture killing the check mid-run
+				return { ok: false, exitCode: 130, output: "check cancelled" };
+			},
+		};
+		const once = { ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 1 } };
+		const r = await runConverge(routineFrom(once), { task: "x" }, { ...deps({ checkRunner }), signal: controller.signal });
+		expect(r.status).toBe("cancelled"); // not "did-not-converge"
+		expect(r.iterations).toHaveLength(0);
 	});
 
 	test("aborts before exhausting iterations when the wall-time budget is exceeded", async () => {

@@ -102,6 +102,31 @@ describe("runOneShot", () => {
 		expect(r.steps.map((s) => s.id)).toEqual(["grill"]); // the format step never ran
 	});
 
+	test("a pre-aborted signal cancels the run before any step runs", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const adapter = fakeAdapter();
+		const r = await runOneShot(routineFrom(GRILLER), { idea: "x" }, { ...deps(adapter), signal: controller.signal });
+		expect(r.status).toBe("cancelled");
+		expect(r.steps).toHaveLength(0);
+		expect(adapter.calls).toHaveLength(0);
+		expect(r.error).toBe("cancelled by operator");
+		expect(r.output).toBeUndefined();
+	});
+
+	test("a call interrupted by the signal cancels the run (not fails it)", async () => {
+		const controller = new AbortController();
+		const adapter: RunDeps["adapter"] = {
+			async call() {
+				controller.abort(); // mimic spawnCapture killing the child mid-call
+				throw new Error("claude call cancelled");
+			},
+		};
+		const r = await runOneShot(routineFrom(GRILLER), { idea: "x" }, { ...deps(adapter), signal: controller.signal });
+		expect(r.status).toBe("cancelled");
+		expect(r.error).toBe("cancelled by operator");
+	});
+
 	test("a template error in a format step fails the run", async () => {
 		const bad = {
 			...GRILLER,

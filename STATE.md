@@ -191,12 +191,28 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] 132 tests, typecheck clean. Real inspect confirms: composition shows "whole run 120m" only; a
       text routine shows "per call 45m, whole run 120m".
 
-## NEXT: cancel (Ctrl-C) + E2E acceptance matrix
-- signal-aware cancel: trap SIGINT -> stop the active claude/check process, discard the sandbox
-  cleanly (no leftover worktree), write a "cancelled" receipt. The owner.pid lock + parent-dir
-  cleanup land cleanly here.
-- then E2E acceptance matrix (text / planning / single-pass sandboxed / loop / check-only /
-  composition / apply path / interrupted run), persisted progress in receipts, routine scaffolding.
+## Increment 11 COMPLETE — signal-aware cancellation (Ctrl-C)
+- [x] AbortSignal threaded bin -> proc -> adapter/check -> executors. spawnCapture kills the in-flight
+      child on abort (and won't spawn if already aborted); the adapter throws and a check returns a
+      flagged result on abort.
+- [x] executors check the signal cooperatively (before each step / iteration / sub-routine) AND treat an
+      in-flight subprocess killed by abort as a cancel, not a failure -> "cancelled" status on all three
+      receipt kinds. A sandboxed run still discards its worktree in `finally`; a cancelled flow propagates.
+- [x] FOUND+FIXED while validating: an aborted CHECK returns a flagged result (doesn't throw), so converge
+      missed it for maxIterations=1 (ended "did-not-converge"). Now a signal that fired during an iteration
+      is treated as a cancel.
+- [x] bin: first SIGINT aborts (kills active step, discards sandbox, writes receipt, exit 130); a second
+      SIGINT force-exits.
+- [x] REAL end-to-end smoke (no claude): a check-only `sleep 30` routine, real SIGINT at 4s -> in-flight
+      sleep killed immediately, run "cancelled", worktree discarded (none left), 0 stray temp dirs, exit 130,
+      cancelled receipt persisted.
+- [x] 144 tests, typecheck clean.
+
+## NEXT: E2E acceptance matrix
+- the 8-case matrix (text / planning / single-pass sandboxed / loop / check-only / composition /
+  apply path / interrupted run). Then persisted progress in receipts, routine scaffolding.
+- possible follow-up: wire runTimeoutMinutes to the cancellation signal for a HARD run deadline
+  (today it is cooperative; Ctrl-C is the only mid-call abort).
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed

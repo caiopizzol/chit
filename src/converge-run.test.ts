@@ -83,6 +83,18 @@ describe("runConvergeInSandbox", () => {
 		expect(h.sandbox()?.discarded).toBe(true);
 	});
 
+	test("a cancelled run discards the sandbox and never applies, even with apply=true", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const h = harness({ apply: true });
+		h.deps.signal = controller.signal;
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("cancelled");
+		expect(res.applied).toBe(false);
+		expect(h.sandbox()?.applied).toBe(false);
+		expect(h.sandbox()?.discarded).toBe(true);
+	});
+
 	test("discards the sandbox even when the loop throws", async () => {
 		const adapter: Adapter = {
 			async call() {

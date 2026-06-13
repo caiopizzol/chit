@@ -20,7 +20,7 @@ export interface CheckResult {
 }
 
 export interface CheckRunner {
-	run(check: Check, cwd: string, timeoutMs?: number): Promise<CheckResult>;
+	run(check: Check, cwd: string, timeoutMs?: number, signal?: AbortSignal): Promise<CheckResult>;
 }
 
 export interface FakeCheckRunner extends CheckRunner {
@@ -44,8 +44,15 @@ export function fakeCheckRunner(
 }
 
 export const argvCheckRunner: CheckRunner = {
-	async run(check, cwd, timeoutMs) {
-		const r = await spawnCapture([check.command, ...check.args], { cwd, ...(timeoutMs !== undefined && { timeoutMs }) });
+	async run(check, cwd, timeoutMs, signal) {
+		const r = await spawnCapture([check.command, ...check.args], {
+			cwd,
+			...(timeoutMs !== undefined && { timeoutMs }),
+			...(signal !== undefined && { signal }),
+		});
+		if (r.aborted) {
+			return { ok: false, exitCode: 130, output: "check cancelled" };
+		}
 		if (r.timedOut) {
 			return { ok: false, exitCode: 124, output: `check timed out after ${timeoutMs}ms` };
 		}

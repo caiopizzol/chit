@@ -49,7 +49,7 @@ export interface ConvergeReceipt {
 	startedAt: number;
 	finishedAt: number;
 	elapsedMs: number;
-	status: "converged" | "did-not-converge" | "failed";
+	status: "converged" | "did-not-converge" | "failed" | "cancelled";
 	iterations: IterationReceipt[];
 	sandbox?: SandboxReceipt;
 	error?: string;
@@ -74,6 +74,9 @@ export interface ConvergeDeps {
 	maxWallMs?: number;
 	diffProvider?: () => Promise<string> | string;
 	onProgress?: (line: string) => void;
+	// Operator-cancellation signal (Ctrl-C). Checked between iterations and steps, and
+	// threaded into calls/checks so an in-flight subprocess is killed promptly.
+	signal?: AbortSignal;
 }
 
 const DEFAULT_MAX_ITERATIONS = 5;
@@ -124,8 +127,13 @@ export async function runConverge(
 	const iterations: IterationReceipt[] = [];
 	let runError: string | undefined;
 	let converged = false;
+	let cancelled = false;
 
-	for (let n = 1; n <= maxIterations && runError === undefined && !converged; n++) {
+	for (let n = 1; n <= maxIterations && runError === undefined && !converged && !cancelled; n++) {
+		if (deps.signal?.aborted) {
+			cancelled = true;
+			break;
+		}
 		if (maxWallMs !== undefined && deps.now() - startedAt >= maxWallMs) {
 			runError = `exceeded max wall-time of ${maxWallMs}ms after ${n - 1} iteration(s)`;
 			break;
@@ -136,6 +144,10 @@ export async function runConverge(
 		let allChecksPassed = true;
 
 		for (const step of manifest.steps) {
+			if (deps.signal?.aborted) {
+				cancelled = true;
+				break;
+			}
 			const stepStart = deps.now();
 			try {
 				if (deps.diffProvider !== undefined) ctx.diff = capDiffForPrompt(await deps.diffProvider());
@@ -150,6 +162,7 @@ export async function runConverge(
 						filesystem: participant.filesystem,
 						cwd: deps.cwd,
 						...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
+						...(deps.signal !== undefined && { signal: deps.signal }),
 					});
 					ctx.steps[step.id] = { output: result.output };
 					stepReceipts.push({
@@ -169,7 +182,7 @@ export async function runConverge(
 					let stepPassed = true;
 					for (const cmd of step.checks) {
 						const checkStart = deps.now();
-						const res = await deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs);
+						const res = await deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal);
 						const label = [cmd.command, ...cmd.args].join(" ");
 							deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"}`);
 						checks.push({ command: label, ok: res.ok, elapsedMs: deps.now() - checkStart });
@@ -193,6 +206,11 @@ export async function runConverge(
 					throw new Error(`runConverge cannot run a ${step.kind} step (${step.id})`);
 				}
 			} catch (e) {
+				// A call/check killed by the cancellation signal is a cancel, not a failure.
+				if (deps.signal?.aborted) {
+					cancelled = true;
+					break;
+				}
 				runError = (e as Error).message;
 				stepReceipts.push({
 					id: step.id,
@@ -206,6 +224,10 @@ export async function runConverge(
 			}
 		}
 
+		// An aborted check returns a flagged result rather than throwing, so the catch
+		// above won't see it; treat a signal that fired during the iteration as a cancel.
+		if (deps.signal?.aborted) cancelled = true;
+		if (cancelled) break; // don't record a partial, interrupted iteration
 		iterations.push({ n, steps: stepReceipts, allChecksPassed: runError === undefined && allChecksPassed });
 		if (runError === undefined && allChecksPassed) converged = true;
 	}
@@ -222,8 +244,9 @@ export async function runConverge(
 		startedAt,
 		finishedAt,
 		elapsedMs: finishedAt - startedAt,
-		status: runError !== undefined ? "failed" : converged ? "converged" : "did-not-converge",
+		status: runError !== undefined ? "failed" : cancelled ? "cancelled" : converged ? "converged" : "did-not-converge",
 		iterations,
 		...(runError !== undefined && { error: runError }),
+		...(cancelled && { error: "cancelled by operator" }),
 	};
 }

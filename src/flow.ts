@@ -122,7 +122,7 @@ export interface FlowReceipt {
 	startedAt: number;
 	finishedAt: number;
 	elapsedMs: number;
-	status: "completed" | "failed";
+	status: "completed" | "failed" | "cancelled";
 	steps: FlowStepReceipt[];
 	error?: string;
 }
@@ -145,6 +145,9 @@ export interface FlowDeps {
 	newRunId: () => string;
 	maxWallMs?: number;
 	onProgress?: (line: string) => void;
+	// Operator-cancellation signal (Ctrl-C). Checked before each sub-routine and
+	// threaded into each sub-run so an in-flight call/check is killed promptly.
+	signal?: AbortSignal;
 	apply: boolean;
 }
 
@@ -165,10 +168,15 @@ export async function runFlow(
 	const stepReceipts: FlowStepReceipt[] = [];
 	const subReceipts: Array<RunReceipt | ConvergeReceipt> = [];
 	let failed: string | undefined;
+	let cancelled = false;
 	let terminalDiff: string | undefined;
 	let applied: boolean | undefined;
 
 	for (const step of resolved.steps) {
+		if (deps.signal?.aborted) {
+			cancelled = true;
+			break;
+		}
 		if (maxWallMs !== undefined && deps.now() - startedAt >= maxWallMs) {
 			failed = `exceeded flow wall-time of ${maxWallMs}ms before step ${step.id}`;
 			break;
@@ -206,6 +214,7 @@ export async function runFlow(
 					...(step.routine.defaults?.maxIterations !== undefined && { maxIterations: step.routine.defaults.maxIterations }),
 					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+					...(deps.signal !== undefined && { signal: deps.signal }),
 					apply: deps.apply,
 				},
 				opts,
@@ -215,6 +224,10 @@ export async function runFlow(
 			applied = r.applied;
 			ctx.steps[step.id] = { output: r.diff };
 			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.receipt.runId, status: r.receipt.status, elapsedMs: deps.now() - stepStart });
+			if (r.receipt.status === "cancelled") {
+				cancelled = true;
+				break;
+			}
 			if (r.receipt.status !== "converged") {
 				failed = `step ${step.id} (${step.routine.id}) ${r.receipt.status}`;
 				break;
@@ -223,12 +236,16 @@ export async function runFlow(
 			const r = await runOneShot(
 				step.routine,
 				validation.values,
-				{ adapter: deps.adapter, cwd: deps.cwd, now: deps.now, newRunId: deps.newRunId, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) },
+				{ adapter: deps.adapter, cwd: deps.cwd, now: deps.now, newRunId: deps.newRunId, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }), ...(deps.signal !== undefined && { signal: deps.signal }) },
 				opts,
 			);
 			subReceipts.push(r);
 			ctx.steps[step.id] = { output: r.output ?? "" };
 			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, elapsedMs: deps.now() - stepStart });
+			if (r.status === "cancelled") {
+				cancelled = true;
+				break;
+			}
 			if (r.status !== "completed") {
 				failed = `step ${step.id} (${step.routine.id}) ${r.status}`;
 				break;
@@ -248,9 +265,10 @@ export async function runFlow(
 			startedAt,
 			finishedAt,
 			elapsedMs: finishedAt - startedAt,
-			status: failed === undefined ? "completed" : "failed",
+			status: cancelled ? "cancelled" : failed === undefined ? "completed" : "failed",
 			steps: stepReceipts,
 			...(failed !== undefined && { error: failed }),
+			...(cancelled && { error: "cancelled by operator" }),
 		},
 		subReceipts,
 		...(terminalDiff !== undefined && { terminalDiff }),

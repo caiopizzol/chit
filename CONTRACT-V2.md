@@ -50,7 +50,8 @@ calls, so `callTimeoutMinutes` is not valid there -- set it on the routines it c
 
 `callTimeoutMinutes` is a **hard** kill (the subprocess is terminated). `runTimeoutMinutes` is a
 **cooperative** budget: a unit already running finishes under its own `callTimeoutMinutes`, and the run
-stops at the next checkpoint. A real mid-call deadline waits on the cancellation work.
+stops at the next checkpoint. (Ctrl-C aborts mid-call via the cancellation signal; wiring
+`runTimeoutMinutes` to that same signal, for a hard run deadline, is a possible follow-up.)
 
 ## Rules (few, enforced at resolve, with clear errors)
 

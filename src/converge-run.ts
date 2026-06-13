@@ -23,6 +23,9 @@ export interface ConvergeRunDeps {
 	maxIterations?: number;
 	maxWallMs?: number;
 	onProgress?: (line: string) => void;
+	// Operator-cancellation signal (Ctrl-C). Threaded into the loop; the sandbox is
+	// torn down in `finally` regardless, so a cancelled run leaves no worktree behind.
+	signal?: AbortSignal;
 	// Apply the diff back to origin on success. Default behavior (false) is a
 	// dry-run: run, show the diff, discard. The caller gates this on confirm.
 	apply: boolean;
@@ -58,6 +61,7 @@ export async function runConvergeInSandbox(
 				...(deps.maxIterations !== undefined && { maxIterations: deps.maxIterations }),
 				...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 				...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+				...(deps.signal !== undefined && { signal: deps.signal }),
 				diffProvider: () => sandbox.diff(),
 			},
 			opts,

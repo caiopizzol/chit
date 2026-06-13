@@ -219,6 +219,28 @@ describe("runFlow (execution)", () => {
 		for (const sub of res.subReceipts) expect(sub.scope).toBe("feat-z");
 	});
 
+	test("a pre-aborted signal cancels the flow before any sub-routine", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, { ...deps(), signal: controller.signal });
+		expect(res.receipt.status).toBe("cancelled");
+		expect(res.receipt.steps).toHaveLength(0);
+		expect(res.subReceipts).toHaveLength(0);
+	});
+
+	test("a cancelled sub-run cancels the whole flow", async () => {
+		const controller = new AbortController();
+		const adapter: Adapter = {
+			async call() {
+				controller.abort();
+				throw new Error("claude call cancelled");
+			},
+		};
+		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, { ...deps({ adapter }), signal: controller.signal });
+		expect(res.receipt.status).toBe("cancelled");
+		expect(res.receipt.steps.at(-1)).toMatchObject({ id: "grill", status: "cancelled" });
+	});
+
 	test("enforces a whole-flow wall-time budget from the composition's limits", async () => {
 		const f = routine({
 			id: "budgeted",

@@ -31,6 +31,9 @@ export interface CliDeps {
 	err: (line: string) => void;
 	// Live-progress sink: notable events as they happen (the bin prints to stderr).
 	onProgress?: (line: string) => void;
+	// Operator-cancellation signal (Ctrl-C). Threaded into every executor; a cancelled
+	// run still writes a receipt and exits 130.
+	signal?: AbortSignal;
 }
 
 const USAGE = `chit -- run declared routines
@@ -148,6 +151,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						now: deps.now,
 						newRunId: deps.newRunId,
 						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+						...(deps.signal !== undefined && { signal: deps.signal }),
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
@@ -157,6 +161,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				const r = result.receipt;
 				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
 				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.routine}: ${s.status}`);
+				if (r.status === "cancelled") {
+					deps.err(`\nrun ${r.runId} cancelled.  (chit trace ${r.runId})`);
+					return 130;
+				}
 				if (r.status === "failed") {
 					deps.err(`\nrun ${r.runId} failed: ${r.error ?? "(unknown)"}`);
 					return 1;
@@ -194,6 +202,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						newRunId: deps.newRunId,
 						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
 						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+						...(deps.signal !== undefined && { signal: deps.signal }),
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
@@ -211,12 +220,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					return 0;
 				}
 				deps.err(`\nrun ${r.runId} ${r.status}${r.error ? `: ${r.error}` : ""}`);
-				return 1;
+				return r.status === "cancelled" ? 130 : 1;
 			}
 
 			const receipt = await runOneShot(routine, validation.values, deps, args.scope !== undefined ? { scope: args.scope } : {});
 			saveReceipt(deps.cwd, receipt);
 
+			if (receipt.status === "cancelled") {
+				deps.err(`run ${receipt.runId} cancelled.  (chit trace ${receipt.runId})`);
+				return 130;
+			}
 			if (receipt.status === "failed") {
 				deps.err(`run ${receipt.runId} failed: ${receipt.error ?? "(unknown)"}`);
 				return 1;

@@ -138,7 +138,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		for (const s of r.steps) {
 			out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${s.elapsedMs}ms  ${s.subRunId || "-"}`);
 		}
-		if (r.status === "failed") out.push(`error:    ${r.error ?? "(unknown)"}`);
+		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
 	}
 	out.push(`inputs:   ${inputKeys.length > 0 ? inputKeys.join(", ") : "none"}`);
@@ -160,7 +160,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 			out.push("changes:");
 			for (const line of r.sandbox.diffStat.split("\n")) out.push(`  ${line}`);
 		}
-		if (r.status === "failed") out.push(`error:    ${r.error ?? "(unknown)"}`);
+		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
 	}
 
@@ -170,7 +170,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		const who = s.kind === "call" ? `call ${s.participant}` : "format";
 		out.push(`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 6)}  ${s.elapsedMs}ms`);
 	}
-	if (r.status === "failed") {
+	if (r.status === "failed" || r.status === "cancelled") {
 		out.push(`error:    ${r.error ?? "(unknown)"}`);
 	} else if (r.output !== undefined) {
 		// The receipt keeps the final output, but trace summarizes it -- the body was

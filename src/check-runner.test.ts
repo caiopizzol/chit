@@ -47,4 +47,13 @@ describe("argvCheckRunner", () => {
 		expect(r.output).toMatch(/timed out/);
 		expect(Date.now() - start).toBeLessThan(2500); // killed near the timeout, not after 5s
 	});
+
+	test("reports a check cancelled when the signal aborts", async () => {
+		const controller = new AbortController();
+		const p = argvCheckRunner.run({ command: "sleep", args: ["5"] }, process.cwd(), undefined, controller.signal);
+		controller.abort();
+		const r = await p;
+		expect(r.ok).toBe(false);
+		expect(r.output).toMatch(/cancelled/);
+	});
 });

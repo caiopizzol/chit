@@ -32,7 +32,7 @@ export interface RunReceipt {
 	startedAt: number;
 	finishedAt: number;
 	elapsedMs: number;
-	status: "completed" | "failed";
+	status: "completed" | "failed" | "cancelled";
 	steps: StepReceipt[];
 	output?: string;
 	error?: string;
@@ -46,6 +46,10 @@ export interface RunDeps {
 	// Optional live-progress sink: one line per notable event, so a multi-minute
 	// run is not a black box. The bin prints these to stderr as they happen.
 	onProgress?: (line: string) => void;
+	// Operator-cancellation signal (Ctrl-C). Checked before each step and threaded
+	// into the call so an in-flight call is killed promptly; a cancelled run records
+	// a "cancelled" receipt rather than a failure.
+	signal?: AbortSignal;
 }
 
 export async function runOneShot(
@@ -66,8 +70,13 @@ export async function runOneShot(
 	const ctx = { inputs: values, steps: {} as Record<string, { output: string }> };
 	const steps: StepReceipt[] = [];
 	let failed: string | undefined;
+	let cancelled = false;
 
 	for (const step of manifest.steps) {
+		if (deps.signal?.aborted) {
+			cancelled = true;
+			break;
+		}
 		if (maxWallMs !== undefined && deps.now() - startedAt >= maxWallMs) {
 			failed = `exceeded max wall-time of ${maxWallMs}ms`;
 			break;
@@ -85,6 +94,7 @@ export async function runOneShot(
 					filesystem: participant.filesystem,
 					cwd: deps.cwd,
 					...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
+					...(deps.signal !== undefined && { signal: deps.signal }),
 				});
 				ctx.steps[step.id] = { output: result.output };
 				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, status: "ok", elapsedMs: deps.now() - stepStart });
@@ -96,6 +106,11 @@ export async function runOneShot(
 				throw new Error(`runOneShot cannot run a ${step.kind} step (${step.id})`);
 			}
 		} catch (e) {
+			// A call killed by the cancellation signal is a cancel, not a failure.
+			if (deps.signal?.aborted) {
+				cancelled = true;
+				break;
+			}
 			failed = (e as Error).message;
 			steps.push({
 				id: step.id,
@@ -112,6 +127,7 @@ export async function runOneShot(
 	const finishedAt = deps.now();
 	const outputId = manifest.output ?? manifest.steps.at(-1)?.id;
 	const output = outputId !== undefined ? ctx.steps[outputId]?.output : undefined;
+	const status = cancelled ? "cancelled" : failed === undefined ? "completed" : "failed";
 	return {
 		runId,
 		routineId: routine.id,
@@ -122,9 +138,10 @@ export async function runOneShot(
 		startedAt,
 		finishedAt,
 		elapsedMs: finishedAt - startedAt,
-		status: failed === undefined ? "completed" : "failed",
+		status,
 		steps,
-		...(failed === undefined && output !== undefined && { output }),
+		...(status === "completed" && output !== undefined && { output }),
+		...(cancelled && { error: "cancelled by operator" }),
 		...(failed !== undefined && { error: failed }),
 	};
 }

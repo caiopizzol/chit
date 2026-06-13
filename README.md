@@ -65,13 +65,16 @@ machine, no API keys, no HTTP). Tests inject fakes, so they stay deterministic a
   iteration, and sub-routine, so a run stops once it is over budget, though a call already in flight still
   finishes under its own `callTimeoutMinutes`. Set either to `"none"` to opt out; defaults are high on
   purpose, to catch a hang, not honest slow work. A composition takes only `runTimeoutMinutes`.
+- **Ctrl-C cancels cleanly.** A SIGINT stops the active call or check, stops the run at the next step,
+  discards any sandbox (no leftover worktree), writes a `cancelled` receipt, and exits 130. A second
+  Ctrl-C force-exits.
 - **Receipts store inputs and the final output in plaintext** under `.chit/runs` (gitignored),
   not per-step transcripts. Whether the body should be stored by default is an open question.
 
 ## Deliberately not here
 
-Studio, MCP tools, plan/batch, a config editor, multi-provider adapters, durable resume,
-live progress. They come back once the one-shape model feels obvious.
+Studio, MCP tools, plan/batch, a config editor, multi-provider adapters, durable resume.
+They come back once the one-shape model feels obvious.
 
 ## Layout
 

@@ -20,6 +20,9 @@ export interface AdapterRequest {
 	// Per-call timeout (ms) the executor derives from the routine's limits; the call
 	// is killed past it. Undefined means no bound (the routine opted out with "none").
 	timeoutMs?: number;
+	// Operator-cancellation signal. When it aborts, the in-flight call is killed so a
+	// Ctrl-C stops promptly rather than waiting out the timeout.
+	signal?: AbortSignal;
 }
 
 export interface AdapterResult {
@@ -66,7 +69,11 @@ export const claudeCliAdapter: Adapter = {
 			cwd: req.cwd,
 			stdin: composed,
 			...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
+			...(req.signal !== undefined && { signal: req.signal }),
 		});
+		if (r.aborted) {
+			throw new Error("claude call cancelled");
+		}
 		if (r.timedOut) {
 			throw new Error(`claude call timed out after ${req.timeoutMs}ms`);
 		}

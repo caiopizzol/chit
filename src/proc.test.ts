@@ -28,4 +28,23 @@ describe("spawnCapture", () => {
 		// killed near the timeout, not after the full 5s sleep
 		expect(Date.now() - start).toBeLessThan(2500);
 	});
+
+	test("kills and flags a process when the abort signal fires", async () => {
+		const controller = new AbortController();
+		const start = Date.now();
+		const p = spawnCapture(["sleep", "5"], { cwd: process.cwd(), signal: controller.signal });
+		controller.abort();
+		const r = await p;
+		expect(r.aborted).toBe(true);
+		expect(r.timedOut).toBe(false);
+		expect(Date.now() - start).toBeLessThan(2500); // killed promptly, not after 5s
+	});
+
+	test("does not spawn at all when the signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const r = await spawnCapture(["echo", "should-not-run"], { cwd: process.cwd(), signal: controller.signal });
+		expect(r.aborted).toBe(true);
+		expect(r.stdout).toBe("");
+	});
 });

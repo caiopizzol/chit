@@ -203,6 +203,22 @@ describe("chit cleanup", () => {
 	});
 });
 
+describe("chit run cancellation", () => {
+	test("a cancelled run exits 130 and records a cancelled receipt", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const { deps, err } = harness();
+		deps.signal = controller.signal;
+		expect(await runCli(["run", "feature-griller", "--input", "idea=x"], deps)).toBe(130);
+		expect(err.join("\n")).toMatch(/cancelled/);
+
+		// the receipt persisted with a cancelled status
+		const t = harness();
+		expect(await runCli(["trace", "run-test"], t.deps)).toBe(0);
+		expect(t.out.join("\n")).toContain("run-test  feature-griller  cancelled");
+	});
+});
+
 describe("chit help", () => {
 	test("prints usage with no args", async () => {
 		const { deps, out } = harness();
