@@ -30,6 +30,15 @@ function startOffset(startedAt: number | undefined, runStart: number): string {
 	return typeof startedAt === "number" ? `+${startedAt - runStart}ms  ` : "";
 }
 
+// A call step's label, including the resolved binding it actually ran on (adapter, plus
+// model when not the default) so trace is an audit record. Legacy receipts without a
+// binding show just the call.
+function callLabel(s: { participant?: string; adapter?: string; model?: string }): string {
+	const base = `call ${s.participant}`;
+	if (s.adapter === undefined) return base;
+	return `${base} (${s.adapter}${s.model !== undefined && s.model !== "default" ? `:${s.model}` : ""})`;
+}
+
 export interface RoutineListItem {
 	id: string;
 	kind: string;
@@ -162,7 +171,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 			out.push(`  iteration ${it.n}  ${startOffset(it.startedAt, r.startedAt)}${it.allChecksPassed ? "checks passed" : "checks failed"}`);
 			const w = Math.max(1, ...it.steps.map((s) => s.id.length));
 			for (const s of it.steps) {
-				const who = s.kind === "call" ? `call ${s.participant}` : s.kind;
+				const who = s.kind === "call" ? callLabel(s) : s.kind;
 				let line = `    ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms`;
 				if (s.checks) line += `  [${s.checks.map((c) => `${c.command}:${c.ok ? "ok" : "fail"}`).join(", ")}]`;
 				out.push(line);
@@ -181,7 +190,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	out.push("steps:");
 	const w = Math.max(1, ...r.steps.map((s) => s.id.length));
 	for (const s of r.steps) {
-		const who = s.kind === "call" ? `call ${s.participant}` : "format";
+		const who = s.kind === "call" ? callLabel(s) : "format";
 		out.push(`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms`);
 	}
 	if (r.status === "failed" || r.status === "cancelled") {

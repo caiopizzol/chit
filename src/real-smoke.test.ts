@@ -38,7 +38,7 @@ function realDeps(): RunDeps {
 			expect(r.status).toBe("completed");
 			expect((r.output ?? "").length).toBeGreaterThan(50);
 		},
-		180_000,
+		600_000,
 	);
 
 	test(
@@ -49,13 +49,13 @@ function realDeps(): RunDeps {
 			expect(r.status).toBe("completed");
 			expect((r.output ?? "").length).toBeGreaterThan(50);
 		},
-		180_000,
+		600_000,
 	);
 });
 
 (REAL ? describe : describe.skip)("real-claude smoke: configurable agents", () => {
 	test(
-		"two claude profiles back different steps; read-only can't write; the receipt names each agent",
+		"two claude profiles back different steps; the receipt names each agent; builder edits only the sandbox",
 		async () => {
 			const repo = mkdtempSync(join(tmpdir(), "chit-agents-"));
 			try {
@@ -95,14 +95,14 @@ function realDeps(): RunDeps {
 				});
 				expect(res.receipt.status).toBe("converged");
 				const steps = res.receipt.iterations[0]?.steps ?? [];
-				expect(steps.find((s) => s.id === "build")?.agent).toBe("builder"); // read-write step ran on the builder agent
-				expect(steps.find((s) => s.id === "review")?.agent).toBe("critic"); // read-only step ran on the critic agent
+				expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "claude" }); // resolved binding recorded
+				expect(steps.find((s) => s.id === "review")).toMatchObject({ agent: "critic", adapter: "claude" });
 				expect(readFileSync(join(repo, "note.md"), "utf-8")).toBe("draft\n"); // dry run: builder edited only the sandbox
 			} finally {
 				rmSync(repo, { recursive: true, force: true });
 			}
 		},
-		300_000,
+		600_000,
 	);
 });
 
@@ -124,6 +124,6 @@ function realDeps(): RunDeps {
 				rmSync(cwd, { recursive: true, force: true });
 			}
 		},
-		180_000,
+		600_000,
 	);
 });

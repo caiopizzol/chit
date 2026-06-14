@@ -243,6 +243,14 @@ describe("formatTrace", () => {
 		expect(out).toContain(`${"SECRET REPORT BODY".length} chars`);
 	});
 
+	test("shows the resolved adapter/model on a call step (audit of what ran)", () => {
+		const withBinding: RunReceipt = {
+			...base,
+			steps: [{ id: "grill", kind: "call", participant: "griller", agent: "claude", adapter: "claude", model: "sonnet", status: "ok", startedAt: 0, elapsedMs: 5 }],
+		};
+		expect(formatTrace(withBinding)).toContain("call griller (claude:sonnet)");
+	});
+
 	test("failed: shows the error and no output line", () => {
 		const out = formatTrace({ ...base, status: "failed", output: undefined, error: "model unavailable" });
 		expect(out).toContain("failed");

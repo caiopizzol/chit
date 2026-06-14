@@ -26,7 +26,10 @@ export interface ConvergeStepReceipt {
 	id: string;
 	kind: "call" | "format" | "check";
 	participant?: string;
+	// The agent id plus the resolved binding it ran on (see StepReceipt).
 	agent?: string;
+	adapter?: string;
+	model?: string;
 	status: "ok" | "failed" | "cancelled";
 	// Absolute clock when the step started (see StepReceipt) -- the timeline source.
 	startedAt: number;
@@ -117,6 +120,12 @@ export async function runConverge(
 	opts: { scope?: string } = {},
 ): Promise<ConvergeReceipt> {
 	const manifest: Manifest = routine.manifest;
+	// Resolved adapter/model for a participant's agent id, recorded on its call receipt.
+	const callBinding = (participantId: string): { adapter?: string; model?: string } => {
+		const agentId = manifest.participants[participantId]?.agent;
+		const b = agentId !== undefined ? routine.agents?.[agentId] : undefined;
+		return b !== undefined ? { adapter: b.adapter, ...(b.model !== undefined && { model: b.model }) } : {};
+	};
 	const callTimeoutMs = effectiveCallTimeoutMs(manifest);
 	// Whole-run wall-time: an explicit deps override (config), else the routine's
 	// limits, else the default. Undefined means no bound ("none").
@@ -180,6 +189,7 @@ export async function runConverge(
 						kind: "call",
 						participant: step.call,
 						agent: participant.agent,
+						...callBinding(step.call),
 						status: "ok",
 						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
@@ -226,7 +236,7 @@ export async function runConverge(
 					stepReceipts.push({
 						id: step.id,
 						kind,
-						...(step.kind === "call" && { participant: step.call }),
+						...(step.kind === "call" && { participant: step.call, ...callBinding(step.call) }),
 						status: "cancelled",
 						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
@@ -237,7 +247,7 @@ export async function runConverge(
 				stepReceipts.push({
 					id: step.id,
 					kind,
-					...(step.kind === "call" && { participant: step.call }),
+					...(step.kind === "call" && { participant: step.call, ...callBinding(step.call) }),
 					status: "failed",
 					startedAt: stepStart,
 					elapsedMs: deps.now() - stepStart,

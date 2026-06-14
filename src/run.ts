@@ -14,7 +14,11 @@ export interface StepReceipt {
 	id: string;
 	kind: "call" | "format";
 	participant?: string;
+	// The agent id (profile) plus the binding it resolved to, so trace can prove which
+	// adapter + model actually ran -- even if the config later changes.
 	agent?: string;
+	adapter?: string;
+	model?: string;
 	status: "ok" | "failed" | "cancelled";
 	// Absolute clock (deps.now()) when the step started. With the run's startedAt this
 	// gives a timeline (offset = startedAt - run.startedAt); elapsedMs is the duration.
@@ -70,6 +74,15 @@ export async function runOneShot(
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
 
+	// The resolved adapter/model a participant's agent id binds to, recorded on its
+	// call receipt so trace proves what actually ran. Empty when the routine has no
+	// bindings (hand-built test routines bypass resolve).
+	const callBinding = (participantId: string): { adapter?: string; model?: string } => {
+		const agentId = manifest.participants[participantId]?.agent;
+		const b = agentId !== undefined ? routine.agents?.[agentId] : undefined;
+		return b !== undefined ? { adapter: b.adapter, ...(b.model !== undefined && { model: b.model }) } : {};
+	};
+
 	const ctx = { inputs: values, steps: {} as Record<string, { output: string }> };
 	const steps: StepReceipt[] = [];
 	let failed: string | undefined;
@@ -100,7 +113,7 @@ export async function runOneShot(
 					...(deps.signal !== undefined && { signal: deps.signal }),
 				});
 				ctx.steps[step.id] = { output: result.output };
-				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
 				steps.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
@@ -116,7 +129,7 @@ export async function runOneShot(
 				steps.push({
 					id: step.id,
 					kind: step.kind === "call" ? "call" : "format",
-					...(step.kind === "call" && { participant: step.call }),
+					...(step.kind === "call" && { participant: step.call, ...callBinding(step.call) }),
 					status: "cancelled",
 					startedAt: stepStart,
 					elapsedMs: deps.now() - stepStart,
@@ -127,7 +140,7 @@ export async function runOneShot(
 			steps.push({
 				id: step.id,
 				kind: step.kind === "call" ? "call" : "format",
-				...(step.kind === "call" && { participant: step.call }),
+				...(step.kind === "call" && { participant: step.call, ...callBinding(step.call) }),
 				status: "failed",
 				startedAt: stepStart,
 				elapsedMs: deps.now() - stepStart,

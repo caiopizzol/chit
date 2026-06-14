@@ -71,6 +71,10 @@ describe("agent binding at resolve time", () => {
 		expect(r.status).toBe("converged");
 		expect(codex.calls.map((c) => c.agent)).toEqual(["builder"]); // builder -> codex
 		expect(claude.calls.map((c) => c.agent)).toEqual(["critic"]); // critic -> claude
+		// the receipt records the RESOLVED binding per call step (audit: what actually ran)
+		const steps = r.iterations[0]?.steps ?? [];
+		expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "codex" });
+		expect(steps.find((s) => s.id === "crit")).toMatchObject({ agent: "critic", adapter: "claude" });
 	});
 });
 

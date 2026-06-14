@@ -333,6 +333,15 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       read-only call cannot write, and the two-agent routine ran builder (read-write) + critic (read-only)
       with the receipt naming each agent and origin untouched. Configurable agents proven with real models.
 
+## Increment 18.1: agent observability + smoke reliability (review follow-ups)
+- [x] receipts now record the RESOLVED binding per call step (agent id + adapter + model), so trace proves
+      what ACTUALLY ran, not just the profile id; trace renders "call builder (claude:sonnet)" (the model is
+      shown only when non-default). agents.test asserts the per-step adapter; views.test asserts the render.
+- [x] raised the guarded real-smoke timeouts (180s -> 600s): a real grill/plan call can exceed 3 min, and a
+      reviewer's independent smoke timed out at 180s. Corrected the two-agent smoke name -- it proves builder
+      edits only the sandbox and the receipt names each agent; the SEPARATE test proves read-only can't write.
+- [x] 184 pass + 4 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
