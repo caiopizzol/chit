@@ -352,7 +352,9 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       but needs `--skip-trust` (or GEMINI_CLI_TRUST_WORKSPACE=1) headless. NEXT slice: a geminiCliAdapter with
       its OWN empirical permission-mapping verification (read-only must ACTUALLY be read-only, the same check
       claude needed), wired as { claude, gemini }; then a real builder-on-claude / critic-on-gemini smoke.
-- [x] 185 pass + 4 skip, typecheck clean.
+- [x] 185 pass + 4 skip, typecheck clean. Guarded multi-model smoke PASSED 1/1 against real claude: a
+      sandboxed loop with builder=sonnet + critic=haiku converged, the receipt recorded each adapter/model
+      binding, origin untouched. Multi-model is proven end to end (different models per participant).
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
