@@ -369,6 +369,17 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] the adapter abstraction is real: a second backend was one registry entry + one verified mapping, no
       redesign. 186 pass + 6 skip, typecheck clean.
 
+## Increment 20: literal CLI-process E2E (operator path)
+- [x] the suite called runCli() directly; added src/cli-process.test.ts that SPAWNS the real binary
+      (`bun src/index.ts ...`) in a temp cwd and asserts exit codes + output -- the operator's actual path:
+      argv parsing, process.exit codes, the bin's adapter-registry wiring, the no-config / unknown-command
+      paths. Deterministic, no model (init -> routines -> inspect; usage; unknown command -> 2; run unknown
+      -> 1; run with no config -> 1). A guarded case runs a real routine through the binary. 191 pass + 7 skip.
+- NEXT (per review, NOT built speculatively): a real-task dogfood pass -- run real tasks through the binary,
+  change nothing mid-run, record every point of friction. That is expected to surface HUMAN-INPUT STEPS as
+  the smallest needed feature (a step that pauses to ask the operator a structured question: clarify,
+  approve, decide). The engine has call/format/check/routine steps but cannot yet stop and ask.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
