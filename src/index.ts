@@ -3,7 +3,7 @@
 // stdout/stderr, cwd) into runCli and exit with its code.
 
 import { createInterface, type Interface } from "node:readline";
-import { claudeCliAdapter, geminiCliAdapter } from "./adapter.ts";
+import { claudeCliAdapter, codexCliAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { runCli } from "./cli.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
@@ -47,7 +47,7 @@ const code = await runCli(process.argv.slice(2), {
 	cwd: process.cwd(),
 	// Adapter registry keyed by adapter type. Adding another backend is one more entry
 	// here; the agent config picks which one each agent uses.
-	adapters: { claude: claudeCliAdapter, gemini: geminiCliAdapter },
+	adapters: { claude: claudeCliAdapter, gemini: geminiCliAdapter, codex: codexCliAdapter },
 	checkRunner: argvCheckRunner,
 	sandboxFactory: gitWorktreeSandboxFactory,
 	now: () => Date.now(),

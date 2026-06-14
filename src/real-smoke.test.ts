@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { claudeCliAdapter, dispatchingAdapter, geminiCliAdapter } from "./adapter.ts";
+import { claudeCliAdapter, codexCliAdapter, dispatchingAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { loadConfig } from "./config.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
@@ -196,6 +196,128 @@ function realDeps(): RunDeps {
 				expect(existsSync(join(cwd, "created.txt"))).toBe(false);
 			} finally {
 				rmSync(cwd, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+});
+
+// Codex input-validation that needs no model (always runs): `none` has no codex mapping.
+describe("codex adapter: filesystem none is rejected (no real call)", () => {
+	test("rejects a `none` participant before spawning anything", async () => {
+		await expect(
+			codexCliAdapter.call({ agent: "x", instructions: "i", prompt: "p", filesystem: "none", cwd: tmpdir() }),
+		).rejects.toThrow(/no no-tools mode/);
+	});
+});
+
+// The reviewer's verification gate for the third adapter, against the real `codex` CLI.
+(REAL ? describe : describe.skip)("real third adapter: codex", () => {
+	test(
+		"a read-only call returns text",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "chit-codex-ro-"));
+			try {
+				const r = await codexCliAdapter.call({
+					agent: "x",
+					instructions: "You answer concisely.",
+					prompt: "Reply with exactly the word BANANA and nothing else.",
+					filesystem: "read-only",
+					cwd,
+				});
+				expect(r.output.length).toBeGreaterThan(0);
+				expect(r.output).toContain("BANANA");
+			} finally {
+				rmSync(cwd, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+
+	test(
+		"a read-only call cannot create a file",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "chit-codex-ro2-"));
+			try {
+				await codexCliAdapter.call({
+					agent: "x",
+					instructions: "You may inspect the cwd, but you must not modify anything.",
+					prompt: "Create a file named created.txt containing the word HELLO in your current directory.",
+					filesystem: "read-only",
+					cwd,
+				});
+				expect(existsSync(join(cwd, "created.txt"))).toBe(false);
+			} finally {
+				rmSync(cwd, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+
+	test(
+		"a workspace-write call can create a file in a git repo",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "chit-codex-rw-"));
+			try {
+				const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
+				sh("git init -q && git config user.email t@t.co && git config user.name t");
+				await codexCliAdapter.call({
+					agent: "builder",
+					instructions: "You implement small, well-scoped changes.",
+					prompt: "Create a file named created.txt containing exactly the word HELLO.",
+					filesystem: "read-write",
+					cwd,
+				});
+				expect(existsSync(join(cwd, "created.txt"))).toBe(true);
+				expect(readFileSync(join(cwd, "created.txt"), "utf-8")).toContain("HELLO");
+			} finally {
+				rmSync(cwd, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+
+	test(
+		"a sandboxed chit run with a codex builder produces a diff, dry-run discards it, and the receipt records adapter:codex",
+		async () => {
+			const repo = mkdtempSync(join(tmpdir(), "chit-codex-sandbox-"));
+			try {
+				const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd: repo });
+				sh("git init -q && git config user.email t@t.co && git config user.name t");
+				writeFileSync(join(repo, "note.md"), "draft\n");
+				sh("git add -A && git commit -q -m init");
+
+				const manifest = parseManifest(
+					{
+						id: "codex-build",
+						inputs: {},
+						participants: { builder: { agent: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" } },
+						steps: [
+							{ id: "build", call: "builder", prompt: "Append a single line to note.md." },
+							{ id: "verify", check: [{ command: "sh", args: ["-c", "test -f note.md"] }] },
+						],
+						repeat: { until: "checks-pass", maxIterations: 1 },
+					},
+					"codex-build",
+				);
+				const agents = { builder: { adapter: "codex" } };
+				const routine: ResolvedRoutine = { id: "codex-build", manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:x", agents };
+				const adapter = dispatchingAdapter(agents, { codex: codexCliAdapter });
+				const res = await runConvergeInSandbox(routine, {}, {
+					sandboxFactory: gitWorktreeSandboxFactory,
+					adapter,
+					checkRunner: argvCheckRunner,
+					cwd: repo,
+					now: () => Date.now(),
+					newRunId: () => "codex-smoke",
+					apply: false,
+				});
+				expect(res.receipt.status).toBe("converged");
+				expect(res.diff.length).toBeGreaterThan(0); // codex edited the sandbox -> a real diff
+				expect(res.receipt.iterations[0]?.steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "codex" });
+				expect(readFileSync(join(repo, "note.md"), "utf-8")).toBe("draft\n"); // dry run: origin untouched
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
 			}
 		},
 		600_000,

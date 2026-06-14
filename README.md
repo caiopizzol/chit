@@ -63,8 +63,8 @@ bun run src/index.ts trace <run-id>
 bun test                          # fast, all fake-backed (no real model calls)
 ```
 
-`run` executes for real by shelling out to the `claude` CLI (already on your
-machine, no API keys, no HTTP). Tests inject fakes, so they stay deterministic and free.
+`run` executes for real by shelling out to an already-installed CLI - `claude`, `gemini`, or `codex`,
+picked per agent in config (no API keys, no HTTP). Tests inject fakes, so they stay deterministic and free.
 
 ## Boundaries (kept on purpose)
 
@@ -93,8 +93,9 @@ machine, no API keys, no HTTP). Tests inject fakes, so they stay deterministic a
 
 ## Deliberately not here
 
-Studio, MCP tools, plan/batch, a config editor, multi-provider adapters, durable resume.
-They come back once the one-shape model feels obvious.
+Studio, MCP tools, plan/batch, a config editor, durable resume.
+They come back once the one-shape model feels obvious. (Multi-provider adapters are now in:
+claude, gemini, and codex, each picked per agent in config.)
 
 ## Layout
 
@@ -105,7 +106,7 @@ src/routine.ts      resolve a routine: config + bound manifest + digest
 src/inputs.ts       validate operator inputs
 src/template.ts     {{ inputs.x }} / {{ steps.y.output }} / {{ iteration }} / {{ diff }}
 src/proc.ts         spawn + capture with a timeout (shared by adapter & checks)
-src/adapter.ts      the one model-call seam (fake for tests, claude CLI for real)
+src/adapter.ts      the one model-call seam (fake for tests; claude / gemini / codex CLIs for real)
 src/check-runner.ts the check seam (fake for tests, real argv spawn)
 src/sandbox.ts      write-safety seam (fake for tests, real git worktree)
 src/run.ts          the text execution path (read-only, in cwd) -> receipt

@@ -6,6 +6,9 @@
 // reimplementing an HTTP client or managing API keys -- the whole point of the
 // proof is the product shape, not a new runtime.
 
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentConfig } from "./config.ts";
 import type { Filesystem } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
@@ -133,9 +136,62 @@ export const geminiCliAdapter: Adapter = {
 	},
 };
 
+// A third real adapter: the codex CLI. Uses `codex exec` (the non-interactive surface)
+// and reads the FINAL message from `--output-last-message` (a clean single-message file),
+// NOT stdout -- stdout carries progress + a token-count footer, so parsing it is fragile.
+// Verified empirically against codex-cli 0.139.0:
+//   read-only      -> --sandbox read-only      (returns text; CANNOT write -- confirmed)
+//   read-write     -> --sandbox workspace-write (writes in the cwd; converge passes a sandbox
+//                     worktree, so codex's sandbox is a second boundary, not the primary one)
+//   none           -> rejected: codex exec has no true no-tools mode, and mapping it to
+//                     read-only would silently grant fs read that `none` promises to withhold.
+// `--skip-git-repo-check` lets a read-only call run in a non-repo cwd (e.g. a grilling temp dir);
+// `--ephemeral` keeps no session history; `--model` selects a model (omitted for the default).
+export const codexCliAdapter: Adapter = {
+	async call(req) {
+		if (req.filesystem === "none") {
+			throw new Error('codex has no no-tools mode, so a `filesystem: "none"` participant cannot use the codex adapter (use read-only, or bind it to another adapter)');
+		}
+		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
+		const sandbox = req.filesystem === "read-write" ? "workspace-write" : "read-only";
+		const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
+		// One ephemeral temp dir per call for the final-message file; removed in `finally`.
+		const dir = mkdtempSync(join(tmpdir(), "chit-codex-"));
+		const outFile = join(dir, "last.txt");
+		try {
+			const args = ["codex", "exec", "--cd", req.cwd, "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral", ...model, "-o", outFile, "-"];
+			const r = await spawnCapture(args, {
+				cwd: req.cwd,
+				stdin: composed,
+				...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
+				...(req.signal !== undefined && { signal: req.signal }),
+			});
+			if (r.aborted) {
+				throw new Error("codex call cancelled");
+			}
+			if (r.timedOut) {
+				throw new Error(`codex call timed out after ${req.timeoutMs}ms`);
+			}
+			if (r.exitCode !== 0) {
+				throw new Error(`codex exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);
+			}
+			// The final message is in the -o file; fall back to stdout only if it is absent.
+			let output: string;
+			try {
+				output = readFileSync(outFile, "utf-8").trim();
+			} catch {
+				output = r.stdout.trim();
+			}
+			return { output };
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	},
+};
+
 // A registry of real adapters keyed by adapter type (the `adapter` field of an
-// agent config). The bin wires { claude, gemini }; adding another backend is one more
-// entry, not a redesign.
+// agent config). The bin wires { claude, gemini, codex }; adding another backend is one
+// more entry, not a redesign.
 export type AdapterRegistry = Record<string, Adapter>;
 
 // The binding seam: the executors call ONE adapter (this one). It resolves each

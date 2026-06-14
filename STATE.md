@@ -457,15 +457,33 @@ user-authored routines, not product concepts. `repeat.until` is now `"checks-pas
   cli non-sandboxed-loop dispatch; flow loop sub-routine; views condition labels; a model-less real-binary loop
   E2E). 237 pass + 7 skip, typecheck clean.
 
+## Increment 22: a third real adapter (codex), config-only
+`codexCliAdapter` beside claude/gemini. No manifest change -- a participant's agent id, bound in
+chit.config.json to `{ adapter: "codex", model? }`, is all it takes. Uses `codex exec` (the
+non-interactive surface) and reads the FINAL message from `--output-last-message` (a clean single-message
+file), NOT stdout (stdout carries progress + a token-count footer).
+- VERIFIED THE CLI MYSELF (codex-cli 0.139.0, not the quoted manual): flags exist as claimed; manually
+  confirmed read-only returns text, read-only CANNOT write, workspace-write CAN write (in a git repo).
+- MAPPING: read-only -> `--sandbox read-only`; read-write -> `--sandbox workspace-write` (codex's sandbox is
+  a SECOND boundary; converge still passes the disposable worktree as cwd, the primary safety). `none` is
+  REJECTED -- codex has no true no-tools mode, and mapping it to read-only would silently grant the fs read
+  that `none` withholds (more honest to fail with a clear error). `--skip-git-repo-check` lets a read-only
+  call run in a non-repo cwd; `--ephemeral` keeps no session history.
+- VERIFIED: +5 tests -- an unguarded `none`-rejection unit test (no model), and 4 guarded real-codex smokes
+  (read-only returns text; read-only can't write; workspace-write writes; a sandboxed chit run with a codex
+  builder produces a diff, dry-run discards it, receipt records adapter:codex). All 5 pass against the real
+  `codex` CLI in ~68s. 238 pass + 11 skip, typecheck clean. (Gate item 5, --apply-after-checks, is the same
+  adapter-agnostic git-apply path already proven; the codex dogfood would exercise it end to end.)
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
 --apply; configurable limits (visible in inspect); Ctrl-C cancel; a persisted timeline; configurable
-agents (adapter + model bound in config, multi-backend); human-input `ask` gates that feed an operator
-answer forward; a generic loop primitive (`repeat.until` = checks-pass OR a model/human-judged `{ step, equals }`,
-sandboxed or in-cwd) so /goal-style loops are authored not built; every run leaves a durable, traceable receipt
-(including did-not-converge, failed, cancelled, and apply-conflict); and `chit init` scaffolds a runnable first
-routine. 21 increments, all green.
+agents (adapter + model bound in config, multi-backend: claude + gemini + codex); human-input `ask` gates that
+feed an operator answer forward; a generic loop primitive (`repeat.until` = checks-pass OR a model/human-judged
+`{ step, equals }`, sandboxed or in-cwd) so /goal-style loops are authored not built; every run leaves a durable,
+traceable receipt (including did-not-converge, failed, cancelled, and apply-conflict); and `chit init` scaffolds
+a runnable first routine. 22 increments, all green.
 
 ## Optional / deferred (none blocking)
 - one real-claude smoke outside CI (the suite fakes the model on purpose).
