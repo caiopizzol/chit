@@ -219,6 +219,53 @@ describe("chit run cancellation", () => {
 	});
 });
 
+describe("chit init", () => {
+	const temps: string[] = [];
+	afterAll(() => {
+		for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
+	});
+	function initDeps(cwd: string) {
+		const out: string[] = [];
+		const err: string[] = [];
+		const deps: CliDeps = {
+			cwd,
+			adapter: fakeAdapter((req) => `OUT(${req.prompt})`),
+			checkRunner: fakeCheckRunner(),
+			sandboxFactory: fakeSandboxFactory(),
+			now: () => 0,
+			newRunId: () => "run-init",
+			out: (l) => out.push(l),
+			err: (l) => err.push(l),
+		};
+		return { deps, out, err };
+	}
+
+	test("scaffolds a routine that then lists, resolves, and runs", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "chit-init-cli-"));
+		temps.push(cwd);
+		const { deps, out } = initDeps(cwd);
+
+		expect(await runCli(["init", "myrev"], deps)).toBe(0);
+		expect(out.join("\n")).toContain("created examples/myrev.json");
+
+		out.length = 0;
+		expect(await runCli(["routines"], deps)).toBe(0);
+		expect(out.join("\n")).toContain("myrev");
+
+		out.length = 0;
+		expect(await runCli(["run", "myrev", "--input", "topic=dark mode"], deps)).toBe(0);
+		expect(out.join("\n")).toContain("OUT(");
+	});
+
+	test("rejects an invalid template", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "chit-init-cli-"));
+		temps.push(cwd);
+		const { deps, err } = initDeps(cwd);
+		expect(await runCli(["init", "x", "--template", "bogus"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/--template must be one of/);
+	});
+});
+
 describe("chit help", () => {
 	test("prints usage with no args", async () => {
 		const { deps, out } = harness();

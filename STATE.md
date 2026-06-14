@@ -262,11 +262,34 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] acceptance: a composition with a dirty-origin terminal apply -> exit 1, origin uncorrupted, the FLOW
       receipt has applyError and formatTrace(flowReceipt) shows the apply line. 160 tests, typecheck clean.
 
-## NEXT: routine scaffolding (`chit init`)
-- the full happy + unhappy E2E story is proven and every run now leaves a receipt; scaffolding is next.
-- still optional/deferred: one real-claude smoke outside CI (the suite fakes the model on purpose);
-  HARD run deadline (wire runTimeoutMinutes to the cancel signal); dry-run/cancelled sandbox receipts
-  still store their (removed) workDir path (JSON-only; trace does not render it).
+## Increment 16 COMPLETE — `chit init` scaffolding
+- [x] src/scaffold.ts: `chit init [<name>] [--template text|loop|check]` writes a runnable manifest from a
+      template under examples/, registers it in chit.config.json (creating it if absent), prints next steps.
+      Templates map to the three first-routine shapes (text / sandboxed loop / check-only); loop+check use
+      an `sh -c "true # replace with your real check"` placeholder so a fresh scaffold runs green and
+      self-documents.
+- [x] the generated manifest is REAL: scaffold.test resolves all three templates and RUNS the text one end
+      to end; cli.test does init -> routines -> run through the CLI. Name validated kebab-case (config's
+      rule); duplicate name / existing manifest rejected; existing config preserved (raw-JSON merge).
+- [x] README documents the verb + layout. 168 tests (468 expects), typecheck clean, no husks.
+- note to self: a careless smoke ran `init` in the repo root and polluted chit.config.json + examples/;
+  reverted via git checkout. ALWAYS cd into a temp dir before running init by hand (tests use temp cwds).
+
+## State of the proof
+The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
+sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
+--apply; configurable limits (visible in inspect); Ctrl-C cancel; a persisted timeline; every run leaves
+a durable, traceable receipt (including did-not-converge, failed, cancelled, and apply-conflict); and
+`chit init` scaffolds a runnable first routine. 16 increments, all green.
+
+## Optional / deferred (none blocking)
+- one real-claude smoke outside CI (the suite fakes the model on purpose).
+- HARD run deadline: wire runTimeoutMinutes to the cancel signal (today cooperative; Ctrl-C is the only
+  mid-call abort).
+- a dry-run/cancelled sandbox receipt still stores its (removed) workDir path -- JSON-only, trace does not
+  render it; could mark it "discarded".
+- still deferred by design: branching, nested composition, multiple sandboxed steps in a flow, parallel
+  fan-out, human-gate steps, durable resume.
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed

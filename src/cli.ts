@@ -15,6 +15,7 @@ import { validateInputs } from "./inputs.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
+import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
 import { reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { saveReceipt, loadReceipt } from "./store.ts";
 import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } from "./views.ts";
@@ -38,6 +39,7 @@ export interface CliDeps {
 
 const USAGE = `chit -- run declared routines
 
+  chit init [<name>] [--template text|loop|check]   scaffold a runnable routine (default: a text "example")
   chit routines                       list the routines declared in chit.config.json
   chit inspect <routine>              show what a routine needs and what it will run
   chit run <routine> [opts]           run a routine and print its output
@@ -88,6 +90,28 @@ function parseRunArgs(rest: string[]): {
 	return { id, inputs, apply, ...(scope !== undefined && { scope }) };
 }
 
+function parseInitArgs(rest: string[]): { name: string; template: Template; error?: string } {
+	let name: string | undefined;
+	let template: Template = "text";
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "--template") {
+			const t = rest[++i];
+			if (t === undefined || !TEMPLATES.includes(t as Template)) {
+				return { name: name ?? "example", template, error: `--template must be one of: ${TEMPLATES.join(", ")}` };
+			}
+			template = t as Template;
+		} else if (a?.startsWith("--")) {
+			return { name: name ?? "example", template, error: `unknown option ${a}` };
+		} else if (name === undefined) {
+			name = a;
+		} else {
+			return { name, template, error: `unexpected argument ${JSON.stringify(a)}` };
+		}
+	}
+	return { name: name ?? "example", template };
+}
+
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 	const [command, ...rest] = argv;
 
@@ -97,6 +121,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 	}
 
 	try {
+		if (command === "init") {
+			const args = parseInitArgs(rest);
+			if (args.error) return fail(deps, args.error);
+			const result = scaffoldRoutine(deps.cwd, args.name, args.template);
+			deps.out(`created ${result.manifestPath}  (${result.template} routine)`);
+			deps.out(`${result.createdConfig ? "created" : "updated"} chit.config.json`);
+			deps.out("");
+			deps.out("next:");
+			deps.out(`  chit inspect ${args.name}`);
+			const runHint = `  chit run ${args.name}${result.inputHint ? ` ${result.inputHint}` : ""}`;
+			deps.out(args.template === "text" ? runHint : `${runHint}            # dry run; add --apply to write back`);
+			deps.out(`\nedit ${result.manifestPath} to make it yours (prompts, participants, checks).`);
+			return 0;
+		}
+
 		if (command === "routines") {
 			const config = loadConfig(deps.cwd);
 			const items: RoutineListItem[] = Object.entries(config.routines).map(([id, entry]) => {
