@@ -391,4 +391,27 @@ describe("runFlow -- ask gates", () => {
 		});
 		expect(() => resolveFlow(f, resolver())).toThrow(/must be the LAST step/);
 	});
+
+	test("forwards askUser into a text sub-routine that has its OWN ask gate (composed behaves like standalone)", async () => {
+		// a read-only text sub-routine that asks INSIDE itself
+		const clarifySub = routine({
+			id: "clarify-sub",
+			inputs: {},
+			steps: [
+				{ id: "name", ask: "who?" },
+				{ id: "out", format: "hello {{ steps.name.output }}" },
+			],
+			output: "out",
+		});
+		const f = routine({ id: "calls-clarify", inputs: {}, steps: [{ id: "c", routine: "clarify-sub", inputs: {} }] });
+		const res = await runFlow(resolveFlow(f, resolver({ "clarify-sub": clarifySub })), {}, { ...deps(), askUser: async () => "Zoe" });
+		expect(res.receipt.status).toBe("completed");
+		// the injected answer reached the sub-routine's output
+		const sub = res.subReceipts[0];
+		if (sub?.policy !== "one-shot") throw new Error("expected a one-shot sub-receipt");
+		expect(sub.output).toBe("hello Zoe");
+		// and the sub-run's ask STEP receipt still carries no answer body
+		const askStep = sub.steps.find((s) => s.id === "name");
+		expect(Object.keys(askStep ?? {}).sort()).toEqual(["elapsedMs", "id", "kind", "startedAt", "status"]);
+	});
 });

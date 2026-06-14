@@ -304,7 +304,17 @@ export async function runFlow(
 			const r = await runOneShot(
 				step.routine,
 				validation.values,
-				{ adapter: deps.adapter, cwd: deps.cwd, now: deps.now, newRunId: deps.newRunId, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }), ...(deps.signal !== undefined && { signal: deps.signal }) },
+				{
+					adapter: deps.adapter,
+					cwd: deps.cwd,
+					now: deps.now,
+					newRunId: deps.newRunId,
+					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+					...(deps.signal !== undefined && { signal: deps.signal }),
+					// Forward the input seam so a text sub-routine with its own ask gate behaves the
+					// same composed as standalone (the routine model: behavior is shape, not context).
+					...(deps.askUser !== undefined && { askUser: deps.askUser }),
+				},
 				opts,
 			);
 			subReceipts.push(r);

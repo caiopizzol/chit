@@ -420,10 +420,15 @@ at a prompt cancels the run), tests inject a deterministic answer.
 - DOGFOOD FIX SHIPPED: examples/feature-flow.json gained an `approve` gate between `plan` and `impl` (the exact
   friction #1). New model-less examples/clarify.json demos the mechanic and backs a deterministic
   real-binary stdin E2E.
-- VERIFIED: +26 tests (manifest Rule 4 + ask parsing + output rule; runOneShot ask incl. cancel + no-handler +
+- VERIFIED: +29 tests (manifest Rule 4 + ask parsing + output rule; runOneShot ask incl. cancel + no-handler +
   output-skip; flow gates incl. feed-forward + no sub-run + cancel; views inspect/trace render; a process E2E
   that pipes stdin to the real bin). Manual: `printf 'Ada\n' | chit run clarify` -> output uses the answer,
-  trace shows `name ask ok` with no body. 217 pass + 7 skip, typecheck clean.
+  trace shows `name ask ok` with no body. 220 pass + 7 skip, typecheck clean.
+- COMPOSABILITY FIX (reviewer-caught, reproduced first): runFlow forwarded onProgress/signal into a one-shot
+  sub-run but NOT askUser, so a composition calling a TEXT sub-routine that has its own ask gate failed ("no
+  input handler wired") even with stdin provided -- a text-routine-with-ask behaved differently composed vs
+  standalone. Fixed by forwarding askUser into runOneShot from runFlow; added a test (composed == standalone,
+  answer reaches the sub-run output, ask step still bodyless).
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
