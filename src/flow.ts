@@ -1,12 +1,14 @@
 // Composition: run a flow routine by running OTHER routines in order, mapping the
 // flow's inputs and earlier steps' outputs into each one's inputs.
 //
-// v1 contract (deliberately strict, so it adds NO new write-safety surface):
-//   - sub-routines are one-shot or converge (no nested flows -> no cycles).
-//   - AT MOST ONE converge step, and it MUST be the last step.
-//   - one-shot steps run in the caller cwd unsandboxed, so they must be read-only
-//     (no read-write participant). Only the terminal converge step may write, and
-//     it does so inside its own disposable worktree (dry-run by default, --apply).
+// Contract (deliberately strict, so it adds NO new write-safety surface):
+//   - sub-routines are execution routines, never compositions (no nested flows -> no cycles).
+//   - AT MOST ONE SANDBOXED sub-routine (one that writes or runs checks), and it MUST be the
+//     LAST step. The write-safety rule is on *sandboxing*, not on looping: a read-only loop
+//     (a { step, equals } repeat with no writes/checks) is unsandboxed and may sit anywhere.
+//   - every earlier step runs in the caller cwd unsandboxed, so it must write nothing: a
+//     one-shot text run, an `ask` gate, or a read-only loop. Only the terminal sandboxed step
+//     may write, inside its own disposable worktree (dry-run by default, --apply).
 // These config-aware checks live in resolveFlow, not in pure manifest parsing.
 //
 // Honesty about receipts: the FlowReceipt itself is body-free (step ids, sub-run

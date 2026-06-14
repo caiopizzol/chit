@@ -3,9 +3,10 @@
 // structure, so the user describes the work, not its execution category:
 //
 //   steps are `routine` steps                 -> composition (run them in order)
-//   `repeat` present                          -> loop until checks pass
+//   `repeat` present                          -> loop until its `until` condition holds
+//                                                (checks pass, or a step's output equals X)
 //   any read-write participant OR check step  -> runs in a git-worktree sandbox
-//   pure read-only call/format, no checks     -> runs read-only in the cwd
+//   pure read-only (call/format, maybe a loop) -> runs read-only in the cwd
 //
 // Parsing validates STRUCTURE (and the no-mixing / repeat / output rules, which
 // need no config). Cross-routine rules (sub-routines exist, composition shape)

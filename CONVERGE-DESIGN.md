@@ -1,5 +1,11 @@
 # Converge — as built, and the one slice still missing
 
+> **Historical design journal (increments 2-3).** It is accurate for *when it was written*, but the
+> model has since moved on. For the current contract see `CONTRACT-V2.md` and `STATE.md`. Notably superseded
+> here: a loop no longer requires a check step - `repeat.until` is `"checks-pass"` OR `{ step, equals }`, and
+> a read-only loop runs in the cwd, not a sandbox (increment 21); the read-only permission mapping is no
+> longer `--permission-mode plan` (that returned empty under `-p`) but default mode with edit tools disallowed.
+
 This supersedes an earlier draft that put fixed `implementer`/`reviewer` slots in
 the loop. That was wrong: it re-introduced the fixed-role vocabulary the product
 model is trying to demote. The loop is now **step-based**.

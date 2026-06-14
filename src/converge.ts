@@ -1,9 +1,14 @@
-// The sandboxed execution path (internally "converge"). Run the routine's ordered
-// steps repeatedly until every check
-// step passes, or maxIterations is hit. State threads across iterations through a
-// persistent context -- a check step's combined failing output becomes its
-// `output`, so the NEXT iteration's call steps can reference {{ steps.verify.output }}
-// and react to the failures. That feedback IS the loop.
+// The loop executor (internally "converge"). Run the routine's ordered steps
+// repeatedly until the `repeat.until` condition holds -- either every check step
+// passes ("checks-pass") or a named step's output equals a target ({ step, equals },
+// e.g. an evaluator call returns "yes") -- or maxIterations is hit. State threads
+// across iterations through a persistent context: a check step's failing output (or
+// an evaluator's critique) becomes that step's `output`, so the NEXT iteration's call
+// steps can reference {{ steps.<id>.output }} and react. That feedback IS the loop.
+//
+// Looping is independent of the sandbox: this executor runs in whatever cwd it is
+// given. A loop that writes or checks is wrapped in a worktree by runConvergeInSandbox;
+// a pure read-only loop runs directly in the caller's cwd.
 //
 // Like runOneShot, this does no disk IO and takes an injected clock, id, adapter,
 // and check-runner, so it is fully deterministic under test with fakes. No real

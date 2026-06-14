@@ -24,14 +24,19 @@ The shipped model. One file format. No `policy` field. Behavior is **derived fro
 - `{ "id", "format": "<template>" }`                    — assemble text
 - `{ "id", "check": [{ "command", "args" }] }`          — run commands (pass/fail)
 - `{ "id", "routine": "<routineId>", "inputs": {...} }` — run another routine
+- `{ "id", "ask": "<question>" }`                       - pause for one operator answer, fed forward
 
 ## Derived behavior (the user never writes a policy)
 
 - steps are `routine` steps              → **composition** (run them in order, pass outputs forward)
-- `repeat` present                       → **loop** the steps until every check passes (or maxIterations)
+- `repeat` present                       → **loop** the steps until its `until` condition holds (or maxIterations)
 - neither                                → **single pass**
 - any `read-write` participant OR any `check` step → runs in a **git-worktree sandbox** (dry run by default, `--apply` writes back)
-- pure read-only call/format (no checks) → runs **read-only** in your cwd (text only)
+- pure read-only (no writes, no checks)  → runs in your cwd, no sandbox (a single pass, OR a read-only loop)
+
+Looping is independent of the sandbox: a loop that writes or checks runs in a worktree; a read-only loop
+(e.g. draft → critique → repeat until "ship") runs in your cwd. `ask` steps are neutral and may sit in a
+composition or a single-pass text routine, but not inside a sandboxed or looping routine.
 
 A `check` command is arbitrary process execution (`bun test`, deploy scripts) and can write files, so a
 routine that runs ANY check gets the worktree boundary too -- not just one with a read-write participant.
@@ -55,17 +60,22 @@ stops at the next checkpoint. (Ctrl-C aborts mid-call via the cancellation signa
 
 ## Rules (few, enforced at resolve, with clear errors)
 
-1. A routine's steps are EITHER all `routine` steps OR a mix of call/format/check — **not both**. Keeps
-   composition and execution distinct; this is the line that stops it becoming a graph engine.
-2. `repeat` requires ≥1 `check` step and an execution routine (not a composition).
-3. `output` may only name a **text-producing** step (`call`, `format`, `routine`) — never a `check`
-   (a check produces pass/fail, not text; its result lives in the receipt).
-4. A composition calls **execution routines only** — no nested composition (so no cycles to detect).
-   At most one sub-routine is sandboxed (writes or has checks), and it must be **last**; earlier
-   sub-routines must be pure read-only/text.
+1. A routine's steps are EITHER `routine` steps (a composition) OR call/format/check (an execution) -
+   **not both**. `ask` is neutral and allowed in either. Keeps composition and execution distinct; this
+   is the line that stops it becoming a graph engine.
+2. `repeat` is an execution routine (not a composition) with an exit condition. `until: "checks-pass"`
+   requires ≥1 `check` step (its signal); `until: { step, equals }` requires the named step to exist AND
+   an explicit `maxIterations` (a judged condition has no guaranteed termination).
+3. `output` may only name a **text-producing** step (`call`, `format`, `routine`) - never a `check` or an
+   `ask` (a check produces pass/fail; an ask answer feeds later steps and is not persisted).
+4. A composition calls **execution routines only** - no nested composition (so no cycles to detect).
+   At most one sub-routine is **sandboxed** (writes or has checks), and it must be **last**; every earlier
+   step must write nothing - a one-shot text run, an `ask` gate, or a read-only loop.
 5. `{{ inputs.X }}` and `{{ steps.Y.output }}` refs are validated at resolve.
-6. No branching/conditionals beyond **repeat-until-checks** and **stop-on-failed-step**. Human gates / branch
-   steps are deferred, on purpose.
+6. `ask` (human input) is allowed only in a composition or a single-pass read-only text routine - never in a
+   sandboxed or looping routine (where "ask once vs every iteration" is undefined); put the gate in the
+   composition that calls it. The only loop control is `repeat.until` (checks-pass or `{ step, equals }`);
+   branch steps and an `ask` HALT/veto are deferred, on purpose.
 
 ## What this replaces
 
@@ -76,17 +86,25 @@ executors (single / loop / composition) — derivation just picks one. The user 
 
 - **A. No step mixing** (rule 1). The sketch implied routine-calls could mix freely with call/check; I forbid it.
   This is the single biggest lever between "minimal" and "secret workflow engine."
-- **B. Dropped `repeat.from`.** A loop re-runs ALL its steps until checks pass. `from` (run setup once, loop a
-  suffix) is real but adds a sub-DSL; defer until something needs it.
-- **C. `output` names a text-producing step id** (call/format/routine, not check). The result is that step's
-  text; a sandboxed routine always shows its diff regardless.
+- **B. Dropped `repeat.from`.** A loop re-runs ALL its steps until its `until` condition holds. `from` (run
+  setup once, loop a suffix) is real but adds a sub-DSL; defer until something needs it.
+- **C. `output` names a text-producing step id** (call/format/routine, not check or ask). The result is that
+  step's text; a sandboxed routine always shows its diff regardless.
 - **D. Sandbox if read-write participant OR any check step.** A check is arbitrary process execution and can
-  write, so anything that runs commands or can edit gets the worktree boundary; only pure read-only call/format
-  routines run in your cwd. This also fixes the current gap where a read-write single-pass routine edits your tree.
+  write, so anything that runs commands or can edit gets the worktree boundary; only pure read-only routines
+  (including a read-only loop) run in your cwd. This also fixes the gap where a read-write single-pass routine
+  would edit your tree.
+- **E. The loop's exit is declared, not hardcoded** (rule 2). `repeat.until` is `"checks-pass"` (every check
+  passed - deterministic) or `{ step, equals }` (a named step's trimmed output equals a string - a model- or
+  human-judged verdict). This makes `/goal`-style loops a routine you author, not a product feature, while
+  keeping convergence checkable by real signals (checks, an evaluator's exact verdict), not hidden model state.
 
 ## Acceptance (re-proven after the refactor)
 
 - grill / plan: no repeat, read-only, text output.
 - implementation-review: repeat until checks pass; read-write → sandboxed.
-- feature-flow: routine steps feeding outputs forward into implementation-review.
+- feature-flow: routine steps feeding outputs forward into implementation-review, with an `ask` gate before
+  the sandboxed implementation step.
+- refine: a read-only loop, `until: { step: "verdict", equals: "ship" }` - runs in the cwd, no sandbox;
+  proven by a real run that converged in 2 iterations when the critic returned exactly "ship".
 - real dry run leaves origin untouched; `--apply` applies only a converged diff.

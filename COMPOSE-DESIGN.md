@@ -1,5 +1,11 @@
 # Composition — design proposal (NOT yet built)
 
+> **Historical design journal.** This was the pre-build proposal; composition has since shipped and grown.
+> For the current contract see `CONTRACT-V2.md` and `STATE.md`. Notably refined since: the "at most one
+> converge step, terminal" rule is really "at most one **sandboxed** sub-routine (writes/checks), and it must
+> be last" - a read-only loop is converge-policy but unsandboxed and may sit anywhere; and compositions now
+> also allow `ask` gates between steps.
+
 Status: proposal for review. No code written. The single loop is now honest + bounded
 (stale wording fixed, diff capped, real revise path field-tested), so composition is unblocked.
 
