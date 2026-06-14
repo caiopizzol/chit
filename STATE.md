@@ -297,7 +297,12 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       wrote nothing (the disallowed edit tools held).
 - [x] guarded real-claude smoke (src/real-smoke.test.ts): skipped by default (CI stays fake-backed), runs
       with CHIT_REAL_SMOKE=1; asserts grill + planning return non-empty output. README mapping updated.
-- [x] 169 pass + 2 skip, typecheck clean. NEXT: re-run the full feature-flow dry-run end to end.
+- [x] 169 pass + 2 skip, typecheck clean.
+- [x] FULL composed flow re-run PASSED with real claude: feature-flow (grill -> plan -> impl) REACHED impl
+      (no more "missing required input task"); impl converged in 1 iteration -- the builder added a working
+      `chit version` command, real `bun run typecheck` + `bun test` both passed in the sandbox; dry-run
+      discarded; origin untouched, no leftover worktree, 0 husks (run-356598da). The composed orchestration
+      model is now proven with REAL model outputs, not just fakes.
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
