@@ -12,8 +12,17 @@ export interface RoutineConfig {
 	defaults?: { maxIterations?: number };
 }
 
+// A local binding: which actual adapter (and model) backs a participant. Manifests
+// reference an agent by id (`participant.agent`); the config says what that id IS.
+// This is the split: manifest = workflow; config = local agent/model bindings.
+export interface AgentConfig {
+	adapter: string;
+	model?: string;
+}
+
 export interface ChitConfig {
 	routines: Record<string, RoutineConfig>;
+	agents: Record<string, AgentConfig>;
 }
 
 export class ConfigError extends Error {
@@ -51,7 +60,7 @@ const ROUTINE_ID_RE = /^[a-z][a-z0-9-]*$/;
 export function parseConfig(raw: unknown, source: string): ChitConfig {
 	if (!isObject(raw)) throw new ConfigError(source, "config must be an object");
 	for (const k of Object.keys(raw)) {
-		if (k !== "routines") throw new ConfigError(source, `unknown field "${k}"`);
+		if (k !== "routines" && k !== "agents") throw new ConfigError(source, `unknown field "${k}"`);
 	}
 	if (!isObject(raw.routines)) throw new ConfigError(source, "`routines` must be an object");
 	const routines: Record<string, RoutineConfig> = {};
@@ -96,5 +105,25 @@ export function parseConfig(raw: unknown, source: string): ChitConfig {
 			...(defaults !== undefined && { defaults }),
 		};
 	}
-	return { routines };
+
+	const agents: Record<string, AgentConfig> = {};
+	if (raw.agents !== undefined) {
+		if (!isObject(raw.agents)) throw new ConfigError(source, "`agents` must be an object");
+		for (const [id, entry] of Object.entries(raw.agents)) {
+			const where = `${source}.agents.${id}`;
+			if (!isObject(entry)) throw new ConfigError(where, "must be an object");
+			for (const k of Object.keys(entry)) {
+				if (k !== "adapter" && k !== "model") throw new ConfigError(where, `unknown field "${k}"`);
+			}
+			if (typeof entry.adapter !== "string" || !entry.adapter) {
+				throw new ConfigError(where, "`adapter` must be a non-empty string");
+			}
+			if (entry.model !== undefined && typeof entry.model !== "string") {
+				throw new ConfigError(where, "`model` must be a string");
+			}
+			agents[id] = { adapter: entry.adapter, ...(typeof entry.model === "string" && { model: entry.model }) };
+		}
+	}
+
+	return { routines, agents };
 }

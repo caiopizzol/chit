@@ -113,7 +113,7 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 	// scaffolded routine unrunnable) and never leaves a half-written state. We keep the raw
 	// object (parseConfig has confirmed routines is a proper object) to preserve entries.
 	const configPath = join(cwd, "chit.config.json");
-	let config: { routines: Record<string, unknown> };
+	let config: { routines: Record<string, unknown>; agents?: Record<string, unknown> };
 	let createdConfig = false;
 	if (existsSync(configPath)) {
 		let raw: unknown;
@@ -127,7 +127,7 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 		} catch (e) {
 			throw new Error(`existing chit.config.json is invalid, fix it before running init: ${(e as Error).message}`);
 		}
-		config = raw as { routines: Record<string, unknown> };
+		config = raw as { routines: Record<string, unknown>; agents?: Record<string, unknown> };
 	} else {
 		config = { routines: {} };
 		createdConfig = true;
@@ -148,6 +148,13 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 	writeFileSync(manifestAbs, `${JSON.stringify(manifest, null, "\t")}\n`);
 
 	routines[name] = { manifestPath, ...(manifest.description !== undefined && { description: manifest.description }) };
+	// The generated participants reference an agent id; make sure each is bound in the
+	// registry (default: the claude adapter), or the scaffolded routine won't resolve.
+	const agents = (config.agents ??= {});
+	const participants = (manifest as { participants?: Record<string, { agent: string }> }).participants ?? {};
+	for (const p of Object.values(participants)) {
+		if (agents[p.agent] === undefined) agents[p.agent] = { adapter: "claude", model: "default" };
+	}
 	writeFileSync(configPath, `${JSON.stringify(config, null, "\t")}\n`);
 
 	return {

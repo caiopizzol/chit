@@ -108,6 +108,14 @@ describe("formatInspect", () => {
 		expect(out).toContain("max 9 iterations");
 	});
 
+	test("shows each participant's agent binding (agent -> adapter[/model])", () => {
+		const out = formatInspect(
+			routineFrom(CONVERGE, { agents: { codex: { adapter: "codex" }, claude: { adapter: "claude", model: "sonnet" } } }),
+		);
+		expect(out).toContain("codex -> codex"); // builder's agent "codex" backed by the codex adapter
+		expect(out).toContain("claude -> claude (sonnet)"); // critic's agent shows the non-default model
+	});
+
 	test("surfaces effective limits, including explicit overrides and a \"none\" opt-out", () => {
 		const tight = formatInspect(routineFrom({ ...ONE_SHOT, limits: { callTimeoutMinutes: 45 } }));
 		expect(tight).toContain("limits: per call 45m");

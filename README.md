@@ -16,6 +16,10 @@ One shape. You describe the work; **how it runs is derived**, never chosen.
 - **Steps** are `call` (ask a participant), `format` (assemble text), `check` (run a
   command), or `routine` (run another routine). "build"/"critique" are just step ids,
   "builder"/"critic" just participant names -- there is no built-in implementer/reviewer.
+- **Agents are bound in config, not baked in.** A participant names an agent id; the config's
+  `agents` registry says what that id IS -- which adapter backs it and which model. So you
+  define your own builder, critic, planner, etc., and point each at the agent/model you want,
+  without Chit knowing those roles. The manifest is the workflow; the config is the local binding.
 - **Behavior is derived from the shape -- there is no `policy` field:**
 
 ```
@@ -82,7 +86,7 @@ They come back once the one-shape model feels obvious.
 
 ```
 src/manifest.ts     the one routine shape: parser + behavior derivation (no policy field)
-src/config.ts       thin routine config (names + manifest path + optional defaults)
+src/config.ts       thin config: routine names + manifest paths, plus the agents registry (id -> adapter/model)
 src/routine.ts      resolve a routine: config + bound manifest + digest
 src/inputs.ts       validate operator inputs
 src/template.ts     {{ inputs.x }} / {{ steps.y.output }} / {{ iteration }} / {{ diff }}

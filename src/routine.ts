@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { ChitConfig } from "./config.ts";
+import type { AgentConfig, ChitConfig } from "./config.ts";
 import { type Manifest, parseManifest } from "./manifest.ts";
 
 export interface ResolvedRoutine {
@@ -18,6 +18,9 @@ export interface ResolvedRoutine {
 	manifest: Manifest;
 	defaults?: { maxIterations?: number };
 	digest: string;
+	// Each participant's agent id bound to its config entry (adapter + model). Set by
+	// resolveRoutine; inspect surfaces it. (Optional so hand-built test routines may omit it.)
+	agents?: Record<string, AgentConfig>;
 }
 
 export class RoutineError extends Error {
@@ -68,6 +71,21 @@ export function resolveRoutine(
 
 	const manifest: Manifest = parseManifest(raw, entry.manifestPath);
 
+	// Bind each participant's agent id to its config entry, so the run knows which
+	// adapter/model backs it. A participant that references an undefined agent fails HERE,
+	// at resolve, not mid-run.
+	const agents: Record<string, AgentConfig> = {};
+	for (const p of Object.values(manifest.participants)) {
+		const agentCfg = config.agents[p.agent];
+		if (agentCfg === undefined) {
+			const known = Object.keys(config.agents).sort();
+			throw new RoutineError(
+				`routine ${JSON.stringify(id)} uses agent ${JSON.stringify(p.agent)}, which is not defined under "agents" in chit.config.json${known.length > 0 ? ` (configured: ${known.join(", ")})` : " (no agents configured)"}`,
+			);
+		}
+		agents[p.agent] = agentCfg;
+	}
+
 	return {
 		id,
 		description: entry.description ?? manifest.description,
@@ -76,5 +94,6 @@ export function resolveRoutine(
 		manifest,
 		...(entry.defaults !== undefined && { defaults: entry.defaults }),
 		digest: digestText(text),
+		agents,
 	};
 }

@@ -90,7 +90,12 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		const pw = Math.max(...pnames.map((n) => n.length));
 		out.push("participants:");
 		for (const [id, p] of Object.entries(m.participants)) {
-			out.push(`  ${pad(id, pw)}  ${pad(p.agent, 8)}  filesystem: ${p.filesystem}`);
+			const binding = routine.agents?.[p.agent];
+			const agentCol =
+				binding !== undefined
+					? `${p.agent} -> ${binding.adapter}${binding.model && binding.model !== "default" ? ` (${binding.model})` : ""}`
+					: p.agent;
+			out.push(`  ${pad(id, pw)}  ${pad(agentCol, 22)}  filesystem: ${p.filesystem}`);
 		}
 		out.push("");
 	}

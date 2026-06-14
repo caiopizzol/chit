@@ -48,6 +48,12 @@ beforeAll(() => {
 				"feature-griller": { manifestPath: "examples/feature-griller.json", description: "Question a feature idea." },
 				"impl-review": { manifestPath: "examples/impl-review.json", description: "Implement and review." },
 			},
+			// impl-review's two participants use different agent ids ("codex" / "claude"); both
+			// resolve to the claude adapter here, proving per-participant agent binding.
+			agents: {
+				claude: { adapter: "claude", model: "default" },
+				codex: { adapter: "claude", model: "default" },
+			},
 		}),
 	);
 });
@@ -59,7 +65,7 @@ function harness(over: { adapter?: Adapter; checkRunner?: CheckRunner; sandboxDi
 	const err: string[] = [];
 	const deps: CliDeps = {
 		cwd: dir,
-		adapter: over.adapter ?? fakeAdapter(),
+		adapters: { claude: over.adapter ?? fakeAdapter() },
 		checkRunner: over.checkRunner ?? fakeCheckRunner(),
 		sandboxFactory: fakeSandboxFactory({ diff: over.sandboxDiff ?? "diff --git a/x b/x" }),
 		now: () => 0,
@@ -229,7 +235,7 @@ describe("chit init", () => {
 		const err: string[] = [];
 		const deps: CliDeps = {
 			cwd,
-			adapter: fakeAdapter((req) => `OUT(${req.prompt})`),
+			adapters: { claude: fakeAdapter((req) => `OUT(${req.prompt})`) },
 			checkRunner: fakeCheckRunner(),
 			sandboxFactory: fakeSandboxFactory(),
 			now: () => 0,

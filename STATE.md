@@ -314,6 +314,22 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] guarded smoke (CHIT_REAL_SMOKE=1) PASSED 3/3 against shipped code: grill + planning return output,
       and a read-only call cannot create a file; repo clean after. read-only is now genuinely read-only.
 
+## Increment 18: configurable agents (the core promise)
+- [x] the gap: manifests said participants have `agent: "claude"` but the adapter THREW for anything else,
+      so the agent/model binding was not actually flexible. Fixed WITHOUT touching the manifest model.
+- [x] config gains an `agents` registry { <id>: { adapter, model? } }. A participant names an agent id;
+      resolveRoutine binds it to the config entry and FAILS at resolve if the id is undefined.
+- [x] dispatchingAdapter (built at the CLI layer from config.agents + an adapter registry) routes each call
+      to the configured adapter + model; the executors are unchanged (they call one adapter). Unknown agent
+      id / unwired adapter type fail cleanly. claudeCliAdapter passes --model (skipped for "default").
+- [x] inspect shows the binding per participant ("builder -> claude"); receipts/trace already record the
+      agent id per step. implementation-review now uses two profiles (builder/critic) to demonstrate it;
+      chit init registers the agent it scaffolds. index wires adapters: { claude: claudeCliAdapter }.
+- [x] tests: agents.test (dispatch routing/model/errors; resolve binding + missing-agent; two participants
+      -> different adapters; composition output across different agents), config agent parsing, inspect
+      binding; + a guarded real smoke (two claude profiles; read-only can't write; read-write edits only in
+      the sandbox; receipt names each agent). 183 pass + 4 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs

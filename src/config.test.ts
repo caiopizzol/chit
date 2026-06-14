@@ -64,3 +64,30 @@ describe("parseConfig", () => {
 		}
 	});
 });
+
+describe("parseConfig -- agents", () => {
+	test("defaults agents to {} when absent", () => {
+		expect(parse(VALID).agents).toEqual({});
+	});
+
+	test("parses an agents registry (adapter + optional model)", () => {
+		const c = parse({ ...VALID, agents: { builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } } });
+		expect(c.agents).toEqual({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } });
+	});
+
+	test("rejects a non-object agents", () => {
+		expect(() => parse({ ...VALID, agents: [] })).toThrow(/`agents` must be an object/);
+	});
+
+	test("rejects an agent without an adapter", () => {
+		expect(() => parse({ ...VALID, agents: { x: { model: "o1" } } })).toThrow(/`adapter` must be a non-empty string/);
+	});
+
+	test("rejects an unknown agent field", () => {
+		expect(() => parse({ ...VALID, agents: { x: { adapter: "claude", temperature: 1 } } })).toThrow(/unknown field "temperature"/);
+	});
+
+	test("rejects a non-string model", () => {
+		expect(() => parse({ ...VALID, agents: { x: { adapter: "claude", model: 5 } } })).toThrow(/`model` must be a string/);
+	});
+});

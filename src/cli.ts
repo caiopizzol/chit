@@ -6,7 +6,7 @@
 // is testable end-to-end on real config/manifest files with a fake adapter -- no
 // real model calls in tests.
 
-import type { Adapter } from "./adapter.ts";
+import { type AdapterRegistry, dispatchingAdapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { loadConfig } from "./config.ts";
@@ -22,7 +22,10 @@ import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } f
 
 export interface CliDeps {
 	cwd: string;
-	adapter: Adapter;
+	// Real adapters keyed by adapter type (e.g. { claude: claudeCliAdapter }). The run
+	// command builds a dispatching adapter from this + the config's agent bindings, so a
+	// participant's agent id picks the adapter and model.
+	adapters: AdapterRegistry;
 	// For sandboxed routines: the check seam and the write-safety sandbox.
 	checkRunner: CheckRunner;
 	sandboxFactory: SandboxFactory;
@@ -165,6 +168,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			if (args.id === undefined) return fail(deps, "run needs a routine id");
 			const config = loadConfig(deps.cwd);
 			const routine = resolveRoutine(config, args.id, deps.cwd);
+			// One adapter for the executors; it routes each call to the configured adapter
+			// and model for that participant's agent id.
+			const adapter = dispatchingAdapter(config.agents, deps.adapters);
 
 			const validation = validateInputs(routine.manifest, args.inputs);
 			if (!validation.ok) {
@@ -183,7 +189,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					resolvedFlow,
 					validation.values,
 					{
-						adapter: deps.adapter,
+						adapter,
 						checkRunner: deps.checkRunner,
 						sandboxFactory: deps.sandboxFactory,
 						cwd: deps.cwd,
@@ -238,7 +244,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					validation.values,
 					{
 						sandboxFactory: deps.sandboxFactory,
-						adapter: deps.adapter,
+						adapter,
 						checkRunner: deps.checkRunner,
 						cwd: deps.cwd,
 						now: deps.now,
@@ -270,7 +276,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return r.status === "cancelled" ? 130 : 1;
 			}
 
-			const receipt = await runOneShot(routine, validation.values, deps, args.scope !== undefined ? { scope: args.scope } : {});
+			const receipt = await runOneShot(routine, validation.values, { ...deps, adapter }, args.scope !== undefined ? { scope: args.scope } : {});
 			saveReceipt(deps.cwd, receipt);
 
 			if (receipt.status === "cancelled") {

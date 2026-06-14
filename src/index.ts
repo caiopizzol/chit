@@ -26,7 +26,9 @@ process.on("SIGINT", () => {
 
 const code = await runCli(process.argv.slice(2), {
 	cwd: process.cwd(),
-	adapter: claudeCliAdapter,
+	// Adapter registry keyed by adapter type. Adding another backend (e.g. a different
+	// CLI or API) is one more entry here; the agent config picks which one each agent uses.
+	adapters: { claude: claudeCliAdapter },
 	checkRunner: argvCheckRunner,
 	sandboxFactory: gitWorktreeSandboxFactory,
 	now: () => Date.now(),

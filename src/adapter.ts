@@ -6,11 +6,17 @@
 // reimplementing an HTTP client or managing API keys -- the whole point of the
 // proof is the product shape, not a new runtime.
 
+import type { AgentConfig } from "./config.ts";
 import type { Filesystem } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
 
 export interface AdapterRequest {
+	// The participant's agent id (a profile, e.g. "builder"). The dispatcher resolves
+	// it to a configured adapter + model; an underlying adapter just records it.
 	agent: string;
+	// Resolved model for this call (from the agent's config); undefined / "default"
+	// means the adapter's default model.
+	model?: string;
 	instructions: string;
 	prompt: string;
 	// Surfaced and passed through so the model is explicit, but NOT yet sandboxed
@@ -49,15 +55,14 @@ export function fakeAdapter(reply: (req: AdapterRequest) => string = () => "ok")
 	};
 }
 
-// The real adapter. Composes instructions + prompt and pipes them to `claude -p`
+// The real claude adapter. Composes instructions + prompt and pipes them to `claude -p`
 // (print mode: one non-interactive response, then exit), reading stdout as the
 // participant's output. Runs in the routine's cwd. For write-capable participants
 // we use acceptEdits, but live converge passes a sandbox cwd, never the caller cwd.
+// The agent id is not checked here -- the dispatcher only routes "claude"-adapter
+// agents to this adapter.
 export const claudeCliAdapter: Adapter = {
 	async call(req) {
-		if (req.agent !== "claude") {
-			throw new Error(`chit-minimal only wires the "claude" agent so far (got "${req.agent}")`);
-		}
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
 		// filesystem -> claude permission:
 		//   read-write -> acceptEdits (auto-apply edits; converge passes a sandbox cwd).
@@ -68,12 +73,16 @@ export const claudeCliAdapter: Adapter = {
 		//                 flow and under `-p` it can route its answer through ExitPlanMode, yielding
 		//                 empty stdout (a real composed flow saw a planning step produce 0 chars).
 		//   none       -> no tools at all.
-		const args =
+		const permission =
 			req.filesystem === "read-write"
-				? ["claude", "-p", "--permission-mode", "acceptEdits"]
+				? ["--permission-mode", "acceptEdits"]
 				: req.filesystem === "read-only"
-					? ["claude", "-p", "--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash"]
-					: ["claude", "-p", "--tools", ""];
+					? ["--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash"]
+					: ["--tools", ""];
+		// `--model` goes BEFORE the permission flags: the read-only mapping ends in a
+		// variadic `--disallowedTools`, which would otherwise swallow the model args.
+		const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
+		const args = ["claude", "-p", ...model, ...permission];
 		const r = await spawnCapture(args, {
 			cwd: req.cwd,
 			stdin: composed,
@@ -92,3 +101,30 @@ export const claudeCliAdapter: Adapter = {
 		return { output: r.stdout.trim() };
 	},
 };
+
+// A registry of real adapters keyed by adapter type (the `adapter` field of an
+// agent config). The bin wires { claude: claudeCliAdapter }; adding another backend
+// is one more entry, not a redesign.
+export type AdapterRegistry = Record<string, Adapter>;
+
+// The binding seam: the executors call ONE adapter (this one). It resolves each
+// call's agent id to the configured adapter + model, then routes to the real adapter.
+// Errors here are config errors -- an unknown agent id, or an adapter type that is
+// named in the config but not wired into the registry.
+export function dispatchingAdapter(agents: Record<string, AgentConfig>, registry: AdapterRegistry): Adapter {
+	return {
+		async call(req) {
+			const agentCfg = agents[req.agent];
+			if (agentCfg === undefined) {
+				throw new Error(`no agent "${req.agent}" is configured (add it under "agents" in chit.config.json)`);
+			}
+			const adapter = registry[agentCfg.adapter];
+			if (adapter === undefined) {
+				throw new Error(
+					`agent "${req.agent}" uses adapter "${agentCfg.adapter}", which is not available (wired adapters: ${Object.keys(registry).join(", ") || "none"})`,
+				);
+			}
+			return adapter.call({ ...req, ...(agentCfg.model !== undefined && { model: agentCfg.model }) });
+		},
+	};
+}

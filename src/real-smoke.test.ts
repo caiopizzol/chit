@@ -9,14 +9,18 @@
 // Run from the repo root, where chit.config.json + examples/ live:
 //   CHIT_REAL_SMOKE=1 bun test src/real-smoke.test.ts
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { claudeCliAdapter } from "./adapter.ts";
+import { claudeCliAdapter, dispatchingAdapter } from "./adapter.ts";
+import { argvCheckRunner } from "./check-runner.ts";
 import { loadConfig } from "./config.ts";
-import { resolveRoutine } from "./routine.ts";
+import { runConvergeInSandbox } from "./converge-run.ts";
+import { parseManifest } from "./manifest.ts";
+import { type ResolvedRoutine, resolveRoutine } from "./routine.ts";
 import { type RunDeps, runOneShot } from "./run.ts";
+import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 
 const REAL = process.env.CHIT_REAL_SMOKE === "1";
 const CWD = process.cwd();
@@ -46,6 +50,59 @@ function realDeps(): RunDeps {
 			expect((r.output ?? "").length).toBeGreaterThan(50);
 		},
 		180_000,
+	);
+});
+
+(REAL ? describe : describe.skip)("real-claude smoke: configurable agents", () => {
+	test(
+		"two claude profiles back different steps; read-only can't write; the receipt names each agent",
+		async () => {
+			const repo = mkdtempSync(join(tmpdir(), "chit-agents-"));
+			try {
+				const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd: repo });
+				sh("git init -q && git config user.email t@t.co && git config user.name t");
+				writeFileSync(join(repo, "note.md"), "draft\n");
+				sh("git add -A && git commit -q -m init");
+
+				const manifest = parseManifest(
+					{
+						id: "two-agents",
+						inputs: {},
+						participants: {
+							builder: { agent: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" },
+							critic: { agent: "critic", instructions: "You only read and comment. Do NOT edit any file.", filesystem: "read-only" },
+						},
+						steps: [
+							{ id: "build", call: "builder", prompt: "Append a single line to note.md." },
+							{ id: "review", call: "critic", prompt: "Review the diff:\n{{ diff }}\nReply with OK." },
+							{ id: "verify", check: [{ command: "sh", args: ["-c", "true"] }] },
+						],
+						repeat: { until: "checks-pass", maxIterations: 1 },
+					},
+					"two-agents",
+				);
+				const agents = { builder: { adapter: "claude" }, critic: { adapter: "claude" } };
+				const routine: ResolvedRoutine = { id: "two-agents", manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:x", agents };
+				const adapter = dispatchingAdapter(agents, { claude: claudeCliAdapter });
+				const res = await runConvergeInSandbox(routine, {}, {
+					sandboxFactory: gitWorktreeSandboxFactory,
+					adapter,
+					checkRunner: argvCheckRunner,
+					cwd: repo,
+					now: () => Date.now(),
+					newRunId: () => "agent-smoke",
+					apply: false,
+				});
+				expect(res.receipt.status).toBe("converged");
+				const steps = res.receipt.iterations[0]?.steps ?? [];
+				expect(steps.find((s) => s.id === "build")?.agent).toBe("builder"); // read-write step ran on the builder agent
+				expect(steps.find((s) => s.id === "review")?.agent).toBe("critic"); // read-only step ran on the critic agent
+				expect(readFileSync(join(repo, "note.md"), "utf-8")).toBe("draft\n"); // dry run: builder edited only the sandbox
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		},
+		300_000,
 	);
 });
 

@@ -25,5 +25,10 @@
 			"manifestPath": "examples/feature-flow.json",
 			"description": "Composed: grill -> plan -> implementation-review."
 		}
+	},
+	"agents": {
+		"claude": { "adapter": "claude", "model": "default" },
+		"builder": { "adapter": "claude", "model": "default" },
+		"critic": { "adapter": "claude", "model": "default" }
 	}
 }

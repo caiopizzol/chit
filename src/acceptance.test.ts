@@ -42,7 +42,9 @@ function newRepo(manifests: Record<string, unknown>, config: unknown): string {
 	};
 	sh("git init -q && git config user.email t@t.co && git config user.name tester");
 	for (const [name, m] of Object.entries(manifests)) writeFileSync(join(repo, `${name}.json`), JSON.stringify(m));
-	writeFileSync(join(repo, "chit.config.json"), JSON.stringify(config));
+	// every test manifest uses agent "claude"; bind it unless the config says otherwise
+	const full = { agents: { claude: { adapter: "claude", model: "default" } }, ...(config as object) };
+	writeFileSync(join(repo, "chit.config.json"), JSON.stringify(full));
 	writeFileSync(join(repo, "seed.txt"), "seed\n");
 	sh("git add -A && git commit -q -m init");
 	return repo;
@@ -59,7 +61,7 @@ function harness(repo: string, adapter: Adapter, over: Partial<CliDeps> = {}) {
 	let rid = 0;
 	const deps: CliDeps = {
 		cwd: repo,
-		adapter,
+		adapters: { claude: adapter },
 		checkRunner: argvCheckRunner,
 		sandboxFactory: gitWorktreeSandboxFactory,
 		now: () => (t += 1),

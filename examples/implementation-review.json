@@ -6,12 +6,12 @@
 	},
 	"participants": {
 		"builder": {
-			"agent": "claude",
+			"agent": "builder",
 			"instructions": "You implement a small, well-scoped code slice and keep going until the checks pass.",
 			"filesystem": "read-write"
 		},
 		"critic": {
-			"agent": "claude",
+			"agent": "critic",
 			"instructions": "You review the work for correctness and scope. You do not edit files.",
 			"filesystem": "read-only"
 		}
