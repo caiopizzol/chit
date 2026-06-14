@@ -284,6 +284,21 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       parseConfig BEFORE writing anything: a malformed config is rejected (exit 1, clear message) and
       nothing is written (atomic). Regression test + a careful subshell CLI smoke confirm it. 169 tests.
 
+## Increment 17 — read-only adapter returns real output (real-E2E fix)
+- [x] REAL model-backed E2E exposed it: a composed feature-flow failed because the planning step produced
+      0 chars -> impl's `task` input was empty -> "missing required input task". Root cause: the adapter
+      mapped read-only -> `claude -p --permission-mode plan`. Plan mode is the plan-then-approve flow; under
+      `-p` it can route the answer through ExitPlanMode and return empty stdout (non-deterministic).
+- [x] FIX (adapter only, manifest model unchanged): read-only -> `claude -p --permission-mode default
+      --disallowedTools Edit Write NotebookEdit`. Confirmed by a side-by-side test: default mode reliably
+      inspects + answers; plan mode was the unreliable one.
+- [x] VERIFIED with real claude: feature-griller -> 8604 chars, planning -> 6584 chars of repo-grounded
+      output (the plan grep'd for color and found the CliDeps out/err seam); git stayed clean -- read-only
+      wrote nothing (the disallowed edit tools held).
+- [x] guarded real-claude smoke (src/real-smoke.test.ts): skipped by default (CI stays fake-backed), runs
+      with CHIT_REAL_SMOKE=1; asserts grill + planning return non-empty output. README mapping updated.
+- [x] 169 pass + 2 skip, typecheck clean. NEXT: re-run the full feature-flow dry-run end to end.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs

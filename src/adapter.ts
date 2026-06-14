@@ -59,11 +59,19 @@ export const claudeCliAdapter: Adapter = {
 			throw new Error(`chit-minimal only wires the "claude" agent so far (got "${req.agent}")`);
 		}
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
+		// filesystem -> claude permission:
+		//   read-write -> acceptEdits (auto-apply edits; converge passes a sandbox cwd).
+		//   read-only  -> default mode with the edit tools disallowed: the model inspects
+		//                 the repo and answers NORMALLY, but cannot edit. NOT plan mode --
+		//                 plan mode is for the plan-then-approve flow and under `-p` it can
+		//                 route its answer through ExitPlanMode, yielding empty stdout (a
+		//                 real composed flow saw a planning step produce 0 chars that way).
+		//   none       -> no tools at all.
 		const args =
 			req.filesystem === "read-write"
 				? ["claude", "-p", "--permission-mode", "acceptEdits"]
 				: req.filesystem === "read-only"
-					? ["claude", "-p", "--permission-mode", "plan"]
+					? ["claude", "-p", "--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit"]
 					: ["claude", "-p", "--tools", ""];
 		const r = await spawnCapture(args, {
 			cwd: req.cwd,
