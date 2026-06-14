@@ -304,6 +304,14 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       discarded; origin untouched, no leftover worktree, 0 husks (run-356598da). The composed orchestration
       model is now proven with REAL model outputs, not just fakes.
 
+## Increment 17.1 — read-only is ACTUALLY read-only (review follow-up)
+- [x] the increment-17 mapping disallowed Edit/Write/NotebookEdit but LEFT Bash, so a model could still
+      `echo > file` -- read-only was not read-only. Verified the hole with real claude (it created
+      created.txt). FIX: add Bash to the disallowed list. Re-verified real: the write is now BLOCKED and
+      reading STILL works (the model read before.txt via the Read tool and returned its contents -- read
+      tools don't need Bash). Added a guarded real-smoke that a read-only call cannot create a file;
+      README corrected to "every write tool disallowed (edit tools AND the shell)". 169 pass + 3 skip.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs

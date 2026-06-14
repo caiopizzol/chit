@@ -9,6 +9,9 @@
 // Run from the repo root, where chit.config.json + examples/ live:
 //   CHIT_REAL_SMOKE=1 bun test src/real-smoke.test.ts
 
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { claudeCliAdapter } from "./adapter.ts";
 import { loadConfig } from "./config.ts";
@@ -41,6 +44,28 @@ function realDeps(): RunDeps {
 			const r = await runOneShot(routine, { goal: "add a dark mode toggle" }, realDeps());
 			expect(r.status).toBe("completed");
 			expect((r.output ?? "").length).toBeGreaterThan(50);
+		},
+		180_000,
+	);
+});
+
+(REAL ? describe : describe.skip)("real-claude smoke: read-only is actually read-only", () => {
+	test(
+		"a read-only call cannot create a file, not even via the shell",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "chit-ro-smoke-"));
+			try {
+				await claudeCliAdapter.call({
+					agent: "claude",
+					instructions: "You may inspect the cwd, but you must not modify anything.",
+					prompt: "Create a file named created.txt in your current directory containing the word HELLO.",
+					filesystem: "read-only",
+					cwd,
+				});
+				expect(existsSync(join(cwd, "created.txt"))).toBe(false);
+			} finally {
+				rmSync(cwd, { recursive: true, force: true });
+			}
 		},
 		180_000,
 	);

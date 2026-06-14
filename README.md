@@ -57,10 +57,10 @@ machine, no API keys, no HTTP). Tests inject fakes, so they stay deterministic a
   git-worktree copy (looping if it has a `repeat`). It is a **dry run by default** (show the diff,
   discard); `--apply` writes the result back. Your real tree is never touched without `--apply`.
 - **Two safety layers, not equal strength.** A participant's `filesystem` maps to how the claude CLI is
-  invoked (read-only -> default mode with the edit tools disallowed, so it inspects and answers but cannot
-  edit; read-write -> `acceptEdits`; none -> no tools): claude-level, not an OS sandbox. The strong,
-  enforced one is the worktree: a sandboxed routine cannot reach your tree without `--apply`. A `check` is
-  arbitrary process execution, so any routine with a check is sandboxed too.
+  invoked (read-only -> default mode with every write tool disallowed -- the edit tools AND the shell, so
+  it inspects and answers but cannot write; read-write -> `acceptEdits`; none -> no tools): claude-level,
+  not an OS sandbox. The strong, enforced one is the worktree: a sandboxed routine cannot reach your tree
+  without `--apply`. A `check` is arbitrary process execution, so any routine with a check is sandboxed too.
 - **Time bounds are configurable per routine (`limits`).** `callTimeoutMinutes` (default 30) is a hard
   bound on any single model call or check -- the subprocess is killed once it is exceeded.
   `runTimeoutMinutes` (default 120) is a cooperative run budget: it is checked before each step, loop

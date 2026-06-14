@@ -61,17 +61,18 @@ export const claudeCliAdapter: Adapter = {
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
 		// filesystem -> claude permission:
 		//   read-write -> acceptEdits (auto-apply edits; converge passes a sandbox cwd).
-		//   read-only  -> default mode with the edit tools disallowed: the model inspects
-		//                 the repo and answers NORMALLY, but cannot edit. NOT plan mode --
-		//                 plan mode is for the plan-then-approve flow and under `-p` it can
-		//                 route its answer through ExitPlanMode, yielding empty stdout (a
-		//                 real composed flow saw a planning step produce 0 chars that way).
+		//   read-only  -> default mode with every WRITE tool disallowed (Edit/Write/NotebookEdit
+		//                 AND Bash -- a shell can `echo > file`, so leaving it in made read-only
+		//                 not actually read-only). The model still inspects via Read/Grep/Glob/LS
+		//                 and answers NORMALLY. NOT plan mode -- plan mode is the plan-then-approve
+		//                 flow and under `-p` it can route its answer through ExitPlanMode, yielding
+		//                 empty stdout (a real composed flow saw a planning step produce 0 chars).
 		//   none       -> no tools at all.
 		const args =
 			req.filesystem === "read-write"
 				? ["claude", "-p", "--permission-mode", "acceptEdits"]
 				: req.filesystem === "read-only"
-					? ["claude", "-p", "--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit"]
+					? ["claude", "-p", "--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash"]
 					: ["claude", "-p", "--tools", ""];
 		const r = await spawnCapture(args, {
 			cwd: req.cwd,
