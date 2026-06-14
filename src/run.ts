@@ -74,13 +74,14 @@ export async function runOneShot(
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
 
-	// The resolved adapter/model a participant's agent id binds to, recorded on its
-	// call receipt so trace proves what actually ran. Empty when the routine has no
-	// bindings (hand-built test routines bypass resolve).
-	const callBinding = (participantId: string): { adapter?: string; model?: string } => {
+	// A call step's agent id and the adapter/model it resolves to, recorded on every call
+	// receipt (ok, failed, AND cancelled) so trace proves what ran. adapter/model are
+	// omitted when the routine has no bindings (hand-built test routines bypass resolve).
+	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string } => {
 		const agentId = manifest.participants[participantId]?.agent;
-		const b = agentId !== undefined ? routine.agents?.[agentId] : undefined;
-		return b !== undefined ? { adapter: b.adapter, ...(b.model !== undefined && { model: b.model }) } : {};
+		if (agentId === undefined) return {};
+		const b = routine.agents?.[agentId];
+		return { agent: agentId, ...(b !== undefined && { adapter: b.adapter, ...(b.model !== undefined && { model: b.model }) }) };
 	};
 
 	const ctx = { inputs: values, steps: {} as Record<string, { output: string }> };
@@ -113,7 +114,7 @@ export async function runOneShot(
 					...(deps.signal !== undefined && { signal: deps.signal }),
 				});
 				ctx.steps[step.id] = { output: result.output };
-				steps.push({ id: step.id, kind: "call", participant: step.call, agent: participant.agent, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				steps.push({ id: step.id, kind: "call", participant: step.call, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
 				steps.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });

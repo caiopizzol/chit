@@ -120,11 +120,13 @@ export async function runConverge(
 	opts: { scope?: string } = {},
 ): Promise<ConvergeReceipt> {
 	const manifest: Manifest = routine.manifest;
-	// Resolved adapter/model for a participant's agent id, recorded on its call receipt.
-	const callBinding = (participantId: string): { adapter?: string; model?: string } => {
+	// A call step's agent id and the adapter/model it resolves to, recorded on every call
+	// receipt (ok, failed, AND cancelled) so trace proves what ran.
+	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string } => {
 		const agentId = manifest.participants[participantId]?.agent;
-		const b = agentId !== undefined ? routine.agents?.[agentId] : undefined;
-		return b !== undefined ? { adapter: b.adapter, ...(b.model !== undefined && { model: b.model }) } : {};
+		if (agentId === undefined) return {};
+		const b = routine.agents?.[agentId];
+		return { agent: agentId, ...(b !== undefined && { adapter: b.adapter, ...(b.model !== undefined && { model: b.model }) }) };
 	};
 	const callTimeoutMs = effectiveCallTimeoutMs(manifest);
 	// Whole-run wall-time: an explicit deps override (config), else the routine's
@@ -188,7 +190,6 @@ export async function runConverge(
 						id: step.id,
 						kind: "call",
 						participant: step.call,
-						agent: participant.agent,
 						...callBinding(step.call),
 						status: "ok",
 						startedAt: stepStart,

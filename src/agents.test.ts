@@ -3,7 +3,7 @@
 // These are always-on (fake-backed) so they prove the binding model with no real calls.
 
 import { describe, expect, test } from "bun:test";
-import { dispatchingAdapter, fakeAdapter } from "./adapter.ts";
+import { type Adapter, dispatchingAdapter, fakeAdapter } from "./adapter.ts";
 import { fakeCheckRunner } from "./check-runner.ts";
 import { type ChitConfig, parseConfig } from "./config.ts";
 import { runConverge } from "./converge.ts";
@@ -75,6 +75,22 @@ describe("agent binding at resolve time", () => {
 		const steps = r.iterations[0]?.steps ?? [];
 		expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "codex" });
 		expect(steps.find((s) => s.id === "crit")).toMatchObject({ agent: "critic", adapter: "claude" });
+	});
+
+	test("a FAILED call step still records the agent + binding (audit consistency)", async () => {
+		const routine = resolveRoutine(cfg({ builder: { adapter: "codex" }, critic: { adapter: "claude" } }), "r", "/x", () => MANIFEST);
+		const claude = fakeAdapter(() => "x");
+		const codex: Adapter = {
+			async call() {
+				throw new Error("boom");
+			},
+		};
+		const adapter = dispatchingAdapter(routine.agents ?? {}, { claude, codex });
+		let t = 0;
+		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
+		expect(r.status).toBe("failed");
+		// the failed build step records which agent/adapter it ran on, not just the participant
+		expect(r.iterations[0]?.steps.find((s) => s.id === "build")).toMatchObject({ status: "failed", agent: "builder", adapter: "codex" });
 	});
 
 	test("multi-model: two profiles on the SAME adapter select different models per step", async () => {
