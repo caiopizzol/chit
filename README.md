@@ -31,10 +31,17 @@ One shape. You describe the work; **how it runs is derived**, never chosen.
 
 ```
 routine steps                              -> composition  (run them, pass outputs forward)
-a repeat                                   -> loop         (until every check passes)
+a repeat                                   -> loop         (until its `until` condition holds)
 a read-write participant OR any check step -> sandboxed    (runs in a git-worktree copy)
 pure read-only call/format, no checks      -> text         (runs in your cwd)
 ```
+
+- **The loop's exit condition is yours to declare, so `/goal` is a routine, not a feature.**
+  `repeat.until` is either `"checks-pass"` (every check command passed -- deterministic, the
+  default) or `{ step, equals }` (a named step's output equals a string, e.g. an evaluator
+  call returns `"yes"`). The latter needs an explicit `maxIterations`, since a judged condition
+  has no guaranteed termination. Looping is independent of the sandbox: a loop that writes or
+  checks runs in a worktree; a pure read-only loop (draft -> critique -> repeat) runs in the cwd.
 
 ```
 chit init [<name>]                 scaffold a runnable routine (--template text | loop | check)

@@ -28,6 +28,10 @@
 		"clarify": {
 			"manifestPath": "examples/clarify.json",
 			"description": "Model-less demo of an ask gate (asks one question, echoes the answer)."
+		},
+		"refine": {
+			"manifestPath": "examples/refine.json",
+			"description": "Draft-and-critique loop until the critic says ship (a model-judged loop, no checks)."
 		}
 	},
 	"agents": {

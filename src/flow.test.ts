@@ -46,6 +46,21 @@ const WRITEY = routine({
 	participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
 	steps: [{ id: "out", call: "w", prompt: "do it" }],
 });
+// A NON-sandboxed loop sub-routine: read-only, { step, equals } exit -> loops in the cwd.
+const REFINE = routine({
+	id: "refine",
+	inputs: { brief: { type: "string" } },
+	participants: {
+		writer: { agent: "claude", instructions: "Draft.", filesystem: "read-only" },
+		critic: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+	},
+	steps: [
+		{ id: "draft", call: "writer", prompt: "brief {{ inputs.brief }} prev=[{{ steps.verdict.output }}]" },
+		{ id: "verdict", call: "critic", prompt: "ship? {{ steps.draft.output }}" },
+	],
+	repeat: { until: { step: "verdict", equals: "ship" }, maxIterations: 3 },
+	output: "draft",
+});
 
 const FLOW = routine({
 	id: "feature-flow",
@@ -57,7 +72,7 @@ const FLOW = routine({
 	],
 });
 
-const REGISTRY: Record<string, ResolvedRoutine> = { grill: GRILL, plan: PLAN, impl: IMPL, writey: WRITEY, "feature-flow": FLOW };
+const REGISTRY: Record<string, ResolvedRoutine> = { grill: GRILL, plan: PLAN, impl: IMPL, writey: WRITEY, refine: REFINE, "feature-flow": FLOW };
 function resolver(over: Record<string, ResolvedRoutine> = {}) {
 	const reg = { ...REGISTRY, ...over };
 	return (id: string): ResolvedRoutine => {
@@ -413,5 +428,30 @@ describe("runFlow -- ask gates", () => {
 		// and the sub-run's ask STEP receipt still carries no answer body
 		const askStep = sub.steps.find((s) => s.id === "name");
 		expect(Object.keys(askStep ?? {}).sort()).toEqual(["elapsedMs", "id", "kind", "startedAt", "status"]);
+	});
+});
+
+describe("runFlow -- non-sandboxed loop sub-routines", () => {
+	test("runs a check-less loop sub-routine (loops in cwd, no worktree) and feeds its result forward", async () => {
+		// the critic returns "ship" -> the loop converges on iteration 1; everything else echoes
+		const adapter = fakeAdapter((req) => (req.instructions === "Judge." ? "ship" : `out(${req.prompt})`));
+		const f = routine({
+			id: "uses-refine",
+			inputs: { brief: { type: "string" } },
+			steps: [
+				{ id: "r", routine: "refine", inputs: { brief: "{{ inputs.brief }}" } },
+				{ id: "use", routine: "grill", inputs: { idea: "{{ steps.r.output }}" } },
+			],
+		});
+		const res = await runFlow(resolveFlow(f, resolver({ refine: REFINE })), { brief: "b" }, deps({ adapter }));
+		expect(res.receipt.status).toBe("completed");
+		expect(res.receipt.steps.map((s) => [s.id, s.kind === "ask" ? "ask" : s.routine, s.status])).toEqual([
+			["r", "refine", "converged"], // a loop sub-run: status is "converged", not "completed"
+			["use", "grill", "completed"],
+		]);
+		// the loop ran with NO sandbox (it writes nothing) and produced no diff
+		expect(res.terminalDiff).toBeUndefined();
+		// its text result (the final draft) flowed into grill's input
+		expect(adapter.calls.some((c) => c.prompt.includes("grill out(brief b prev=[])"))).toBe(true);
 	});
 });

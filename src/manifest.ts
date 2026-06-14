@@ -66,8 +66,15 @@ export interface AskStep {
 }
 export type Step = CallStep | FormatStep | CheckStep | RoutineStep | AskStep;
 
+// A loop's exit condition. The runtime owns the LOOP; the routine declares WHEN it ends,
+// so /goal, grilling, research-until-good, etc. are authored, not hardcoded:
+//   "checks-pass"            -- every check step passed (deterministic; the proven default)
+//   { step, equals }         -- a named step's output equals a string (e.g. an evaluator
+//                               call returns "yes"); model- or human-judged convergence
+export type RepeatUntil = "checks-pass" | { step: string; equals: string };
+
 export interface Repeat {
-	until: "checks-pass";
+	until: RepeatUntil;
 	maxIterations?: number;
 }
 
@@ -299,35 +306,62 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	const composition = routineCount > 0;
 
 	// Rule 4: `ask` (human input) is supported only where execution pauses cleanly between
-	// steps -- a read-only text routine or a composition. It is NOT supported inside a
-	// sandboxed or looping routine (a check step or a read-write participant), where the
-	// shared converge executor re-runs steps and "ask once vs every iteration" is undefined.
-	// Put the gate in the composition that calls the sandboxed routine instead.
+	// steps -- a single-pass text routine or a composition. It is NOT supported inside a
+	// sandboxed routine (a check step or a read-write participant) NOR a loop (`repeat`),
+	// where the converge executor re-runs steps and "ask once vs every iteration" is undefined.
+	// Put the gate in the composition that calls this routine instead.
 	const sandboxed = steps.some((s) => s.kind === "check") || Object.values(participants).some((p) => p.filesystem === "read-write");
-	if (steps.some((s) => s.kind === "ask") && !composition && sandboxed) {
+	const looping = raw.repeat !== undefined;
+	if (steps.some((s) => s.kind === "ask") && !composition && (sandboxed || looping)) {
 		throw new ManifestError(
 			source,
-			"an `ask` step is not supported in a sandboxed or looping routine (it has a check step or a read-write participant). Put the ask in the composition that calls this routine, or in a read-only text routine.",
+			"an `ask` step is not supported in a sandboxed or looping routine (it has a check step, a read-write participant, or a `repeat`). Put the ask in the composition that calls this routine, or in a single-pass read-only text routine.",
 		);
 	}
 
-	// Rule 2: repeat needs >=1 check and an execution routine.
+	// Rule 2: repeat declares a loop over an execution routine (never a composition) with an
+	// exit condition. "checks-pass" needs >=1 check step as its signal; { step, equals } needs
+	// the named step to exist AND an explicit maxIterations (a judged condition has no
+	// deterministic termination, so the author must bound it). Looping is independent of the
+	// sandbox: a loop that writes or checks runs in a worktree, a pure read-only loop in cwd.
 	let repeat: Repeat | undefined;
 	if (raw.repeat !== undefined) {
 		if (!isObject(raw.repeat)) throw new ManifestError(`${source}.repeat`, "must be an object");
 		requireKeys(raw.repeat, new Set(["until", "maxIterations"]), `${source}.repeat`);
-		if (raw.repeat.until !== "checks-pass") throw new ManifestError(`${source}.repeat`, '`until` must be "checks-pass"');
-		if (raw.repeat.maxIterations !== undefined) {
-			const mi = raw.repeat.maxIterations;
-			if (typeof mi !== "number" || !Number.isInteger(mi) || mi < 1) {
-				throw new ManifestError(`${source}.repeat`, "`maxIterations` must be a positive integer");
-			}
-		}
 		if (composition) throw new ManifestError(source, "`repeat` is not valid on a composition (a composition's sub-routines repeat themselves)");
-		if (!steps.some((s) => s.kind === "check")) {
-			throw new ManifestError(source, "`repeat` requires at least one `check` step (its convergence signal)");
+
+		const mi = raw.repeat.maxIterations;
+		if (mi !== undefined && (typeof mi !== "number" || !Number.isInteger(mi) || mi < 1)) {
+			throw new ManifestError(`${source}.repeat`, "`maxIterations` must be a positive integer");
 		}
-		repeat = { until: "checks-pass", ...(typeof raw.repeat.maxIterations === "number" && { maxIterations: raw.repeat.maxIterations }) };
+
+		const rawUntil = raw.repeat.until;
+		let until: RepeatUntil;
+		if (rawUntil === "checks-pass") {
+			if (!steps.some((s) => s.kind === "check")) {
+				throw new ManifestError(source, '`repeat.until: "checks-pass"` requires at least one `check` step (its convergence signal)');
+			}
+			until = "checks-pass";
+		} else if (isObject(rawUntil)) {
+			requireKeys(rawUntil, new Set(["step", "equals"]), `${source}.repeat.until`);
+			if (typeof rawUntil.step !== "string" || !rawUntil.step) {
+				throw new ManifestError(`${source}.repeat.until`, "`step` must be a non-empty step id");
+			}
+			if (typeof rawUntil.equals !== "string") {
+				throw new ManifestError(`${source}.repeat.until`, "`equals` must be a string to compare the step's output against");
+			}
+			if (!steps.some((s) => s.id === rawUntil.step)) {
+				throw new ManifestError(source, `\`repeat.until.step\` references ${JSON.stringify(rawUntil.step)}, which is not a step in this routine`);
+			}
+			if (mi === undefined) {
+				throw new ManifestError(source, "`repeat.until: { step, equals }` requires an explicit `maxIterations` (a judged condition has no guaranteed termination)");
+			}
+			until = { step: rawUntil.step, equals: rawUntil.equals };
+		} else {
+			throw new ManifestError(`${source}.repeat.until`, '`until` must be "checks-pass" or an object { step, equals }');
+		}
+
+		repeat = { until, ...(typeof mi === "number" && { maxIterations: mi }) };
 	}
 
 	// Rule 3: output names a TEXT-producing step (call/format/routine), never a check or

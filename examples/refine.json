@@ -1,0 +1,33 @@
+{
+	"id": "refine",
+	"description": "Draft and self-critique a piece of writing, looping until the critic approves. A model-judged loop with no checks and no sandbox -- /goal, authored as a routine.",
+	"inputs": {
+		"brief": { "type": "string", "required": true, "description": "what to write, and any constraints" }
+	},
+	"participants": {
+		"writer": {
+			"agent": "claude",
+			"instructions": "You draft and then revise a short piece of writing. On each pass, improve the draft using the latest critique. You only produce text; you write no files.",
+			"filesystem": "read-only"
+		},
+		"critic": {
+			"agent": "claude",
+			"instructions": "You judge whether a draft is ready to ship against the brief. You only read and judge; you write no files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "draft",
+			"call": "writer",
+			"prompt": "Brief:\n{{ inputs.brief }}\n\nIteration {{ iteration }}.\nLatest critique (empty on the first pass):\n{{ steps.verdict.output }}\n\nProduce the best draft you can, addressing the critique."
+		},
+		{
+			"id": "verdict",
+			"call": "critic",
+			"prompt": "Brief:\n{{ inputs.brief }}\n\nDraft:\n{{ steps.draft.output }}\n\nIf this draft is ready to ship, reply with exactly the word: ship\nOtherwise reply with one concrete, specific improvement to make next (and do not write the word ship)."
+		}
+	],
+	"repeat": { "until": { "step": "verdict", "equals": "ship" }, "maxIterations": 4 },
+	"output": "draft"
+}

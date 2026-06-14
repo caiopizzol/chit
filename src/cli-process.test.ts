@@ -93,6 +93,35 @@ describe("CLI process: the real binary (no model)", () => {
 		expect(r.exitCode).toBe(0);
 		expect(r.stdout.toString()).toContain("hello Ada"); // the typed answer flowed into the format step
 	});
+
+	// A non-sandboxed loop through the real binary, no model: a format-only loop whose
+	// { step, equals } exit is satisfied (or not) by an input. Proves the cwd-loop dispatch,
+	// convergence, exit codes, and text output at the process boundary.
+	test("a { step, equals } loop runs in the cwd, converges, and prints its result (no model, no sandbox)", () => {
+		const cwd = tmp();
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { settle: { manifestPath: "settle.json" } }, agents: {} }));
+		writeFileSync(
+			join(cwd, "settle.json"),
+			JSON.stringify({
+				id: "settle",
+				inputs: { answer: { type: "string" } },
+				steps: [
+					{ id: "decide", format: "{{ inputs.answer }}" },
+					{ id: "result", format: "settled on {{ inputs.answer }}" },
+				],
+				repeat: { until: { step: "decide", equals: "yes" }, maxIterations: 2 },
+				output: "result",
+			}),
+		);
+		const ok = run(["run", "settle", "--input", "answer=yes"], cwd);
+		expect(ok.code).toBe(0);
+		expect(ok.out).toContain("run converged (1 iteration)");
+		expect(ok.out).toContain("settled on yes");
+
+		const no = run(["run", "settle", "--input", "answer=no"], cwd);
+		expect(no.code).toBe(1);
+		expect(no.err).toMatch(/did-not-converge/);
+	});
 });
 
 (process.env.CHIT_REAL_SMOKE === "1" ? describe : describe.skip)("CLI process: a real run through the binary", () => {

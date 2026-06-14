@@ -11,7 +11,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
-import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
+import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -54,11 +54,17 @@ export interface ConvergeReceipt {
 	digest: string;
 	inputs: Record<string, string>;
 	maxIterations: number;
+	// The exit condition this loop ran under (audit: what "converged" meant). Defaults to
+	// "checks-pass" for a single-pass sandboxed routine that has no `repeat`.
+	until: RepeatUntil;
 	startedAt: number;
 	finishedAt: number;
 	elapsedMs: number;
 	status: "converged" | "did-not-converge" | "failed" | "cancelled";
 	iterations: IterationReceipt[];
+	// The loop's text result: the final-iteration output of its last call/format step (or the
+	// declared `output`). Mainly for a non-sandboxed loop, whose result is text, not a diff.
+	output?: string;
 	sandbox?: SandboxReceipt;
 	error?: string;
 	// Set when the run converged but applying the diff back to origin failed (e.g. a
@@ -133,6 +139,9 @@ export async function runConverge(
 	// limits, else the default. Undefined means no bound ("none").
 	const maxWallMs = deps.maxWallMs ?? effectiveRunTimeoutMs(manifest);
 	const maxIterations = effectiveMaxIterations(manifest, deps.maxIterations);
+	// The exit condition. A routine with no `repeat` runs once with checks-pass semantics
+	// (a single-pass sandboxed run converges iff its checks pass / it has none).
+	const until: RepeatUntil = manifest.repeat?.until ?? "checks-pass";
 	const runId = deps.newRunId();
 	const startedAt = deps.now();
 
@@ -269,11 +278,26 @@ export async function runConverge(
 			if (stepReceipts.length > 0) iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: false });
 			break;
 		}
-		iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: runError === undefined && allChecksPassed });
-		if (runError === undefined && allChecksPassed) converged = true;
+		// Did this iteration meet the exit condition? checks-pass = every check passed;
+		// { step, equals } = that step's (trimmed) output equals the target, e.g. an
+		// evaluator call returned "yes". The `allChecksPassed` field carries this generic
+		// "converged this iteration" verdict (its legacy name; the view labels it by `until`).
+		const meets =
+			runError === undefined &&
+			(until === "checks-pass" ? allChecksPassed : (ctx.steps[until.step]?.output ?? "").trim() === until.equals);
+		iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: meets });
+		if (meets) converged = true;
 	}
 
 	const finishedAt = deps.now();
+	// The loop's text result: the declared `output`, else the last call/format step's
+	// final-iteration value (ctx holds the latest output per step). Skipped as products: a
+	// check (failure text, not a result) and the { step, equals } evaluator step (its verdict
+	// like "yes" is the signal, not the work). Mainly consumed by a non-sandboxed loop.
+	const untilStep = typeof until === "object" ? until.step : undefined;
+	const outputId =
+		manifest.output ?? [...manifest.steps].reverse().find((s) => (s.kind === "call" || s.kind === "format") && s.id !== untilStep)?.id;
+	const output = outputId !== undefined ? ctx.steps[outputId]?.output : undefined;
 	return {
 		runId,
 		routineId: routine.id,
@@ -282,11 +306,13 @@ export async function runConverge(
 		digest: routine.digest,
 		inputs: values,
 		maxIterations,
+		until,
 		startedAt,
 		finishedAt,
 		elapsedMs: finishedAt - startedAt,
 		status: runError !== undefined ? "failed" : cancelled ? "cancelled" : converged ? "converged" : "did-not-converge",
 		iterations,
+		...(output !== undefined && output !== "" && { output }),
 		...(runError !== undefined && { error: runError }),
 		...(cancelled && { error: "cancelled by operator" }),
 	};

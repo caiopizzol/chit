@@ -236,3 +236,66 @@ describe("effectiveMaxIterations", () => {
 		expect(effectiveMaxIterations(m(3), 999)).toBe(20);
 	});
 });
+
+describe("runConverge -- { step, equals } convergence (a user-authored /goal loop)", () => {
+	// A check-less loop: a worker call + an evaluator call whose "yes" ends it. The evaluator's
+	// verdict feeds the next worker iteration, exactly like a check's failure output does.
+	const GOAL = {
+		id: "goal-loop",
+		inputs: { goal: { type: "string" } },
+		participants: {
+			worker: { agent: "worker", instructions: "Work toward the goal.", filesystem: "read-only" },
+			judge: { agent: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
+		},
+		steps: [
+			{ id: "work", call: "worker", prompt: "Goal {{ inputs.goal }} iter {{ iteration }} prev=[{{ steps.done.output }}]" },
+			{ id: "done", call: "judge", prompt: "Met? {{ steps.work.output }}" },
+		],
+		repeat: { until: { step: "done", equals: "yes" }, maxIterations: 4 },
+		output: "work",
+	};
+
+	test("converges when the evaluator step's output equals the target; output is the work, not the verdict", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "yes" : `draft(${req.prompt})`));
+		const r = await runConverge(routineFrom(GOAL), { goal: "ship" }, deps({ adapter }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(1);
+		expect(r.iterations[0]?.allChecksPassed).toBe(true); // the generic "met the condition" verdict
+		expect(r.until).toEqual({ step: "done", equals: "yes" });
+		expect(r.output).toBe("draft(Goal ship iter 1 prev=[])"); // the worker's result, not "yes"
+	});
+
+	test("loops while the verdict is not the target, feeding it forward, then converges", async () => {
+		// judge says "no" on iteration 1, "yes" on iteration 2
+		let judged = 0;
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? (judged++ === 0 ? "no" : "yes") : `draft(${req.prompt})`));
+		const r = await runConverge(routineFrom(GOAL), { goal: "ship" }, deps({ adapter }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(2);
+		// iteration 2's worker prompt saw iteration 1's "no" verdict fed forward
+		expect(r.iterations[1]?.steps[0]?.id).toBe("work");
+		const iter2WorkPrompt = adapter.calls.find((c) => c.agent === "worker" && c.prompt.includes("iter 2"))?.prompt ?? "";
+		expect(iter2WorkPrompt).toContain("prev=[no]");
+	});
+
+	test("does-not-converge when the target verdict never appears within maxIterations", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "no" : "draft"));
+		const r = await runConverge(routineFrom(GOAL), { goal: "ship" }, deps({ adapter }));
+		expect(r.status).toBe("did-not-converge");
+		expect(r.iterations).toHaveLength(4); // ran to maxIterations
+		expect(r.iterations.every((it) => it.allChecksPassed === false)).toBe(true);
+	});
+
+	test("the comparison is trimmed, so a verdict with surrounding whitespace still matches", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "  yes\n" : "draft"));
+		const r = await runConverge(routineFrom(GOAL), { goal: "ship" }, deps({ adapter }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(1);
+	});
+
+	test("an exact, case-sensitive match: 'Yes.' does not satisfy equals 'yes'", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "Yes." : "draft"));
+		const r = await runConverge(routineFrom(GOAL), { goal: "ship" }, deps({ adapter }));
+		expect(r.status).toBe("did-not-converge"); // author must make the evaluator return the exact token
+	});
+});

@@ -172,6 +172,7 @@ describe("formatTrace converge", () => {
 		runId: "run-c",
 		routineId: "impl-review",
 		policy: "converge",
+		until: "checks-pass",
 		digest: `sha256:${"c".repeat(64)}`,
 		inputs: { task: "ship it" },
 		maxIterations: 3,
@@ -246,6 +247,34 @@ describe("formatTrace converge", () => {
 		expect(out).not.toContain("NaN");
 		expect(out).toContain("iteration 1  checks passed"); // offset omitted, still readable
 		expect(out).toContain("build"); // the step line renders (just without an offset)
+	});
+
+	test("a { step, equals } loop shows the condition, a met/not-met verdict, and a text-output summary", () => {
+		const goal: ConvergeReceipt = {
+			runId: "run-g",
+			routineId: "goal-loop",
+			policy: "converge",
+			until: { step: "done", equals: "yes" },
+			digest: `sha256:${"g".repeat(64)}`,
+			inputs: { goal: "ship" },
+			maxIterations: 3,
+			startedAt: 0,
+			finishedAt: 16,
+			elapsedMs: 16,
+			status: "converged",
+			iterations: [
+				{ n: 1, startedAt: 0, allChecksPassed: false, steps: [{ id: "done", kind: "call", participant: "judge", status: "ok", startedAt: 5, elapsedMs: 3 }] },
+				{ n: 2, startedAt: 8, allChecksPassed: true, steps: [{ id: "done", kind: "call", participant: "judge", status: "ok", startedAt: 13, elapsedMs: 3 }] },
+			],
+			output: "the final draft text",
+		};
+		const out = formatTrace(goal);
+		expect(out).toContain(`until: done == "yes"`);
+		expect(out).toContain("condition not met"); // iteration 1
+		expect(out).toContain("condition met"); // iteration 2
+		expect(out).not.toContain("checks passed"); // it is not a checks loop
+		expect(out).toContain("output:"); // the text result is summarized (no diff/sandbox)
+		expect(out).not.toContain("the final draft text"); // body not dumped, just summarized
 	});
 });
 

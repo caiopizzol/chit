@@ -137,7 +137,8 @@ export function formatInspect(routine: ResolvedRoutine): string {
 
 	if (m.repeat !== undefined) {
 		const mi = routine.defaults?.maxIterations ?? m.repeat.maxIterations;
-		out.push(`loop:   repeat the steps until all checks pass${mi !== undefined ? `, max ${mi} iterations` : ""}`);
+		const cond = m.repeat.until === "checks-pass" ? "all checks pass" : `${m.repeat.until.step} == ${JSON.stringify(m.repeat.until.equals)}`;
+		out.push(`loop:   repeat the steps until ${cond}${mi !== undefined ? `, max ${mi} iterations` : ""}`);
 	} else if (m.output !== undefined) {
 		out.push(`output: ${m.output}`);
 	}
@@ -184,9 +185,16 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	out.push(`inputs:   ${inputKeys.length > 0 ? inputKeys.join(", ") : "none"}`);
 
 	if (r.policy === "converge") {
-		out.push(`iterations: ${r.iterations.length} (max ${r.maxIterations})`);
+		// The exit condition this loop ran under, and the per-iteration verdict labelled for it:
+		// checks-pass reports "checks passed/failed"; { step, equals } reports "condition met/not".
+		// Legacy receipts (written before `until` existed) had only checks-pass; default to it.
+		const until = r.until ?? "checks-pass";
+		const untilLabel = until === "checks-pass" ? "checks-pass" : `${until.step} == ${JSON.stringify(until.equals)}`;
+		const verdict = (met: boolean): string =>
+			until === "checks-pass" ? (met ? "checks passed" : "checks failed") : met ? "condition met" : "condition not met";
+		out.push(`iterations: ${r.iterations.length} (max ${r.maxIterations}); until: ${untilLabel}`);
 		for (const it of r.iterations) {
-			out.push(`  iteration ${it.n}  ${startOffset(it.startedAt, r.startedAt)}${it.allChecksPassed ? "checks passed" : "checks failed"}`);
+			out.push(`  iteration ${it.n}  ${startOffset(it.startedAt, r.startedAt)}${verdict(it.allChecksPassed)}`);
 			const w = Math.max(1, ...it.steps.map((s) => s.id.length));
 			for (const s of it.steps) {
 				const who = s.kind === "call" ? callLabel(s) : s.kind;
@@ -199,6 +207,10 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		if (r.sandbox?.diffStat) {
 			out.push("changes:");
 			for (const line of r.sandbox.diffStat.split("\n")) out.push(`  ${line}`);
+		} else if (r.output !== undefined) {
+			// A non-sandboxed loop produces no diff; its result is text, summarized (not dumped)
+			// just like a one-shot's output -- the body was printed at run time.
+			out.push(`output:   ${r.output.length} chars (printed at run time; not shown here)`);
 		}
 		if (r.applyError) out.push(`apply:    could not apply to your tree -- ${r.applyError}`);
 		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);

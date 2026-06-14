@@ -430,13 +430,42 @@ at a prompt cancels the run), tests inject a deterministic answer.
   standalone. Fixed by forwarding askUser into runOneShot from runFlow; added a test (composed == standalone,
   answer reaches the sub-run output, ask step still bodyless).
 
+## Increment 21: a generic loop primitive (`repeat.until`), so /goal is authored, not built
+The remaining opinionated part was `repeat.until: "checks-pass"` -- loops could only end when command checks
+passed. Generalized so the routine declares WHEN the loop ends; /goal, grilling, research-until-good are now
+user-authored routines, not product concepts. `repeat.until` is now `"checks-pass"` (unchanged default) OR
+`{ step, equals }` -- a named step's (trimmed) output equals a string (e.g. an evaluator call returns "yes").
+- LOOP / SANDBOX DECOUPLED (the real architectural work): `repeat` no longer implies a check, so a loop is no
+  longer always sandboxed. runConverge was already the pure loop (runConvergeInSandbox just wraps it with a
+  worktree), so dispatch now routes a non-sandboxed loop (read-only, no checks, a `{ step, equals }` exit) to
+  runConverge IN THE CWD -- in cli.ts AND flow.ts (a flow sub-routine can be a text loop). Critical: relaxing
+  the rule without fixing dispatch would have let a check-less loop silently route to runOneShot and run ONCE
+  (a manifest that parses but doesn't loop). Sandbox rules unchanged: write/check -> worktree.
+- VERIFIED REVIEWER'S EXAMPLE WAS INVALID: their /goal sample put a `routine` step inside the loop (a
+  composition + repeat = both forbidden). Looping a SUB-ROUTINE is a bigger, separate feature; the minimal
+  generic-until is on EXECUTION loops, so /goal is authored with a `call` evaluator. Composition-looping deferred.
+- DECISIONS: comparison is `output.trim() === equals` (exact, case-sensitive; the author makes the evaluator
+  return the token). `maxIterations` REQUIRED for `{ step, equals }` (a judged condition has no guaranteed
+  termination), optional (default 5) for checks-pass. ask stays out of ALL loops (Rule 4 now also checks
+  `repeat`, since a non-sandboxed loop would otherwise slip past the old sandbox-only guard). A loop's text
+  result is the declared `output`, else the last call/format step EXCLUDING the evaluator step (its verdict is
+  the signal, not the product) -- on the ConvergeReceipt, surfaced for non-sandboxed loops.
+- SHIPPED: examples/refine.json (draft -> critique -> repeat until "ship") -- a real model-judged, non-sandboxed
+  loop. trace/inspect render the condition + a met/not-met verdict.
+- VERIFIED: +17 tests (until parsing + required-maxIterations + step-exists + ask-in-loop; runConverge
+  step-equals convergence incl. trim + case-sensitivity + did-not-converge + output-is-work-not-verdict;
+  cli non-sandboxed-loop dispatch; flow loop sub-routine; views condition labels; a model-less real-binary loop
+  E2E). 237 pass + 7 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
 --apply; configurable limits (visible in inspect); Ctrl-C cancel; a persisted timeline; configurable
 agents (adapter + model bound in config, multi-backend); human-input `ask` gates that feed an operator
-answer forward; every run leaves a durable, traceable receipt (including did-not-converge, failed,
-cancelled, and apply-conflict); and `chit init` scaffolds a runnable first routine. 20 increments, all green.
+answer forward; a generic loop primitive (`repeat.until` = checks-pass OR a model/human-judged `{ step, equals }`,
+sandboxed or in-cwd) so /goal-style loops are authored not built; every run leaves a durable, traceable receipt
+(including did-not-converge, failed, cancelled, and apply-conflict); and `chit init` scaffolds a runnable first
+routine. 21 increments, all green.
 
 ## Optional / deferred (none blocking)
 - one real-claude smoke outside CI (the suite fakes the model on purpose).
@@ -445,8 +474,9 @@ cancelled, and apply-conflict); and `chit init` scaffolds a runnable first routi
 - a dry-run/cancelled sandbox receipt still stores its (removed) workDir path -- JSON-only, trace does not
   render it; could mark it "discarded".
 - still deferred by design: branching, an `ask` HALT/veto (today feed-forward only; Ctrl-C is the hard stop),
-  ask inside a sandboxed/looping routine, nested composition, multiple sandboxed steps in a flow, parallel
-  fan-out, durable resume.
+  ask inside a sandboxed/looping routine, looping a SUB-ROUTINE (a `routine` step inside a `repeat`; today a
+  loop is over an execution routine's call/format/check steps), richer `until` forms (regex / contains /
+  model-scored), nested composition, multiple sandboxed steps in a flow, parallel fan-out, durable resume.
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed

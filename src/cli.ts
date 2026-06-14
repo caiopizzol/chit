@@ -8,6 +8,7 @@
 
 import { type AdapterRegistry, dispatchingAdapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
+import { runConverge } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { loadConfig } from "./config.ts";
 import { resolveFlow, runFlow } from "./flow.ts";
@@ -278,6 +279,36 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				}
 				deps.err(`\nrun ${r.runId} ${r.status}${r.error ? `: ${r.error}` : ""}`);
 				return r.status === "cancelled" ? 130 : 1;
+			}
+
+			if (routine.manifest.repeat !== undefined) {
+				// A non-sandboxed loop: read-only, no checks, but a `repeat` whose exit is a
+				// { step, equals } condition (e.g. an evaluator returns "yes"). It writes nothing,
+				// so it loops in the cwd with no worktree; its result is text, printed like a one-shot.
+				const loop = await runConverge(
+					routine,
+					validation.values,
+					{
+						adapter,
+						checkRunner: deps.checkRunner,
+						cwd: deps.cwd,
+						now: deps.now,
+						newRunId: deps.newRunId,
+						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
+						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+						...(deps.signal !== undefined && { signal: deps.signal }),
+					},
+					args.scope !== undefined ? { scope: args.scope } : {},
+				);
+				saveReceipt(deps.cwd, loop);
+				deps.out(`run ${loop.status} (${loop.iterations.length} iteration${loop.iterations.length === 1 ? "" : "s"})`);
+				if (loop.status === "converged") {
+					if (loop.output !== undefined) deps.out(`\n${loop.output}`);
+					deps.out(`\nrun ${loop.runId}  (chit trace ${loop.runId})`);
+					return 0;
+				}
+				deps.err(`\nrun ${loop.runId} ${loop.status}${loop.error ? `: ${loop.error}` : ""}`);
+				return loop.status === "cancelled" ? 130 : 1;
 			}
 
 			const receipt = await runOneShot(routine, validation.values, { ...deps, adapter }, args.scope !== undefined ? { scope: args.scope } : {});

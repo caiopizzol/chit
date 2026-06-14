@@ -108,9 +108,9 @@ describe("parseManifest -- rules", () => {
 		expect(() => parse({ ...TEXT, steps, output: "a" })).toThrow(/either all `routine` steps .* or call\/format\/check/);
 	});
 
-	test("rule 2: repeat requires a check step", () => {
+	test("rule 2: repeat with checks-pass requires a check step", () => {
 		const steps = [{ id: "build", call: "builder", prompt: "p" }];
-		expect(() => parse({ ...LOOP, steps })).toThrow(/`repeat` requires at least one `check` step/);
+		expect(() => parse({ ...LOOP, steps })).toThrow(/requires at least one `check` step/);
 	});
 
 	test("rule 2: repeat is not valid on a composition", () => {
@@ -306,5 +306,69 @@ describe("effective timeouts", () => {
 		const m = parse({ ...TEXT, limits: { callTimeoutMinutes: "none", runTimeoutMinutes: "none" } });
 		expect(effectiveCallTimeoutMs(m)).toBeUndefined();
 		expect(effectiveRunTimeoutMs(m)).toBeUndefined();
+	});
+});
+
+describe("parseManifest -- generic repeat.until", () => {
+	// A /goal-style loop authored by the user: a worker call + an evaluator call whose output
+	// decides convergence. No check step; the evaluator's "yes" ends the loop.
+	const GOAL = {
+		id: "goal-loop",
+		inputs: { goal: { type: "string" } },
+		participants: {
+			worker: { agent: "claude", instructions: "Work toward the goal.", filesystem: "read-only" },
+			evaluator: { agent: "claude", instructions: "Judge whether the goal is met.", filesystem: "read-only" },
+		},
+		steps: [
+			{ id: "work", call: "worker", prompt: "Goal: {{ inputs.goal }}\nPrior verdict: {{ steps.done.output }}" },
+			{ id: "done", call: "evaluator", prompt: "Goal: {{ inputs.goal }}\nResult: {{ steps.work.output }}\nReturn exactly yes or no." },
+		],
+		repeat: { until: { step: "done", equals: "yes" }, maxIterations: 8 },
+	};
+
+	test("parses a { step, equals } condition and keeps checks-pass working", () => {
+		const m = parse(GOAL);
+		expect(m.repeat).toEqual({ until: { step: "done", equals: "yes" }, maxIterations: 8 });
+		expect(kindLabel(m)).toBe("loop");
+		// no check step + read-only participants -> a NON-sandboxed loop (runs in cwd, not a worktree)
+		expect(hasChecks(m)).toBe(false);
+		expect(isSandboxed(m)).toBe(false);
+	});
+
+	test("a { step, equals } loop that writes is still sandboxed (loop and sandbox are independent)", () => {
+		const m = parse({
+			...GOAL,
+			participants: {
+				worker: { agent: "claude", instructions: "Edit toward the goal.", filesystem: "read-write" },
+				evaluator: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+			},
+		});
+		expect(isSandboxed(m)).toBe(true); // a read-write participant -> worktree
+		expect(kindLabel(m)).toBe("loop");
+	});
+
+	test("requires an explicit maxIterations for the { step, equals } form", () => {
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "done", equals: "yes" } } })).toThrow(/requires an explicit `maxIterations`/);
+	});
+
+	test("rejects a { step, equals } that names a non-existent step", () => {
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "ghost", equals: "yes" }, maxIterations: 3 } })).toThrow(/references "ghost", which is not a step/);
+	});
+
+	test("rejects a non-string equals", () => {
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "done", equals: 1 }, maxIterations: 3 } })).toThrow(/`equals` must be a string/);
+	});
+
+	test("rejects an unknown until form", () => {
+		expect(() => parse({ ...GOAL, repeat: { until: "goal-met", maxIterations: 3 } })).toThrow(/`until` must be "checks-pass" or an object/);
+	});
+
+	test("rejects an ask step in a non-sandboxed repeat loop (ask still excluded from loops)", () => {
+		const steps = [
+			{ id: "draft", call: "worker", prompt: "{{ inputs.goal }}" },
+			{ id: "gate", ask: "good enough?" },
+			{ id: "done", call: "evaluator", prompt: "yes or no?" },
+		];
+		expect(() => parse({ ...GOAL, steps })).toThrow(/`ask` step is not supported in a sandboxed or looping routine/);
 	});
 });

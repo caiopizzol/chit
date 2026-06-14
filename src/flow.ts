@@ -16,7 +16,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
-import type { ConvergeReceipt } from "./converge.ts";
+import { type ConvergeReceipt, runConverge } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { validateInputs } from "./inputs.ts";
 import { effectiveRunTimeoutMs, isComposition, isSandboxed, type Manifest } from "./manifest.ts";
@@ -253,7 +253,8 @@ export async function runFlow(
 		// Derived: a sub-routine that writes or runs checks is sandboxed (-> converge path);
 		// otherwise it is a pure text run (-> one-shot path).
 		const sandboxed = isSandboxed(step.routine.manifest);
-		const policy: "one-shot" | "converge" = sandboxed ? "converge" : "one-shot";
+		const looping = step.routine.manifest.repeat !== undefined;
+		const policy: "one-shot" | "converge" = sandboxed || looping ? "converge" : "one-shot";
 
 		const mapped: Record<string, string> = {};
 		for (const [name, template] of Object.entries(step.inputs)) mapped[name] = renderTemplate(template, ctx);
@@ -298,6 +299,36 @@ export async function runFlow(
 			}
 			if (r.receipt.status !== "converged") {
 				failed = `step ${step.id} (${step.routine.id}) ${r.receipt.status}`;
+				break;
+			}
+		} else if (looping) {
+			// A non-sandboxed loop sub-routine (read-only, no checks, a { step, equals } repeat):
+			// loop in the cwd (no worktree -- it writes nothing); its text result feeds forward.
+			const r = await runConverge(
+				step.routine,
+				validation.values,
+				{
+					adapter: deps.adapter,
+					checkRunner: deps.checkRunner,
+					cwd: deps.cwd,
+					now: deps.now,
+					newRunId: deps.newRunId,
+					...(step.routine.defaults?.maxIterations !== undefined && { maxIterations: step.routine.defaults.maxIterations }),
+					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
+					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+					...(deps.signal !== undefined && { signal: deps.signal }),
+				},
+				opts,
+			);
+			subReceipts.push(r);
+			ctx.steps[step.id] = { output: r.output ?? "" };
+			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			if (r.status === "cancelled") {
+				cancelled = true;
+				break;
+			}
+			if (r.status !== "converged") {
+				failed = `step ${step.id} (${step.routine.id}) ${r.status}`;
 				break;
 			}
 		} else {

@@ -36,23 +36,43 @@ const REVIEW = {
 	repeat: { until: "checks-pass", maxIterations: 3 },
 };
 
+// A non-sandboxed loop: read-only worker + evaluator, a { step, equals } exit. No checks,
+// no writes -> it loops in the cwd, never a worktree. The /goal pattern, user-authored.
+const GOAL = {
+	id: "goal-loop",
+	inputs: { goal: { type: "string" } },
+	participants: {
+		worker: { agent: "claude", instructions: "Work toward the goal.", filesystem: "read-only" },
+		judge: { agent: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
+	},
+	steps: [
+		{ id: "work", call: "worker", prompt: "Goal {{ inputs.goal }} prev=[{{ steps.done.output }}]" },
+		{ id: "done", call: "judge", prompt: "Met? {{ steps.work.output }}" },
+	],
+	repeat: { until: { step: "done", equals: "yes" }, maxIterations: 3 },
+	output: "work",
+};
+
 beforeAll(() => {
 	dir = mkdtempSync(join(tmpdir(), "chit-min-cli-"));
 	mkdirSync(join(dir, "examples"), { recursive: true });
 	writeFileSync(join(dir, "examples", "feature-griller.json"), JSON.stringify(GRILLER));
 	writeFileSync(join(dir, "examples", "impl-review.json"), JSON.stringify(REVIEW));
+	writeFileSync(join(dir, "examples", "goal-loop.json"), JSON.stringify(GOAL));
 	writeFileSync(
 		join(dir, "chit.config.json"),
 		JSON.stringify({
 			routines: {
 				"feature-griller": { manifestPath: "examples/feature-griller.json", description: "Question a feature idea." },
 				"impl-review": { manifestPath: "examples/impl-review.json", description: "Implement and review." },
+				"goal-loop": { manifestPath: "examples/goal-loop.json", description: "Loop until an evaluator says yes." },
 			},
 			// impl-review's two participants use different agent ids ("codex" / "claude"); both
 			// resolve to the claude adapter here, proving per-participant agent binding.
 			agents: {
 				claude: { adapter: "claude", model: "default" },
 				codex: { adapter: "claude", model: "default" },
+				judge: { adapter: "claude", model: "default" },
 			},
 		}),
 	);
@@ -148,6 +168,23 @@ describe("chit run", () => {
 		const { deps, err } = harness();
 		expect(await runCli(["run", "feature-griller", "--input", "idea"], deps)).toBe(1);
 		expect(err.join("\n")).toMatch(/--input expects/);
+	});
+
+	test("runs a non-sandboxed loop in the cwd and prints its text result on convergence", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "yes" : `draft:${req.prompt}`));
+		const { deps, out } = harness({ adapter });
+		expect(await runCli(["run", "goal-loop", "--input", "goal=ship"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("run converged (1 iteration)");
+		expect(text).toContain("draft:"); // the worker's output, not the "yes" verdict
+		expect(text).not.toMatch(/sandbox discarded/); // proves the cwd-loop path, not the sandbox path
+	});
+
+	test("a non-sandboxed loop that never meets its condition exits 1", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "no" : "draft"));
+		const { deps, err } = harness({ adapter });
+		expect(await runCli(["run", "goal-loop", "--input", "goal=ship"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/did-not-converge/);
 	});
 });
 
