@@ -10,6 +10,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseConfig } from "./config.ts";
 
 export type Template = "text" | "loop" | "check";
 
@@ -107,22 +108,31 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 		throw new Error(`routine name must be kebab-case and start with a letter (got ${JSON.stringify(name)})`);
 	}
 
-	// Load-or-create the config (raw JSON, so existing entries are preserved verbatim).
+	// Load-or-create the config. An EXISTING config is validated with parseConfig BEFORE
+	// anything is written, so init never extends a malformed config (which would leave the
+	// scaffolded routine unrunnable) and never leaves a half-written state. We keep the raw
+	// object (parseConfig has confirmed routines is a proper object) to preserve entries.
 	const configPath = join(cwd, "chit.config.json");
-	let config: { routines?: Record<string, unknown> } & Record<string, unknown>;
+	let config: { routines: Record<string, unknown> };
 	let createdConfig = false;
 	if (existsSync(configPath)) {
+		let raw: unknown;
 		try {
-			config = JSON.parse(readFileSync(configPath, "utf-8"));
+			raw = JSON.parse(readFileSync(configPath, "utf-8"));
 		} catch (e) {
 			throw new Error(`chit.config.json is not valid JSON: ${(e as Error).message}`);
 		}
-		if (config.routines === undefined) config.routines = {};
+		try {
+			parseConfig(raw, "chit.config.json");
+		} catch (e) {
+			throw new Error(`existing chit.config.json is invalid, fix it before running init: ${(e as Error).message}`);
+		}
+		config = raw as { routines: Record<string, unknown> };
 	} else {
 		config = { routines: {} };
 		createdConfig = true;
 	}
-	const routines = config.routines as Record<string, unknown>;
+	const routines = config.routines;
 	if (routines[name] !== undefined) {
 		throw new Error(`routine ${JSON.stringify(name)} already exists in chit.config.json`);
 	}

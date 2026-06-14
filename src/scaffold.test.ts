@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -72,5 +72,14 @@ describe("scaffoldRoutine", () => {
 	test("rejects a non-kebab-case name", () => {
 		const cwd = tmp();
 		expect(() => scaffoldRoutine(cwd, "BadName", "text")).toThrow(/kebab-case/);
+	});
+
+	test("refuses a malformed existing config and stays atomic (writes nothing)", () => {
+		const cwd = tmp();
+		writeFileSync(join(cwd, "chit.config.json"), '{"routines":[]}'); // routines is an array, not an object
+		expect(() => scaffoldRoutine(cwd, "new-one", "text")).toThrow(/invalid|routines/i);
+		// nothing was written: no manifest, and the bad config is left exactly as it was
+		expect(existsSync(join(cwd, "examples/new-one.json"))).toBe(false);
+		expect(readFileSync(join(cwd, "chit.config.json"), "utf-8")).toBe('{"routines":[]}');
 	});
 });

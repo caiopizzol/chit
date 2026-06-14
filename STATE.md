@@ -272,8 +272,17 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       to end; cli.test does init -> routines -> run through the CLI. Name validated kebab-case (config's
       rule); duplicate name / existing manifest rejected; existing config preserved (raw-JSON merge).
 - [x] README documents the verb + layout. 168 tests (468 expects), typecheck clean, no husks.
-- note to self: a careless smoke ran `init` in the repo root and polluted chit.config.json + examples/;
-  reverted via git checkout. ALWAYS cd into a temp dir before running init by hand (tests use temp cwds).
+- note to self: a careless smoke ran `init` in the repo root and polluted chit.config.json + examples/
+  (TWICE now); reverted via git checkout both times. For manual init smokes use a subshell:
+  `( cd "$tmp" && bun run <abs>/src/index.ts init ... )`. Tests use temp cwds, so they are safe.
+
+## Increment 16.1 — init validates an existing config (review follow-up)
+- [x] FIXED: init did not validate an existing chit.config.json before mutating it. A parseable-but-invalid
+      shape like {"routines":[]} (array) bypassed the undefined check, and JSON.stringify silently drops a
+      named property set on an array -- so init reported success while the routine was never registered and
+      the config stayed invalid (the scaffold was unrunnable). Now init validates the existing config with
+      parseConfig BEFORE writing anything: a malformed config is rejected (exit 1, clear message) and
+      nothing is written (atomic). Regression test + a careful subshell CLI smoke confirm it. 169 tests.
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
