@@ -2,7 +2,7 @@
 // The bin: wire the real world (claude CLI adapter, wall clock, random ids,
 // stdout/stderr, cwd) into runCli and exit with its code.
 
-import { claudeCliAdapter } from "./adapter.ts";
+import { claudeCliAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { runCli } from "./cli.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
@@ -26,9 +26,9 @@ process.on("SIGINT", () => {
 
 const code = await runCli(process.argv.slice(2), {
 	cwd: process.cwd(),
-	// Adapter registry keyed by adapter type. Adding another backend (e.g. a different
-	// CLI or API) is one more entry here; the agent config picks which one each agent uses.
-	adapters: { claude: claudeCliAdapter },
+	// Adapter registry keyed by adapter type. Adding another backend is one more entry
+	// here; the agent config picks which one each agent uses.
+	adapters: { claude: claudeCliAdapter, gemini: geminiCliAdapter },
 	checkRunner: argvCheckRunner,
 	sandboxFactory: gitWorktreeSandboxFactory,
 	now: () => Date.now(),

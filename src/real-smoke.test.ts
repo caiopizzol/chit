@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { claudeCliAdapter, dispatchingAdapter } from "./adapter.ts";
+import { claudeCliAdapter, dispatchingAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { loadConfig } from "./config.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
@@ -98,6 +98,80 @@ function realDeps(): RunDeps {
 				expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "claude", model: "sonnet" });
 				expect(steps.find((s) => s.id === "review")).toMatchObject({ agent: "critic", adapter: "claude", model: "haiku" });
 				expect(readFileSync(join(repo, "note.md"), "utf-8")).toBe("draft\n"); // dry run: builder edited only the sandbox
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+});
+
+(REAL ? describe : describe.skip)("real second adapter: gemini", () => {
+	test(
+		"a gemini read-only call cannot create a file",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "chit-gemini-ro-"));
+			try {
+				await geminiCliAdapter.call({
+					agent: "critic",
+					instructions: "You may inspect the cwd, but you must not modify anything.",
+					prompt: "Create a file named created.txt in your current directory containing the word HELLO.",
+					filesystem: "read-only",
+					cwd,
+				});
+				expect(existsSync(join(cwd, "created.txt"))).toBe(false);
+			} finally {
+				rmSync(cwd, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+
+	test(
+		"builder on claude (read-write, sandboxed) + critic on gemini (read-only); trace shows both bindings",
+		async () => {
+			const repo = mkdtempSync(join(tmpdir(), "chit-mixed-"));
+			try {
+				const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd: repo });
+				sh("git init -q && git config user.email t@t.co && git config user.name t");
+				writeFileSync(join(repo, "note.md"), "draft\n");
+				sh("git add -A && git commit -q -m init");
+
+				const manifest = parseManifest(
+					{
+						id: "mixed",
+						inputs: {},
+						participants: {
+							builder: { agent: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" },
+							critic: { agent: "critic", instructions: "You only read and comment. Do NOT edit any file.", filesystem: "read-only" },
+						},
+						steps: [
+							{ id: "build", call: "builder", prompt: "Append a single line to note.md." },
+							{ id: "review", call: "critic", prompt: "Review the diff:\n{{ diff }}\nReply with OK." },
+							{ id: "verify", check: [{ command: "sh", args: ["-c", "true"] }] },
+						],
+						repeat: { until: "checks-pass", maxIterations: 1 },
+					},
+					"mixed",
+				);
+				// builder -> claude (read-write), critic -> gemini (read-only): two real backends
+				const agents = { builder: { adapter: "claude" }, critic: { adapter: "gemini" } };
+				const routine: ResolvedRoutine = { id: "mixed", manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:x", agents };
+				const adapter = dispatchingAdapter(agents, { claude: claudeCliAdapter, gemini: geminiCliAdapter });
+				const res = await runConvergeInSandbox(routine, {}, {
+					sandboxFactory: gitWorktreeSandboxFactory,
+					adapter,
+					checkRunner: argvCheckRunner,
+					cwd: repo,
+					now: () => Date.now(),
+					newRunId: () => "mixed-smoke",
+					apply: false,
+				});
+				expect(res.receipt.status).toBe("converged");
+				const steps = res.receipt.iterations[0]?.steps ?? [];
+				expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "claude" });
+				expect(steps.find((s) => s.id === "review")).toMatchObject({ agent: "critic", adapter: "gemini" });
+				expect(readFileSync(join(repo, "note.md"), "utf-8")).toBe("draft\n"); // dry run: origin untouched
 			} finally {
 				rmSync(repo, { recursive: true, force: true });
 			}

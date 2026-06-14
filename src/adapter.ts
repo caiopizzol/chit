@@ -102,9 +102,40 @@ export const claudeCliAdapter: Adapter = {
 	},
 };
 
+// A second real adapter: the gemini CLI. Verified empirically (the same checks claude
+// needed): `gemini -p` returns its answer on stdout; `--approval-mode plan` is genuinely
+// read-only -- it returns output AND cannot write a file (unlike claude's plan mode it
+// does not blank stdout); `--approval-mode yolo` auto-approves writes. `--skip-trust` is
+// required to run headless. `--model` selects the model (omitted for the default).
+export const geminiCliAdapter: Adapter = {
+	async call(req) {
+		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
+		// filesystem -> approval mode: read-write auto-approves edits (yolo); read-only and
+		// none use plan (read-only -- returns output but cannot modify the tree).
+		const approval = req.filesystem === "read-write" ? ["--approval-mode", "yolo"] : ["--approval-mode", "plan"];
+		const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
+		const args = ["gemini", "--skip-trust", ...model, ...approval, "-p", composed];
+		const r = await spawnCapture(args, {
+			cwd: req.cwd,
+			...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
+			...(req.signal !== undefined && { signal: req.signal }),
+		});
+		if (r.aborted) {
+			throw new Error("gemini call cancelled");
+		}
+		if (r.timedOut) {
+			throw new Error(`gemini call timed out after ${req.timeoutMs}ms`);
+		}
+		if (r.exitCode !== 0) {
+			throw new Error(`gemini exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);
+		}
+		return { output: r.stdout.trim() };
+	},
+};
+
 // A registry of real adapters keyed by adapter type (the `adapter` field of an
-// agent config). The bin wires { claude: claudeCliAdapter }; adding another backend
-// is one more entry, not a redesign.
+// agent config). The bin wires { claude, gemini }; adding another backend is one more
+// entry, not a redesign.
 export type AdapterRegistry = Record<string, Adapter>;
 
 // The binding seam: the executors call ONE adapter (this one). It resolves each

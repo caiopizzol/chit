@@ -356,6 +356,19 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       sandboxed loop with builder=sonnet + critic=haiku converged, the receipt recorded each adapter/model
       binding, origin untouched. Multi-model is proven end to end (different models per participant).
 
+## Increment 19: a second real adapter (gemini) -- multi-backend proven
+- [x] also (review follow-up): every call receipt (ok/failed/cancelled) now names the agent, not just the
+      adapter/model -- callBinding carries the agent id. Failed-call test asserts it.
+- [x] geminiCliAdapter, with its permission mapping EMPIRICALLY verified FIRST (the claude lesson):
+      `gemini --skip-trust -p` returns clean stdout (the "Ripgrep" notice is stderr); `--approval-mode plan`
+      is genuinely read-only (returns output AND cannot write a file); `yolo` auto-approves writes; `--model`
+      selects the model. Wired as adapters: { claude, gemini }.
+- [x] guarded smokes PASSED 2/2 against real models: a gemini read-only call cannot create a file; and a
+      MIXED run -- builder on CLAUDE (read-write, sandboxed) + critic on GEMINI (read-only) -- converged, the
+      receipt recorded both bindings (build->claude, review->gemini), origin untouched on the dry run.
+- [x] the adapter abstraction is real: a second backend was one registry entry + one verified mapping, no
+      redesign. 186 pass + 6 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
