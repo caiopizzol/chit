@@ -311,6 +311,8 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       reading STILL works (the model read before.txt via the Read tool and returned its contents -- read
       tools don't need Bash). Added a guarded real-smoke that a read-only call cannot create a file;
       README corrected to "every write tool disallowed (edit tools AND the shell)". 169 pass + 3 skip.
+- [x] guarded smoke (CHIT_REAL_SMOKE=1) PASSED 3/3 against shipped code: grill + planning return output,
+      and a read-only call cannot create a file; repo clean after. read-only is now genuinely read-only.
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
