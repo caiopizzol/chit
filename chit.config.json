@@ -23,7 +23,11 @@
 		},
 		"feature-flow": {
 			"manifestPath": "examples/feature-flow.json",
-			"description": "Composed: grill -> plan -> implementation-review."
+			"description": "Composed: grill -> plan -> approve gate -> implementation-review."
+		},
+		"clarify": {
+			"manifestPath": "examples/clarify.json",
+			"description": "Model-less demo of an ask gate (asks one question, echoes the answer)."
 		}
 	},
 	"agents": {

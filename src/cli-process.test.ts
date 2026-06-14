@@ -4,7 +4,7 @@
 // adapter-registry wiring, and the no-config / unknown-command paths an operator hits.
 // The deterministic cases need no model; one guarded case runs a real routine.
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -69,6 +69,29 @@ describe("CLI process: the real binary (no model)", () => {
 		const r = run(["run", "anything"], tmp());
 		expect(r.code).toBe(1);
 		expect(r.err).toMatch(/no config found/);
+	});
+
+	// The unit tests inject a fake askUser; only the real binary proves the stdin reader
+	// (the bin's askOnStdin) is wired and feeds the answer forward. A model-less ask+format
+	// routine keeps this deterministic -- no model needed.
+	test("an ask step reads the operator's answer from stdin and feeds it forward", () => {
+		const cwd = tmp();
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { echo: { manifestPath: "echo.json" } }, agents: {} }));
+		writeFileSync(
+			join(cwd, "echo.json"),
+			JSON.stringify({
+				id: "echo",
+				inputs: {},
+				steps: [
+					{ id: "name", ask: "Who are you?" },
+					{ id: "out", format: "hello {{ steps.name.output }}" },
+				],
+				output: "out",
+			}),
+		);
+		const r = Bun.spawnSync(["bun", BIN, "run", "echo"], { cwd, stdin: Buffer.from("Ada\n") });
+		expect(r.exitCode).toBe(0);
+		expect(r.stdout.toString()).toContain("hello Ada"); // the typed answer flowed into the format step
 	});
 });
 

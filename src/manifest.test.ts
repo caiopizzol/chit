@@ -140,7 +140,7 @@ describe("parseManifest -- rules", () => {
 
 	test("rejects a step that is more than one kind", () => {
 		const steps = [{ id: "x", call: "griller", prompt: "p", format: "f" }];
-		expect(() => parse({ ...TEXT, steps, output: "x" })).toThrow(/exactly one of `call`, `format`, `check`, or `routine`/);
+		expect(() => parse({ ...TEXT, steps, output: "x" })).toThrow(/exactly one of `call`, `format`, `check`, `routine`, or `ask`/);
 	});
 
 	test("rejects an unknown filesystem permission", () => {
@@ -160,6 +160,98 @@ describe("parseManifest -- rules", () => {
 			expect(e).toBeInstanceOf(ManifestError);
 			expect((e as ManifestError).source).toBe("test.json");
 		}
+	});
+});
+
+describe("parseManifest -- ask (human input) steps", () => {
+	// A text routine with a decision gate: grill, ask the operator, refine using the answer.
+	const ASK_TEXT = {
+		id: "clarify-flow",
+		inputs: { idea: { type: "string" } },
+		participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+		steps: [
+			{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
+			{ id: "decide", ask: "Anything to add?\n{{ steps.grill.output }}" },
+			{ id: "refine", call: "griller", prompt: "Refine with: {{ steps.decide.output }}" },
+		],
+		output: "refine",
+	};
+
+	test("parses an ask step in a text routine and keeps it an execution", () => {
+		const m = parse(ASK_TEXT);
+		expect(m.steps.map((s) => [s.id, s.kind])).toEqual([
+			["grill", "call"],
+			["decide", "ask"],
+			["refine", "call"],
+		]);
+		const ask = m.steps.find((s) => s.id === "decide");
+		expect(ask).toMatchObject({ kind: "ask", ask: "Anything to add?\n{{ steps.grill.output }}" });
+		expect(isComposition(m)).toBe(false);
+		expect(isSandboxed(m)).toBe(false);
+		expect(kindLabel(m)).toBe("text");
+	});
+
+	test("an ask step may sit between routine steps without breaking composition detection", () => {
+		const m = parse({
+			id: "gated-flow",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "feature-griller", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "approve", ask: "Approve the plan? {{ steps.grill.output }}" },
+				{ id: "impl", routine: "impl-review", inputs: { task: "{{ steps.approve.output }}" } },
+			],
+		});
+		expect(isComposition(m)).toBe(true);
+		expect(kindLabel(m)).toBe("composition");
+		expect(m.steps.map((s) => s.kind)).toEqual(["routine", "ask", "routine"]);
+	});
+
+	test("requires a non-empty `ask` string", () => {
+		const steps = [{ id: "q", ask: "" }];
+		expect(() => parse({ ...ASK_TEXT, steps, output: undefined })).toThrow(/`ask` must be a non-empty question string/);
+	});
+
+	test("rejects an ask step in a sandboxed routine (a check step)", () => {
+		const steps = [
+			{ id: "build", call: "griller", prompt: "go" },
+			{ id: "q", ask: "looks right?" },
+			{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+		];
+		expect(() => parse({ ...ASK_TEXT, steps, output: undefined })).toThrow(/`ask` step is not supported in a sandboxed or looping routine/);
+	});
+
+	test("rejects an ask step when a participant is read-write (sandboxed)", () => {
+		expect(() =>
+			parse({
+				id: "edit-with-ask",
+				participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+				steps: [
+					{ id: "q", ask: "proceed?" },
+					{ id: "go", call: "w", prompt: "do it" },
+				],
+			}),
+		).toThrow(/`ask` step is not supported in a sandboxed or looping routine/);
+	});
+
+	test("rejects an ask step in a repeat loop (it has a check -> sandboxed)", () => {
+		const steps = [
+			{ id: "q", ask: "continue?" },
+			{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
+			{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+		];
+		expect(() => parse({ ...LOOP, steps })).toThrow(/`ask` step is not supported in a sandboxed or looping routine/);
+	});
+
+	test("rejects `output` naming an ask step (its answer is not persisted)", () => {
+		expect(() => parse({ ...ASK_TEXT, output: "decide" })).toThrow(/`output` cannot name an `ask` step/);
+	});
+
+	test("still rejects a genuine routine/execution mix (ask is neutral, not a loophole)", () => {
+		const steps = [
+			{ id: "r", routine: "feature-griller", inputs: {} },
+			{ id: "c", call: "griller", prompt: "p" },
+		];
+		expect(() => parse({ ...ASK_TEXT, steps, output: undefined })).toThrow(/not a mix/);
 	});
 });
 

@@ -70,7 +70,7 @@ function resolver(over: Record<string, ResolvedRoutine> = {}) {
 describe("resolveFlow (graph rules)", () => {
 	test("resolves a valid grill -> plan -> impl composition", () => {
 		const rf = resolveFlow(FLOW, resolver());
-		expect(rf.steps.map((s) => [s.id, s.routine.id])).toEqual([
+		expect(rf.steps.map((s) => [s.id, s.kind === "ask" ? "ask" : s.routine.id])).toEqual([
 			["grill", "grill"],
 			["plan", "plan"],
 			["impl", "impl"],
@@ -133,6 +133,36 @@ describe("resolveFlow (graph rules)", () => {
 		const f = routine({ id: "f", inputs: {}, steps: [{ id: "n", routine: "feature-flow", inputs: {} }] });
 		expect(() => resolveFlow(f, resolver())).toThrow(/nested composition is not supported/);
 	});
+
+	test("resolves an ask gate between routine steps", () => {
+		const f = routine({
+			id: "gated",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "approve", ask: "Refine the goal? {{ steps.grill.output }}" },
+				{ id: "plan", routine: "plan", inputs: { goal: "{{ steps.approve.output }}" } },
+			],
+		});
+		const rf = resolveFlow(f, resolver());
+		expect(rf.steps.map((s) => [s.id, s.kind])).toEqual([
+			["grill", "routine"],
+			["approve", "ask"],
+			["plan", "routine"],
+		]);
+	});
+
+	test("rejects an ask whose question references a not-yet-run step", () => {
+		const f = routine({
+			id: "f",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "approve", ask: "approve {{ steps.plan.output }}?" }, // plan runs later
+				{ id: "plan", routine: "plan", inputs: { goal: "{{ inputs.idea }}" } },
+			],
+		});
+		expect(() => resolveFlow(f, resolver())).toThrow(/not an earlier step/);
+	});
 });
 
 function deps(over: Partial<FlowDeps> = {}): FlowDeps {
@@ -153,7 +183,7 @@ describe("runFlow (execution)", () => {
 		const adapter = fakeAdapter((req) => `OUT[${req.prompt}]`);
 		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "dark mode" }, deps({ adapter }));
 		expect(res.receipt.status).toBe("completed");
-		expect(res.receipt.steps.map((s) => [s.id, s.routine, s.status])).toEqual([
+		expect(res.receipt.steps.map((s) => [s.id, s.kind === "ask" ? "ask" : s.routine, s.status])).toEqual([
 			["grill", "grill", "completed"],
 			["plan", "plan", "completed"],
 			["impl", "impl", "converged"],
@@ -258,5 +288,107 @@ describe("runFlow (execution)", () => {
 		expect(res.receipt.status).toBe("failed");
 		expect(res.receipt.error).toMatch(/flow wall-time/);
 		expect(res.receipt.steps.map((s) => s.id)).toEqual(["grill"]); // plan never started
+	});
+});
+
+describe("runFlow -- ask gates", () => {
+	// grill -> approve(ask) -> plan: the operator's answer becomes plan's goal.
+	const GATED = routine({
+		id: "gated",
+		inputs: { idea: { type: "string" } },
+		steps: [
+			{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idea }}" } },
+			{ id: "approve", ask: "Refine the goal?\n{{ steps.grill.output }}" },
+			{ id: "plan", routine: "plan", inputs: { goal: "{{ steps.approve.output }}" } },
+		],
+	});
+
+	test("pauses at the gate, feeds the answer into the next sub-routine's input", async () => {
+		const adapter = fakeAdapter((req) => `OUT[${req.prompt}]`);
+		const asked: string[] = [];
+		const askUser = async (q: string) => {
+			asked.push(q);
+			return "ship dark mode first";
+		};
+		const res = await runFlow(resolveFlow(GATED, resolver()), { idea: "dark mode" }, { ...deps({ adapter }), askUser });
+		expect(res.receipt.status).toBe("completed");
+		// the gate's question rendered with grill's output
+		expect(asked).toEqual(["Refine the goal?\nOUT[grill dark mode]"]);
+		// plan's prompt used the OPERATOR's answer, not grill's output
+		expect(adapter.calls.at(-1)?.prompt ?? "").toContain("plan ship dark mode first");
+		expect(res.receipt.steps.map((s) => [s.id, s.kind === "ask" ? "ask" : s.routine, s.status])).toEqual([
+			["grill", "grill", "completed"],
+			["approve", "ask", "completed"],
+			["plan", "plan", "completed"],
+		]);
+	});
+
+	test("the ask step receipt carries no answer body, and launches no sub-run", async () => {
+		const res = await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, { ...deps(), askUser: async () => "SENSITIVE" });
+		const ask = res.receipt.steps.find((s) => s.id === "approve");
+		expect(Object.keys(ask ?? {}).sort()).toEqual(["elapsedMs", "id", "kind", "startedAt", "status"]);
+		// only grill and plan produced sub-receipts; the gate did not
+		expect(res.subReceipts.map((s) => s.routineId)).toEqual(["grill", "plan"]);
+	});
+
+	test("a gate with no input handler wired fails the flow at that step", async () => {
+		const res = await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, deps()); // no askUser
+		expect(res.receipt.status).toBe("failed");
+		expect(res.receipt.error).toMatch(/needs an input handler/);
+		expect(res.receipt.steps.map((s) => [s.id, s.status])).toEqual([
+			["grill", "completed"],
+			["approve", "failed"],
+		]);
+	});
+
+	test("a Ctrl-C at the gate cancels the flow", async () => {
+		const controller = new AbortController();
+		const askUser = async () => {
+			controller.abort(); // mimic the bin rejecting the pending prompt on SIGINT
+			throw new Error("cancelled");
+		};
+		const res = await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, { ...deps(), signal: controller.signal, askUser });
+		expect(res.receipt.status).toBe("cancelled");
+		expect(res.receipt.steps.at(-1)).toMatchObject({ id: "approve", kind: "ask", status: "cancelled" });
+	});
+
+	test("emits a live-progress line for the gate", async () => {
+		const lines: string[] = [];
+		await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, { ...deps(), askUser: async () => "ok", onProgress: (l) => lines.push(l) });
+		expect(lines).toContain("step approve (ask)");
+	});
+
+	test("a gate before the terminal sandboxed step feeds the answer into the sandboxed sub-run (the feature-flow shape)", async () => {
+		const adapter = fakeAdapter((req) => `OUT[${req.prompt}]`);
+		const gatedImpl = routine({
+			id: "gated-impl",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "grill", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "approve", ask: "Adjustments before building? {{ steps.grill.output }}" },
+				{ id: "impl", routine: "impl", inputs: { task: "{{ steps.approve.output }}" } },
+			],
+		});
+		const res = await runFlow(resolveFlow(gatedImpl, resolver()), { idea: "x" }, { ...deps({ adapter }), askUser: async () => "keep it tiny" });
+		expect(res.receipt.status).toBe("completed");
+		expect(res.receipt.steps.map((s) => [s.id, s.status])).toEqual([
+			["grill", "completed"],
+			["approve", "completed"],
+			["impl", "converged"],
+		]);
+		// the builder call inside the sandboxed sub-run saw the operator's answer
+		expect(adapter.calls.at(-1)?.prompt ?? "").toContain("keep it tiny");
+	});
+
+	test("rejects a gate placed AFTER the terminal sandboxed step (sandboxed must be last)", () => {
+		const f = routine({
+			id: "bad-order",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.idea }}" } },
+				{ id: "approve", ask: "looks good?" },
+			],
+		});
+		expect(() => resolveFlow(f, resolver())).toThrow(/must be the LAST step/);
 	});
 });

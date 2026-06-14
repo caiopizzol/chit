@@ -39,6 +39,13 @@ function callLabel(s: { participant?: string; adapter?: string; model?: string }
 	return `${base} (${s.adapter}${s.model !== undefined && s.model !== "default" ? `:${s.model}` : ""})`;
 }
 
+// A one-line preview of an `ask` question for inspect (questions are often multi-line,
+// e.g. they embed {{ steps.plan.output }}); collapse whitespace and clip.
+function askPreview(q: string): string {
+	const flat = q.replace(/\s+/g, " ").trim();
+	return flat.length > 50 ? `"${flat.slice(0, 49)}…"` : `"${flat}"`;
+}
+
 export interface RoutineListItem {
 	id: string;
 	kind: string;
@@ -78,6 +85,10 @@ export function formatInspect(routine: ResolvedRoutine): string {
 	if (isComposition(m)) {
 		out.push("steps:");
 		m.steps.forEach((s, i) => {
+			if (s.kind === "ask") {
+				out.push(`  ${i + 1}. ${pad(s.id, 10)} ask  ${askPreview(s.ask)}`.trimEnd());
+				return;
+			}
 			if (s.kind !== "routine") return;
 			const ins = Object.keys(s.inputs);
 			out.push(`  ${i + 1}. ${pad(s.id, 10)} -> ${pad(s.routine, 22)}${ins.length ? `inputs: ${ins.join(", ")}` : ""}`.trimEnd());
@@ -118,7 +129,9 @@ export function formatInspect(routine: ResolvedRoutine): string {
 					? "format"
 					: s.kind === "check"
 						? `check: ${s.checks.map((c) => [c.command, ...c.args].join(" ")).join(", ")}`
-						: "routine";
+						: s.kind === "ask"
+							? `ask  ${askPreview(s.ask)}`
+							: "routine";
 		out.push(`  ${i + 1}. ${pad(s.id, 10)} ${what}`);
 	});
 
@@ -157,7 +170,12 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		out.push("steps:");
 		const w = Math.max(1, ...r.steps.map((s) => s.id.length));
 		for (const s of r.steps) {
-			out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  ${s.subRunId || "-"}`);
+			// An ask gate has no sub-routine/sub-run -- show it as `ask` with a "-" run id.
+			if (s.kind === "ask") {
+				out.push(`  ${pad(s.id, w)}  -> ${pad("ask", 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  -`);
+			} else {
+				out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  ${s.subRunId || "-"}`);
+			}
 		}
 		if (r.applyError) out.push(`apply:    could not apply to your tree -- ${r.applyError}`);
 		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
@@ -190,7 +208,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	out.push("steps:");
 	const w = Math.max(1, ...r.steps.map((s) => s.id.length));
 	for (const s of r.steps) {
-		const who = s.kind === "call" ? callLabel(s) : "format";
+		const who = s.kind === "call" ? callLabel(s) : s.kind === "ask" ? "ask" : "format";
 		out.push(`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms`);
 	}
 	if (r.status === "failed" || r.status === "cancelled") {

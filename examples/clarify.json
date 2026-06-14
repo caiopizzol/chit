@@ -1,0 +1,10 @@
+{
+	"id": "clarify",
+	"description": "A model-less demo of an ask gate: it asks you one question and formats the answer back.",
+	"inputs": {},
+	"steps": [
+		{ "id": "name", "ask": "What should I call this run?" },
+		{ "id": "out", "format": "Got it -- this run is \"{{ steps.name.output }}\"." }
+	],
+	"output": "out"
+}

@@ -229,7 +229,9 @@ export async function runConverge(
 					throw new Error(`runConverge cannot run a ${step.kind} step (${step.id})`);
 				}
 			} catch (e) {
-				const kind = step.kind === "routine" ? "check" : step.kind;
+				// Only call/format/check reach the sandbox path (Rule 4 keeps ask out, and a
+				// routine step is a composition); map anything else to "check" defensively.
+				const kind = step.kind === "call" || step.kind === "format" || step.kind === "check" ? step.kind : "check";
 				// A call/check killed by the cancellation signal is a cancel, not a failure;
 				// record the active step so the timeline shows what was interrupted.
 				if (deps.signal?.aborted) {

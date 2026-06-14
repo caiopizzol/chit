@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ConvergeReceipt } from "./converge.ts";
+import type { FlowReceipt } from "./flow.ts";
 import { parseManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
@@ -131,6 +132,39 @@ describe("formatInspect", () => {
 		expect(out).toContain("limits: whole run 120m");
 		expect(out).not.toContain("per call"); // a composition makes no direct calls
 	});
+
+	test("composition: renders an ask gate between routine steps", () => {
+		const gated = {
+			id: "gated-flow",
+			description: "Grill, approve, implement.",
+			inputs: { idea: { type: "string" } },
+			steps: [
+				{ id: "grill", routine: "feature-griller", inputs: { idea: "{{ inputs.idea }}" } },
+				{ id: "approve", ask: "Approve the plan before implementing?" },
+				{ id: "impl", routine: "impl-review", inputs: { task: "{{ steps.approve.output }}" } },
+			],
+		};
+		const out = formatInspect(routineFrom(gated));
+		expect(out).toContain("approve");
+		expect(out).toContain(`ask  "Approve the plan before implementing?"`);
+	});
+
+	test("text: renders an ask gate in the step list", () => {
+		const gated = {
+			id: "clarify",
+			inputs: { idea: { type: "string" } },
+			participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+			steps: [
+				{ id: "grill", call: "griller", prompt: "p" },
+				{ id: "decide", ask: "anything to add?" },
+				{ id: "out", format: "{{ steps.decide.output }}" },
+			],
+			output: "out",
+		};
+		const out = formatInspect(routineFrom(gated));
+		expect(out).toContain(`decide`);
+		expect(out).toContain(`ask  "anything to add?"`);
+	});
 });
 
 describe("formatTrace converge", () => {
@@ -256,5 +290,60 @@ describe("formatTrace", () => {
 		expect(out).toContain("failed");
 		expect(out).toContain("error:    model unavailable");
 		expect(out).not.toMatch(/output:/);
+	});
+
+	test("one-shot with an ask step: the step renders as `ask`", () => {
+		const withAsk: RunReceipt = {
+			...base,
+			steps: [
+				{ id: "grill", kind: "call", participant: "griller", agent: "claude", status: "ok", startedAt: 0, elapsedMs: 5 },
+				{ id: "decide", kind: "ask", status: "ok", startedAt: 5, elapsedMs: 1 },
+				{ id: "out", kind: "format", status: "ok", startedAt: 6, elapsedMs: 1 },
+			],
+		};
+		const out = formatTrace(withAsk);
+		expect(out).toMatch(/decide {2}ask/);
+	});
+});
+
+describe("formatTrace flow", () => {
+	const flow: FlowReceipt = {
+		runId: "run-f",
+		routineId: "gated-flow",
+		policy: "flow",
+		digest: `sha256:${"f".repeat(64)}`,
+		inputs: { idea: "dark mode" },
+		startedAt: 0,
+		finishedAt: 30,
+		elapsedMs: 30,
+		status: "completed",
+		steps: [
+			{ id: "grill", kind: "routine", routine: "feature-griller", policy: "one-shot", subRunId: "run-g", status: "completed", startedAt: 0, elapsedMs: 10 },
+			{ id: "approve", kind: "ask", status: "completed", startedAt: 10, elapsedMs: 2 },
+			{ id: "impl", kind: "routine", routine: "impl-review", policy: "converge", subRunId: "run-i", status: "converged", startedAt: 12, elapsedMs: 18 },
+		],
+	};
+
+	test("renders routine sub-runs with their ids and the ask gate with a `-` run id", () => {
+		const out = formatTrace(flow);
+		expect(out).toContain("run-f  gated-flow  completed");
+		expect(out).toContain("feature-griller");
+		expect(out).toContain("run-g");
+		expect(out).toContain("run-i");
+		// the gate: rendered as `ask`, no sub-run id
+		expect(out).toMatch(/approve {2}-> ask\b/);
+		const askLine = out.split("\n").find((l) => l.includes("approve")) ?? "";
+		expect(askLine.trimEnd().endsWith("-")).toBe(true);
+	});
+
+	test("a legacy flow receipt without per-step kind renders its routine steps", () => {
+		// a flow receipt written before ask existed: steps have no `kind` field
+		const legacy = {
+			...flow,
+			steps: [{ id: "grill", routine: "feature-griller", policy: "one-shot", subRunId: "run-g", status: "completed", startedAt: 0, elapsedMs: 10 }],
+		} as FlowReceipt;
+		const out = formatTrace(legacy);
+		expect(out).toContain("feature-griller");
+		expect(out).toContain("run-g");
 	});
 });

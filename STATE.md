@@ -396,14 +396,42 @@ shows `call builder (claude)`, the checks, and a diffstat. Friction, ranked:
 CONCLUSION (smallest justified next feature): HUMAN-INPUT STEPS. Shape the dogfood revealed: a step kind that
 pauses to ask the operator a structured question and feeds the answer forward (decision gates between steps:
 "refine the idea?", "approve/adjust the plan before implementing?"). Implement via an injectable askUser seam
-(deterministic in tests; the bin reads stdin), like the adapter/checkRunner seams. NOT built yet -- next slice.
+(deterministic in tests; the bin reads stdin), like the adapter/checkRunner seams.
+
+## Increment 20: human-input gates (`ask` steps) -- the dogfood fix
+A new step kind `{ id, ask: "<question>" }`. It pauses, asks the operator one question (which can template in
+earlier output, e.g. `{{ steps.plan.output }}`), and feeds the typed answer forward via the existing
+`{{ steps.<id>.output }}` -- no new plumbing for feed-forward. Fourth injected seam `deps.askUser(question)`,
+exactly like adapter/checkRunner/sandboxFactory: the bin reads stdin (a shared, abort-aware readline -- Ctrl-C
+at a prompt cancels the run), tests inject a deterministic answer.
+- SCOPE (feed-forward only, deliberate): the answer shapes later steps ("refine", "adjust the plan"). NO
+  manifest-level halt/veto -- a hard "no" is still Ctrl-C (writes a clean `cancelled` receipt). Halt is new
+  control flow; deferred until a 2nd dogfood justifies its shape.
+- WHERE (Rule 4): `ask` is allowed in text routines and compositions (execution pauses cleanly between steps),
+  and FORBIDDEN in a sandboxed/looping routine (a check step or read-write participant). One notch stricter
+  than the reviewer's "no ask in repeat loops": the converge executor is shared by repeat and non-repeat
+  sandboxed runs, so excluding the whole sandbox path keeps that executor untouched and sidesteps
+  ask-once-vs-every-iteration entirely. A sandboxed routine that needs a gate gets it in the composition that
+  calls it -- exactly the dogfood shape (grill -> plan -> approve -> impl).
+- RECEIPT BOUNDARY (verified the reviewer's point against the code): per-step transcripts are already never
+  stored (store.ts); the `ask` step receipt carries status + timing only, never the answer. `output` cannot
+  name an ask step, and the implicit output skips ask -- so an answer never becomes the persisted run output
+  unless the operator explicitly formats it forward.
+- DOGFOOD FIX SHIPPED: examples/feature-flow.json gained an `approve` gate between `plan` and `impl` (the exact
+  friction #1). New model-less examples/clarify.json demos the mechanic and backs a deterministic
+  real-binary stdin E2E.
+- VERIFIED: +26 tests (manifest Rule 4 + ask parsing + output rule; runOneShot ask incl. cancel + no-handler +
+  output-skip; flow gates incl. feed-forward + no sub-run + cancel; views inspect/trace render; a process E2E
+  that pipes stdin to the real bin). Manual: `printf 'Ada\n' | chit run clarify` -> output uses the answer,
+  trace shows `name ask ok` with no body. 217 pass + 7 skip, typecheck clean.
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
---apply; configurable limits (visible in inspect); Ctrl-C cancel; a persisted timeline; every run leaves
-a durable, traceable receipt (including did-not-converge, failed, cancelled, and apply-conflict); and
-`chit init` scaffolds a runnable first routine. 16 increments, all green.
+--apply; configurable limits (visible in inspect); Ctrl-C cancel; a persisted timeline; configurable
+agents (adapter + model bound in config, multi-backend); human-input `ask` gates that feed an operator
+answer forward; every run leaves a durable, traceable receipt (including did-not-converge, failed,
+cancelled, and apply-conflict); and `chit init` scaffolds a runnable first routine. 20 increments, all green.
 
 ## Optional / deferred (none blocking)
 - one real-claude smoke outside CI (the suite fakes the model on purpose).
@@ -411,8 +439,9 @@ a durable, traceable receipt (including did-not-converge, failed, cancelled, and
   mid-call abort).
 - a dry-run/cancelled sandbox receipt still stores its (removed) workDir path -- JSON-only, trace does not
   render it; could mark it "discarded".
-- still deferred by design: branching, nested composition, multiple sandboxed steps in a flow, parallel
-  fan-out, human-gate steps, durable resume.
+- still deferred by design: branching, an `ask` HALT/veto (today feed-forward only; Ctrl-C is the hard stop),
+  ask inside a sandboxed/looping routine, nested composition, multiple sandboxed steps in a flow, parallel
+  fan-out, durable resume.
 
 ## Deferred still
 durable resume, richer receipts, parallel fan-out, nested composition / multiple sandboxed

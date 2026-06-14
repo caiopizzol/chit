@@ -12,7 +12,7 @@ import { renderTemplate } from "./template.ts";
 
 export interface StepReceipt {
 	id: string;
-	kind: "call" | "format";
+	kind: "call" | "format" | "ask";
 	participant?: string;
 	// The agent id (profile) plus the binding it resolved to, so trace can prove which
 	// adapter + model actually ran -- even if the config later changes.
@@ -57,6 +57,10 @@ export interface RunDeps {
 	// into the call so an in-flight call is killed promptly; a cancelled run records
 	// a "cancelled" receipt rather than a failure.
 	signal?: AbortSignal;
+	// Human-input seam: an `ask` step calls this to get one operator answer (the bin
+	// reads stdin; tests inject a deterministic answer). A routine with no ask steps
+	// never calls it; an ask step that runs without it wired is an error.
+	askUser?: (question: string) => Promise<string>;
 }
 
 export async function runOneShot(
@@ -118,8 +122,16 @@ export async function runOneShot(
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
 				steps.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			} else if (step.kind === "ask") {
+				if (deps.askUser === undefined) throw new Error(`step ${step.id} is an \`ask\` but no input handler is wired`);
+				deps.onProgress?.(`  ask ${step.id} …`);
+				// The answer feeds later steps via {{ steps.<id>.output }}; it is NOT recorded
+				// on the receipt (the step receipt below carries status + timing only).
+				const answer = await deps.askUser(renderTemplate(step.ask, ctx));
+				ctx.steps[step.id] = { output: answer };
+				steps.push({ id: step.id, kind: "ask", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
 			} else {
-				// A non-sandboxed text routine has only call/format steps (dispatch guarantees it).
+				// A non-sandboxed text routine has only call/format/ask steps (dispatch guarantees it).
 				throw new Error(`runOneShot cannot run a ${step.kind} step (${step.id})`);
 			}
 		} catch (e) {
@@ -129,7 +141,7 @@ export async function runOneShot(
 				cancelled = true;
 				steps.push({
 					id: step.id,
-					kind: step.kind === "call" ? "call" : "format",
+					kind: step.kind === "call" ? "call" : step.kind === "ask" ? "ask" : "format",
 					...(step.kind === "call" && { participant: step.call, ...callBinding(step.call) }),
 					status: "cancelled",
 					startedAt: stepStart,
@@ -140,7 +152,7 @@ export async function runOneShot(
 			failed = (e as Error).message;
 			steps.push({
 				id: step.id,
-				kind: step.kind === "call" ? "call" : "format",
+				kind: step.kind === "call" ? "call" : step.kind === "ask" ? "ask" : "format",
 				...(step.kind === "call" && { participant: step.call, ...callBinding(step.call) }),
 				status: "failed",
 				startedAt: stepStart,
@@ -152,7 +164,10 @@ export async function runOneShot(
 	}
 
 	const finishedAt = deps.now();
-	const outputId = manifest.output ?? manifest.steps.at(-1)?.id;
+	// The run's output is its last TEXT-producing step. An `ask` answer feeds later steps
+	// but is not the routine's product (and is kept out of the receipt), so it is never the
+	// implicit output -- fall back to the last non-ask step.
+	const outputId = manifest.output ?? [...manifest.steps].reverse().find((s) => s.kind !== "ask")?.id;
 	const output = outputId !== undefined ? ctx.steps[outputId]?.output : undefined;
 	const status = cancelled ? "cancelled" : failed === undefined ? "completed" : "failed";
 	return {

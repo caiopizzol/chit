@@ -38,6 +38,9 @@ export interface CliDeps {
 	// Operator-cancellation signal (Ctrl-C). Threaded into every executor; a cancelled
 	// run still writes a receipt and exits 130.
 	signal?: AbortSignal;
+	// Human-input seam for `ask` steps (the bin reads stdin; tests inject an answer).
+	// Threaded into the one-shot and flow executors; the sandbox path has no ask steps.
+	askUser?: (question: string) => Promise<string>;
 }
 
 const USAGE = `chit -- run declared routines
@@ -197,6 +200,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						newRunId: deps.newRunId,
 						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 						...(deps.signal !== undefined && { signal: deps.signal }),
+						...(deps.askUser !== undefined && { askUser: deps.askUser }),
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
@@ -205,7 +209,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
 				const r = result.receipt;
 				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
-				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.routine}: ${s.status}`);
+				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.kind === "ask" ? "ask" : s.routine}: ${s.status}`);
 				if (r.status === "cancelled") {
 					deps.err(`\nrun ${r.runId} cancelled.  (chit trace ${r.runId})`);
 					return 130;

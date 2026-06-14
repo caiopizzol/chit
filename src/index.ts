@@ -2,6 +2,7 @@
 // The bin: wire the real world (claude CLI adapter, wall clock, random ids,
 // stdout/stderr, cwd) into runCli and exit with its code.
 
+import { createInterface, type Interface } from "node:readline";
 import { claudeCliAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { runCli } from "./cli.ts";
@@ -24,6 +25,24 @@ process.on("SIGINT", () => {
 	}
 });
 
+// Human-input seam for `ask` steps. The question and the `> ` prompt go to stderr (stdout
+// is the result channel); the typed line is the answer. One shared readline for the run's
+// lifetime; we process.exit at the end, so it needs no explicit teardown. Abort-aware: a
+// Ctrl-C while waiting rejects the pending ask, so the run cancels instead of hanging.
+let rl: Interface | undefined;
+function askOnStdin(question: string): Promise<string> {
+	rl ??= createInterface({ input: process.stdin, output: process.stderr });
+	return new Promise((resolve, reject) => {
+		if (controller.signal.aborted) return reject(new Error("cancelled"));
+		const onAbort = () => reject(new Error("cancelled"));
+		controller.signal.addEventListener("abort", onAbort, { once: true });
+		rl?.question(`\n${question}\n> `, (answer) => {
+			controller.signal.removeEventListener("abort", onAbort);
+			resolve(answer);
+		});
+	});
+}
+
 const code = await runCli(process.argv.slice(2), {
 	cwd: process.cwd(),
 	// Adapter registry keyed by adapter type. Adding another backend is one more entry
@@ -38,6 +57,7 @@ const code = await runCli(process.argv.slice(2), {
 	// Live progress streams to stderr as it happens; the final result is on stdout.
 	onProgress: (line) => process.stderr.write(`${line}\n`),
 	signal: controller.signal,
+	askUser: askOnStdin,
 });
 
 process.exit(code);

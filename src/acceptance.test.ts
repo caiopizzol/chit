@@ -209,7 +209,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		// receipt-level: the flow links its sub-runs, which are persisted separately
 		const flowReceipt = loadReceipt(repo, "run-accept-0") as FlowReceipt;
 		expect(flowReceipt.policy).toBe("flow");
-		expect(flowReceipt.steps.map((s) => s.subRunId)).toEqual(["run-accept-1", "run-accept-2"]);
+		expect(flowReceipt.steps.map((s) => (s.kind === "ask" ? "-" : s.subRunId))).toEqual(["run-accept-1", "run-accept-2"]);
 		expect(loadReceipt(repo, "run-accept-1").routineId).toBe("griller");
 		expect(loadReceipt(repo, "run-accept-2").routineId).toBe("impl");
 	});

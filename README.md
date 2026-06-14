@@ -14,8 +14,15 @@ One shape. You describe the work; **how it runs is derived**, never chosen.
 - A **manifest** is the source of truth: inputs, participants, ordered steps, an
   optional `repeat`, and optional `limits` (time bounds). Config never restates any of this.
 - **Steps** are `call` (ask a participant), `format` (assemble text), `check` (run a
-  command), or `routine` (run another routine). "build"/"critique" are just step ids,
+  command), `routine` (run another routine), or `ask` (pause for one operator answer,
+  fed forward like any step output). "build"/"critique" are just step ids,
   "builder"/"critic" just participant names -- there is no built-in implementer/reviewer.
+- **An `ask` step is a human-input gate.** It pauses, asks the operator one question
+  (which can template in earlier output, e.g. "approve this plan: {{ steps.plan.output }}"),
+  and feeds the typed answer to later steps. The answer lives only in memory -- it is never
+  written to the receipt. Gates belong in text routines or compositions (where execution
+  pauses cleanly between steps), not inside a sandboxed/looping routine; put the gate in the
+  composition that calls it instead.
 - **Agents are bound in config, not baked in.** A participant names an agent id; the config's
   `agents` registry says what that id IS -- which adapter backs it and which model. So you
   define your own builder, critic, planner, etc., and point each at the agent/model you want,

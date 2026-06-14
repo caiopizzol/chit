@@ -25,11 +25,11 @@ import { type RunReceipt, runOneShot } from "./run.ts";
 import type { SandboxFactory } from "./sandbox.ts";
 import { renderTemplate } from "./template.ts";
 
-export interface ResolvedFlowStep {
-	id: string;
-	inputs: Record<string, string>;
-	routine: ResolvedRoutine;
-}
+// A composition step is either a sub-routine to run or an `ask` gate that pauses for
+// one operator answer (fed forward via {{ steps.<id>.output }}, like a sub-run's output).
+export type ResolvedFlowStep =
+	| { id: string; kind: "routine"; inputs: Record<string, string>; routine: ResolvedRoutine }
+	| { id: string; kind: "ask"; ask: string };
 
 export interface ResolvedFlow {
 	flow: ResolvedRoutine;
@@ -66,8 +66,33 @@ export function resolveFlow(
 	const steps: ResolvedFlowStep[] = [];
 	const priorIds = new Set<string>();
 
+	// Validate every template ref in a composition step (its sub-routine inputs, or an
+	// ask question): a {{ steps.X.output }} must name an earlier step, a {{ inputs.Y }}
+	// must be a declared input. Shared by routine and ask steps so an ask can reference
+	// earlier outputs (e.g. "approve this plan: {{ steps.plan.output }}").
+	const checkRefs = (template: string, stepId: string): void => {
+		for (const ref of stepRefs(template)) {
+			if (!priorIds.has(ref)) {
+				throw new RoutineError(`composition step ${JSON.stringify(stepId)}: references step ${JSON.stringify(ref)}, which is not an earlier step`);
+			}
+		}
+		for (const ref of inputRefs(template)) {
+			if (!(ref in manifest.inputs)) {
+				throw new RoutineError(`composition step ${JSON.stringify(stepId)}: references {{ inputs.${ref} }}, which is not a declared input`);
+			}
+		}
+	};
+
 	for (const [i, step] of manifest.steps.entries()) {
-		if (step.kind !== "routine") throw new Error("composition step must be a routine step");
+		if (step.kind === "ask") {
+			// A decision gate between sub-routines: pauses for one operator answer, fed
+			// forward like any step output. It launches no sub-run and writes nothing.
+			checkRefs(step.ask, step.id);
+			steps.push({ id: step.id, kind: "ask", ask: step.ask });
+			priorIds.add(step.id);
+			continue;
+		}
+		if (step.kind !== "routine") throw new Error("composition step must be a routine or ask step");
 		const isLast = i === manifest.steps.length - 1;
 		let sub: ResolvedRoutine;
 		try {
@@ -78,41 +103,43 @@ export function resolveFlow(
 		if (isComposition(sub.manifest)) {
 			throw new RoutineError(`composition step ${JSON.stringify(step.id)}: ${JSON.stringify(step.routine)} is itself a composition -- nested composition is not supported (call execution routines only)`);
 		}
-		for (const template of Object.values(step.inputs)) {
-			for (const ref of stepRefs(template)) {
-				if (!priorIds.has(ref)) {
-					throw new RoutineError(`composition step ${JSON.stringify(step.id)}: input references step ${JSON.stringify(ref)}, which is not an earlier step`);
-				}
-			}
-			for (const ref of inputRefs(template)) {
-				if (!(ref in manifest.inputs)) {
-					throw new RoutineError(`composition step ${JSON.stringify(step.id)}: input references {{ inputs.${ref} }}, which is not a declared input`);
-				}
-			}
-		}
+		for (const template of Object.values(step.inputs)) checkRefs(template, step.id);
 		// A sandboxed sub-routine (writes or runs checks) must be the LAST step, and a
 		// composition has at most one (a non-last sandboxed step is caught here). Earlier
 		// steps must be pure read-only/text, so the composition adds no write surface.
 		if (isSandboxed(sub.manifest) && !isLast) {
 			throw new RoutineError(`composition ${JSON.stringify(flowRoutine.id)}: step ${JSON.stringify(step.id)} (${JSON.stringify(sub.id)}) writes or runs checks, so it must be the LAST step; earlier steps must be read-only/text.`);
 		}
-		steps.push({ id: step.id, inputs: step.inputs, routine: sub });
+		steps.push({ id: step.id, kind: "routine", inputs: step.inputs, routine: sub });
 		priorIds.add(step.id);
 	}
 	return { flow: flowRoutine, steps };
 }
 
-export interface FlowStepReceipt {
-	id: string;
-	routine: string;
-	// The sub-run's receipt kind: "converge" for a sandboxed sub-routine, else "one-shot".
-	policy: "one-shot" | "converge";
-	subRunId: string;
-	status: string;
-	// Absolute clock when the sub-run started, so trace can place it on the timeline.
-	startedAt: number;
-	elapsedMs: number;
-}
+// A routine step records the sub-run it launched; an `ask` step records only status +
+// timing (the answer is never persisted). `kind` is optional on the routine variant so
+// legacy flow receipts (written before ask existed, with no `kind`) still type-check and
+// render as routine steps.
+export type FlowStepReceipt =
+	| {
+			id: string;
+			kind?: "routine";
+			routine: string;
+			// The sub-run's receipt kind: "converge" for a sandboxed sub-routine, else "one-shot".
+			policy: "one-shot" | "converge";
+			subRunId: string;
+			status: string;
+			// Absolute clock when the sub-run started, so trace can place it on the timeline.
+			startedAt: number;
+			elapsedMs: number;
+	  }
+	| {
+			id: string;
+			kind: "ask";
+			status: string;
+			startedAt: number;
+			elapsedMs: number;
+	  };
 
 export interface FlowReceipt {
 	runId: string;
@@ -155,6 +182,9 @@ export interface FlowDeps {
 	// Operator-cancellation signal (Ctrl-C). Checked before each sub-routine and
 	// threaded into each sub-run so an in-flight call/check is killed promptly.
 	signal?: AbortSignal;
+	// Human-input seam for `ask` gates between sub-routines (the bin reads stdin; tests
+	// inject a deterministic answer). Required only if the composition has an ask step.
+	askUser?: (question: string) => Promise<string>;
 	apply: boolean;
 }
 
@@ -190,6 +220,35 @@ export async function runFlow(
 			break;
 		}
 		const stepStart = deps.now();
+
+		if (step.kind === "ask") {
+			// A decision gate: pause for one operator answer, feed it forward. No sub-run,
+			// no receipt body -- only status + timing land in the flow receipt.
+			if (deps.askUser === undefined) {
+				failed = `step ${step.id}: an ask gate needs an input handler, but none is wired`;
+				stepReceipts.push({ id: step.id, kind: "ask", status: "failed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				break;
+			}
+			deps.onProgress?.(`step ${step.id} (ask)`);
+			let answer: string;
+			try {
+				answer = await deps.askUser(renderTemplate(step.ask, ctx));
+			} catch (e) {
+				// Ctrl-C during the prompt aborts the signal and rejects the ask -> a cancel.
+				if (deps.signal?.aborted) {
+					cancelled = true;
+					stepReceipts.push({ id: step.id, kind: "ask", status: "cancelled", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+					break;
+				}
+				failed = `step ${step.id} (ask): ${(e as Error).message}`;
+				stepReceipts.push({ id: step.id, kind: "ask", status: "failed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				break;
+			}
+			ctx.steps[step.id] = { output: answer };
+			stepReceipts.push({ id: step.id, kind: "ask", status: "completed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			continue;
+		}
+
 		deps.onProgress?.(`step ${step.id} -> ${step.routine.id}`);
 		// Derived: a sub-routine that writes or runs checks is sandboxed (-> converge path);
 		// otherwise it is a pure text run (-> one-shot path).

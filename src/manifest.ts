@@ -55,7 +55,16 @@ export interface RoutineStep {
 	routine: string;
 	inputs: Record<string, string>;
 }
-export type Step = CallStep | FormatStep | CheckStep | RoutineStep;
+// A human-input gate: pause, ask the operator one question, and feed their typed
+// answer forward as this step's output ({{ steps.<id>.output }}). It produces text
+// like call/format, but the text comes from a person, not a model. The answer lives
+// only in the in-memory step context; it is never written to the receipt (see store.ts).
+export interface AskStep {
+	id: string;
+	kind: "ask";
+	ask: string;
+}
+export type Step = CallStep | FormatStep | CheckStep | RoutineStep | AskStep;
 
 export interface Repeat {
 	until: "checks-pass";
@@ -99,7 +108,11 @@ export function effectiveRunTimeoutMs(m: Manifest): number | undefined {
 // --- derived behavior (the user never writes these) ---
 
 export function isComposition(m: Manifest): boolean {
-	return m.steps.length > 0 && m.steps.every((s) => s.kind === "routine");
+	// `ask` steps are neutral -- they may sit between routine steps (a decision gate)
+	// without making a composition an execution. A composition is "has >=1 routine step
+	// and every non-ask step is a routine".
+	const nonAsk = m.steps.filter((s) => s.kind !== "ask");
+	return nonAsk.length > 0 && nonAsk.every((s) => s.kind === "routine");
 }
 
 export function hasChecks(m: Manifest): boolean {
@@ -224,9 +237,9 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 		if (typeof s.id !== "string" || !s.id) throw new ManifestError(where, "`id` must be a non-empty string");
 		if (seen.has(s.id)) throw new ManifestError(where, `duplicate step id "${s.id}"`);
 		seen.add(s.id);
-		const kinds = (["call", "format", "check", "routine"] as const).filter((k) => s[k] !== undefined);
+		const kinds = (["call", "format", "check", "routine", "ask"] as const).filter((k) => s[k] !== undefined);
 		if (kinds.length !== 1) {
-			throw new ManifestError(where, "a step is exactly one of `call`, `format`, `check`, or `routine`");
+			throw new ManifestError(where, "a step is exactly one of `call`, `format`, `check`, `routine`, or `ask`");
 		}
 		const kind = kinds[0];
 		if (kind === "call") {
@@ -243,6 +256,10 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 		} else if (kind === "check") {
 			requireKeys(s, new Set(["id", "check"]), where);
 			out.push({ id: s.id, kind: "check", checks: parseCheckArray(s.check, `${where}.check`) });
+		} else if (kind === "ask") {
+			requireKeys(s, new Set(["id", "ask"]), where);
+			if (typeof s.ask !== "string" || !s.ask) throw new ManifestError(where, "`ask` must be a non-empty question string");
+			out.push({ id: s.id, kind: "ask", ask: s.ask });
 		} else {
 			requireKeys(s, new Set(["id", "routine", "inputs"]), where);
 			if (typeof s.routine !== "string" || !s.routine) throw new ManifestError(where, "`routine` must be a non-empty routine id");
@@ -272,12 +289,27 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	const participants = parseParticipants(raw.participants, source);
 	const steps = parseSteps(raw.steps, source, participants);
 
-	// Rule 1: no step mixing -- all `routine` (composition) OR none (execution).
+	// Rule 1: no step mixing -- `routine` steps (a composition) OR call/format/check
+	// (an execution), never both. `ask` steps are neutral and allowed in either.
 	const routineCount = steps.filter((s) => s.kind === "routine").length;
-	if (routineCount > 0 && routineCount < steps.length) {
+	const execCount = steps.filter((s) => s.kind === "call" || s.kind === "format" || s.kind === "check").length;
+	if (routineCount > 0 && execCount > 0) {
 		throw new ManifestError(source, "steps must be either all `routine` steps (a composition) or call/format/check (an execution), not a mix");
 	}
 	const composition = routineCount > 0;
+
+	// Rule 4: `ask` (human input) is supported only where execution pauses cleanly between
+	// steps -- a read-only text routine or a composition. It is NOT supported inside a
+	// sandboxed or looping routine (a check step or a read-write participant), where the
+	// shared converge executor re-runs steps and "ask once vs every iteration" is undefined.
+	// Put the gate in the composition that calls the sandboxed routine instead.
+	const sandboxed = steps.some((s) => s.kind === "check") || Object.values(participants).some((p) => p.filesystem === "read-write");
+	if (steps.some((s) => s.kind === "ask") && !composition && sandboxed) {
+		throw new ManifestError(
+			source,
+			"an `ask` step is not supported in a sandboxed or looping routine (it has a check step or a read-write participant). Put the ask in the composition that calls this routine, or in a read-only text routine.",
+		);
+	}
 
 	// Rule 2: repeat needs >=1 check and an execution routine.
 	let repeat: Repeat | undefined;
@@ -298,13 +330,16 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		repeat = { until: "checks-pass", ...(typeof raw.repeat.maxIterations === "number" && { maxIterations: raw.repeat.maxIterations }) };
 	}
 
-	// Rule 3: output names a TEXT-producing step (call/format/routine), never a check.
+	// Rule 3: output names a TEXT-producing step (call/format/routine), never a check or
+	// an ask. An ask answer is an input to later steps, not the routine's product, and it
+	// is kept out of the persisted receipt -- so it cannot be the run's output.
 	let output: string | undefined;
 	if (raw.output !== undefined) {
 		if (typeof raw.output !== "string") throw new ManifestError(source, "`output` must be a string");
 		const target = steps.find((s) => s.id === raw.output);
 		if (target === undefined) throw new ManifestError(source, "`output` must name one of the steps");
 		if (target.kind === "check") throw new ManifestError(source, "`output` cannot name a `check` step (it produces no text)");
+		if (target.kind === "ask") throw new ManifestError(source, "`output` cannot name an `ask` step (its answer feeds later steps and is not persisted)");
 		output = raw.output;
 	}
 

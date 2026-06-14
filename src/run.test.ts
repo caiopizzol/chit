@@ -148,3 +148,84 @@ describe("runOneShot", () => {
 		]);
 	});
 });
+
+describe("runOneShot -- ask steps", () => {
+	// grill -> ask the operator -> format the answer in. The ask question itself templates
+	// in grill's output, so the operator decides with context.
+	const ASK = {
+		id: "clarify",
+		inputs: { idea: { type: "string" } },
+		participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+		steps: [
+			{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
+			{ id: "decide", ask: "Refine?\n{{ steps.grill.output }}" },
+			{ id: "out", format: "FINAL: {{ steps.decide.output }}" },
+		],
+		output: "out",
+	};
+
+	test("captures the operator answer and feeds it forward; the question renders with prior output", async () => {
+		const adapter = fakeAdapter((req) => `GRILLED(${req.prompt})`);
+		const asked: string[] = [];
+		const askUser = async (q: string) => {
+			asked.push(q);
+			return "make it dark";
+		};
+		const r = await runOneShot(routineFrom(ASK), { idea: "x" }, { ...deps(adapter), askUser });
+		expect(r.status).toBe("completed");
+		expect(asked).toEqual(["Refine?\nGRILLED(Idea: x)"]);
+		expect(r.output).toBe("FINAL: make it dark");
+		expect(r.steps.map((s) => [s.id, s.kind, s.status])).toEqual([
+			["grill", "call", "ok"],
+			["decide", "ask", "ok"],
+			["out", "format", "ok"],
+		]);
+	});
+
+	test("the ask STEP receipt carries no answer body -- only status + timing", async () => {
+		const r = await runOneShot(routineFrom(ASK), { idea: "x" }, { ...deps(fakeAdapter()), askUser: async () => "SENSITIVE-ANSWER" });
+		const ask = r.steps.find((s) => s.id === "decide");
+		// the receipt records exactly id/kind/status/startedAt/elapsedMs -- no answer field
+		expect(Object.keys(ask ?? {}).sort()).toEqual(["elapsedMs", "id", "kind", "startedAt", "status"]);
+		// (the answer does reach r.output here, but only because this routine formats it into
+		// its `out` step -- that is the operator's explicit choice, not the ask step leaking.)
+	});
+
+	test("an ask step with no input handler wired fails the run", async () => {
+		const r = await runOneShot(routineFrom(ASK), { idea: "x" }, deps(fakeAdapter()));
+		expect(r.status).toBe("failed");
+		expect(r.error).toMatch(/no input handler is wired/);
+		expect(r.steps.map((s) => [s.id, s.status])).toEqual([
+			["grill", "ok"],
+			["decide", "failed"],
+		]);
+	});
+
+	test("the implicit output skips a trailing ask step (the answer is not the run's product)", async () => {
+		const trailing = {
+			id: "trailing",
+			inputs: { idea: { type: "string" } },
+			participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+			steps: [
+				{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
+				{ id: "decide", ask: "any notes?" },
+			],
+		};
+		const r = await runOneShot(routineFrom(trailing), { idea: "x" }, { ...deps(fakeAdapter((req) => `G(${req.prompt})`)), askUser: async () => "PRIVATE" });
+		expect(r.status).toBe("completed");
+		expect(r.output).toBe("G(Idea: x)"); // grill, not the answer
+		expect(JSON.stringify(r)).not.toContain("PRIVATE");
+	});
+
+	test("a Ctrl-C during an ask cancels the run (records the ask as cancelled)", async () => {
+		const controller = new AbortController();
+		const askUser = async () => {
+			controller.abort(); // mimic the bin rejecting the pending prompt on SIGINT
+			throw new Error("cancelled");
+		};
+		const r = await runOneShot(routineFrom(ASK), { idea: "x" }, { ...deps(fakeAdapter((req) => `G(${req.prompt})`)), signal: controller.signal, askUser });
+		expect(r.status).toBe("cancelled");
+		expect(r.error).toBe("cancelled by operator");
+		expect(r.steps.at(-1)).toMatchObject({ id: "decide", kind: "ask", status: "cancelled" });
+	});
+});
