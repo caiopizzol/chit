@@ -329,6 +329,9 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       -> different adapters; composition output across different agents), config agent parsing, inspect
       binding; + a guarded real smoke (two claude profiles; read-only can't write; read-write edits only in
       the sandbox; receipt names each agent). 183 pass + 4 skip, typecheck clean.
+- [x] guarded smoke (CHIT_REAL_SMOKE=1) PASSED 4/4 against real claude: read-only routines return output, a
+      read-only call cannot write, and the two-agent routine ran builder (read-write) + critic (read-only)
+      with the receipt naming each agent and origin untouched. Configurable agents proven with real models.
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
