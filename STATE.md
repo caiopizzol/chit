@@ -342,6 +342,18 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       edits only the sandbox and the receipt names each agent; the SEPARATE test proves read-only can't write.
 - [x] 184 pass + 4 skip, typecheck clean.
 
+## Increment 18.2: multi-model proven; second-adapter feasibility scouted
+- [x] multi-model: a participant can pick its model. Always-on test -- two profiles on the SAME claude
+      adapter with different models route the right model per step and the receipt records each. Confirmed
+      real: `claude -p --model sonnet` returns output, so the dispatcher's --model passthrough is genuine.
+      The guarded two-agent smoke now uses two MODELS (builder=sonnet, critic=haiku) and asserts each binding.
+- [x] second real adapter scouted (do NOT ship unverified): `codex exec` and `gemini -p` both exist and run
+      non-interactively. gemini is closest to claude (-p / -m / --approval-mode default|auto_edit|yolo|plan)
+      but needs `--skip-trust` (or GEMINI_CLI_TRUST_WORKSPACE=1) headless. NEXT slice: a geminiCliAdapter with
+      its OWN empirical permission-mapping verification (read-only must ACTUALLY be read-only, the same check
+      claude needed), wired as { claude, gemini }; then a real builder-on-claude / critic-on-gemini smoke.
+- [x] 185 pass + 4 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs

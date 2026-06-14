@@ -55,7 +55,7 @@ function realDeps(): RunDeps {
 
 (REAL ? describe : describe.skip)("real-claude smoke: configurable agents", () => {
 	test(
-		"two claude profiles back different steps; the receipt names each agent; builder edits only the sandbox",
+		"two claude profiles with different MODELS back different steps; the receipt records each binding; builder edits only the sandbox",
 		async () => {
 			const repo = mkdtempSync(join(tmpdir(), "chit-agents-"));
 			try {
@@ -81,7 +81,7 @@ function realDeps(): RunDeps {
 					},
 					"two-agents",
 				);
-				const agents = { builder: { adapter: "claude" }, critic: { adapter: "claude" } };
+				const agents = { builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude", model: "haiku" } };
 				const routine: ResolvedRoutine = { id: "two-agents", manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:x", agents };
 				const adapter = dispatchingAdapter(agents, { claude: claudeCliAdapter });
 				const res = await runConvergeInSandbox(routine, {}, {
@@ -95,8 +95,8 @@ function realDeps(): RunDeps {
 				});
 				expect(res.receipt.status).toBe("converged");
 				const steps = res.receipt.iterations[0]?.steps ?? [];
-				expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "claude" }); // resolved binding recorded
-				expect(steps.find((s) => s.id === "review")).toMatchObject({ agent: "critic", adapter: "claude" });
+				expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "claude", model: "sonnet" });
+				expect(steps.find((s) => s.id === "review")).toMatchObject({ agent: "critic", adapter: "claude", model: "haiku" });
 				expect(readFileSync(join(repo, "note.md"), "utf-8")).toBe("draft\n"); // dry run: builder edited only the sandbox
 			} finally {
 				rmSync(repo, { recursive: true, force: true });

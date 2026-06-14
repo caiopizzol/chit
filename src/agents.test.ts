@@ -76,6 +76,20 @@ describe("agent binding at resolve time", () => {
 		expect(steps.find((s) => s.id === "build")).toMatchObject({ agent: "builder", adapter: "codex" });
 		expect(steps.find((s) => s.id === "crit")).toMatchObject({ agent: "critic", adapter: "claude" });
 	});
+
+	test("multi-model: two profiles on the SAME adapter select different models per step", async () => {
+		const routine = resolveRoutine(cfg({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude", model: "haiku" } }), "r", "/x", () => MANIFEST);
+		const claude = fakeAdapter(() => "ok");
+		const adapter = dispatchingAdapter(routine.agents ?? {}, { claude });
+		let t = 0;
+		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
+		// the adapter saw each participant's configured model
+		expect(Object.fromEntries(claude.calls.map((c) => [c.agent, c.model]))).toEqual({ builder: "sonnet", critic: "haiku" });
+		// and the receipt records the resolved model per call step
+		const steps = r.iterations[0]?.steps ?? [];
+		expect(steps.find((s) => s.id === "build")).toMatchObject({ adapter: "claude", model: "sonnet" });
+		expect(steps.find((s) => s.id === "crit")).toMatchObject({ adapter: "claude", model: "haiku" });
+	});
 });
 
 describe("composition across differently configured agents", () => {
