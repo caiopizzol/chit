@@ -375,10 +375,28 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       argv parsing, process.exit codes, the bin's adapter-registry wiring, the no-config / unknown-command
       paths. Deterministic, no model (init -> routines -> inspect; usage; unknown command -> 2; run unknown
       -> 1; run with no config -> 1). A guarded case runs a real routine through the binary. 191 pass + 7 skip.
-- NEXT (per review, NOT built speculatively): a real-task dogfood pass -- run real tasks through the binary,
-  change nothing mid-run, record every point of friction. That is expected to surface HUMAN-INPUT STEPS as
-  the smallest needed feature (a step that pauses to ask the operator a structured question: clarify,
-  approve, decide). The engine has call/format/check/routine steps but cannot yet stop and ask.
+## Dogfood pass 1 -- feature-flow through the real binary (framework unchanged)
+Ran a genuine task: `chit agents` command, via `bun run src/index.ts run feature-flow --input idea=...`,
+dry-run. grill(3m) -> plan(3.5m) -> impl(12m), ~18.5m total. It SUCCEEDED: the model wrote a real
+implementation (formatAgentList + AgentListItem + a cli command + tests + docs), real typecheck+test passed
+in the sandbox, converged iter 1, dry-run discarded, origin clean. The observability fix paid off -- trace
+shows `call builder (claude)`, the checks, and a diffstat. Friction, ranked:
+1. NO HUMAN-INPUT / decision gates (the big one). grill->plan->impl is fully automated; the operator can't
+   refine the idea after grilling, approve/adjust the plan before a 12-min impl, or veto choices. The model
+   made ALL decisions -- it even edited STATE.md + README (the dev's own log/docs), which an operator would
+   want to scope out BEFORE implementing. This is the predicted gap, confirmed.
+2. The builder edits broadly (7 files / 140 lines for "add a command"); no scoping except via prompt text.
+3. Long runs are a black box: ~18.5m, no progress magnitude/ETA; one builder call took ~9m with no in-call
+   progress.
+4. trace is good per-run but not aggregated: the FLOW trace shows only sub-run ids (drill in for models/
+   changes), and neither says "what to do next" (the --apply hint the CLI output gives).
+5. inspect of a composition doesn't show the agents the flow uses; live progress shows the agent id, not the
+   resolved adapter/model.
+
+CONCLUSION (smallest justified next feature): HUMAN-INPUT STEPS. Shape the dogfood revealed: a step kind that
+pauses to ask the operator a structured question and feeds the answer forward (decision gates between steps:
+"refine the idea?", "approve/adjust the plan before implementing?"). Implement via an injectable askUser seam
+(deterministic in tests; the bin reads stdin), like the adapter/checkRunner seams. NOT built yet -- next slice.
 
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
