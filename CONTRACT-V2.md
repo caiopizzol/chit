@@ -20,10 +20,10 @@ The shipped model. One file format. No `policy` field. Behavior is **derived fro
 
 ## Step kinds
 
-- `{ "id", "call": "<participant>", "prompt": "..." }`  — ask a participant
-- `{ "id", "format": "<template>" }`                    — assemble text
-- `{ "id", "check": [{ "command", "args" }] }`          — run commands (pass/fail)
-- `{ "id", "routine": "<routineId>", "inputs": {...} }` — run another routine
+- `{ "id", "call": "<participant>", "prompt": "..." }`  - ask a participant
+- `{ "id", "format": "<template>" }`                    - assemble text
+- `{ "id", "check": [{ "command", "args" }] }`          - run commands (pass/fail)
+- `{ "id", "routine": "<routineId>", "inputs": {...} }` - run another routine
 - `{ "id", "ask": "<question>" }`                       - pause for one operator answer, fed forward
 
 ## Derived behavior (the user never writes a policy)
@@ -82,7 +82,7 @@ stops at the next checkpoint. (Ctrl-C aborts mid-call via the cancellation signa
 ## What this replaces
 
 `policy: one-shot | converge | flow` is gone as a user concept. Internally the runtime keeps the proven
-executors (single / loop / composition) — derivation just picks one. The user learns ONE shape.
+executors (single / loop / composition) - derivation just picks one. The user learns ONE shape.
 
 ## Design calls (where v2 sharpened the original sketch)
 

@@ -239,7 +239,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- the diff above is saved. apply exactly it with: chit apply ${r.runId}   (or re-run with --apply)`,
+							: `\ndry run -- the diff above is saved. apply exactly it with:  chit apply ${r.runId}`,
 					);
 					return 0;
 				}
@@ -289,7 +289,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- the diff above is saved. apply exactly it with: chit apply ${r.runId}   (or re-run with --apply)`,
+							: `\ndry run -- the diff above is saved. apply exactly it with:  chit apply ${r.runId}`,
 					);
 					return 0;
 				}

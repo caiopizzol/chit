@@ -1,4 +1,4 @@
-# Composition — design proposal (NOT yet built)
+# Composition - design proposal (NOT yet built)
 
 > **Historical design journal.** This was the pre-build proposal; composition has since shipped and grown.
 > For the current contract see `CONTRACT-V2.md` and `STATE.md`. Notably refined since: the "at most one

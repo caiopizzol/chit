@@ -1,4 +1,4 @@
-# Converge — as built, and the one slice still missing
+# Converge - as built, and the one slice still missing
 
 > **Historical design journal (increments 2-3).** It is accurate for *when it was written*, but the
 > model has since moved on. For the current contract see `CONTRACT-V2.md` and `STATE.md`. Notably superseded

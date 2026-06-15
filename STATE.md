@@ -1,4 +1,4 @@
-# chit-minimal — build state
+# chit-minimal - build state
 
 ## Objective
 Prove the Chit product model with one public concept: **a routine is a declared workflow**.
@@ -19,13 +19,13 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - Adapter is an injectable interface so the run flow is testable with a fake (no real model calls in tests).
 
 ## Public surface
-- `chit routines` — list declared routines (id, policy, description)
-- `chit inspect <routine>` — description, policy, required inputs, participants+agents, filesystem,
+- `chit routines` - list declared routines (id, policy, description)
+- `chit inspect <routine>` - description, policy, required inputs, participants+agents, filesystem,
   steps (or loop+checks), manifest path + digest
-- `chit run <routine> [--input k=v ...] [--scope s]` — resolve, validate inputs, execute, print run id + output
-- `chit trace <run-id>` — receipt: what/who ran, status, elapsed, checks/verdict; no transcript bodies by default
+- `chit run <routine> [--input k=v ...] [--scope s]` - resolve, validate inputs, execute, print run id + output
+- `chit trace <run-id>` - receipt: what/who ran, status, elapsed, checks/verdict; no transcript bodies by default
 
-## Status — increment 1 COMPLETE
+## Status - increment 1 COMPLETE
 - [x] scaffold (package.json, tsconfig, .gitignore)
 - [x] manifest model + parser (+tests)
 - [x] config model + loader (+tests)
@@ -43,7 +43,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       printed a grounded report, persisted receipt run-a109eae0, trace renders it.
       NOTE: receipts store inputs + final output in plaintext (.chit/runs, gitignored).
 
-## Increment 2 COMPLETE — step-based converge (configurable, no fixed roles)
+## Increment 2 COMPLETE - step-based converge (configurable, no fixed roles)
 - [x] Loop is now STEP-BASED, not implementer/reviewer slots. A manifest is ordered steps
       (`call` / `format` / `check`); "build"/"critique" are step ids, "builder"/"critic" are
       participant names. Roles are examples, not runtime concepts. (other-model catch on my
@@ -57,7 +57,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] example implementation-review.json rewritten step-based; inspect renders it.
 - [x] 77 tests pass, typecheck clean. Proven: fail -> feedback -> converge (converge.test.ts).
 
-## Increment 3 COMPLETE — write-safe live converge (the real end-to-end loop)
+## Increment 3 COMPLETE - write-safe live converge (the real end-to-end loop)
 - [x] Sandbox seam (sandbox.ts): fakeSandbox + gitWorktreeSandboxFactory (real git worktree,
       node_modules symlinked, diff/apply/discard). Tested against a throwaway git repo.
 - [x] runConvergeInSandbox (converge-run.ts): create sandbox -> run loop with cwd=sandbox ->
@@ -71,7 +71,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       discarded -> origin untouched, no leftover worktree, receipt run-12c4ae18 traces correctly.
 - [x] 87 tests pass, typecheck clean.
 
-## Increment 4 COMPLETE — safety bounds + doc fixes
+## Increment 4 COMPLETE - safety bounds + doc fixes
 - [x] proc.ts spawnCapture(timeoutMs): kills a hung process; tested (sleep + short timeout).
 - [x] adapter + argv check-runner route through it: per-call timeout (5 min). A hung model call
       or hung check can no longer block a run.
@@ -80,7 +80,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       claude-permission enforcement (plan/acceptEdits/none) vs the stronger worktree write-safety;
       noted the timeouts. 92 tests, typecheck clean.
 
-## STRESS TEST PASSED — real source-editing converge
+## STRESS TEST PASSED - real source-editing converge
 - [x] implementation-review (diff-aware critic via {{ diff }}) vs a real task: builder created
       src/greet.ts + src/greet.test.ts, critic reviewed the diff, real `bun run typecheck` AND
       `bun test` passed in the sandbox, converged in 1 iteration (~2 min), origin untouched,
@@ -89,7 +89,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
   exercised here (that path is proven only by the fake-backed converge tests). Critic took ~90s;
   diff size will grow critic cost -- the {{ diff }} budget cap is still worth doing.
 
-## Increment 5 COMPLETE — honest + bounded single loop
+## Increment 5 COMPLETE - honest + bounded single loop
 - [x] fixed stale wording: inspect note (was "gated", now describes live sandbox + dry-run),
       README test count (62 -> 92), STATE "Not in scope" (dropped converge execution; corrected
       the filesystem-permission wording).
@@ -100,7 +100,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       Closes the "revise-after-failed-checks not field-tested" gap.
 - [x] 94 tests, typecheck clean.
 
-## Increment 6 COMPLETE — routine composition (flows), Option-1 contract
+## Increment 6 COMPLETE - routine composition (flows), Option-1 contract
 - [x] `policy: "flow"`: steps invoke OTHER routines, mapping inputs/outputs via the existing
       templating. Structural parse only; graph checks are config-aware (resolveFlow). flow.ts.
 - [x] Option-1 contract enforced at resolve: sub-routines are one-shot|converge (no nested flows
@@ -120,14 +120,14 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       run-f5111fa3); `chit trace <subRunId>` works per step. NOTE: ~12.5 min wall-clock (3 real
       model calls + a converge loop) -- reinforces that live progress + budgets are the real next needs.
 
-## Increment 6.1 — flow propagation fixes (review follow-ups)
+## Increment 6.1 - flow propagation fixes (review follow-ups)
 - [x] flow now forwards a converge sub-routine's config `defaults.maxIterations` into the sub-run,
       so it behaves identically inside a flow and standalone (was ignored before).
 - [x] flow `scope` propagates to every sub-run (one-shot + converge), so the whole chain shares it.
 - [x] resolveFlow now also validates `{{ inputs.X }}` refs against the declared flow inputs (a typo
       is caught at resolve, not silently rendered empty). 108 tests, typecheck clean.
 
-## Increment 7 COMPLETE — v2 manifest (one shape, derived behavior) [BREAKING]
+## Increment 7 COMPLETE - v2 manifest (one shape, derived behavior) [BREAKING]
 - [x] removed `policy`. Manifest = inputs + participants + steps + optional repeat + output.
       Step kinds: call / format / check / routine. CONTRACT-V2.md is the spec.
 - [x] derived: routine steps -> composition; `repeat` -> loop; read-write participant OR any
@@ -140,7 +140,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       maxIter from repeat or 1; composition -> runFlow). All examples + tests converted.
 - [x] 108 tests, typecheck clean. CLI smoke: routines shows text/loop/composition; inspect/run derive.
 
-## Increment 8 — v2 DX pass + acceptance closed
+## Increment 8 - v2 DX pass + acceptance closed
 - [x] DX wording: README rewritten around one shape + derived behavior; CLI help/labels no longer
       say policy/one-shot/converge ("converge:" run label -> "run <status>"); receipt `policy`
       documented as an internal per-kind tag. Dropped the unverifiable "Biome clean" claim
@@ -152,14 +152,14 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       sandbox; dry-run discarded; origin clean; no leftover worktree.
 - known edge: force-killing a sandboxed run mid-flight skips its worktree cleanup (leak); add a guard.
 
-## Increment 9 — operator control, step 1: live progress + cleanup
+## Increment 9 - operator control, step 1: live progress + cleanup
 - [x] live progress: executors emit step/iteration/check/sub-routine events through an optional
       onProgress sink; the bin streams them to stderr as they happen (result stays on stdout).
       Verified on a real run (creating sandbox -> iteration 1 -> call builder -> check ... -> ok).
 - [x] `chit cleanup`: reapStaleSandboxes removes sandbox worktrees left by an interrupted run
       (force-kill skips finally-discard). Tested (real git) + CLI. 112 tests, typecheck clean.
 
-## Increment 10 COMPLETE — configurable limits + cleanup hardening
+## Increment 10 COMPLETE - configurable limits + cleanup hardening
 - [x] per-routine `limits` { callTimeoutMinutes, runTimeoutMinutes }, each a positive number of
       minutes or "none" to opt out. High defaults (30m call / 120m run); maxIterations always kept.
       Replaced the hidden 10m per-call constant: the per-call bound flows manifest -> adapter
@@ -176,7 +176,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       suite run). Tests: dead-owner reaped, live-owner skipped (real git + real pid), CLI removal path.
 - [x] 124 tests, typecheck clean.
 
-## Increment 10.1 — limits coherence (review follow-ups)
+## Increment 10.1 - limits coherence (review follow-ups)
 - [x] composition limits were accepted but inert. Now: `callTimeoutMinutes` is REJECTED on a composition
       (it makes no direct calls -- set it on the sub-routines); `runTimeoutMinutes` is ENFORCED as a
       whole-flow wall-time budget (checked before each sub-routine) and SHOWN in inspect.
@@ -191,7 +191,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] 132 tests, typecheck clean. Real inspect confirms: composition shows "whole run 120m" only; a
       text routine shows "per call 45m, whole run 120m".
 
-## Increment 11 COMPLETE — signal-aware cancellation (Ctrl-C)
+## Increment 11 COMPLETE - signal-aware cancellation (Ctrl-C)
 - [x] AbortSignal threaded bin -> proc -> adapter/check -> executors. spawnCapture kills the in-flight
       child on abort (and won't spawn if already aborted); the adapter throws and a check returns a
       flagged result on abort.
@@ -208,7 +208,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       cancelled receipt persisted.
 - [x] 144 tests, typecheck clean.
 
-## Increment 12 COMPLETE — E2E acceptance matrix (real git, faked model)
+## Increment 12 COMPLETE - E2E acceptance matrix (real git, faked model)
 - [x] src/acceptance.test.ts: every routine shape driven through the real CLI (runCli) against a REAL
       git-worktree sandbox and REAL checks, with only the model call faked (a stub that writes files for
       read-write participants, so real diffs/applies happen). 7 cases:
@@ -219,7 +219,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] all 7 green first try; full suite 151 tests, typecheck clean; no leftover worktrees, 0 temp husks.
       The shape is boring and reliable across the real cases.
 
-## Increment 13 COMPLETE — persisted execution timeline (receipts + trace)
+## Increment 13 COMPLETE - persisted execution timeline (receipts + trace)
 - [x] every step/check/iteration/sub-run receipt now carries an absolute `startedAt` (deps.now()); with
       the run's startedAt that is a real timeline (offset = startedAt - run.startedAt). elapsedMs is the
       duration.
@@ -232,7 +232,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       newRunId is now a per-run counter so a flow's sub-receipts no longer collide.
 - [x] 151 tests (406 expects), typecheck clean, no leftover worktrees / temp husks.
 
-## Increment 14 COMPLETE — legacy trace compat + failure-case E2E
+## Increment 14 COMPLETE - legacy trace compat + failure-case E2E
 - [x] FIXED a regression: the timeline render assumed per-step startedAt, so `chit trace` on receipts
       written before increment 13 showed "+NaNms". Reproduced on real old receipts (run-12c4ae18 etc.).
       Now the offset is omitted when a step/iteration lacks startedAt (legacy), so old receipts stay
@@ -244,7 +244,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       in-flight cancel -> an async abort DURING a running check cancels + discards (not just pre-abort).
 - [x] 157 tests (430 expects), typecheck clean, no leftover worktrees / temp husks.
 
-## Increment 15 COMPLETE — apply-failure leaves a durable receipt (+ stale-doc fix)
+## Increment 15 COMPLETE - apply-failure leaves a durable receipt (+ stale-doc fix)
 - [x] FIXED the last reliability hole: when a converged run's write-back (sandbox.apply) failed (e.g. a
       dirty origin), runConvergeInSandbox threw before the CLI could save the receipt -- so a converged
       run could leave NO evidence. Now the apply error is CAUGHT, recorded on the receipt (applyError) and
@@ -255,14 +255,14 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
 - [x] fixed stale STATE "Not in scope" (it still listed routine composition + live progress, both built).
 - [x] 159 tests (439 expects), typecheck clean, no leftover worktrees / temp husks.
 
-## Increment 15.1 — flow apply-failure visible from the flow run id (review follow-up)
+## Increment 15.1 - flow apply-failure visible from the flow run id (review follow-up)
 - [x] 15 fixed standalone runs, but the FLOW receipt did not carry applyError, so `chit trace <flowRunId>`
       (the id the CLI points the user to) showed "completed" with no apply failure -- only the terminal
       sub-receipt had it. Now FlowReceipt carries applyError, runFlow persists it, flow trace renders it.
 - [x] acceptance: a composition with a dirty-origin terminal apply -> exit 1, origin uncorrupted, the FLOW
       receipt has applyError and formatTrace(flowReceipt) shows the apply line. 160 tests, typecheck clean.
 
-## Increment 16 COMPLETE — `chit init` scaffolding
+## Increment 16 COMPLETE - `chit init` scaffolding
 - [x] src/scaffold.ts: `chit init [<name>] [--template text|loop|check]` writes a runnable manifest from a
       template under examples/, registers it in chit.config.json (creating it if absent), prints next steps.
       Templates map to the three first-routine shapes (text / sandboxed loop / check-only); loop+check use
@@ -276,7 +276,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
   (TWICE now); reverted via git checkout both times. For manual init smokes use a subshell:
   `( cd "$tmp" && bun run <abs>/src/index.ts init ... )`. Tests use temp cwds, so they are safe.
 
-## Increment 16.1 — init validates an existing config (review follow-up)
+## Increment 16.1 - init validates an existing config (review follow-up)
 - [x] FIXED: init did not validate an existing chit.config.json before mutating it. A parseable-but-invalid
       shape like {"routines":[]} (array) bypassed the undefined check, and JSON.stringify silently drops a
       named property set on an array -- so init reported success while the routine was never registered and
@@ -284,7 +284,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       parseConfig BEFORE writing anything: a malformed config is rejected (exit 1, clear message) and
       nothing is written (atomic). Regression test + a careful subshell CLI smoke confirm it. 169 tests.
 
-## Increment 17 — read-only adapter returns real output (real-E2E fix)
+## Increment 17 - read-only adapter returns real output (real-E2E fix)
 - [x] REAL model-backed E2E exposed it: a composed feature-flow failed because the planning step produced
       0 chars -> impl's `task` input was empty -> "missing required input task". Root cause: the adapter
       mapped read-only -> `claude -p --permission-mode plan`. Plan mode is the plan-then-approve flow; under
@@ -304,7 +304,7 @@ Built from scratch (no `@chit-run/*` dependency). Reuses the *concepts*, not the
       discarded; origin untouched, no leftover worktree, 0 husks (run-356598da). The composed orchestration
       model is now proven with REAL model outputs, not just fakes.
 
-## Increment 17.1 — read-only is ACTUALLY read-only (review follow-up)
+## Increment 17.1 - read-only is ACTUALLY read-only (review follow-up)
 - [x] the increment-17 mapping disallowed Edit/Write/NotebookEdit but LEFT Bash, so a model could still
       `echo > file` -- read-only was not read-only. Verified the hole with real claude (it created
       created.txt). FIX: add Bash to the disallowed list. Re-verified real: the write is now BLOCKED and
