@@ -37,7 +37,7 @@ describe("schemas/chit.schema.json", () => {
 		const ajv = new Ajv2020({ allErrors: true });
 		const validate = ajv.compile(schema);
 		const raw = {
-			$schema: "https://chit.dev/schemas/chit.schema.json",
+			$schema: "https://chit.run/schemas/chit.schema.json",
 			profiles: {
 				builder: "codex:gpt-5.5",
 				critic: "gemini",

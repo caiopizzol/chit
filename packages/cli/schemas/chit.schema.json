@@ -1,6 +1,6 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"$id": "https://chit.dev/schemas/chit.schema.json",
+	"$id": "https://chit.run/schemas/chit.schema.json",
 	"title": "Chit config",
 	"description": "Authoring schema for a Chit config file. Semantic rules are still enforced by the Chit parser and resolver.",
 	"type": "object",
