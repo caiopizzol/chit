@@ -6,7 +6,6 @@ import {
 	RoutinePipelineVisual,
 	SandboxApplyVisual,
 	TerminalDemoVisual,
-	TwoFileVisual,
 } from "./doc-visuals";
 
 export function getMDXComponents(components?: MDXComponents): MDXComponents {
@@ -17,7 +16,6 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
 		RoutinePipelineVisual,
 		SandboxApplyVisual,
 		TerminalDemoVisual,
-		TwoFileVisual,
 		...components,
 	};
 }

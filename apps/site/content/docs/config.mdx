@@ -5,7 +5,7 @@ description: The compact reference for chit.config.json.
 
 Chit has one public config surface: `chit.config.json`.
 
-It answers two questions:
+The schema answers two questions:
 
 1. Which local adapters and models can routines use?
 2. Which routines can this project run?
@@ -15,22 +15,9 @@ It answers two questions:
 	A routine agent points to a profile, so the workflow stays separate from the local model choice.
 </Callout>
 
-## Two Config Options
+## Schema At A Glance
 
-<Cards>
-	<Card href="#inline-routines" title="Inline routines">
-		The best default. Keep everything in `chit.config.json`.
-	</Card>
-	<Card href="#file-backed-routines" title="File-backed routines">
-		Use when a routine gets large enough to deserve its own file.
-	</Card>
-</Cards>
-
-<TwoFileVisual />
-
-## Inline Routines
-
-Start here. One file is easier to read, copy, and review.
+This is the shape to understand first. `profiles` declare local model bindings. `routines` declare what runs.
 
 ```json
 {
@@ -67,32 +54,13 @@ Start here. One file is easier to read, copy, and review.
 
 This one routine is an implementation loop because it has `repeat`. It is sandboxed because it has a read-write agent and a check.
 
-## File-Backed Routines
-
-When the routine gets long, keep `profiles` in the root config and move only the routine body.
-
-```json
-{
-	"$schema": "https://chit.run/schemas/chit.schema.json",
-	"profiles": {
-		"builder": "codex:gpt-5.5",
-		"critic": "gemini"
-	},
-	"routines": {
-		"implement": { "file": "routines/implement.json" }
-	}
-}
-```
-
-`routines/implement.json` contains the same routine object you would have written inline.
-
 ## Root Fields
 
 | Field | Type | Required | Description |
 |---|---:|---:|---|
 | `$schema` | string | no | JSON Schema URL for editor hints. |
 | `profiles` | object | yes | Local adapter and model bindings. |
-| `routines` | object | yes | Named inline routines or file references. |
+| `routines` | object | yes | Named routine definitions. |
 
 ## Profiles
 

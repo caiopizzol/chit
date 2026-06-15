@@ -13,8 +13,8 @@ There is no built-in implementer, reviewer, planner, griller, or goal mode. Thos
 	<Card href="/docs/config" title="Read the config model">
 		Profiles bind adapters and models. Routines declare the workflow.
 	</Card>
-	<Card href="/docs/config#two-config-options" title="Choose one file or many">
-		Start in `chit.config.json`. Extract large routines when the file gets crowded.
+	<Card href="/docs/config#validation" title="See what gets validated">
+		The schema gives editor hints. The parser is the runtime authority.
 	</Card>
 </Cards>
 
@@ -32,7 +32,7 @@ Chit keeps that orchestration explicit:
 - `repeat` declares when a loop stops.
 - receipts show what ran, which model ran it, what checks passed, and what changed.
 
-## One File To Start
+## Config Shape
 
 ```json
 {

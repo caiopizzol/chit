@@ -48,29 +48,6 @@ export function RoutinePipelineVisual() {
 	);
 }
 
-export function TwoFileVisual() {
-	return (
-			<VisualShell title="Start in one file, extract when it grows">
-			<div className="doc-two-file">
-				<div className="doc-visual-panel">
-					<div className="doc-visual-panel-kicker">chit.config.json</div>
-					<strong>default authoring surface</strong>
-					<span>profiles.builder = codex:gpt-5.5</span>
-					<span>routines.implement.steps</span>
-					<span>repeat.until = checks-pass</span>
-				</div>
-				<div className="doc-binding-line">optional extraction</div>
-				<div className="doc-visual-panel">
-					<div className="doc-visual-panel-kicker">routines/implement.json</div>
-					<strong>same routine shape</strong>
-					<span>{"routines.implement.file -> routines/implement.json"}</span>
-					<span>use this only when the routine is large</span>
-				</div>
-			</div>
-		</VisualShell>
-	);
-}
-
 export function GoalLoopVisual() {
 	return (
 		<VisualShell title="/goal as a routine">
