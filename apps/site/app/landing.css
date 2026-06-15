@@ -1,0 +1,444 @@
+/*
+ * landing.css - styles for the chit.run marketing page (app/page.tsx).
+ *
+ * Scoped under `.landing` so none of it leaks into the Fumadocs docs chrome.
+ * Bare font names use the next/font CSS variables defined in app/layout.tsx.
+ * Same paper/ink palette, same shape-coded status, same copy.
+ */
+
+.landing {
+	--bg: #f4f2ea;
+	--sheet: #eae5d5;
+	--receipt: #e0dbc6;
+	--ink: #0a0a0a;
+	--carbon: #2a2a2a;
+	--faded: #807766;
+	--pass: #2f6b3e;
+	--warn: #9c5b0a;
+	--fail: #7b1f15;
+	--hairline: #c7bfab;
+
+	background: var(--bg);
+	color: var(--ink);
+	font-family: var(--font-chit-body), "Inter", system-ui, sans-serif;
+	font-size: 15px;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+	min-height: 100vh;
+}
+.landing * {
+	box-sizing: border-box;
+}
+.landing .container {
+	max-width: 720px;
+	margin: 0 auto;
+	padding: 56px 32px;
+}
+
+.landing nav {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 18px 32px;
+	border-bottom: 1px solid var(--ink);
+	background: var(--bg);
+	max-width: 720px;
+	margin: 0 auto;
+}
+.landing .wordmark {
+	font-family: var(--font-chit-display), "Bricolage Grotesque", serif;
+	font-weight: 700;
+	font-size: 20px;
+	letter-spacing: -0.015em;
+}
+.landing nav .right a {
+	color: var(--ink);
+	text-decoration: none;
+	margin-left: 22px;
+	font-size: 12px;
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+.landing nav .right a:hover {
+	text-decoration: underline;
+}
+
+.landing .signature {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 10px;
+	color: var(--carbon);
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	padding: 6px 12px;
+	border: 1px solid var(--ink);
+	background: var(--sheet);
+	margin: 0 0 40px;
+}
+.landing .signature .dot {
+	width: 7px;
+	height: 7px;
+	background: var(--ink);
+	border-radius: 50%;
+}
+.landing .signature .v {
+	color: var(--ink);
+	letter-spacing: 0.04em;
+	text-transform: none;
+}
+
+.landing h1 {
+	font-family: var(--font-chit-display), "Bricolage Grotesque", serif;
+	font-weight: 700;
+	font-size: 60px;
+	line-height: 1.02;
+	letter-spacing: -0.035em;
+	margin: 0 0 20px;
+}
+.landing h2 {
+	font-family: var(--font-chit-display), "Bricolage Grotesque", serif;
+	font-weight: 600;
+	font-size: 32px;
+	line-height: 1.12;
+	letter-spacing: -0.02em;
+	margin: 64px 0 12px;
+}
+.landing h3 {
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-weight: 700;
+	font-size: 13px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	margin: 48px 0 12px;
+	color: var(--ink);
+}
+.landing p {
+	margin: 0 0 16px;
+}
+.landing .subhead {
+	font-size: 18px;
+	color: var(--carbon);
+	margin-bottom: 28px;
+	line-height: 1.5;
+}
+.landing .lede {
+	font-size: 15.5px;
+	color: var(--carbon);
+	line-height: 1.6;
+}
+
+.landing .cta {
+	display: inline-block;
+	background: var(--ink);
+	color: var(--bg);
+	padding: 12px 22px;
+	text-decoration: none;
+	font-weight: 500;
+	font-size: 13px;
+	margin: 4px 0 0;
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+.landing .cta:hover {
+	background: var(--carbon);
+}
+
+.landing pre {
+	background: var(--receipt);
+	border: none;
+	border-left: 3px solid var(--ink);
+	padding: 16px 20px;
+	overflow-x: auto;
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 12.5px;
+	line-height: 1.6;
+	color: var(--ink);
+	margin: 16px 0 0;
+}
+.landing pre.terminal {
+	background: var(--ink);
+	color: #f4f1e8;
+	border-left: 3px solid #f4f1e8;
+}
+.landing pre .cmd {
+	color: var(--ink);
+	font-weight: 700;
+}
+.landing pre.terminal .cmd {
+	color: #f4f1e8;
+	font-weight: 700;
+}
+.landing pre .warn-line {
+	color: var(--warn);
+}
+.landing pre.terminal .warn-line {
+	color: #e2a100;
+}
+.landing pre .pass-line {
+	color: var(--pass);
+	font-weight: 500;
+}
+.landing pre.terminal .pass-line {
+	color: #6cc885;
+}
+.landing pre .meta {
+	color: var(--faded);
+}
+.landing pre.terminal .meta {
+	color: #8c8c8c;
+}
+.landing pre .key {
+	color: var(--ink);
+	font-weight: 600;
+}
+.landing pre .str {
+	color: var(--carbon);
+}
+
+.landing .keystone {
+	text-align: center;
+	margin: 96px 0;
+	padding: 56px 0;
+	border-top: 1px solid var(--ink);
+	border-bottom: 1px solid var(--ink);
+}
+.landing .keystone h2 {
+	font-family: var(--font-chit-display), "Bricolage Grotesque", serif;
+	font-weight: 700;
+	font-size: 88px;
+	line-height: 0.98;
+	letter-spacing: -0.05em;
+	margin: 0;
+	color: var(--ink);
+}
+.landing .keystone .vs {
+	color: var(--ink);
+	text-decoration: underline;
+	text-decoration-thickness: 4px;
+	text-underline-offset: 8px;
+}
+.landing .keystone p {
+	font-size: 15px;
+	color: var(--carbon);
+	margin: 24px auto 0;
+	max-width: 380px;
+	line-height: 1.5;
+}
+
+.landing .receipt-block {
+	border-top: 1px solid var(--ink);
+	margin: 16px 0 0;
+}
+.landing .receipt-line {
+	display: grid;
+	grid-template-columns: 24px 90px 1fr;
+	gap: 12px;
+	padding: 14px 0;
+	border-bottom: 1px dashed var(--ink);
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 13px;
+	align-items: baseline;
+}
+.landing .receipt-line .ind {
+	width: 8px;
+	height: 8px;
+	margin-top: 6px;
+}
+.landing .receipt-line.pass .ind {
+	background: var(--ink);
+	border-radius: 50%;
+}
+.landing .receipt-line.warn .ind {
+	background: transparent;
+	border: 2px solid var(--ink);
+	width: 6px;
+	height: 6px;
+	margin-top: 6px;
+}
+.landing .receipt-line.fail .ind {
+	background: var(--ink);
+	transform: rotate(45deg);
+	margin-left: 1px;
+}
+.landing .receipt-line .label {
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	font-size: 11px;
+	color: var(--ink);
+}
+.landing .receipt-line .body {
+	color: var(--ink);
+	font-family: var(--font-chit-body), "Inter", sans-serif;
+}
+
+.landing .modes {
+	border-top: 1px solid var(--ink);
+	margin: 16px 0 0;
+}
+.landing .mode-line {
+	display: grid;
+	grid-template-columns: 124px 1fr;
+	gap: 12px;
+	padding: 14px 0;
+	border-bottom: 1px dashed var(--ink);
+	align-items: baseline;
+}
+.landing .mode-line .label {
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	font-size: 11px;
+	color: var(--ink);
+}
+.landing .mode-line .body {
+	color: var(--ink);
+	font-family: var(--font-chit-body), "Inter", sans-serif;
+	font-size: 14px;
+}
+@media (max-width: 560px) {
+	.landing .mode-line {
+		grid-template-columns: 1fr;
+		gap: 4px;
+	}
+}
+
+.landing .graph {
+	background: var(--sheet);
+	border: 1px solid var(--ink);
+	padding: 20px;
+	margin: 16px 0 0;
+}
+.landing .graph text {
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+}
+
+.landing blockquote {
+	border-left: none;
+	margin: 64px 0 32px;
+	padding: 0;
+	font-family: var(--font-chit-display), "Bricolage Grotesque", serif;
+	font-size: 32px;
+	line-height: 1.2;
+	color: var(--ink);
+	font-weight: 700;
+	text-align: center;
+	letter-spacing: -0.025em;
+}
+.landing blockquote cite {
+	display: block;
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 10px;
+	font-weight: 400;
+	font-style: normal;
+	color: var(--faded);
+	margin-top: 18px;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+}
+
+.landing footer {
+	border-top: 1px solid var(--ink);
+	margin: 80px auto 0;
+	max-width: 720px;
+	padding: 24px 32px;
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 10px;
+	color: var(--faded);
+	letter-spacing: 0.14em;
+	display: flex;
+	justify-content: space-between;
+	text-transform: uppercase;
+}
+
+.landing .inline-link {
+	color: var(--ink);
+	text-decoration: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+.landing .inline-link:hover {
+	text-decoration-thickness: 2px;
+}
+
+.landing #install pre.terminal {
+	margin-top: 12px;
+}
+
+/* Mobile: scale the hero down and tighten layout. */
+@media (max-width: 640px) {
+	.landing .container {
+		padding: 32px 20px;
+	}
+	.landing h1 {
+		font-size: 40px;
+		line-height: 1.05;
+		letter-spacing: -0.025em;
+	}
+	.landing h2 {
+		font-size: 26px;
+		margin: 48px 0 12px;
+	}
+	.landing .subhead {
+		font-size: 17px;
+	}
+	.landing .keystone {
+		margin: 64px 0;
+		padding: 40px 0;
+	}
+	.landing .keystone h2 {
+		font-size: 52px;
+		letter-spacing: -0.04em;
+	}
+	.landing .keystone .vs {
+		text-decoration-thickness: 3px;
+		text-underline-offset: 6px;
+	}
+	.landing blockquote {
+		font-size: 24px;
+		margin: 48px 0 24px;
+	}
+	.landing pre {
+		font-size: 11.5px;
+		padding: 14px 16px;
+	}
+	.landing .signature {
+		font-size: 9px;
+		padding: 5px 10px;
+		gap: 8px;
+	}
+	.landing nav {
+		padding: 14px 20px;
+	}
+	.landing nav .right a {
+		margin-left: 14px;
+		font-size: 11px;
+	}
+	.landing .receipt-line {
+		grid-template-columns: 20px 64px 1fr;
+		gap: 8px;
+	}
+	.landing .receipt-line .body {
+		font-size: 12px;
+	}
+	.landing footer {
+		padding: 20px 24px;
+		flex-direction: column;
+		gap: 8px;
+	}
+}
+
+/* Very narrow phones: drop the hero line-break so it does not wrap weirdly. */
+@media (max-width: 380px) {
+	.landing h1 {
+		font-size: 34px;
+	}
+	.landing .keystone h2 {
+		font-size: 44px;
+	}
+}

@@ -1,0 +1,269 @@
+---
+title: Config
+description: A compact reference for chit.config.json, routines, profiles, agents, steps, and loops.
+---
+
+Chit has one config surface: `chit.config.json`.
+
+The file answers two questions:
+
+1. Which models are available on this machine?
+2. Which routines can this project run?
+
+<Callout title="The main rule">
+	Provider details live in `profiles`. Workflow details live in `routines`.
+	A routine names participants and steps. A profile decides which adapter and model run them.
+</Callout>
+
+## Two Config Options
+
+<Cards>
+	<Card href="#option-1-inline-routines" title="Option 1: inline routines">
+		Best default. Keep the whole workflow in `chit.config.json`.
+	</Card>
+	<Card href="#option-2-file-backed-routines" title="Option 2: file-backed routines">
+		Use when a routine is large enough that it deserves its own file.
+	</Card>
+</Cards>
+
+### Option 1: Inline Routines
+
+Use this first. It keeps the setup easy to read and easy to copy into another project.
+
+```json
+{
+	"$schema": "https://chit.dev/schemas/chit.schema.json",
+	"profiles": {
+		"planner": "claude:sonnet",
+		"builder": "codex:gpt-5.5",
+		"critic": "gemini"
+	},
+	"routines": {
+		"implement": {
+			"input": "task",
+			"agents": {
+				"builder": {
+					"profile": "builder",
+					"instructions": "Implement the smallest correct change.",
+					"filesystem": "read-write"
+				},
+				"critic": {
+					"profile": "critic",
+					"instructions": "Review the diff. Do not edit files.",
+					"filesystem": "read-only"
+				}
+			},
+			"steps": [
+				{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}" },
+				{ "id": "review", "call": "critic", "prompt": "Review the diff:\n{{ diff }}" },
+				{ "id": "verify", "check": "bun test" }
+			],
+			"repeat": { "until": "checks-pass", "maxIterations": 3 }
+		}
+	}
+}
+```
+
+### Option 2: File-Backed Routines
+
+Use this when the routine is too large for the root file. The root config still owns the profile registry.
+
+```json
+{
+	"$schema": "https://chit.dev/schemas/chit.schema.json",
+	"profiles": {
+		"builder": "codex:gpt-5.5",
+		"critic": "gemini"
+	},
+	"routines": {
+		"implement": { "file": "routines/implement.json" }
+	}
+}
+```
+
+The routine file contains the same routine object you would have written inline.
+
+```json
+{
+	"input": "task",
+	"agents": {
+		"builder": {
+			"profile": "builder",
+			"instructions": "Implement the smallest correct change.",
+			"filesystem": "read-write"
+		},
+		"critic": {
+			"profile": "critic",
+			"instructions": "Review the diff.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "build", "call": "builder", "prompt": "{{ inputs.task }}" },
+		{ "id": "review", "call": "critic", "prompt": "{{ diff }}" },
+		{ "id": "verify", "check": "bun test" }
+	],
+	"repeat": { "until": "checks-pass", "maxIterations": 3 }
+}
+```
+
+<TwoFileVisual />
+
+## Root Config
+
+| Field | Type | Required | Description |
+|---|---:|---:|---|
+| `$schema` | string | no | JSON Schema URL for editor hints and validation. |
+| `profiles` | object | yes | Local adapter and model bindings. Routine agents point here. |
+| `routines` | object | yes | Named routines. Each entry is either an inline routine or a file reference. |
+
+## Profiles
+
+Profiles are local. They let the same routine run with different adapters or models on different machines.
+
+| Shape | Example | Meaning |
+|---|---|---|
+| adapter string | `"critic": "gemini"` | Use the adapter's default model. |
+| adapter and model string | `"builder": "codex:gpt-5.5"` | Use one adapter with one explicit model. |
+| object | `"judge": { "adapter": "claude", "model": "haiku" }` | Same as the string form, but explicit. |
+
+| Object field | Type | Required | Description |
+|---|---:|---:|---|
+| `adapter` | string | yes | Adapter id, such as `claude`, `codex`, or `gemini`. |
+| `model` | string | no | Model id passed to that adapter. Omit it to use the adapter default. |
+
+## Routines
+
+A routine is a declared workflow. It can be a text run, a flow, a loop, a sandboxed implementation, a check-only verifier, or a human-gated process. Chit derives that from the fields.
+
+| Field | Type | Required | Description |
+|---|---:|---:|---|
+| `input` | string | no | Shorthand for one required string input. |
+| `inputs` | array or object | no | Multiple inputs, or the full input definition object. |
+| `agents` | object | when `call` steps exist | Participants inside this routine. These are workflow ids, not providers. |
+| `steps` | array | yes | Ordered execution steps. |
+| `repeat` | object | no | Loop condition and maximum iterations. |
+| `output` | string | no | Step id whose output becomes the routine output. If omitted, Chit uses the last output-producing step. |
+| `limits` | object | no | Per-call and whole-run time bounds. |
+
+<Callout title="Names are yours">
+	`builder`, `critic`, `planner`, `judge`, and `griller` are not built into Chit.
+	They are ids in your routine. Use names that match the workflow you want.
+</Callout>
+
+## Routine Agents
+
+Routine agents are participants. Each one points to a profile.
+
+| Field | Type | Required | Description |
+|---|---:|---:|---|
+| `profile` | string | yes | Profile id from the root `profiles` object. |
+| `instructions` | string | yes | Stable role instructions for this participant inside this routine. |
+| `filesystem` | string | yes | One of `none`, `read-only`, or `read-write`. |
+
+| Filesystem | Meaning |
+|---|---|
+| `none` | No file access requested from the adapter. |
+| `read-only` | Inspect files, but do not edit them. |
+| `read-write` | May edit. Sandboxed routines write in a disposable git worktree first. |
+
+## Steps
+
+Every step has an `id`. The rest of the object chooses the step kind.
+
+| Step kind | Required fields | Produces output | Description |
+|---|---|---:|---|
+| `call` | `id`, `call`, `prompt` | yes | Calls a routine agent and stores its text output. |
+| `ask` | `id`, `ask` | yes | Pauses for one operator answer and feeds it forward. |
+| `check` | `id`, `check` | yes | Runs one or more commands and stores the check result. |
+| `format` | `id`, `format` | yes | Builds text from inputs and prior step output. |
+| `routine` | `id`, `routine`, `inputs` | yes | Runs another routine and stores its output. |
+
+```json
+[
+	{ "id": "plan", "call": "planner", "prompt": "Plan:\n{{ inputs.idea }}" },
+	{ "id": "approve", "ask": "Adjust this plan?\n{{ steps.plan.output }}" },
+	{ "id": "build", "routine": "implement", "inputs": { "task": "{{ steps.plan.output }}\n{{ steps.approve.output }}" } },
+	{ "id": "verify", "check": "bun test" }
+]
+```
+
+String checks run through the shell.
+
+```json
+{ "id": "verify", "check": "bun test" }
+```
+
+Use object checks when you want argv-level control.
+
+```json
+{ "id": "verify", "check": [{ "command": "bun", "args": ["test"] }] }
+```
+
+## Templates
+
+Prompts, formats, questions, and routine inputs can read prior context.
+
+| Template | Meaning |
+|---|---|
+| `{{ inputs.task }}` | A user input passed to the routine. |
+| `{{ steps.plan.output }}` | Output from an earlier step. |
+| `{{ steps.verify.output }}` | Check result from an earlier step. |
+| `{{ iteration }}` | Current loop iteration. |
+| `{{ diff }}` | Current sandbox diff for review steps. |
+
+## Loops
+
+Loops require `maxIterations`. The stop condition lives under `repeat.until`.
+
+| Condition | Example | Best use |
+|---|---|---|
+| checks pass | `"checks-pass"` | Implementation loops, deploy checks, verification flows. |
+| exact step output | `{ "step": "review", "equals": "pass" }` | A model or human verdict controls completion. |
+| all conditions | `{ "all": ["checks-pass", { "step": "review", "equals": "pass" }] }` | Checks and review both block convergence. |
+
+```json
+{
+	"repeat": {
+		"until": { "all": ["checks-pass", { "step": "review", "equals": "pass" }] },
+		"maxIterations": 3
+	}
+}
+```
+
+<Callout title="Prefer checks when they can prove the result">
+	Model verdicts are useful, but deterministic checks are the strongest convergence signal.
+	Use a blocking model verdict when judgment is the point of the routine.
+</Callout>
+
+## Limits
+
+| Field | Type | Description |
+|---|---:|---|
+| `callTimeoutMinutes` | number or `"none"` | Hard timeout for each model call and check command. |
+| `runTimeoutMinutes` | number or `"none"` | Cooperative wall-time budget for the whole run. It is checked between steps. |
+
+```json
+{
+	"limits": {
+		"callTimeoutMinutes": 10,
+		"runTimeoutMinutes": 60
+	}
+}
+```
+
+## Runtime Rules
+
+| Routine shape | Runtime behavior |
+|---|---|
+| read-only `call` and `format` steps | Runs in the current directory. |
+| `routine` steps | Runs as a flow and passes outputs forward. |
+| `repeat` | Runs as a loop until the stop condition is met or `maxIterations` is reached. |
+| `check` steps or read-write agents | Runs in a disposable git worktree. |
+| sandboxed success | Produces a patch that can be applied with `chit apply <run-id>`. |
+
+## Compatibility
+
+New configs should use the names shown on this page: `profiles`, routine `agents`, and agent `profile`.
+
+Chit still accepts older aliases where needed, but the preferred shape is the one documented here.

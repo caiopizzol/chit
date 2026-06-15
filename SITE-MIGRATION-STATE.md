@@ -36,10 +36,11 @@ runtime harness where a routine is a declared workflow. Drop the old, heavier st
   index, TwoFileVisual used by config; others available).
 
 ## Phases
-1. [in progress] Monorepo restructure: move CLI into packages/cli, root workspace
-   package.json + tsconfig.base.json. Gate: cli `bun test` (282) + `typecheck` green.
-2. [ ] Copy apps/site (exclude build dirs), wire workspace, drop Biome dep. Gate:
-   site `typecheck` + static `build` succeed.
+1. [DONE dd97262] Monorepo restructure: CLI in packages/cli, root workspace
+   package.json + tsconfig.base.json. cli test 282 pass + typecheck green.
+2. [DONE] Copy apps/site (excluded build dirs), dropped Biome `check` script,
+   `bun install` (616 pkgs). site typecheck + static build both succeed
+   (/, /docs, /docs/config, llms, sitemap).
 3. [ ] Copy brand.md to repo root.
 4. [ ] Rewrite landing to the minimal story (real manifest + real CLI transcript).
 5. [ ] Polish docs index; keep config; add Validation section; surface the schema.

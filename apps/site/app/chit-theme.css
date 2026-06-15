@@ -1,0 +1,299 @@
+/*
+ * chit-theme.css - token bridge for Fumadocs UI.
+ *
+ * Maps Fumadocs' `--color-fd-*` variables to chit's paper/ink palette
+ * (brand.md -> Visual) so the docs section reads like the chit.run landing:
+ * warm paper, near-black ink, no accent color. The site is light-only;
+ * the theme toggle is disabled (lib/layout.shared.tsx) and next-themes is
+ * off (components/provider.tsx), so :root is the single source of truth.
+ *
+ * Values are inlined from brand.md rather than imported from the landing,
+ * to keep this Next build independent of the landing's asset pipeline.
+ */
+
+@layer base {
+	:root {
+		/* Page chrome */
+		--color-fd-background: #f4f2ea; /* Paper */
+		--color-fd-foreground: #0a0a0a; /* Ink */
+
+		/* Muted + secondary surfaces */
+		--color-fd-muted: #eae5d5; /* Sheet */
+		--color-fd-muted-foreground: #2a2a2a; /* Carbon */
+		--color-fd-secondary: #eae5d5; /* Sheet */
+		--color-fd-secondary-foreground: #0a0a0a; /* Ink */
+
+		/* Cards + popovers */
+		--color-fd-card: #eae5d5; /* Sheet */
+		--color-fd-card-foreground: #0a0a0a; /* Ink */
+		--color-fd-popover: #f4f2ea; /* Paper */
+		--color-fd-popover-foreground: #0a0a0a; /* Ink */
+
+		/* Hover backgrounds (sidebar items, search hits) */
+		--color-fd-accent: #e0dbc6; /* Receipt */
+		--color-fd-accent-foreground: #0a0a0a; /* Ink */
+
+		/* Borders + focus ring */
+		--color-fd-border: #c7bfab; /* Hairline */
+		--color-fd-ring: #0a0a0a; /* Ink (no accent color) */
+
+		/* "Primary" is ink: chit has no brand accent. */
+		--color-fd-primary: #0a0a0a; /* Ink */
+		--color-fd-primary-foreground: #f4f2ea; /* Paper */
+	}
+
+	html {
+		font-family: var(--font-chit-body), "Inter", system-ui, sans-serif;
+	}
+
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6 {
+		font-family: var(--font-chit-display), "Bricolage Grotesque", system-ui, sans-serif;
+		letter-spacing: -0.02em;
+	}
+
+	code,
+	pre,
+	kbd,
+	samp {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+	}
+}
+
+@layer components {
+	.doc-visual {
+		margin: 1.5rem 0;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #eae5d5;
+		padding: 1rem;
+		color: #0a0a0a;
+	}
+
+	.doc-visual-title {
+		margin-bottom: 0.75rem;
+		font-family: var(--font-chit-display), "Bricolage Grotesque", system-ui, sans-serif;
+		font-size: 0.95rem;
+		font-weight: 650;
+		letter-spacing: 0;
+	}
+
+	.doc-flow {
+		display: flex;
+		align-items: stretch;
+		gap: 0.5rem;
+	}
+
+	.doc-visual-node {
+		display: flex;
+		min-width: 0;
+		flex: 1 1 8.25rem;
+		flex-direction: column;
+		justify-content: center;
+		gap: 0.25rem;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #f4f2ea;
+		padding: 0.75rem;
+		font-size: 0.86rem;
+		line-height: 1.35;
+	}
+
+	.doc-visual-node strong {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.78rem;
+		font-weight: 700;
+		letter-spacing: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.doc-visual-node span {
+		color: #2a2a2a;
+		overflow-wrap: anywhere;
+	}
+
+	.doc-visual-node-dark {
+		background: #0a0a0a;
+		color: #f4f2ea;
+	}
+
+	.doc-visual-node-dark span {
+		color: #eae5d5;
+	}
+
+	.doc-visual-node-muted {
+		background: #e0dbc6;
+	}
+
+	.doc-visual-connector {
+		display: flex;
+		flex: 0 0 auto;
+		align-items: center;
+		justify-content: center;
+		color: #2a2a2a;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.78rem;
+	}
+
+	.doc-two-file {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+		gap: 0.75rem;
+		align-items: stretch;
+	}
+
+	.doc-visual-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #f4f2ea;
+		padding: 0.85rem;
+		font-size: 0.86rem;
+		line-height: 1.35;
+	}
+
+	.doc-visual-panel strong,
+	.doc-visual-panel-kicker {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		letter-spacing: 0;
+	}
+
+	.doc-visual-panel-kicker {
+		color: #2a2a2a;
+		font-size: 0.74rem;
+	}
+
+	.doc-visual-panel span {
+		overflow-wrap: anywhere;
+	}
+
+	.doc-binding-line {
+		display: flex;
+		max-width: 8rem;
+		align-items: center;
+		justify-content: center;
+		color: #2a2a2a;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.74rem;
+		line-height: 1.35;
+		text-align: center;
+	}
+
+	.doc-loop {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+		gap: 0.5rem;
+		align-items: stretch;
+	}
+
+	.doc-loop-branches {
+		grid-column: 1 / -1;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+	}
+
+	.doc-loop-branch {
+		display: grid;
+		grid-template-columns: 3rem minmax(0, 1fr);
+		gap: 0.5rem;
+		align-items: stretch;
+	}
+
+	.doc-loop-branch > span {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #f4f2ea;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.74rem;
+	}
+
+	.doc-panel-flow {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.doc-panel-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.5rem;
+	}
+
+	.doc-sandbox {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.doc-sandbox-outcomes {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.5rem;
+	}
+
+	.doc-terminal {
+		overflow: hidden;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #0a0a0a;
+		color: #f4f2ea;
+	}
+
+	.doc-terminal-bar {
+		border-bottom: 1px solid #2a2a2a;
+		padding: 0.5rem 0.75rem;
+		color: #eae5d5;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.74rem;
+	}
+
+	.doc-terminal pre {
+		margin: 0;
+		overflow-x: auto;
+		background: transparent;
+		padding: 0.85rem;
+		color: inherit;
+		font-size: 0.78rem;
+		line-height: 1.55;
+	}
+
+	.doc-terminal code {
+		color: inherit;
+	}
+
+	@media (max-width: 760px) {
+		.doc-flow,
+		.doc-loop {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.doc-visual-connector {
+			min-height: 1rem;
+		}
+
+		.doc-two-file,
+		.doc-panel-grid,
+		.doc-sandbox-outcomes,
+		.doc-loop-branches,
+		.doc-loop-branch {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.doc-binding-line {
+			max-width: none;
+			min-height: 1rem;
+		}
+	}
+}

@@ -1,0 +1,83 @@
+---
+title: Overview
+description: Chit is a small declared runtime for multi-model agent workflows.
+---
+
+Chit turns the agent workflow you already run by hand into config.
+
+You declare the routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt.
+
+There is no built-in implementer, reviewer, planner, griller, or goal mode. Those are routine names, participant ids, and prompts you define.
+
+<Cards>
+	<Card href="/docs/config" title="Read the config model">
+		Profiles bind adapters and models. Routines declare the workflow.
+	</Card>
+	<Card href="/docs/config#two-config-options" title="Choose one file or many">
+		Start in `chit.config.json`. Extract large routines when the file gets crowded.
+	</Card>
+</Cards>
+
+## Why Chit Exists
+
+<RoutinePipelineVisual />
+
+Modern coding work is moving from one prompt to repeatable loops: ask, plan, build, review, verify, revise. Good results often come from different models playing different parts.
+
+Chit keeps that orchestration explicit:
+
+- `profiles` choose which adapter and model back each local role.
+- `routines` describe what happens, in order.
+- `steps` move context from one model, command, or human gate to the next.
+- `repeat` declares when a loop stops.
+- receipts show what ran, which model ran it, what checks passed, and what changed.
+
+## One File To Start
+
+```json
+{
+	"profiles": {
+		"planner": "claude:sonnet",
+		"builder": "codex:gpt-5.5",
+		"critic": "gemini"
+	},
+	"routines": {
+		"feature-flow": {
+			"input": "idea",
+			"steps": [
+				{ "id": "grill", "routine": "grill", "inputs": { "idea": "{{ inputs.idea }}" } },
+				{ "id": "plan", "routine": "plan", "inputs": { "brief": "{{ steps.grill.output }}" } },
+				{ "id": "approve", "ask": "Adjust the plan?\n{{ steps.plan.output }}" },
+				{ "id": "impl", "routine": "implement", "inputs": { "task": "{{ steps.plan.output }}\n{{ steps.approve.output }}" } }
+			]
+		}
+	}
+}
+```
+
+This is a routine, not a hardcoded product mode. You can use the same primitives for grilling sessions, planning, implementation, code review, process verification, deployment checks, and `/goal`-style loops.
+
+## How Execution Is Derived
+
+You do not choose a separate policy. Chit reads the routine shape.
+
+| If the routine has | Chit runs |
+|---|---|
+| read-only calls and format steps | a text run in the current directory |
+| `routine` steps | a flow that passes outputs forward |
+| `repeat` | a loop until the stop condition is met |
+| checks or read-write agents | a sandboxed run in a disposable git worktree |
+
+## The Developer Loop
+
+```sh
+chit init implement --template loop
+chit inspect implement
+chit run implement --input task="add a version command"
+chit apply run-a1b5efea
+chit trace run-a1b5efea
+```
+
+Sandboxed runs are dry-run by default. They produce a patch you can inspect, then `chit apply` applies the exact reviewed result.
+
+Start with [Config](/docs/config).
