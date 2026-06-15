@@ -4,10 +4,10 @@
 
 import type { ReactNode } from "react";
 
-const FS_LEVELS: { name: string; note: string; tone?: "muted" | "dark" }[] = [
-	{ name: "none", note: "No file tools given to the adapter.", tone: "muted" },
-	{ name: "read-only", note: "Inspect files. Every write tool is disallowed." },
-	{ name: "read-write", note: "May edit. Runs in a disposable git worktree first.", tone: "dark" },
+const FS_LEVELS: { name: string; note: string; tone?: "mid" | "strong" }[] = [
+	{ name: "none", note: "No file tools given to the adapter." },
+	{ name: "read-only", note: "Inspect files. Every write tool is disallowed.", tone: "mid" },
+	{ name: "read-write", note: "May edit. Runs in a disposable git worktree first.", tone: "strong" },
 ];
 
 export function FilesystemScale() {

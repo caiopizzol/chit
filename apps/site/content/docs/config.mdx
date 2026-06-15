@@ -25,13 +25,11 @@ This one routine is an implementation loop because it has `repeat`. It is sandbo
 
 ## Root Fields
 
-<TypeTable
-	type={{
-		$schema: { type: "string", description: "JSON Schema URL for editor hints." },
-		profiles: { type: "object", required: true, description: "Local adapter and model bindings." },
-		routines: { type: "object", required: true, description: "Named routine definitions." },
-	}}
-/>
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `$schema` | string | no | JSON Schema URL for editor hints. |
+| `profiles` | object | yes | Local adapter and model bindings. |
+| `routines` | object | yes | Named routine definitions. |
 
 ## Profiles
 
@@ -60,17 +58,15 @@ Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use 
 
 A routine is a declared workflow. It can be text-only, composed from other routines, looped, check-only, sandboxed, or human-gated. Chit derives that from the fields.
 
-<TypeTable
-	type={{
-		input: { type: "string", description: "Shorthand for one required string input." },
-		inputs: { type: "array | object", description: "Multiple inputs, or full input definitions." },
-		agents: { type: "object", description: "Participants inside the routine. Required when the routine has call steps." },
-		steps: { type: "array", required: true, description: "Ordered steps." },
-		repeat: { type: "object", description: "Loop stop condition and cap." },
-		output: { type: "string", description: "Step id used as the routine output." },
-		limits: { type: "object", description: "Per-call and whole-run time bounds." },
-	}}
-/>
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `input` | string | no | Shorthand for one required string input. |
+| `inputs` | array or object | no | Multiple inputs, or full input definitions. |
+| `agents` | object | with `call` steps | Participants inside the routine. |
+| `steps` | array | yes | Ordered steps. |
+| `repeat` | object | no | Loop stop condition and cap. |
+| `output` | string | no | Step id used as the routine output. |
+| `limits` | object | no | Per-call and whole-run time bounds. |
 
 <Callout title="Names are yours">
 	`builder`, `critic`, `planner`, `judge`, and `griller` are not built into Chit.
@@ -81,17 +77,11 @@ A routine is a declared workflow. It can be text-only, composed from other routi
 
 Routine agents are local to one routine. Each points at a profile and declares stable instructions.
 
-<TypeTable
-	type={{
-		profile: { type: "string", required: true, description: "Profile id from the root profiles object." },
-		instructions: { type: "string", required: true, description: "Stable instructions for this agent in this routine." },
-		filesystem: {
-			type: '"none" | "read-only" | "read-write"',
-			required: true,
-			description: "File access the adapter is granted.",
-		},
-	}}
-/>
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `profile` | string | yes | Profile id from the root `profiles` object. |
+| `instructions` | string | yes | Stable instructions for this agent in this routine. |
+| `filesystem` | string | yes | `none`, `read-only`, or `read-write`. |
 
 <FilesystemScale />
 
@@ -175,12 +165,10 @@ A judged loop (`{ step, equals }`, or an `all` that contains one) must set `maxI
 }
 ```
 
-<TypeTable
-	type={{
-		callTimeoutMinutes: { type: 'number | "none"', default: "30", description: "Hard timeout for each model call and check command." },
-		runTimeoutMinutes: { type: 'number | "none"', default: "120", description: "Cooperative wall-time budget for the whole run. Checked between steps." },
-	}}
-/>
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `callTimeoutMinutes` | number or `"none"` | 30 | Hard timeout for each model call and check command. |
+| `runTimeoutMinutes` | number or `"none"` | 120 | Cooperative wall-time budget for the whole run. Checked between steps. |
 
 ## Runtime Behavior
 

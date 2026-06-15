@@ -1,4 +1,3 @@
-import { TypeTable } from "fumadocs-ui/components/type-table";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
 import { AnnotatedConfig, DerivedBehavior, FilesystemScale } from "./config-visuals";
@@ -13,8 +12,6 @@ import {
 export function getMDXComponents(components?: MDXComponents): MDXComponents {
 	return {
 		...defaultMdxComponents,
-		// Typed field reference for the config schema.
-		TypeTable,
 		// Brand doc visuals.
 		GoalLoopVisual,
 		MultiModelPanelVisual,
