@@ -20,7 +20,7 @@ import { runOneShot } from "./run.ts";
 import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { hasPatch, listReceipts, loadPatch, loadReceipt, savePatch, saveReceipt } from "./store.ts";
-import { formatInspect, formatRoutineList, formatRunList, formatTrace, type RoutineListItem, type RunListItem } from "./views.ts";
+import { formatInspect, formatReceiptBodies, formatRoutineList, formatRunList, formatTrace, type RoutineListItem, type RunListItem } from "./views.ts";
 
 export interface CliDeps {
 	cwd: string;
@@ -59,7 +59,7 @@ const USAGE = `chit -- run declared routines
       --input <name>=<value>          supply an input (repeatable)
       --scope <name>                  tag the run (e.g. a Linear/Jira id); read it back with chit runs --scope
       --auto-apply                    automation: apply immediately, skipping the dry-run review (prefer chit apply)
-  chit trace <run-id>                 show the receipt for a past run
+  chit trace <run-id> [--full]        show a past run's receipt (--full adds the stored inputs + output)
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
 
@@ -184,7 +184,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					status: r.status,
 					...(r.scope !== undefined && { scope: r.scope }),
 					ageMs: now - r.startedAt,
-					inputKeys: Object.keys(r.inputs),
+					inputs: r.inputs,
 					hasPatch: hasPatch(deps.cwd, r.runId),
 				}));
 			deps.out(formatRunList(items, scope));
@@ -385,9 +385,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		}
 
 		if (command === "trace") {
-			const id = rest[0];
+			let id: string | undefined;
+			let full = false;
+			for (const a of rest) {
+				if (a === "--full") full = true;
+				else if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit trace accepts --full)`);
+				else if (id === undefined) id = a;
+				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
+			}
 			if (id === undefined) return fail(deps, "trace needs a run id");
-			deps.out(formatTrace(loadReceipt(deps.cwd, id)));
+			const receipt = loadReceipt(deps.cwd, id);
+			deps.out(formatTrace(receipt));
+			if (full) deps.out(formatReceiptBodies(receipt, loadPatch(deps.cwd, id)));
 			return 0;
 		}
 

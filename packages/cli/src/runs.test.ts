@@ -26,12 +26,13 @@ const RUN_A: RunReceipt = {
 	routineId: "plan",
 	policy: "one-shot",
 	digest: "sha256:a",
-	inputs: { idea: "x" },
+	inputs: { idea: "add a hero section" },
 	startedAt: 1000,
 	finishedAt: 2000,
 	elapsedMs: 1000,
 	status: "completed",
 	steps: [],
+	output: "Implementation plan: add shout and whisper helpers",
 };
 const RUN_B: ConvergeReceipt = {
 	runId: "run-bbb",
@@ -39,7 +40,7 @@ const RUN_B: ConvergeReceipt = {
 	policy: "converge",
 	scope: "SD-1",
 	digest: "sha256:b",
-	inputs: { task: "x" },
+	inputs: { task: "wire the billing API" },
 	maxIterations: 3,
 	until: "checks-pass",
 	startedAt: 1500,
@@ -70,11 +71,11 @@ describe("listReceipts", () => {
 
 describe("formatRunList", () => {
 	const items: RunListItem[] = [
-		{ runId: "run-aaa", routineId: "plan", status: "completed", ageMs: 5 * 60_000, inputKeys: ["idea"], hasPatch: false },
-		{ runId: "run-bbb", routineId: "implement", status: "converged", scope: "SD-1", ageMs: 2 * 3_600_000, inputKeys: ["task"], hasPatch: true },
+		{ runId: "run-aaa", routineId: "plan", status: "completed", ageMs: 5 * 60_000, inputs: { idea: "add a hero section" }, hasPatch: false },
+		{ runId: "run-bbb", routineId: "implement", status: "converged", scope: "SD-1", ageMs: 2 * 3_600_000, inputs: { task: "wire the billing API" }, hasPatch: true },
 	];
 
-	test("renders newest-first with scope, age, inputs, and a patch tag", () => {
+	test("renders newest-first with scope, age, input previews, and a patch tag", () => {
 		const text = formatRunList(items);
 		expect(text).toContain("runs (2):");
 		expect(text.indexOf("run-aaa")).toBeLessThan(text.indexOf("run-bbb")); // 5m ago before 2h ago
@@ -82,6 +83,8 @@ describe("formatRunList", () => {
 		expect(text).toContain("2h ago");
 		expect(text).toContain("SD-1");
 		expect(text).toContain("patch"); // run-bbb has a stored patch
+		expect(text).toContain("idea: add a hero section"); // the primary input VALUE, not just the key
+		expect(text).toContain("task: wire the billing API");
 	});
 
 	test("empty and scope-filtered messages", () => {
@@ -122,6 +125,7 @@ describe("chit runs (command)", () => {
 		const text = out.join("\n");
 		expect(text).toContain("run-aaa");
 		expect(text).toContain("run-bbb");
+		expect(text).toContain("idea: add a hero section"); // the value preview distinguishes runs
 	});
 
 	test("--scope filters to one work item", async () => {
@@ -145,5 +149,33 @@ describe("chit runs (command)", () => {
 		const { deps, out } = mkDeps(tmp());
 		expect(await runCli(["runs"], deps)).toBe(0);
 		expect(out.join("\n")).toContain("No runs yet");
+	});
+});
+
+describe("chit trace --full", () => {
+	test("shows the stored input values and the output body", async () => {
+		const dir = tmp();
+		saveReceipt(dir, RUN_A);
+		const { deps, out } = mkDeps(dir);
+		expect(await runCli(["trace", "run-aaa", "--full"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("idea: add a hero section");
+		expect(text).toContain("Implementation plan: add shout and whisper helpers");
+	});
+
+	test("compact by default omits the bodies", async () => {
+		const dir = tmp();
+		saveReceipt(dir, RUN_A);
+		const { deps, out } = mkDeps(dir);
+		expect(await runCli(["trace", "run-aaa"], deps)).toBe(0);
+		expect(out.join("\n")).not.toContain("Implementation plan: add shout and whisper helpers");
+	});
+
+	test("rejects an unknown option", async () => {
+		const dir = tmp();
+		saveReceipt(dir, RUN_A);
+		const { deps, err } = mkDeps(dir);
+		expect(await runCli(["trace", "run-aaa", "--xyz"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/unknown option --xyz/);
 	});
 });

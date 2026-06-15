@@ -91,8 +91,20 @@ export interface RunListItem {
 	status: string;
 	scope?: string;
 	ageMs: number;
-	inputKeys: string[];
+	inputs: Record<string, string>;
 	hasPatch: boolean;
+}
+
+// A one-line preview of a run's primary (first) input VALUE, so two runs of the same routine are
+// distinguishable in the history ("add a shout(name)..." vs "...whisper(name)..."). Whitespace is
+// collapsed and the value clipped; any further inputs are noted as `+N`.
+function inputPreview(inputs: Record<string, string>): string {
+	const keys = Object.keys(inputs);
+	const key = keys[0];
+	if (key === undefined) return "-";
+	const value = (inputs[key] ?? "").replace(/\s+/g, " ").trim();
+	const clipped = value.length > 48 ? `${value.slice(0, 47)}…` : value || "-";
+	return `${key}: ${clipped}${keys.length > 1 ? ` +${keys.length - 1}` : ""}`;
 }
 
 // The run history: the evidence Chit already stores, read back. Newest first. `scopeFilter` is
@@ -107,9 +119,8 @@ export function formatRunList(items: RunListItem[], scopeFilter?: string): strin
 	const wStatus = Math.max(...rows.map((r) => r.status.length));
 	const wScope = Math.max(5, ...rows.map((r) => (r.scope ?? "-").length));
 	const lines = rows.map((r) => {
-		const inputs = r.inputKeys.length > 0 ? r.inputKeys.join(",") : "-";
-		const patch = r.hasPatch ? "  patch" : "";
-		return `  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  ${pad(r.status, wStatus)}  ${pad(r.scope ?? "-", wScope)}  ${pad(ageLabel(r.ageMs), 9)}  ${inputs}${patch}`.trimEnd();
+		const patch = pad(r.hasPatch ? "patch" : "", 5);
+		return `  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  ${pad(r.status, wStatus)}  ${pad(r.scope ?? "-", wScope)}  ${pad(ageLabel(r.ageMs), 9)}  ${patch}  ${inputPreview(r.inputs)}`.trimEnd();
 	});
 	const header = scopeFilter !== undefined ? `runs in scope "${scopeFilter}" (${rows.length}):` : `runs (${rows.length}):`;
 	return [header, ...lines].join("\n");
@@ -290,6 +301,33 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		// The receipt keeps the final output, but trace summarizes it -- the body was
 		// printed at run time; this view is the audit record, not a transcript dump.
 		out.push(`output:   ${r.output.length} chars (printed at run time; not shown here)`);
+	}
+	return out.join("\n");
+}
+
+// The full stored content of a receipt, for `chit trace --full`: the input VALUES, the final
+// output, and the stored patch when there is one. All of this already sits on disk in plaintext;
+// --full only DISPLAYS it (it reveals nothing the compact view collected differently). Kept
+// separate so the compact `formatTrace` audit stays the default.
+export function formatReceiptBodies(r: RunReceipt | ConvergeReceipt | FlowReceipt, patch?: string): string {
+	const indentBlock = (s: string): string =>
+		s
+			.split("\n")
+			.map((l) => `  ${l}`)
+			.join("\n");
+	const out: string[] = [];
+	const inputKeys = Object.keys(r.inputs);
+	if (inputKeys.length > 0) {
+		out.push("inputs:");
+		for (const k of inputKeys) out.push(`  ${k}: ${r.inputs[k] ?? ""}`);
+	}
+	if ("output" in r && typeof r.output === "string" && r.output.length > 0) {
+		out.push("output:");
+		out.push(indentBlock(r.output));
+	}
+	if (patch !== undefined && patch.trim() !== "") {
+		out.push("patch:");
+		out.push(indentBlock(patch));
 	}
 	return out.join("\n");
 }

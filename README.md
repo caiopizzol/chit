@@ -51,7 +51,7 @@ chit routines                      list declared routines (with their derived ki
 chit inspect <routine>             what it needs and what will run
 chit doctor [--real]               check the environment is ready; --real makes tiny model calls
 chit run <routine> [--input k=v]   run it (sandboxed = dry run); chit apply <run-id> to keep it
-chit trace <run-id>                the receipt for a past run
+chit trace <run-id> [--full]       the receipt for a past run (--full adds the stored inputs + output)
 chit runs [--scope <id>]           past runs (id, routine, status, scope, age); --scope is your work key
 ```
 
