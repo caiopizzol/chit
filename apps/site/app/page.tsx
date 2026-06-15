@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./landing.css";
 
 export const metadata: Metadata = {
-	title: { absolute: "chit - versioned, cross-vendor agent routines" },
+	title: { absolute: "chit - a thin runtime for multi-agent workflows" },
 	description:
-		"Turn the agent handoff you already run by hand into a versioned, cross-vendor routine with an audit trail. Stop being the glue between your agents.",
+		"A routine is a declared workflow: who runs, in what order, what context flows, where a check gates. chit reads the config and runs it. Codex, Claude, Gemini. Stop being the glue between your agents.",
 };
 
 export default function Home() {
@@ -26,12 +26,12 @@ export default function Home() {
 					between your agents.
 				</h1>
 				<p className="subhead">
-					One agent proposes. Another verifies. Another executes. A chit captures the routine in a
-					file the runtime reads. Codex, Claude, MCP, your shell. Choreographed. You step in when
-					judgment matters.
+					One agent proposes. Another reviews. A check gates the result. A routine captures that
+					in a file the runtime reads. Codex, Claude, Gemini, your shell. You step in when judgment
+					matters.
 				</p>
 				<a href="#install" className="cta">
-					$ bunx @chit-run/cli
+					$ chit run implement
 				</a>
 
 				<div className="keystone">
@@ -43,216 +43,163 @@ export default function Home() {
 
 				<h2>The chit is the routine.</h2>
 				<p className="lede">
-					A chit declares who runs, what context flows, what permissions apply, and where the work
-					goes next. The runtime reads the chit. The output shows what ran.
+					A routine declares who runs, what context flows forward, and when a loop stops. There is
+					no policy to pick: how it runs is derived from the shape. A check or a writing agent runs
+					it sandboxed; a repeat makes it a loop.
 				</p>
-				<pre>
-					<span className="key">{"{"}</span>
-					{"\n  "}
-					<span className="key">"id"</span>: <span className="str">"consult"</span>,{"\n  "}
-					<span className="key">"description"</span>:{" "}
-					<span className="str">"Ask Codex and Claude. Format the answer."</span>,{"\n  "}
-					<span className="key">"participants"</span>: {"{"}
-					{"\n    "}
-					<span className="key">"codex"</span>: {"{"} <span className="key">"agent"</span>:{" "}
-					<span className="str">"codex"</span>,{"\n                "}
-					<span className="key">"session"</span>: <span className="str">"per_scope"</span> {"}"},
-					{"\n    "}
-					<span className="key">"claude"</span>: {"{"} <span className="key">"agent"</span>:{" "}
-					<span className="str">"claude"</span>,{"\n                "}
-					<span className="key">"session"</span>: <span className="str">"per_scope"</span>,
-					{"\n                "}
-					<span className="key">"permissions"</span>: {"{"}
-					{"\n                  "}
-					<span className="key">"filesystem"</span>: <span className="str">"read_only"</span> {"}"}{" "}
-					{"}"}
-					{"\n  "}
-					{"}"},{"\n  "}
-					<span className="key">"steps"</span>: {"{"}
-					{"\n    "}
-					<span className="key">"ask_codex"</span>: {"{"} <span className="key">"call"</span>:{" "}
-					<span className="str">"codex"</span> {"}"},{"\n    "}
-					<span className="key">"ask_claude"</span>: {"{"} <span className="key">"call"</span>:{" "}
-					<span className="str">"claude"</span> {"}"},{"\n    "}
-					<span className="key">"out"</span>: {"{"} <span className="key">"format"</span>:{" "}
-					<span className="str">"## codex\\n..."</span> {"}"}
-					{"\n  "}
-					{"}"}
-					{"\n"}
-					{"}"}
-				</pre>
+				<pre>{`{
+  "profiles": {
+    "builder": "codex:gpt-5.5",
+    "critic": "gemini"
+  },
+  "routines": {
+    "implement": {
+      "input": "task",
+      "agents": {
+        "builder": { "profile": "builder", "instructions": "Implement the smallest correct change.", "filesystem": "read-write" },
+        "critic":  { "profile": "critic",  "instructions": "Review the diff. Do not edit files.",     "filesystem": "read-only" }
+      },
+      "steps": [
+        { "id": "build",  "call": "builder", "prompt": "{{ inputs.task }}" },
+        { "id": "review", "call": "critic",  "prompt": "{{ diff }}" },
+        { "id": "verify", "check": "bun test" }
+      ],
+      "repeat": { "until": "checks-pass", "maxIterations": 3 }
+    }
+  }
+}`}</pre>
 
 				<h2>The run says what ran.</h2>
-				<p className="lede">The CLI says what ran. No chat log.</p>
+				<p className="lede">
+					A writing run starts from HEAD in a throwaway git worktree, loops until the checks pass,
+					and stops at a patch. Nothing touches your tree until you apply it. No chat log.
+				</p>
 				<pre className="terminal">
-					<span className="cmd">$ chit run examples/consult.json --scope work-session</span>
-					{"\n"}
-					<span className="meta">manifest: consult</span>
-					{"\n"}
-					<span className="meta">scope: work-session-7f24089cc56</span>
-					{"\n"}
-					<span className="meta">adapters: codex-exec, claude-cli</span>
-					{"\n\nvalidation:\n  "}
-					<span className="pass-line">capabilities: compatible</span>
-					{"\n  "}
-					<span className="pass-line">agents: resolved</span>
-					{"\n  "}
-					<span className="pass-line">permissions: read_only enforced</span>
-					{
-						"\n    codex via --sandbox read-only;\n    claude via --permission-mode plan\n\nexecution:\n  level 0:  ask_codex, ask_claude\n  level 1:  out\n\n"
-					}
-					<span className="pass-line">run passes</span>
+					<span className="cmd">{`$ chit run implement --input task="add a --version flag"`}</span>
+					{"\n\n"}
+					<span className="pass-line">run converged (2 iterations)</span>
+					{"\n\n"}
+					<span className="meta">{` src/cli.ts          | 7 +++++++
+ src/version.test.ts | 14 ++++++++++++++
+ 2 files changed, 21 insertions(+)`}</span>
+					{"\n\n"}
+					{`dry run -- the diff above is saved. apply exactly it with:  `}
+					<span className="cmd">chit apply run-a1b5efea</span>
 					{"\n"}
 				</pre>
 
-				<h2>Read the chit before it fires.</h2>
-				<p className="lede">Four views of the same graph: ASCII, JSON, Mermaid, HTML.</p>
-				<div className="graph">
-					<svg viewBox="0 0 660 260" width="100%" role="img" aria-label="chit execution graph">
-						<line x1="150" y1="125" x2="245" y2="75" stroke="#0A0A0A" strokeWidth="1.2" />
-						<line x1="150" y1="135" x2="245" y2="185" stroke="#0A0A0A" strokeWidth="1.2" />
-						<line x1="385" y1="75" x2="480" y2="125" stroke="#0A0A0A" strokeWidth="1.2" />
-						<line x1="385" y1="185" x2="480" y2="135" stroke="#0A0A0A" strokeWidth="1.2" />
-						<rect
-							x="20"
-							y="100"
-							width="130"
-							height="55"
-							fill="#F4F2EA"
-							stroke="#0A0A0A"
-							strokeWidth="1.5"
-						/>
-						<text x="85" y="126" textAnchor="middle" fontSize="12" fill="#0A0A0A" fontWeight="600">
-							inputs
-						</text>
-						<text x="85" y="142" textAnchor="middle" fontSize="10" fill="#2A2A2A">
-							question
-						</text>
-						<rect
-							x="245"
-							y="45"
-							width="140"
-							height="55"
-							fill="#F4F2EA"
-							stroke="#0A0A0A"
-							strokeWidth="1.5"
-						/>
-						<text x="315" y="71" textAnchor="middle" fontSize="12" fill="#0A0A0A" fontWeight="600">
-							ask_codex
-						</text>
-						<text x="315" y="87" textAnchor="middle" fontSize="10" fill="#2A2A2A">
-							codex-exec
-						</text>
-						<rect
-							x="245"
-							y="160"
-							width="140"
-							height="55"
-							fill="#F4F2EA"
-							stroke="#0A0A0A"
-							strokeWidth="1.5"
-						/>
-						<text x="315" y="186" textAnchor="middle" fontSize="12" fill="#0A0A0A" fontWeight="600">
-							ask_claude
-						</text>
-						<text x="315" y="202" textAnchor="middle" fontSize="10" fill="#2A2A2A">
-							claude-cli
-						</text>
-						<rect
-							x="480"
-							y="100"
-							width="140"
-							height="55"
-							fill="#F4F2EA"
-							stroke="#0A0A0A"
-							strokeWidth="1.5"
-						/>
-						<text x="550" y="126" textAnchor="middle" fontSize="12" fill="#0A0A0A" fontWeight="600">
-							out
-						</text>
-						<text x="550" y="142" textAnchor="middle" fontSize="10" fill="#2A2A2A">
-							format
-						</text>
-					</svg>
-				</div>
-
-				<h2>Every chit, checked.</h2>
+				<h2>Read it before it runs.</h2>
 				<p className="lede">
-					Permissions are typed. Capabilities are checked. The chit cannot lie about what it
-					enforces.
+					<code>chit inspect</code> resolves the routine, binds each agent to a real adapter and
+					model, and shows the steps and limits before anything runs. If the config is invalid, the
+					run never starts.
+				</p>
+				<pre>{`$ chit inspect implement
+implement  (loop)
+
+inputs:
+  task  required
+
+agents:
+  builder  builder -> codex (gpt-5.5)  filesystem: read-write
+  critic   critic -> gemini            filesystem: read-only
+
+steps:
+  1. build       call builder
+  2. review      call critic
+  3. verify      check: sh -c bun test
+loop:   repeat the steps until all checks pass, max 3 iterations
+limits: per call 30m, whole run 120m
+
+note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
+      discards it); review the diff, then chit apply <run-id> to apply it.`}</pre>
+
+				<h2>Validated before it runs.</h2>
+				<p className="lede">
+					The config is checked against a schema and the parser before any model is called. An
+					impossible binding fails at parse, not three steps in.
 				</p>
 				<div className="receipt-block">
 					<div className="receipt-line pass">
 						<div className="ind" />
 						<div className="label">PASS</div>
-						<div className="body">capabilities · all required surface capabilities present</div>
+						<div className="body">config valid · profiles bind, the routine resolves, every step is typed</div>
 					</div>
-					<div className="receipt-line warn">
+					<div className="receipt-line fail">
 						<div className="ind" />
-						<div className="label">WARN</div>
+						<div className="label">FAIL</div>
 						<div className="body">
-							unenforced permission · an adapter that cannot enforce a declared permission needs
-							--allow-unenforced-permissions
+							impossible binding · <code>codex:sonnet</code> is rejected at parse, before a model runs
 						</div>
 					</div>
 					<div className="receipt-line fail">
 						<div className="ind" />
 						<div className="label">FAIL</div>
-						<div className="body">marker mismatch · manifest hash differs from sealed marker</div>
+						<div className="body">dirty worktree · a sandboxed run must start from a clean HEAD, or it refuses</div>
 					</div>
 				</div>
 
-				<h2>Run it three ways.</h2>
-				<p className="lede">The same chit, three execution modes. You choose how much to watch.</p>
+				<h2>The dry run is the default.</h2>
+				<p className="lede">A sandboxed run produces a patch and stops. You decide what happens next.</p>
 				<div className="modes">
 					<div className="mode-line">
-						<div className="label">Foreground</div>
+						<div className="label">Dry run</div>
 						<div className="body">
-							Checkpoint every iteration. chit runs one round; you read the diff and the verdict,
-							then advance.
+							The run executes in a git worktree and saves the exact patch. Your working tree is
+							untouched.
 						</div>
 					</div>
 					<div className="mode-line">
-						<div className="label">Background</div>
+						<div className="label">Review</div>
 						<div className="body">
-							Run one task unattended. chit converges in a detached worker against a git worktree.
-							Check on it later; read the receipt.
+							<code>chit trace &lt;run-id&gt;</code> shows what each step and iteration did, with the
+							resolved bindings.
 						</div>
 					</div>
 					<div className="mode-line">
-						<div className="label">Batch</div>
+						<div className="label">Apply</div>
 						<div className="body">
-							Run several tasks in parallel, one worktree each, with declared dependencies. The
-							deliverable is a set of reviewable branches.
+							<code>chit apply &lt;run-id&gt;</code> replays that exact patch through a gate: same HEAD,
+							clean tree, <code>git apply --check</code>.
 						</div>
 					</div>
 				</div>
 
 				<blockquote>
-					No chit, no work.
+					The agents think.
 					<br />
-					No work, no surprises.
-					<cite>chit manifesto</cite>
+					chit moves the work.
+					<cite>field note</cite>
 				</blockquote>
 
 				<section id="install">
 					<h2>Install</h2>
 					<p className="lede">
-						The published CLI is <code>@chit-run/cli</code>. It runs under Bun and installs the{" "}
-						<code>chit</code> binary.
+						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you
+						already have installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No
+						API keys, no HTTP.
 					</p>
 					<pre className="terminal">
-						<span className="cmd">$ bunx @chit-run/cli@latest --help</span>
+						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
 						{"\n"}
-						<span className="cmd">$ bun install -g @chit-run/cli@latest</span>
+						<span className="cmd">$ cd chit && bun install</span>
 						{"\n"}
-						<span className="cmd">$ chit --help</span>
+						<span className="cmd">$ bun run chit init implement --template loop</span>
+						{"\n"}
+						<span className="cmd">$ bun run chit --help</span>
 					</pre>
 					<p className="lede" style={{ marginTop: 16 }}>
-						Example manifests and Studio live in the source repo. Start with the CLI, then open the
-						docs when you want the full surface map.
+						Start with <a className="inline-link" href="/docs">the docs</a>: the routine model, the
+						config reference, and exactly what the validator checks.
 					</p>
 				</section>
+
+				<h3>Honest about being early</h3>
+				<p className="lede">
+					Not here yet: Studio, MCP tools, batch, durable resume. They come back once the one-shape
+					model is obvious. Multi-vendor adapters are in: claude, codex, and gemini, picked per
+					agent in config.
+				</p>
 			</div>
 
 			<footer>

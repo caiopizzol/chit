@@ -32,7 +32,7 @@ Use this first. It keeps the setup easy to read and easy to copy into another pr
 
 ```json
 {
-	"$schema": "https://chit.dev/schemas/chit.schema.json",
+	"$schema": "https://chit.run/schemas/chit.schema.json",
 	"profiles": {
 		"planner": "claude:sonnet",
 		"builder": "codex:gpt-5.5",
@@ -70,7 +70,7 @@ Use this when the routine is too large for the root file. The root config still 
 
 ```json
 {
-	"$schema": "https://chit.dev/schemas/chit.schema.json",
+	"$schema": "https://chit.run/schemas/chit.schema.json",
 	"profiles": {
 		"builder": "codex:gpt-5.5",
 		"critic": "gemini"
@@ -214,7 +214,7 @@ Prompts, formats, questions, and routine inputs can read prior context.
 
 ## Loops
 
-Loops require `maxIterations`. The stop condition lives under `repeat.until`.
+The stop condition lives under `repeat.until`. A judged loop (`{ step, equals }`, or an `all` that contains one) must set an explicit `maxIterations`. A `checks-pass` loop may set one too; without it, it falls back to a default cap of 5 iterations.
 
 | Condition | Example | Best use |
 |---|---|---|
@@ -261,6 +261,32 @@ Loops require `maxIterations`. The stop condition lives under `repeat.until`.
 | `repeat` | Runs as a loop until the stop condition is met or `maxIterations` is reached. |
 | `check` steps or read-write agents | Runs in a disposable git worktree. |
 | sandboxed success | Produces a patch that can be applied with `chit apply <run-id>`. |
+
+## Validation
+
+Two layers check a config, and they stay in lockstep. The **schema** (the `$schema` above) gives editor hints and validates the file shape. The **parser** is authoritative and runs before any model is called. The schema's adapter and model rules are generated from the same registry the parser uses, so the two cannot drift. An impossible config fails at parse, not three steps into a run.
+
+The parser rejects, among others:
+
+| Rejected | Example | Reason |
+|---|---|---|
+| Unknown top-level field | `{ "recipes": {} }` | Allowed: `$schema`, `profiles` (or `agents`), `routines`. |
+| `profiles` and `agents` together | both keys set | They are aliases; use one. |
+| Non-kebab routine id | `"Build_It"` | Ids match `^[a-z][a-z0-9-]*$`. |
+| Unknown adapter in a shorthand | `"x": "ollama:llama3"` | Built-ins are `claude`, `codex`, `gemini`. A custom adapter must use the object form. |
+| Impossible built-in model | `"x": "codex:sonnet"` | `sonnet` is a Claude model, not a codex one. |
+| Trailing colon, no model | `"x": "codex:"` | Use `"codex"` for the default model. |
+| Unknown agent field | `{ "adapter": "claude", "temperature": 1 }` | Only `adapter` and `model`. |
+| `..` in a routine file path | `{ "file": "../secret.json" }` | A routine file cannot escape the project. |
+| Non-positive `maxIterations` | `0` or `-1` | Must be a positive integer. |
+| A routine with no `steps` | `{ "input": "task" }` | `steps` must be an array. |
+| A judged loop with no cap | `{ "until": { "step": "review", "equals": "pass" } }` | A judged loop must set an explicit `maxIterations`. |
+
+<Callout title="Structural, not live">
+	Validation proves the config is well-formed. It does not prove your account can use a model.
+	`codex:gpt-5.5` is structurally valid but still fails if your local codex login lacks that model.
+	That live check is a separate concern, not the schema's job.
+</Callout>
 
 ## Compatibility
 

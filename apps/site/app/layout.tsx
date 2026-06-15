@@ -33,7 +33,7 @@ export const metadata: Metadata = {
 	metadataBase: new URL(siteUrl),
 	title: { default: "chit", template: "%s - chit" },
 	description:
-		"Versioned, cross-vendor agent routines with an audit trail. Stop being the glue between your agents.",
+		"A thin runtime for multi-agent workflows. A routine is a declared workflow the runtime reads and runs. Stop being the glue between your agents.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

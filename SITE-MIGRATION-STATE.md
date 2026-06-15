@@ -41,13 +41,24 @@ runtime harness where a routine is a declared workflow. Drop the old, heavier st
 2. [DONE] Copy apps/site (excluded build dirs), dropped Biome `check` script,
    `bun install` (616 pkgs). site typecheck + static build both succeed
    (/, /docs, /docs/config, llms, sitemap).
-3. [ ] Copy brand.md to repo root.
-4. [ ] Rewrite landing to the minimal story (real manifest + real CLI transcript).
-5. [ ] Polish docs index; keep config; add Validation section; surface the schema.
-6. [ ] Align domain to chit.run (schema $id, $schema URLs, site metadata/sitemap,
-   schema.test.ts reference). Gate: cli tests still green.
-7. [ ] Final verify: cli tests + typecheck, site typecheck + build, no em dashes,
-   `git diff --check`. Commit per phase (conventional, no co-author, no push).
+3. [DONE] Copied brand.md to repo root.
+4. [DONE] Rewrote landing (page.tsx) to the minimal story: real config, real
+   `chit run` transcript (run converged + dry-run/apply), real `chit inspect`
+   block, validation receipts, dry-run/review/apply, honest "early" section.
+5. [DONE] index.mdx already accurate (left as-is). config.mdx: added a Validation
+   section (every example verified vs the parser) and fixed the wrong "loops
+   require maxIterations" line (only judged loops do; checks-pass defaults to 5).
+6. [DONE] Domain -> chit.run: schema $id, schema.test.ts, config.mdx $schema URLs,
+   site root + llms.txt descriptions. (siteUrl was already chit.run.)
+7. [DONE] Verified: cli 282 pass + typecheck, site typecheck + static build,
+   no em dashes, git diff --check clean. Rendered output checked (new copy in,
+   stale terms out).
+
+## Verification corrections found while writing (standing rule: verify, not assume)
+- Old docs said "Loops require maxIterations" -- false. Only judged loops do;
+  a checks-pass loop falls back to DEFAULT_MAX_ITERATIONS = 5. Fixed in config.mdx.
+- Landing's old run output, four-views, scopes, markers, Studio, batch are not in
+  chit-minimal. Replaced with verified `chit run`/`chit inspect` output from views.ts.
 
 ## Open items to confirm with user
 - Install story + repo URL: chit-minimal has no remote and is unpublished. Landing
