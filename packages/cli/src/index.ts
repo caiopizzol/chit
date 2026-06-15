@@ -6,6 +6,7 @@ import { createInterface, type Interface } from "node:readline";
 import { claudeCliAdapter, codexCliAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { runCli } from "./cli.ts";
+import { realDoctorProbes } from "./doctor.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 
 // Ctrl-C cancellation: the first SIGINT aborts the signal, which kills the active
@@ -58,6 +59,7 @@ const code = await runCli(process.argv.slice(2), {
 	onProgress: (line) => process.stderr.write(`${line}\n`),
 	signal: controller.signal,
 	askUser: askOnStdin,
+	doctorProbes: realDoctorProbes,
 });
 
 process.exit(code);

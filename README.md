@@ -48,6 +48,7 @@ pure read-only call/format, no checks      -> text         (runs in your cwd)
 chit init [<name>]                 scaffold a runnable routine (--template text | loop | check)
 chit routines                      list declared routines (with their derived kind)
 chit inspect <routine>             what it needs and what will run
+chit doctor                        check the environment is ready (CLIs, git, checks) before a run
 chit run <routine> [--input k=v]   run it (sandboxed = dry run); chit apply <run-id> to keep it
 chit trace <run-id>                the receipt for a past run
 ```
@@ -117,8 +118,9 @@ src/converge-run.ts orchestrates a sandboxed run in a worktree (apply-on-confirm
 src/flow.ts         composition: run sub-routines in order, pass outputs forward
 src/store.ts        receipts on disk under .chit/runs (internal per-kind tag)
 src/views.ts        routine list / inspect / trace rendering
+src/doctor.ts       `chit doctor`: environment readiness (CLI presence, git, check commands)
 src/scaffold.ts     `chit init` templates: write a runnable inline routine + register it
-src/cli.ts          the verbs: init / routines / inspect / run / trace / cleanup
+src/cli.ts          the verbs: init / routines / inspect / doctor / run / trace / cleanup
 src/index.ts        the bin
 ```
 
