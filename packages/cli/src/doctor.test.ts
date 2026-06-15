@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type DoctorProbes, type DoctorReport, formatDoctor, runDoctor } from "./doctor.ts";
+import type { Adapter } from "./adapter.ts";
+import { type AdapterProbe, type DoctorProbes, type DoctorReport, formatDoctor, makeRealAdapterProbe, runDoctor } from "./doctor.ts";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -156,5 +157,97 @@ describe("formatDoctor", () => {
 	test("summarizes a clean pass and a warn-only run", () => {
 		expect(formatDoctor({ ok: true, checks: [{ status: "pass", title: "config", detail: "ok" }] })).toContain("ready.");
 		expect(formatDoctor({ ok: true, checks: [{ status: "warn", title: "git", detail: "dirty" }] })).toContain("ready, with 1 warning to review.");
+	});
+});
+
+function fakeAdapterProbe(over: Partial<{ reachOk: boolean; readOnlyHeld: boolean; readWriteWorked: boolean }> = {}): AdapterProbe {
+	return {
+		reach: async () => ({ ok: over.reachOk ?? true, detail: "ok" }),
+		permissions: async () => ({ readOnlyHeld: over.readOnlyHeld ?? true, readWriteWorked: over.readWriteWorked ?? true, detail: "" }),
+	};
+}
+
+describe("runDoctor --real (injected AdapterProbe)", () => {
+	test("real checks pass for reachable adapters whose permissions hold", async () => {
+		const dir = project(SANDBOXED);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe());
+		expect(statusOf(r, "real codex:gpt-5.5")).toBe("pass");
+		expect(statusOf(r, "real gemini")).toBe("pass");
+		expect(statusOf(r, "real codex read-only")).toBe("pass");
+		expect(statusOf(r, "real codex read-write")).toBe("pass");
+		expect(r.ok).toBe(true);
+	});
+
+	test("an unreachable adapter / rejected model fails, and its permission probes are skipped", async () => {
+		const dir = project(SANDBOXED);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe({ reachOk: false }));
+		expect(statusOf(r, "real codex:gpt-5.5")).toBe("fail");
+		expect(hasTitle(r, "real codex read-only")).toBe(false);
+		expect(r.ok).toBe(false);
+	});
+
+	test("a write leaking through a read-only call is a fail", async () => {
+		const dir = project(SANDBOXED);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe({ readOnlyHeld: false }));
+		expect(statusOf(r, "real codex read-only")).toBe("fail");
+		expect(r.ok).toBe(false);
+	});
+
+	test("read-write writing nothing is a warning, not a fail", async () => {
+		const dir = project(SANDBOXED);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe({ readWriteWorked: false }));
+		expect(statusOf(r, "real codex read-write")).toBe("warn");
+		expect(r.ok).toBe(true);
+	});
+
+	test("default doctor (no AdapterProbe) runs no real checks", async () => {
+		const dir = project(SANDBOXED);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }));
+		expect(r.checks.some((c) => c.title.startsWith("real "))).toBe(false);
+	});
+});
+
+describe("makeRealAdapterProbe (mechanics over fake adapters)", () => {
+	test("reads the permission mapping off real files: read-only holds, read-write writes", async () => {
+		const writing: Adapter = {
+			async call(req) {
+				// a write-capable model writes only when granted read-write
+				if (req.filesystem === "read-write") writeFileSync(join(req.cwd, "rw.txt"), "x");
+				return { output: "ok" };
+			},
+		};
+		const probe = makeRealAdapterProbe({ codex: writing });
+		expect((await probe.reach("codex", "gpt-5.5")).ok).toBe(true);
+		const p = await probe.permissions("codex", "gpt-5.5");
+		expect(p.readOnlyHeld).toBe(true);
+		expect(p.readWriteWorked).toBe(true);
+	});
+
+	test("detects a write that leaks through a read-only call", async () => {
+		const leaky: Adapter = {
+			async call(req) {
+				writeFileSync(join(req.cwd, req.filesystem === "read-only" ? "ro.txt" : "rw.txt"), "x");
+				return { output: "ok" };
+			},
+		};
+		const p = await makeRealAdapterProbe({ x: leaky }).permissions("x", undefined);
+		expect(p.readOnlyHeld).toBe(false);
+	});
+
+	test("an adapter error makes reach not ok and surfaces the message", async () => {
+		const dead: Adapter = {
+			async call() {
+				throw new Error("not authenticated");
+			},
+		};
+		const r = await makeRealAdapterProbe({ x: dead }).reach("x", undefined);
+		expect(r.ok).toBe(false);
+		expect(r.detail).toContain("not authenticated");
+	});
+
+	test("an unwired adapter reports not wired", async () => {
+		const r = await makeRealAdapterProbe({}).reach("ghost", undefined);
+		expect(r.ok).toBe(false);
+		expect(r.detail).toContain("not wired");
 	});
 });

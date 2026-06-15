@@ -11,7 +11,7 @@ import type { CheckRunner } from "./check-runner.ts";
 import { runConverge } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { loadConfig } from "./config.ts";
-import { type DoctorProbes, formatDoctor, realDoctorProbes, runDoctor } from "./doctor.ts";
+import { type DoctorProbes, formatDoctor, makeRealAdapterProbe, realDoctorProbes, runDoctor } from "./doctor.ts";
 import { resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
@@ -53,7 +53,7 @@ const USAGE = `chit -- run declared routines
   chit init [<name>] [--template text|loop|check]   scaffold a runnable inline routine
   chit routines                       list the routines declared in chit.config.json
   chit inspect <routine>              show what a routine needs and what it will run
-  chit doctor                         check this project's environment is ready to run
+  chit doctor [--real]                check the environment is ready (--real makes tiny model calls)
   chit run <routine> [opts]           run a routine; a sandboxed routine is a DRY RUN (review, then chit apply)
       --input <name>=<value>          supply an input (repeatable)
       --scope <name>                  name the run's scope (session grouping)
@@ -172,7 +172,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		}
 
 		if (command === "doctor") {
-			const report = await runDoctor(deps.cwd, deps.doctorProbes ?? realDoctorProbes);
+			const real = rest.includes("--real");
+			const adapterProbe = real ? makeRealAdapterProbe(deps.adapters) : undefined;
+			const report = await runDoctor(deps.cwd, deps.doctorProbes ?? realDoctorProbes, adapterProbe);
 			deps.out(formatDoctor(report));
 			return report.ok ? 0 : 1;
 		}

@@ -48,7 +48,7 @@ pure read-only call/format, no checks      -> text         (runs in your cwd)
 chit init [<name>]                 scaffold a runnable routine (--template text | loop | check)
 chit routines                      list declared routines (with their derived kind)
 chit inspect <routine>             what it needs and what will run
-chit doctor                        check the environment is ready (CLIs, git, checks) before a run
+chit doctor [--real]               check the environment is ready; --real makes tiny model calls
 chit run <routine> [--input k=v]   run it (sandboxed = dry run); chit apply <run-id> to keep it
 chit trace <run-id>                the receipt for a past run
 ```

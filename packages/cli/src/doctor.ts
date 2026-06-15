@@ -2,12 +2,18 @@
 // The schema and parser prove a config is well-formed; doctor proves the ENVIRONMENT can
 // actually run it -- the CLIs are installed, the project is a git repo where sandboxing
 // works, and the commands a check runs exist. It spends nothing: no model calls, no writes.
-// (A future `--real` mode will make tiny real calls to confirm auth/model access and the
-// read-only/read-write permission mappings; that one can cost money, so it stays opt-in.)
+// `--real` (opt-in) goes further: a tiny real call per configured adapter confirms the CLI
+// runs, auth works, and the model is accepted, plus a read-only call that must not write and a
+// read-write call that must, confirming the permission mapping in THIS environment. It can
+// spend model calls, so it never runs by default.
 //
-// The live probes are injected (DoctorProbes) so the whole pass is testable with fakes --
-// the same discipline as the adapter/check/sandbox seams. The bin wires `realDoctorProbes`.
+// Both live seams are injected -- DoctorProbes (PATH, git) and AdapterProbe (the real calls) --
+// so the whole pass is testable with fakes. The bin wires realDoctorProbes + makeRealAdapterProbe.
 
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AdapterRegistry } from "./adapter.ts";
 import { isBuiltInAdapter } from "./builtin-adapters.ts";
 import { type ChitConfig, ConfigError, loadConfig } from "./config.ts";
 import { type Check, isSandboxed } from "./manifest.ts";
@@ -35,6 +41,14 @@ export interface DoctorProbes {
 	gitState(cwd: string): Promise<{ isRepo: boolean; clean: boolean }>;
 }
 
+// The real-call seam for `--real`. `reach` is one tiny read-only call (the CLI runs, auth works,
+// the model is accepted); `permissions` confirms read-only cannot write and read-write can.
+// Injected so the report logic is tested with a fake; makeRealAdapterProbe is the real version.
+export interface AdapterProbe {
+	reach(adapter: string, model: string | undefined): Promise<{ ok: boolean; detail: string }>;
+	permissions(adapter: string, model: string | undefined): Promise<{ readOnlyHeld: boolean; readWriteWorked: boolean; detail: string }>;
+}
+
 // The binary a check actually invokes, best-effort. A string check "bun test" is stored as
 // `sh -c "bun test"`, so the real command is the first token of the script, not `sh`. An
 // argv check carries its command directly.
@@ -48,7 +62,7 @@ function checkBinary(c: Check): string {
 
 // Run the readiness pass over a project directory. Pure except for reading the config/manifest
 // files (real, deterministic) and the injected probes; returns a structured report.
-export async function runDoctor(cwd: string, probes: DoctorProbes): Promise<DoctorReport> {
+export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?: AdapterProbe): Promise<DoctorReport> {
 	const checks: DoctorCheck[] = [];
 
 	// 1. The config must parse and validate -- everything else reads from it.
@@ -83,17 +97,18 @@ export async function runDoctor(cwd: string, probes: DoctorProbes): Promise<Doct
 	// 3. Each built-in adapter a profile binds must have its CLI installed. A custom adapter
 	//    is opaque (we do not know its binary), so it is a warning, not a fail.
 	const adapters = [...new Set(Object.values(config.agents).map((a) => a.adapter))].sort();
+	const presentAdapters: string[] = [];
 	for (const adapter of adapters) {
 		if (!isBuiltInAdapter(adapter)) {
 			checks.push({ status: "warn", title: `adapter ${adapter}`, detail: "custom adapter; cannot probe for a CLI" });
 			continue;
 		}
-		const exists = await probes.commandExists(adapter);
-		checks.push(
-			exists
-				? { status: "pass", title: `adapter ${adapter}`, detail: "CLI found on PATH" }
-				: { status: "fail", title: `adapter ${adapter}`, detail: `"${adapter}" CLI not found on PATH; a routine that calls it will fail` },
-		);
+		if (await probes.commandExists(adapter)) {
+			presentAdapters.push(adapter);
+			checks.push({ status: "pass", title: `adapter ${adapter}`, detail: "CLI found on PATH" });
+		} else {
+			checks.push({ status: "fail", title: `adapter ${adapter}`, detail: `"${adapter}" CLI not found on PATH; a routine that calls it will fail` });
+		}
 	}
 
 	// 4. The commands a check runs should exist. The binary extraction is best-effort, so a
@@ -123,6 +138,49 @@ export async function runDoctor(cwd: string, probes: DoctorProbes): Promise<Doct
 			checks.push({ status: "warn", title: "git", detail: "working tree is dirty; a sandboxed run starts from a clean HEAD, so commit or stash first" });
 		} else {
 			checks.push({ status: "pass", title: "git", detail: "clean git repo; sandboxing can work" });
+		}
+	}
+
+	// 6. --real: confirm the wired CLIs and configured models actually run here, and that the
+	//    permission mapping holds. Opt-in (real model calls), so only when an adapterProbe is given.
+	//    Probed per adapter that passed the PATH check above.
+	if (adapterProbe !== undefined) {
+		const modelsByAdapter = new Map<string, Set<string | undefined>>();
+		for (const a of Object.values(config.agents)) {
+			if (!presentAdapters.includes(a.adapter)) continue;
+			const models = modelsByAdapter.get(a.adapter) ?? new Set<string | undefined>();
+			models.add(a.model);
+			modelsByAdapter.set(a.adapter, models);
+		}
+		for (const adapter of presentAdapters) {
+			const models = modelsByAdapter.get(adapter);
+			if (models === undefined) continue;
+			let anyReachable = false;
+			for (const model of models) {
+				const label = model !== undefined && model !== "default" ? `${adapter}:${model}` : adapter;
+				const r = await adapterProbe.reach(adapter, model);
+				if (r.ok) {
+					anyReachable = true;
+					checks.push({ status: "pass", title: `real ${label}`, detail: `reachable, model accepted${r.detail ? ` (${r.detail})` : ""}` });
+				} else {
+					checks.push({ status: "fail", title: `real ${label}`, detail: `not reachable / model rejected: ${r.detail}` });
+				}
+			}
+			// The permission mapping is adapter-level, so probe it once per adapter (first model),
+			// and only if something was reachable -- no point write-testing an unreachable CLI.
+			if (anyReachable) {
+				const p = await adapterProbe.permissions(adapter, [...models][0]);
+				checks.push(
+					p.readOnlyHeld
+						? { status: "pass", title: `real ${adapter} read-only`, detail: "no write got through" }
+						: { status: "fail", title: `real ${adapter} read-only`, detail: "a write got through a read-only call" },
+				);
+				checks.push(
+					p.readWriteWorked
+						? { status: "pass", title: `real ${adapter} read-write`, detail: "wrote inside a temp sandbox" }
+						: { status: "warn", title: `real ${adapter} read-write`, detail: "no file written (the model may have declined)" },
+				);
+			}
 		}
 	}
 
@@ -169,3 +227,74 @@ export const realDoctorProbes: DoctorProbes = {
 		}
 	},
 };
+
+// The real AdapterProbe for `--real`: tiny calls through the wired adapters in a temp dir,
+// reading the permission mapping off whether a file actually appears. Expensive (model calls),
+// so only the --real path builds it. Tests inject a fake AdapterProbe instead.
+export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
+	const TIMEOUT_MS = 90_000;
+	return {
+		async reach(adapter, model) {
+			const a = registry[adapter];
+			if (a === undefined) return { ok: false, detail: "adapter not wired" };
+			const dir = mkdtempSync(join(tmpdir(), `chit-doctor-reach-${adapter}-`));
+			try {
+				const r = await a.call({
+					agent: adapter,
+					...(model !== undefined && { model }),
+					instructions: "Connectivity check.",
+					prompt: 'Reply with the single word "ok".',
+					filesystem: "read-only",
+					cwd: dir,
+					timeoutMs: TIMEOUT_MS,
+				});
+				const out = r.output.trim();
+				return { ok: out.length > 0, detail: out.slice(0, 40) || "(empty output)" };
+			} catch (e) {
+				return { ok: false, detail: (e as Error).message };
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		async permissions(adapter, model) {
+			const a = registry[adapter];
+			if (a === undefined) return { readOnlyHeld: true, readWriteWorked: false, detail: "adapter not wired" };
+			const dir = mkdtempSync(join(tmpdir(), `chit-doctor-perm-${adapter}-`));
+			try {
+				// read-only must NOT be able to write: ask it to, then confirm the file is absent.
+				try {
+					await a.call({
+						agent: adapter,
+						...(model !== undefined && { model }),
+						instructions: "Permission check.",
+						prompt: 'Create a file named ro.txt containing "x".',
+						filesystem: "read-only",
+						cwd: dir,
+						timeoutMs: TIMEOUT_MS,
+					});
+				} catch {
+					// A refusal is fine -- the file simply will not exist, which is the point.
+				}
+				const readOnlyHeld = !existsSync(join(dir, "ro.txt"));
+				// read-write must be able to write: ask it to, then confirm the file appeared.
+				try {
+					await a.call({
+						agent: adapter,
+						...(model !== undefined && { model }),
+						instructions: "Permission check.",
+						prompt: 'Create a file named rw.txt containing "x".',
+						filesystem: "read-write",
+						cwd: dir,
+						timeoutMs: TIMEOUT_MS,
+					});
+				} catch {
+					// Surfaces as the file being absent below.
+				}
+				const readWriteWorked = existsSync(join(dir, "rw.txt"));
+				return { readOnlyHeld, readWriteWorked, detail: "" };
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	};
+}
