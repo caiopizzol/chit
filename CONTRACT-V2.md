@@ -31,7 +31,7 @@ The shipped model. One file format. No `policy` field. Behavior is **derived fro
 - steps are `routine` steps              → **composition** (run them in order, pass outputs forward)
 - `repeat` present                       → **loop** the steps until its `until` condition holds (or maxIterations)
 - neither                                → **single pass**
-- any `read-write` participant OR any `check` step → runs in a **git-worktree sandbox** (dry run by default, `--apply` writes back)
+- any `read-write` participant OR any `check` step → runs in a **git-worktree sandbox** (dry run by default; review, then `chit apply`)
 - pure read-only (no writes, no checks)  → runs in your cwd, no sandbox (a single pass, OR a read-only loop)
 
 Looping is independent of the sandbox: a loop that writes or checks runs in a worktree; a read-only loop
@@ -110,4 +110,4 @@ executors (single / loop / composition) - derivation just picks one. The user le
   the sandboxed implementation step.
 - refine: a read-only loop, `until: { step: "verdict", equals: "ship" }` - runs in the cwd, no sandbox;
   proven by a real run that converged in 2 iterations when the critic returned exactly "ship".
-- real dry run leaves origin untouched; `--apply` applies only a converged diff.
+- real dry run leaves origin untouched; `chit apply` applies only a converged diff.

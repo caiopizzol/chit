@@ -106,7 +106,7 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		out.push(`limits: whole run ${minutesLabel(effectiveRunTimeoutMs(m))}`);
 		out.push("");
 		out.push("note: runs each routine in order, passing outputs forward. A terminal sandboxed");
-		out.push("      step (if any) writes only its own worktree; --apply writes the result back.");
+		out.push("      step (if any) writes only its own worktree; review the diff, then `chit apply`.");
 		out.push("");
 		out.push(`manifest: ${routine.manifestPath}`);
 		out.push(`digest:   ${shortDigest(routine.digest)}`);
@@ -158,7 +158,7 @@ export function formatInspect(routine: ResolvedRoutine): string {
 	if (isSandboxed(m)) {
 		out.push("");
 		out.push("note: runs in a git-worktree sandbox -- dry run by default (shows the diff,");
-		out.push("      discards it); pass --apply to write a result back to your tree.");
+		out.push("      discards it); review the diff, then `chit apply <run-id>` to apply it.");
 	}
 	out.push("");
 	out.push(`manifest: ${routine.manifestPath}`);

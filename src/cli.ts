@@ -139,7 +139,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			deps.out("next:");
 			deps.out(`  chit inspect ${args.name}`);
 			const runHint = `  chit run ${args.name}${result.inputHint ? ` ${result.inputHint}` : ""}`;
-			deps.out(args.template === "text" ? runHint : `${runHint}            # dry run; add --apply to write back`);
+			deps.out(args.template === "text" ? runHint : `${runHint}            # dry run by default; review, then: chit apply <run-id>`);
 			deps.out(`\nedit ${result.manifestPath} to make it yours (prompts, participants, checks).`);
 			return 0;
 		}
@@ -254,7 +254,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			if (isSandboxed(routine.manifest)) {
 				// A routine that writes or runs checks executes inside a sandbox (a git
 				// worktree): edits land on the copy, not your tree. Dry run by default
-				// (show the diff, discard it); `--apply` writes the result back.
+				// (show the diff, discard it); review then `chit apply`, or `--auto-apply` to skip review.
 				const pf = await preflightSandbox(deps);
 				if (!pf.ok) return 1;
 				const result = await runConvergeInSandbox(

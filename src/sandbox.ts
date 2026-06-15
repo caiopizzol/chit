@@ -176,7 +176,7 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 
 		const stage = () => gitOrThrow(["add", "-A", "--", ".", EXCLUDE_NM], workDir);
 		// The re-appliable patch: a staged binary diff. Used both to store (dry run) and to
-		// apply (--apply), so what `chit apply` re-plays is byte-identical to what ran here.
+		// apply (--auto-apply), so what `chit apply` re-plays is byte-identical to what ran here.
 		const binaryPatch = async () => {
 			await stage();
 			return gitOrThrow(["diff", "--cached", "--binary", "--", ".", EXCLUDE_NM], workDir);

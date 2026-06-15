@@ -8,7 +8,7 @@
 //     (a { step, equals } repeat with no writes/checks) is unsandboxed and may sit anywhere.
 //   - every earlier step runs in the caller cwd unsandboxed, so it must write nothing: a
 //     one-shot text run, an `ask` gate, or a read-only loop. Only the terminal sandboxed step
-//     may write, inside its own disposable worktree (dry-run by default, --apply).
+//     may write, inside its own disposable worktree (dry-run by default; review then chit apply).
 // These config-aware checks live in resolveFlow, not in pure manifest parsing.
 //
 // Honesty about receipts: the FlowReceipt itself is body-free (step ids, sub-run

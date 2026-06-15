@@ -48,7 +48,7 @@ pure read-only call/format, no checks      -> text         (runs in your cwd)
 chit init [<name>]                 scaffold a runnable routine (--template text | loop | check)
 chit routines                      list declared routines (with their derived kind)
 chit inspect <routine>             what it needs and what will run
-chit run <routine> [--input k=v]   run it; --apply to keep a sandboxed result
+chit run <routine> [--input k=v]   run it (sandboxed = dry run); chit apply <run-id> to keep it
 chit trace <run-id>                the receipt for a past run
 ```
 
@@ -74,12 +74,12 @@ picked per agent in config (no API keys, no HTTP). Tests inject fakes, so they s
   step and participant names you choose.
 - **Sandboxed routines run live, safely.** A routine that writes or runs checks executes inside a
   git-worktree copy (looping if it has a `repeat`). It is a **dry run by default** (show the diff,
-  discard); `--apply` writes the result back. Your real tree is never touched without `--apply`.
+  discard); review it, then `chit apply <run-id>` writes it back (`--auto-apply` skips the review). Your tree is never touched without one of those.
 - **Two safety layers, not equal strength.** A participant's `filesystem` maps to how the claude CLI is
   invoked (read-only -> default mode with every write tool disallowed -- the edit tools AND the shell, so
   it inspects and answers but cannot write; read-write -> `acceptEdits`; none -> no tools): claude-level,
   not an OS sandbox. The strong, enforced one is the worktree: a sandboxed routine cannot reach your tree
-  without `--apply`. A `check` is arbitrary process execution, so any routine with a check is sandboxed too.
+  until you apply. A `check` is arbitrary process execution, so any routine with a check is sandboxed too.
 - **Time bounds are configurable per routine (`limits`).** `callTimeoutMinutes` (default 30) is a hard
   bound on any single model call or check -- the subprocess is killed once it is exceeded.
   `runTimeoutMinutes` (default 120) is a cooperative run budget: it is checked before each step, loop
