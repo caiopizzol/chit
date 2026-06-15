@@ -16,7 +16,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
-import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatUntil } from "./manifest.ts";
+import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
 
@@ -287,12 +287,14 @@ export async function runConverge(
 			break;
 		}
 		// Did this iteration meet the exit condition? checks-pass = every check passed;
-		// { step, equals } = that step's (trimmed) output equals the target, e.g. an
-		// evaluator call returned "yes". The `allChecksPassed` field carries this generic
-		// "converged this iteration" verdict (its legacy name; the view labels it by `until`).
+		// { step, equals } = that step's (trimmed) output equals the target (e.g. an evaluator
+		// returned "yes"); { all: [...] } = EVERY listed condition holds (so a review can block).
+		// The `allChecksPassed` field carries this generic "converged this iteration" verdict
+		// (its legacy name; the view labels it by `until`).
+		const conditionMet = (cond: RepeatCondition): boolean =>
+			cond === "checks-pass" ? allChecksPassed : (ctx.steps[cond.step]?.output ?? "").trim() === cond.equals;
 		const meets =
-			runError === undefined &&
-			(until === "checks-pass" ? allChecksPassed : (ctx.steps[until.step]?.output ?? "").trim() === until.equals);
+			runError === undefined && (typeof until === "object" && "all" in until ? until.all.every(conditionMet) : conditionMet(until));
 		iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: meets });
 		if (meets) converged = true;
 	}
@@ -302,9 +304,13 @@ export async function runConverge(
 	// final-iteration value (ctx holds the latest output per step). Skipped as products: a
 	// check (failure text, not a result) and the { step, equals } evaluator step (its verdict
 	// like "yes" is the signal, not the work). Mainly consumed by a non-sandboxed loop.
-	const untilStep = typeof until === "object" ? until.step : undefined;
+	// The { step, equals } evaluator steps (single OR every one inside `all`) are signals, not
+	// the work, so they are skipped when picking the implicit output -- like check steps.
+	const signalSteps = new Set<string>(
+		typeof until === "object" ? ("all" in until ? until.all.flatMap((c) => (typeof c === "object" ? [c.step] : [])) : [until.step]) : [],
+	);
 	const outputId =
-		manifest.output ?? [...manifest.steps].reverse().find((s) => (s.kind === "call" || s.kind === "format") && s.id !== untilStep)?.id;
+		manifest.output ?? [...manifest.steps].reverse().find((s) => (s.kind === "call" || s.kind === "format") && !signalSteps.has(s.id))?.id;
 	const output = outputId !== undefined ? ctx.steps[outputId]?.output : undefined;
 	return {
 		runId,

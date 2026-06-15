@@ -299,3 +299,49 @@ describe("runConverge -- { step, equals } convergence (a user-authored /goal loo
 		expect(r.status).toBe("did-not-converge"); // author must make the evaluator return the exact token
 	});
 });
+
+describe("runConverge -- compound { all } convergence (a model review can BLOCK)", () => {
+	// Converge only when the checks pass AND the critic returns exactly "pass". So a passing
+	// build that the critic rejects keeps looping -- review is blocking, not advisory.
+	const GATED = {
+		id: "gated",
+		inputs: {},
+		participants: {
+			builder: { agent: "builder", instructions: "Build.", filesystem: "read-write" },
+			critic: { agent: "critic", instructions: "Judge.", filesystem: "read-only" },
+		},
+		steps: [
+			{ id: "build", call: "builder", prompt: "iter {{ iteration }} prev=[{{ steps.critique.output }}]" },
+			{ id: "critique", call: "critic", prompt: "review {{ steps.build.output }}" },
+			{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
+		],
+		repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 4 },
+		output: "build",
+	};
+
+	test("checks pass but the critic withholds 'pass' -> keeps looping, then converges when it says pass", async () => {
+		let judged = 0;
+		// checks always pass (fakeCheckRunner default); critic blocks on iter 1, approves on iter 2
+		const adapter = fakeAdapter((req) => (req.agent === "critic" ? (judged++ === 0 ? "needs work" : "pass") : "built"));
+		const r = await runConverge(routineFrom(GATED), {}, deps({ adapter, checkRunner: fakeCheckRunner() }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(2);
+		expect(r.iterations[0]?.allChecksPassed).toBe(false); // "met the exit condition?" = false: critic blocked despite green checks
+		expect(r.iterations[1]?.allChecksPassed).toBe(true);
+		expect(r.until).toEqual({ all: ["checks-pass", { step: "critique", equals: "pass" }] });
+	});
+
+	test("green checks are not enough: a critic stuck on rejection -> did-not-converge", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "critic" ? "needs work" : "built"));
+		const r = await runConverge(routineFrom(GATED), {}, deps({ adapter, checkRunner: fakeCheckRunner() }));
+		expect(r.status).toBe("did-not-converge");
+		expect(r.iterations).toHaveLength(4);
+	});
+
+	test("the critic step is a signal, not the product: output is the build, not 'pass'", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "critic" ? "pass" : "the built artifact"));
+		const r = await runConverge(routineFrom(GATED), {}, deps({ adapter, checkRunner: fakeCheckRunner() }));
+		expect(r.status).toBe("converged");
+		expect(r.output).toBe("the built artifact");
+	});
+});

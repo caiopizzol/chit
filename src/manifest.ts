@@ -72,7 +72,11 @@ export type Step = CallStep | FormatStep | CheckStep | RoutineStep | AskStep;
 //   "checks-pass"            -- every check step passed (deterministic; the proven default)
 //   { step, equals }         -- a named step's output equals a string (e.g. an evaluator
 //                               call returns "yes"); model- or human-judged convergence
-export type RepeatUntil = "checks-pass" | { step: string; equals: string };
+export type RepeatCondition = "checks-pass" | { step: string; equals: string };
+// The exit is one condition, OR `{ all: [...] }` requiring EVERY listed condition to hold.
+// That lets a manifest make a model review BLOCKING, not advisory: converge only when the
+// checks pass AND the critic step returns "pass". Still declared, still checkable.
+export type RepeatUntil = RepeatCondition | { all: RepeatCondition[] };
 
 export interface Repeat {
 	until: RepeatUntil;
@@ -336,30 +340,44 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 			throw new ManifestError(`${source}.repeat`, "`maxIterations` must be a positive integer");
 		}
 
+		// One condition: "checks-pass" or { step, equals } (the step must exist). The aggregate
+		// requirements (a check step for checks-pass, an explicit maxIterations for a judged
+		// condition) are enforced once over the whole set below, so they hold inside `all` too.
+		const parseCondition = (rawCond: unknown, where: string): RepeatCondition => {
+			if (rawCond === "checks-pass") return "checks-pass";
+			if (isObject(rawCond) && !("all" in rawCond)) {
+				requireKeys(rawCond, new Set(["step", "equals"]), where);
+				if (typeof rawCond.step !== "string" || !rawCond.step) throw new ManifestError(where, "`step` must be a non-empty step id");
+				if (typeof rawCond.equals !== "string") throw new ManifestError(where, "`equals` must be a string to compare the step's output against");
+				if (!steps.some((s) => s.id === rawCond.step)) {
+					throw new ManifestError(source, `\`repeat.until\` references step ${JSON.stringify(rawCond.step)}, which is not a step in this routine`);
+				}
+				return { step: rawCond.step, equals: rawCond.equals };
+			}
+			throw new ManifestError(where, '`until` condition must be "checks-pass" or { step, equals }');
+		};
+
 		const rawUntil = raw.repeat.until;
 		let until: RepeatUntil;
-		if (rawUntil === "checks-pass") {
-			if (!steps.some((s) => s.kind === "check")) {
-				throw new ManifestError(source, '`repeat.until: "checks-pass"` requires at least one `check` step (its convergence signal)');
+		let conds: RepeatCondition[];
+		if (isObject(rawUntil) && "all" in rawUntil) {
+			requireKeys(rawUntil, new Set(["all"]), `${source}.repeat.until`);
+			if (!Array.isArray(rawUntil.all) || rawUntil.all.length === 0) {
+				throw new ManifestError(`${source}.repeat.until`, "`all` must be a non-empty array of conditions");
 			}
-			until = "checks-pass";
-		} else if (isObject(rawUntil)) {
-			requireKeys(rawUntil, new Set(["step", "equals"]), `${source}.repeat.until`);
-			if (typeof rawUntil.step !== "string" || !rawUntil.step) {
-				throw new ManifestError(`${source}.repeat.until`, "`step` must be a non-empty step id");
-			}
-			if (typeof rawUntil.equals !== "string") {
-				throw new ManifestError(`${source}.repeat.until`, "`equals` must be a string to compare the step's output against");
-			}
-			if (!steps.some((s) => s.id === rawUntil.step)) {
-				throw new ManifestError(source, `\`repeat.until.step\` references ${JSON.stringify(rawUntil.step)}, which is not a step in this routine`);
-			}
-			if (mi === undefined) {
-				throw new ManifestError(source, "`repeat.until: { step, equals }` requires an explicit `maxIterations` (a judged condition has no guaranteed termination)");
-			}
-			until = { step: rawUntil.step, equals: rawUntil.equals };
+			conds = rawUntil.all.map((c, i) => parseCondition(c, `${source}.repeat.until.all[${i}]`));
+			until = { all: conds };
 		} else {
-			throw new ManifestError(`${source}.repeat.until`, '`until` must be "checks-pass" or an object { step, equals }');
+			const cond = parseCondition(rawUntil, `${source}.repeat.until`);
+			conds = [cond];
+			until = cond;
+		}
+
+		if (conds.includes("checks-pass") && !steps.some((s) => s.kind === "check")) {
+			throw new ManifestError(source, '`repeat.until: "checks-pass"` requires at least one `check` step (its convergence signal)');
+		}
+		if (conds.some((c) => typeof c === "object") && mi === undefined) {
+			throw new ManifestError(source, "a `{ step, equals }` exit condition requires an explicit `maxIterations` (a judged condition has no guaranteed termination)");
 		}
 
 		repeat = { until, ...(typeof mi === "number" && { maxIterations: mi }) };

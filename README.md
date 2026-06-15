@@ -37,11 +37,12 @@ pure read-only call/format, no checks      -> text         (runs in your cwd)
 ```
 
 - **The loop's exit condition is yours to declare, so `/goal` is a routine, not a feature.**
-  `repeat.until` is either `"checks-pass"` (every check command passed -- deterministic, the
-  default) or `{ step, equals }` (a named step's output equals a string, e.g. an evaluator
-  call returns `"yes"`). The latter needs an explicit `maxIterations`, since a judged condition
-  has no guaranteed termination. Looping is independent of the sandbox: a loop that writes or
-  checks runs in a worktree; a pure read-only loop (draft -> critique -> repeat) runs in the cwd.
+  `repeat.until` is `"checks-pass"` (every check command passed -- deterministic, the default),
+  `{ step, equals }` (a named step's output equals a string, e.g. an evaluator returns `"yes"`),
+  or `{ all: [...] }` (every listed condition -- so a critic can BLOCK convergence: checks pass
+  AND the critic returns `"pass"`). A judged condition needs an explicit `maxIterations`. Looping
+  is independent of the sandbox: a writing/checking loop runs in a worktree; a pure read-only
+  loop (draft -> critique -> repeat) runs in the cwd.
 
 ```
 chit init [<name>]                 scaffold a runnable routine (--template text | loop | check)

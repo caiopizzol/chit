@@ -495,6 +495,22 @@ Two related fixes to make a sandboxed feature-flow trustworthy, both verified ag
   stores the patch + leaves origin clean -> `chit apply` re-plays it onto the real tree) and a real-binary
   dirty-refusal. 246 pass + 11 skip, typecheck clean.
 
+## Increment 24: compound `repeat.until { all }`, so a model review can BLOCK convergence
+Before, a critic was advisory: a loop converged when its checks passed, no matter what the critic said. Now
+`repeat.until` can be `{ all: [<condition>, ...] }` -- converge only when EVERY listed condition holds. So a
+manifest can make review blocking, not just advisory: `{ all: ["checks-pass", { step: "critique", equals:
+"pass" }] }` converges only when the checks are green AND the critic returns exactly "pass"; otherwise the
+critic's feedback feeds the next iteration. Still generic (no hardcoded "reviewer"), still checkable.
+- Composes with the generic until: a shared condition parser validates each member (a check step for
+  checks-pass; the named step exists; an explicit maxIterations if any judged condition appears -- enforced
+  over the whole set, so it holds inside `all`). converge evaluates `all.every(conditionMet)`; the implicit
+  output skips EVERY signal step (single or inside all), not just one.
+- VERIFIED: +9 tests (parse the compound + each aggregate requirement + empty-all + bad-ref; runConverge
+  proves a green build the critic rejects keeps looping then converges on "pass", and a stuck critic ->
+  did-not-converge; views render `checks-pass AND critique == "pass"` and an all-met verdict; binary inspect
+  confirmed). Existing examples keep their advisory critics; the capability is opt-in per manifest. 255 pass +
+  11 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs

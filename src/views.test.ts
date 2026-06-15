@@ -276,6 +276,30 @@ describe("formatTrace converge", () => {
 		expect(out).toContain("output:"); // the text result is summarized (no diff/sandbox)
 		expect(out).not.toContain("the final draft text"); // body not dumped, just summarized
 	});
+
+	test("a compound { all } loop renders the AND-joined condition and an all-met verdict", () => {
+		const compound: ConvergeReceipt = {
+			runId: "run-a",
+			routineId: "gated",
+			policy: "converge",
+			until: { all: ["checks-pass", { step: "critique", equals: "pass" }] },
+			digest: `sha256:${"a".repeat(64)}`,
+			inputs: {},
+			maxIterations: 4,
+			startedAt: 0,
+			finishedAt: 20,
+			elapsedMs: 20,
+			status: "converged",
+			iterations: [
+				{ n: 1, startedAt: 0, allChecksPassed: false, steps: [{ id: "verify", kind: "check", status: "ok", startedAt: 0, elapsedMs: 1, checks: [{ command: "bun test", ok: true, startedAt: 0, elapsedMs: 1 }] }] },
+				{ n: 2, startedAt: 10, allChecksPassed: true, steps: [{ id: "verify", kind: "check", status: "ok", startedAt: 10, elapsedMs: 1, checks: [{ command: "bun test", ok: true, startedAt: 10, elapsedMs: 1 }] }] },
+			],
+		};
+		const out = formatTrace(compound);
+		expect(out).toContain(`until: checks-pass AND critique == "pass"`);
+		expect(out).toContain("not yet"); // iteration 1: checks green but the critic blocked
+		expect(out).toContain("all conditions met"); // iteration 2
+	});
 });
 
 describe("formatTrace", () => {

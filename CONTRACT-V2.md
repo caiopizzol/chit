@@ -65,7 +65,9 @@ stops at the next checkpoint. (Ctrl-C aborts mid-call via the cancellation signa
    is the line that stops it becoming a graph engine.
 2. `repeat` is an execution routine (not a composition) with an exit condition. `until: "checks-pass"`
    requires ≥1 `check` step (its signal); `until: { step, equals }` requires the named step to exist AND
-   an explicit `maxIterations` (a judged condition has no guaranteed termination).
+   an explicit `maxIterations` (a judged condition has no guaranteed termination). `until: { all: [...] }`
+   requires EVERY listed condition (each validated the same way) -- so a manifest can make a model review
+   blocking: converge only when the checks pass AND the critic step returns "pass".
 3. `output` may only name a **text-producing** step (`call`, `format`, `routine`) - never a `check` or an
    `ask` (a check produces pass/fail; an ask answer feeds later steps and is not persisted).
 4. A composition calls **execution routines only** - no nested composition (so no cycles to detect).
@@ -95,9 +97,10 @@ executors (single / loop / composition) — derivation just picks one. The user 
   (including a read-only loop) run in your cwd. This also fixes the gap where a read-write single-pass routine
   would edit your tree.
 - **E. The loop's exit is declared, not hardcoded** (rule 2). `repeat.until` is `"checks-pass"` (every check
-  passed - deterministic) or `{ step, equals }` (a named step's trimmed output equals a string - a model- or
-  human-judged verdict). This makes `/goal`-style loops a routine you author, not a product feature, while
-  keeping convergence checkable by real signals (checks, an evaluator's exact verdict), not hidden model state.
+  passed - deterministic), `{ step, equals }` (a named step's trimmed output equals a string - a model- or
+  human-judged verdict), or `{ all: [...] }` (every listed condition - e.g. checks pass AND a critic returns
+  "pass", making review blocking). This makes `/goal`-style loops a routine you author, not a product feature,
+  while keeping convergence checkable by real signals (checks, an evaluator's exact verdict), not hidden state.
 
 ## Acceptance (re-proven after the refactor)
 

@@ -352,7 +352,7 @@ describe("parseManifest -- generic repeat.until", () => {
 	});
 
 	test("rejects a { step, equals } that names a non-existent step", () => {
-		expect(() => parse({ ...GOAL, repeat: { until: { step: "ghost", equals: "yes" }, maxIterations: 3 } })).toThrow(/references "ghost", which is not a step/);
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "ghost", equals: "yes" }, maxIterations: 3 } })).toThrow(/references step "ghost", which is not a step/);
 	});
 
 	test("rejects a non-string equals", () => {
@@ -360,7 +360,7 @@ describe("parseManifest -- generic repeat.until", () => {
 	});
 
 	test("rejects an unknown until form", () => {
-		expect(() => parse({ ...GOAL, repeat: { until: "goal-met", maxIterations: 3 } })).toThrow(/`until` must be "checks-pass" or an object/);
+		expect(() => parse({ ...GOAL, repeat: { until: "goal-met", maxIterations: 3 } })).toThrow(/must be "checks-pass" or \{ step, equals \}/);
 	});
 
 	test("rejects an ask step in a non-sandboxed repeat loop (ask still excluded from loops)", () => {
@@ -370,5 +370,48 @@ describe("parseManifest -- generic repeat.until", () => {
 			{ id: "done", call: "evaluator", prompt: "yes or no?" },
 		];
 		expect(() => parse({ ...GOAL, steps })).toThrow(/`ask` step is not supported in a sandboxed or looping routine/);
+	});
+});
+
+describe("parseManifest -- compound repeat.until { all }", () => {
+	// build + critic + check: converge only when checks pass AND the critic returns "pass".
+	const base = {
+		id: "gated",
+		inputs: {},
+		participants: {
+			builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
+			critic: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+		},
+		steps: [
+			{ id: "build", call: "builder", prompt: "go" },
+			{ id: "critique", call: "critic", prompt: "pass?" },
+			{ id: "verify", check: [{ command: "sh", args: ["-c", "true"] }] },
+		],
+	};
+
+	test("parses { all: [checks-pass, { step, equals }] }", () => {
+		const m = parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 3 } });
+		expect(m.repeat?.until).toEqual({ all: ["checks-pass", { step: "critique", equals: "pass" }] });
+	});
+
+	test("a compound containing checks-pass still requires a check step", () => {
+		const noCheck = { ...base, steps: [base.steps[0], base.steps[1]] }; // drop the check
+		expect(() => parse({ ...noCheck, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 2 } })).toThrow(
+			/requires at least one `check` step/,
+		);
+	});
+
+	test("a compound containing a { step, equals } requires an explicit maxIterations", () => {
+		expect(() => parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] } } })).toThrow(/requires an explicit `maxIterations`/);
+	});
+
+	test("validates a step reference inside all", () => {
+		expect(() => parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "ghost", equals: "pass" }] }, maxIterations: 2 } })).toThrow(
+			/references step "ghost"/,
+		);
+	});
+
+	test("rejects an empty all", () => {
+		expect(() => parse({ ...base, repeat: { until: { all: [] }, maxIterations: 2 } })).toThrow(/`all` must be a non-empty array/);
 	});
 });

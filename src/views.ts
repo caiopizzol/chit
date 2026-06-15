@@ -6,7 +6,7 @@
 
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
-import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, isComposition, isSandboxed, kindLabel } from "./manifest.ts";
+import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, isComposition, isSandboxed, kindLabel, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
 
@@ -21,6 +21,14 @@ function shortDigest(d: string): string {
 // Render an effective timeout (ms) as a minutes label, or "none" when unbounded.
 function minutesLabel(ms: number | undefined): string {
 	return ms === undefined ? "none" : `${ms / 60_000}m`;
+}
+
+// Render a loop's exit condition for inspect/trace. `checksLabel` lets each caller phrase the
+// checks-pass case to fit its sentence ("all checks pass" in inspect, "checks-pass" in trace);
+// an `{ all: [...] }` reads as the conditions joined by AND.
+function formatUntil(u: RepeatUntil, checksLabel: string): string {
+	const cond = (c: RepeatCondition): string => (c === "checks-pass" ? checksLabel : `${c.step} == ${JSON.stringify(c.equals)}`);
+	return typeof u === "object" && "all" in u ? u.all.map(cond).join(" AND ") : cond(u);
 }
 
 // A step/iteration start offset for the timeline, with a trailing gap. Omitted for
@@ -137,7 +145,7 @@ export function formatInspect(routine: ResolvedRoutine): string {
 
 	if (m.repeat !== undefined) {
 		const mi = routine.defaults?.maxIterations ?? m.repeat.maxIterations;
-		const cond = m.repeat.until === "checks-pass" ? "all checks pass" : `${m.repeat.until.step} == ${JSON.stringify(m.repeat.until.equals)}`;
+		const cond = formatUntil(m.repeat.until, "all checks pass");
 		out.push(`loop:   repeat the steps until ${cond}${mi !== undefined ? `, max ${mi} iterations` : ""}`);
 	} else if (m.output !== undefined) {
 		out.push(`output: ${m.output}`);
@@ -191,9 +199,12 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		// checks-pass reports "checks passed/failed"; { step, equals } reports "condition met/not".
 		// Legacy receipts (written before `until` existed) had only checks-pass; default to it.
 		const until = r.until ?? "checks-pass";
-		const untilLabel = until === "checks-pass" ? "checks-pass" : `${until.step} == ${JSON.stringify(until.equals)}`;
-		const verdict = (met: boolean): string =>
-			until === "checks-pass" ? (met ? "checks passed" : "checks failed") : met ? "condition met" : "condition not met";
+		const untilLabel = formatUntil(until, "checks-pass");
+		const verdict = (met: boolean): string => {
+			if (until === "checks-pass") return met ? "checks passed" : "checks failed";
+			if (typeof until === "object" && "all" in until) return met ? "all conditions met" : "not yet";
+			return met ? "condition met" : "condition not met";
+		};
 		out.push(`iterations: ${r.iterations.length} (max ${r.maxIterations}); until: ${untilLabel}`);
 		for (const it of r.iterations) {
 			out.push(`  iteration ${it.n}  ${startOffset(it.startedAt, r.startedAt)}${verdict(it.allChecksPassed)}`);
