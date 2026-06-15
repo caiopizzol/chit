@@ -87,8 +87,11 @@ describe("scenario matrix", () => {
 		expect(isSandboxed(implementation)).toBe(true);
 		expect(implementation.repeat?.until).toBe("checks-pass");
 
+		// 08 is the one advanced scenario that blocks on a model verdict. It uses the robust
+		// SPLIT form: a free-form `review` (feedback for the builder) + a constrained `verdict`
+		// (the "pass"/"revise" signal the loop gates on). Even so it is fragile vs a check.
 		const blockingReview = routine("08-review-blocks-loop", "implement").manifest;
-		expect(blockingReview.repeat?.until).toEqual({ all: ["checks-pass", { step: "critique", equals: "pass" }] });
+		expect(blockingReview.repeat?.until).toEqual({ all: ["checks-pass", { step: "verdict", equals: "pass" }] });
 
 		const forcedRevise = routine("09-check-fails-then-recovers", "forced-revise").manifest;
 		expect(kindLabel(forcedRevise)).toBe("loop");
@@ -135,6 +138,8 @@ describe("scenario matrix", () => {
 			required: true,
 			description: "manual output from a prior run",
 		});
-		expect(impl.manifest.repeat?.until).toEqual({ all: ["checks-pass", { step: "critique", equals: "pass" }] });
+		// checks-first default: the critic is advisory feedback, the deterministic check is the gate
+		// (the cross-run handoff is the focus here, not a fragile blocking verdict).
+		expect(impl.manifest.repeat?.until).toBe("checks-pass");
 	});
 });

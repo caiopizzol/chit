@@ -1,6 +1,6 @@
 {
 	"id": "implement",
-	"description": "Build until checks pass and the reviewer returns pass.",
+	"description": "Advanced + fragile: converge only when checks pass AND a constrained model verdict returns pass.",
 	"inputs": {
 		"task": { "type": "string", "required": true }
 	},
@@ -12,14 +12,15 @@
 		},
 		"critic": {
 			"agent": "critic",
-			"instructions": "Approve only correct, in-scope diffs. You do not edit files.",
+			"instructions": "You review diffs. You do not edit files.",
 			"filesystem": "read-only"
 		}
 	},
 	"steps": [
-		{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nReview feedback:\n{{ steps.critique.output }}\nCheck feedback:\n{{ steps.verify.output }}" },
-		{ "id": "critique", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nIf this is correct and in scope, reply with exactly: pass\nOtherwise provide one concrete issue and do not write pass." },
+		{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nReview feedback:\n{{ steps.review.output }}\nCheck feedback:\n{{ steps.verify.output }}" },
+		{ "id": "review", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nGive concrete, specific feedback to improve correctness and scope. Free-form; this is guidance for the builder, not a verdict." },
+		{ "id": "verdict", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nReply with exactly one word: pass (if correct, in scope, and ready to ship) or revise (otherwise). Nothing else." },
 		{ "id": "verify", "check": [{ "command": "node", "args": ["-e", "console.log('ok')"] }] }
 	],
-	"repeat": { "until": { "all": ["checks-pass", { "step": "critique", "equals": "pass" }] }, "maxIterations": 3 }
+	"repeat": { "until": { "all": ["checks-pass", { "step": "verdict", "equals": "pass" }] }, "maxIterations": 3 }
 }
