@@ -7,6 +7,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnCapture } from "./proc.ts";
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
 import type { RunReceipt } from "./run.ts";
@@ -79,8 +80,28 @@ export function loadPatch(cwd: string, runId: string): string | undefined {
 	return existsSync(path) ? readFileSync(path, "utf-8") : undefined;
 }
 
-// Whether a reviewable patch is stored for a run (a converged sandboxed dry run leaves one).
-// Cheaper than loadPatch when the body is not needed -- the run-history view only wants the flag.
-export function hasPatch(cwd: string, runId: string): boolean {
-	return existsSync(patchPath(cwd, runId));
+// The lifecycle state of a run's stored patch, derived live from git + the patch itself -- no new
+// state is kept. Ordered the way `chit apply` reasons about it:
+//   none      no patch stored (not a sandboxed run, or nothing to apply)
+//   applied   the patch reverse-applies cleanly, so its changes are already in the tree
+//   stale     not applied, and HEAD moved off the recorded base -- `chit apply` would refuse
+//   pending   forward-applies cleanly onto the current tree -- ready for `chit apply`
+//   conflicts none of the above -- the tree diverged; re-run rather than apply
+export type PatchStatus = "none" | "applied" | "stale" | "pending" | "conflicts";
+
+async function gitApplyCleans(cwd: string, patch: string, reverse: boolean): Promise<boolean> {
+	const r = await spawnCapture(["git", "apply", "--check", ...(reverse ? ["--reverse"] : []), "-"], { cwd, stdin: patch });
+	return r.exitCode === 0;
+}
+
+export async function patchStatus(cwd: string, runId: string, baseCommit?: string): Promise<PatchStatus> {
+	const patch = loadPatch(cwd, runId);
+	if (patch === undefined || patch.trim() === "") return "none";
+	if (await gitApplyCleans(cwd, patch, true)) return "applied";
+	if (baseCommit !== undefined) {
+		const head = await spawnCapture(["git", "rev-parse", "HEAD"], { cwd });
+		if (head.exitCode === 0 && head.stdout.trim() !== baseCommit) return "stale";
+	}
+	if (await gitApplyCleans(cwd, patch, false)) return "pending";
+	return "conflicts";
 }

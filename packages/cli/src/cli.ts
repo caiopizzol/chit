@@ -19,7 +19,7 @@ import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
-import { hasPatch, listReceipts, loadPatch, loadReceipt, savePatch, saveReceipt } from "./store.ts";
+import { listReceipts, loadPatch, loadReceipt, patchStatus, savePatch, saveReceipt } from "./store.ts";
 import { formatInspect, formatReceiptBodies, formatRoutineList, formatRunList, formatTrace, type RoutineListItem, type RunListItem } from "./views.ts";
 
 export interface CliDeps {
@@ -176,17 +176,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				}
 			}
 			const now = deps.now();
-			const items: RunListItem[] = listReceipts(deps.cwd)
-				.filter((r) => scope === undefined || r.scope === scope)
-				.map((r) => ({
-					runId: r.runId,
-					routineId: r.routineId,
-					status: r.status,
-					...(r.scope !== undefined && { scope: r.scope }),
-					ageMs: now - r.startedAt,
-					inputs: r.inputs,
-					hasPatch: hasPatch(deps.cwd, r.runId),
-				}));
+			const items: RunListItem[] = await Promise.all(
+				listReceipts(deps.cwd)
+					.filter((r) => scope === undefined || r.scope === scope)
+					.map(async (r) => ({
+						runId: r.runId,
+						routineId: r.routineId,
+						status: r.status,
+						...(r.scope !== undefined && { scope: r.scope }),
+						ageMs: now - r.startedAt,
+						inputs: r.inputs,
+						patch: await patchStatus(deps.cwd, r.runId, "baseCommit" in r ? r.baseCommit : undefined),
+					})),
+			);
 			deps.out(formatRunList(items, scope));
 			return 0;
 		}
@@ -280,7 +282,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- the diff above is saved. apply exactly it with:  chit apply ${r.runId}`,
+							: `\ndry run -- the diff is saved.\n  review:  chit trace --full ${r.runId}\n  apply:   chit apply ${r.runId}`,
 					);
 					return 0;
 				}
@@ -330,7 +332,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- the diff above is saved. apply exactly it with:  chit apply ${r.runId}`,
+							: `\ndry run -- the diff is saved.\n  review:  chit trace --full ${r.runId}\n  apply:   chit apply ${r.runId}`,
 					);
 					return 0;
 				}

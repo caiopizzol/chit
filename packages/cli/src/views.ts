@@ -9,6 +9,7 @@ import type { FlowReceipt } from "./flow.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, isComposition, isSandboxed, kindLabel, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
+import type { PatchStatus } from "./store.ts";
 
 function pad(s: string, n: number): string {
 	return s.length >= n ? s : s + " ".repeat(n - s.length);
@@ -82,9 +83,8 @@ function ageLabel(ms: number): string {
 	return `${Math.floor(h / 24)}d ago`;
 }
 
-// One row of the run history. Everything here is derived from a stored receipt (plus whether a
-// .patch sits beside it); nothing new is tracked. `hasPatch` means an exact reviewable patch is
-// on disk for `chit apply` -- it does NOT mean the run was applied (that is not on the receipt).
+// One row of the run history. Everything here is derived from a stored receipt plus the patch's
+// lifecycle state (derived live from git). `patch` is "none" when the run stored no patch.
 export interface RunListItem {
 	runId: string;
 	routineId: string;
@@ -92,7 +92,7 @@ export interface RunListItem {
 	scope?: string;
 	ageMs: number;
 	inputs: Record<string, string>;
-	hasPatch: boolean;
+	patch: PatchStatus;
 }
 
 // A one-line preview of a run's primary (first) input VALUE, so two runs of the same routine are
@@ -118,8 +118,9 @@ export function formatRunList(items: RunListItem[], scopeFilter?: string): strin
 	const wRoutine = Math.max(...rows.map((r) => r.routineId.length));
 	const wStatus = Math.max(...rows.map((r) => r.status.length));
 	const wScope = Math.max(5, ...rows.map((r) => (r.scope ?? "-").length));
+	const wPatch = Math.max(0, ...rows.map((r) => (r.patch === "none" ? 0 : r.patch.length)));
 	const lines = rows.map((r) => {
-		const patch = pad(r.hasPatch ? "patch" : "", 5);
+		const patch = pad(r.patch === "none" ? "" : r.patch, wPatch);
 		return `  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  ${pad(r.status, wStatus)}  ${pad(r.scope ?? "-", wScope)}  ${pad(ageLabel(r.ageMs), 9)}  ${patch}  ${inputPreview(r.inputs)}`.trimEnd();
 	});
 	const header = scopeFilter !== undefined ? `runs in scope "${scopeFilter}" (${rows.length}):` : `runs (${rows.length}):`;

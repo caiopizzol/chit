@@ -164,7 +164,8 @@ describe("chit run", () => {
 		expect(text).toContain("run converged");
 		expect(text).toContain("diff --git");
 		expect(text).toMatch(/dry run/);
-		expect(text).toMatch(/chit apply run-test/); // the hint points at the reviewable apply gate
+		expect(text).toMatch(/chit trace --full run-test/); // review hint
+		expect(text).toMatch(/chit apply run-test/); // apply hint
 	});
 
 	test("applies a converged run immediately with --auto-apply", async () => {
