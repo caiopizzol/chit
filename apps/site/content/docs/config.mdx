@@ -19,48 +19,19 @@ The schema answers two questions:
 
 This is the shape to understand first. `profiles` declare local model bindings. `routines` declare what runs.
 
-```json
-{
-	"$schema": "https://chit.run/schemas/chit.schema.json",
-	"profiles": {
-		"builder": "codex:gpt-5.5",
-		"critic": "gemini"
-	},
-	"routines": {
-		"implement": {
-			"input": "task",
-			"agents": {
-				"builder": {
-					"profile": "builder",
-					"instructions": "Implement the smallest correct change.",
-					"filesystem": "read-write"
-				},
-				"critic": {
-					"profile": "critic",
-					"instructions": "Review the diff. Do not edit files.",
-					"filesystem": "read-only"
-				}
-			},
-			"steps": [
-				{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}" },
-				{ "id": "review", "call": "critic", "prompt": "Review the diff:\n{{ diff }}" },
-				{ "id": "verify", "check": "bun test" }
-			],
-			"repeat": { "until": "checks-pass", "maxIterations": 3 }
-		}
-	}
-}
-```
+<AnnotatedConfig />
 
 This one routine is an implementation loop because it has `repeat`. It is sandboxed because it has a read-write agent and a check.
 
 ## Root Fields
 
-| Field | Type | Required | Description |
-|---|---:|---:|---|
-| `$schema` | string | no | JSON Schema URL for editor hints. |
-| `profiles` | object | yes | Local adapter and model bindings. |
-| `routines` | object | yes | Named routine definitions. |
+<TypeTable
+	type={{
+		$schema: { type: "string", description: "JSON Schema URL for editor hints." },
+		profiles: { type: "object", required: true, description: "Local adapter and model bindings." },
+		routines: { type: "object", required: true, description: "Named routine definitions." },
+	}}
+/>
 
 ## Profiles
 
@@ -89,15 +60,17 @@ Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use 
 
 A routine is a declared workflow. It can be text-only, composed from other routines, looped, check-only, sandboxed, or human-gated. Chit derives that from the fields.
 
-| Field | Type | Required | Description |
-|---|---:|---:|---|
-| `input` | string | no | Shorthand for one required string input. |
-| `inputs` | array or object | no | Multiple inputs, or full input definitions. |
-| `agents` | object | when `call` steps exist | Participants inside the routine. |
-| `steps` | array | yes | Ordered steps. |
-| `repeat` | object | no | Loop stop condition and cap. |
-| `output` | string | no | Step id used as the routine output. |
-| `limits` | object | no | Per-call and whole-run time bounds. |
+<TypeTable
+	type={{
+		input: { type: "string", description: "Shorthand for one required string input." },
+		inputs: { type: "array | object", description: "Multiple inputs, or full input definitions." },
+		agents: { type: "object", description: "Participants inside the routine. Required when the routine has call steps." },
+		steps: { type: "array", required: true, description: "Ordered steps." },
+		repeat: { type: "object", description: "Loop stop condition and cap." },
+		output: { type: "string", description: "Step id used as the routine output." },
+		limits: { type: "object", description: "Per-call and whole-run time bounds." },
+	}}
+/>
 
 <Callout title="Names are yours">
 	`builder`, `critic`, `planner`, `judge`, and `griller` are not built into Chit.
@@ -108,17 +81,19 @@ A routine is a declared workflow. It can be text-only, composed from other routi
 
 Routine agents are local to one routine. Each points at a profile and declares stable instructions.
 
-| Field | Type | Required | Description |
-|---|---:|---:|---|
-| `profile` | string | yes | Profile id from the root `profiles` object. |
-| `instructions` | string | yes | Stable instructions for this agent in this routine. |
-| `filesystem` | string | yes | `none`, `read-only`, or `read-write`. |
+<TypeTable
+	type={{
+		profile: { type: "string", required: true, description: "Profile id from the root profiles object." },
+		instructions: { type: "string", required: true, description: "Stable instructions for this agent in this routine." },
+		filesystem: {
+			type: '"none" | "read-only" | "read-write"',
+			required: true,
+			description: "File access the adapter is granted.",
+		},
+	}}
+/>
 
-| Filesystem | Meaning |
-|---|---|
-| `none` | No file access requested from the adapter. |
-| `read-only` | Inspect files, but do not edit. |
-| `read-write` | May edit. Sandboxed routines write in a disposable git worktree first. |
+<FilesystemScale />
 
 ## Steps
 
@@ -200,20 +175,20 @@ A judged loop (`{ step, equals }`, or an `all` that contains one) must set `maxI
 }
 ```
 
-| Field | Type | Description |
-|---|---:|---|
-| `callTimeoutMinutes` | number or `"none"` | Hard timeout for each model call and check command. |
-| `runTimeoutMinutes` | number or `"none"` | Cooperative wall-time budget for the whole run. Checked between steps. |
+<TypeTable
+	type={{
+		callTimeoutMinutes: { type: 'number | "none"', default: "30", description: "Hard timeout for each model call and check command." },
+		runTimeoutMinutes: { type: 'number | "none"', default: "120", description: "Cooperative wall-time budget for the whole run. Checked between steps." },
+	}}
+/>
 
 ## Runtime Behavior
 
-| If the routine has | Chit runs |
-|---|---|
-| read-only `call` and `format` steps | a text run in the current directory |
-| `routine` steps | a flow that passes outputs forward |
-| `repeat` | a loop until the stop condition is met |
-| `check` steps or read-write agents | a sandboxed run in a disposable git worktree |
-| sandboxed success | a dry-run patch that can be applied with `chit apply <run-id>` |
+You do not choose an execution mode. Chit derives it from the routine's shape.
+
+<DerivedBehavior />
+
+A sandboxed run is a dry run: it produces a patch and stops. Review it, then `chit apply <run-id>` writes it back.
 
 <SandboxApplyVisual />
 

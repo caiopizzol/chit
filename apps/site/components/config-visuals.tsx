@@ -1,31 +1,8 @@
-// Mockup visuals for exploring a less-flat config reference (see /docs/mockups).
-// Brand-styled (paper/ink, mono labels, shape-coded status) to match doc-visuals.tsx.
-// EXPERIMENTAL: registered in components/mdx.tsx and styled under the "config mockup"
-// block in app/chit-theme.css. Remove all three together when the direction is chosen.
+// Visuals for the config reference (/docs/config). Brand-styled (paper/ink, mono
+// labels, shape-coded status) to match doc-visuals.tsx. Styled under the "config
+// reference visuals" block in app/chit-theme.css.
 
 import type { ReactNode } from "react";
-
-const STEP_KINDS: { kind: string; fields: string; desc: string }[] = [
-	{ kind: "call", fields: "id · call · prompt", desc: "Ask a routine agent. Stores its text output." },
-	{ kind: "ask", fields: "id · ask", desc: "Pause for one operator answer. Fed forward, never stored." },
-	{ kind: "check", fields: "id · check", desc: "Run one or more commands. Any check forces a sandbox." },
-	{ kind: "format", fields: "id · format", desc: "Assemble text from templates and prior output." },
-	{ kind: "routine", fields: "id · routine · inputs", desc: "Run another routine and store its output." },
-];
-
-export function StepKindGrid() {
-	return (
-		<div className="cfg-grid">
-			{STEP_KINDS.map((s) => (
-				<div key={s.kind} className="cfg-card">
-					<div className="cfg-card-head">{s.kind}</div>
-					<div className="cfg-chip">{s.fields}</div>
-					<p>{s.desc}</p>
-				</div>
-			))}
-		</div>
-	);
-}
 
 const FS_LEVELS: { name: string; note: string; tone?: "muted" | "dark" }[] = [
 	{ name: "none", note: "No file tools given to the adapter.", tone: "muted" },
@@ -43,26 +20,6 @@ export function FilesystemScale() {
 						<span className="cfg-mono">{l.name}</span>
 					</div>
 					<p>{l.note}</p>
-				</div>
-			))}
-		</div>
-	);
-}
-
-const LOOP_CONDITIONS: { title: string; code: string; when: string }[] = [
-	{ title: "checks pass", code: `"checks-pass"`, when: "Deterministic. The default. Falls back to 5 iterations." },
-	{ title: "step equals", code: `{ "step": "review", "equals": "pass" }`, when: "A model or human verdict ends the loop. Needs a cap." },
-	{ title: "all", code: `{ "all": ["checks-pass", { "step": "review", "equals": "pass" }] }`, when: "Both must hold. A reviewer can block convergence." },
-];
-
-export function LoopConditionCards() {
-	return (
-		<div className="cfg-grid cfg-grid-3">
-			{LOOP_CONDITIONS.map((c) => (
-				<div key={c.title} className="cfg-card">
-					<div className="cfg-card-head">{c.title}</div>
-					<pre className="cfg-card-code">{c.code}</pre>
-					<p>{c.when}</p>
 				</div>
 			))}
 		</div>
@@ -112,8 +69,8 @@ const ANNOTATED_CONFIG = `{
     "implement": {
       "input": "task",
       "agents": {
-        "builder": { "profile": "builder", "filesystem": "read-write" },
-        "critic":  { "profile": "critic",  "filesystem": "read-only" }
+        "builder": { "profile": "builder", "instructions": "Implement it.", "filesystem": "read-write" },
+        "critic":  { "profile": "critic",  "instructions": "Review the diff.", "filesystem": "read-only" }
       },
       "steps": [
         { "id": "build",  "call": "builder", "prompt": "{{ inputs.task }}" },
@@ -137,28 +94,6 @@ export function AnnotatedConfig() {
 					</div>
 				))}
 			</div>
-		</div>
-	);
-}
-
-const REJECTS: { example: string; reason: string }[] = [
-	{ example: `"x": "codex:sonnet"`, reason: "sonnet is a Claude model, not a codex one" },
-	{ example: `"x": "codex:"`, reason: "trailing colon, no model: use \"codex\"" },
-	{ example: `"x": "ollama:llama3"`, reason: "unknown adapter: custom adapters use object form" },
-	{ example: `{ "file": "../secret.json" }`, reason: "a routine file cannot escape the project" },
-	{ example: `{ "until": { "step": "review", "equals": "pass" } }`, reason: "a judged loop must set maxIterations" },
-];
-
-export function RejectList() {
-	return (
-		<div className="cfg-reject">
-			{REJECTS.map((r) => (
-				<div key={r.example} className="cfg-reject-row">
-					<span className="cfg-reject-shape">◆</span>
-					<code className="cfg-reject-ex">{r.example}</code>
-					<span className="cfg-reject-why">{r.reason}</span>
-				</div>
-			))}
 		</div>
 	);
 }
