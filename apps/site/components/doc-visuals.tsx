@@ -118,7 +118,7 @@ export function TerminalDemoVisual() {
 				<pre>
 					<code>{`$ chit inspect feature-flow
 steps: grill -> plan -> approve -> impl
-	profiles: planner claude/sonnet, builder codex/gpt-5.5, critic gemini
+		profiles: planner claude/sonnet, builder claude/opus max, critic codex/gpt-5.5 xhigh
 
 $ chit run feature-flow --input idea="add a version command"
 ? Adjust the plan before implementation:

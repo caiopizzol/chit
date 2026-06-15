@@ -68,6 +68,14 @@
 									"pattern": "^claude-"
 								}
 							]
+						},
+						"effort": {
+							"enum": [
+								"low",
+								"medium",
+								"high",
+								"max"
+							]
 						}
 					}
 				},
@@ -102,6 +110,15 @@
 								{
 									"pattern": "^o\\d"
 								}
+							]
+						},
+						"reasoningEffort": {
+							"enum": [
+								"minimal",
+								"low",
+								"medium",
+								"high",
+								"xhigh"
 							]
 						}
 					}

@@ -133,8 +133,17 @@ describe("parseConfig -- agents", () => {
 	});
 
 	test("parses an agents registry (adapter + optional model)", () => {
-		const c = parse({ ...VALID, agents: { builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } } });
-		expect(c.agents).toEqual({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } });
+		const c = parse({
+			...VALID,
+			agents: {
+				builder: { adapter: "claude", model: "sonnet", effort: "max" },
+				critic: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+			},
+		});
+		expect(c.agents).toEqual({
+			builder: { adapter: "claude", model: "sonnet", effort: "max" },
+			critic: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+		});
 	});
 
 	test("parses profiles as the preferred name, including string shorthand", () => {
@@ -160,6 +169,14 @@ describe("parseConfig -- agents", () => {
 
 	test("rejects a non-string model", () => {
 		expect(() => parse({ ...VALID, agents: { x: { adapter: "claude", model: 5 } } })).toThrow(/`model` must be a string/);
+	});
+
+	test("rejects invalid or adapter-mismatched profile effort settings", () => {
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", effort: "xhigh" } } })).toThrow(/effort.*must be one/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", effort: "max" } } })).toThrow(/only supported by the claude adapter/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", reasoningEffort: "max" } } })).toThrow(/reasoningEffort.*must be one/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", reasoningEffort: "xhigh" } } })).toThrow(/only supported by the codex adapter/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", reasoningEffort: "xhigh" } } })).toThrow(/only supported by the codex adapter/);
 	});
 });
 

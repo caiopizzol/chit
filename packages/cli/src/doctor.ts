@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterRegistry } from "./adapter.ts";
 import { adapterSupportsFilesystem, isBuiltInAdapter } from "./builtin-adapters.ts";
-import { type ChitConfig, ConfigError, loadConfig } from "./config.ts";
+import { type AgentConfig, type ChitConfig, ConfigError, loadConfig } from "./config.ts";
 import { type Check, isSandboxed } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
 import { type ResolvedRoutine, resolveRoutine } from "./routine.ts";
@@ -45,8 +45,26 @@ export interface DoctorProbes {
 // the model is accepted); `permissions` confirms read-only cannot write and read-write can.
 // Injected so the report logic is tested with a fake; makeRealAdapterProbe is the real version.
 export interface AdapterProbe {
-	reach(adapter: string, model: string | undefined): Promise<{ ok: boolean; detail: string }>;
-	permissions(adapter: string, model: string | undefined): Promise<{ readOnlyHeld: boolean; readWriteWorked: boolean; detail: string }>;
+	reach(profile: AgentConfig): Promise<{ ok: boolean; detail: string }>;
+	permissions(profile: AgentConfig): Promise<{ readOnlyHeld: boolean; readWriteWorked: boolean; detail: string }>;
+}
+
+function profileKey(profile: AgentConfig): string {
+	return JSON.stringify({
+		adapter: profile.adapter,
+		model: profile.model,
+		effort: profile.effort,
+		reasoningEffort: profile.reasoningEffort,
+	});
+}
+
+function profileLabel(profile: AgentConfig): string {
+	const base = profile.model !== undefined && profile.model !== "default" ? `${profile.adapter}:${profile.model}` : profile.adapter;
+	const options = [
+		...(profile.effort !== undefined ? [`effort=${profile.effort}`] : []),
+		...(profile.reasoningEffort !== undefined ? [`reasoning=${profile.reasoningEffort}`] : []),
+	];
+	return [base, ...options].join(" ");
 }
 
 // The binary a check actually invokes, best-effort. A string check "bun test" is stored as
@@ -159,20 +177,24 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 	//    permission mapping holds. Opt-in (real model calls), so only when an adapterProbe is given.
 	//    Probed per adapter that passed the PATH check above.
 	if (adapterProbe !== undefined) {
-		const modelsByAdapter = new Map<string, Set<string | undefined>>();
+		const profilesByAdapter = new Map<string, AgentConfig[]>();
+		const seenProfiles = new Set<string>();
 		for (const a of Object.values(config.agents)) {
 			if (!presentAdapters.includes(a.adapter)) continue;
-			const models = modelsByAdapter.get(a.adapter) ?? new Set<string | undefined>();
-			models.add(a.model);
-			modelsByAdapter.set(a.adapter, models);
+			const key = profileKey(a);
+			if (seenProfiles.has(key)) continue;
+			seenProfiles.add(key);
+			const profiles = profilesByAdapter.get(a.adapter) ?? [];
+			profiles.push(a);
+			profilesByAdapter.set(a.adapter, profiles);
 		}
 		for (const adapter of presentAdapters) {
-			const models = modelsByAdapter.get(adapter);
-			if (models === undefined) continue;
+			const profiles = profilesByAdapter.get(adapter);
+			if (profiles === undefined) continue;
 			let anyReachable = false;
-			for (const model of models) {
-				const label = model !== undefined && model !== "default" ? `${adapter}:${model}` : adapter;
-				const r = await adapterProbe.reach(adapter, model);
+			for (const profile of profiles) {
+				const label = profileLabel(profile);
+				const r = await adapterProbe.reach(profile);
 				if (r.ok) {
 					anyReachable = true;
 					checks.push({ status: "pass", title: `real ${label}`, detail: `reachable, model accepted${r.detail ? ` (${r.detail})` : ""}` });
@@ -183,7 +205,7 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 			// The permission mapping is adapter-level, so probe it once per adapter (first model),
 			// and only if something was reachable -- no point write-testing an unreachable CLI.
 			if (anyReachable) {
-				const p = await adapterProbe.permissions(adapter, [...models][0]);
+				const p = await adapterProbe.permissions(profiles[0] as AgentConfig);
 				checks.push(
 					p.readOnlyHeld
 						? { status: "pass", title: `real ${adapter} read-only`, detail: "no write got through" }
@@ -248,14 +270,16 @@ export const realDoctorProbes: DoctorProbes = {
 export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
 	const TIMEOUT_MS = 90_000;
 	return {
-		async reach(adapter, model) {
-			const a = registry[adapter];
+		async reach(profile) {
+			const a = registry[profile.adapter];
 			if (a === undefined) return { ok: false, detail: "adapter not wired" };
-			const dir = mkdtempSync(join(tmpdir(), `chit-doctor-reach-${adapter}-`));
+			const dir = mkdtempSync(join(tmpdir(), `chit-doctor-reach-${profile.adapter}-`));
 			try {
 				const r = await a.call({
-					agent: adapter,
-					...(model !== undefined && { model }),
+					agent: profile.adapter,
+					...(profile.model !== undefined && { model: profile.model }),
+					...(profile.effort !== undefined && { effort: profile.effort }),
+					...(profile.reasoningEffort !== undefined && { reasoningEffort: profile.reasoningEffort }),
 					instructions: "Connectivity check.",
 					prompt: 'Reply with the single word "ok".',
 					filesystem: "read-only",
@@ -270,16 +294,18 @@ export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
 				rmSync(dir, { recursive: true, force: true });
 			}
 		},
-		async permissions(adapter, model) {
-			const a = registry[adapter];
+		async permissions(profile) {
+			const a = registry[profile.adapter];
 			if (a === undefined) return { readOnlyHeld: true, readWriteWorked: false, detail: "adapter not wired" };
-			const dir = mkdtempSync(join(tmpdir(), `chit-doctor-perm-${adapter}-`));
+			const dir = mkdtempSync(join(tmpdir(), `chit-doctor-perm-${profile.adapter}-`));
 			try {
 				// read-only must NOT be able to write: ask it to, then confirm the file is absent.
 				try {
 					await a.call({
-						agent: adapter,
-						...(model !== undefined && { model }),
+						agent: profile.adapter,
+						...(profile.model !== undefined && { model: profile.model }),
+						...(profile.effort !== undefined && { effort: profile.effort }),
+						...(profile.reasoningEffort !== undefined && { reasoningEffort: profile.reasoningEffort }),
 						instructions: "Permission check.",
 						prompt: 'Create a file named ro.txt containing "x".',
 						filesystem: "read-only",
@@ -293,8 +319,10 @@ export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
 				// read-write must be able to write: ask it to, then confirm the file appeared.
 				try {
 					await a.call({
-						agent: adapter,
-						...(model !== undefined && { model }),
+						agent: profile.adapter,
+						...(profile.model !== undefined && { model: profile.model }),
+						...(profile.effort !== undefined && { effort: profile.effort }),
+						...(profile.reasoningEffort !== undefined && { reasoningEffort: profile.reasoningEffort }),
 						instructions: "Permission check.",
 						prompt: 'Create a file named rw.txt containing "x".',
 						filesystem: "read-write",

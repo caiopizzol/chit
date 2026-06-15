@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Adapter } from "./adapter.ts";
+import type { AgentConfig } from "./config.ts";
 import { type AdapterProbe, type DoctorProbes, type DoctorReport, formatDoctor, makeRealAdapterProbe, runDoctor } from "./doctor.ts";
 
 const dirs: string[] = [];
@@ -31,7 +32,7 @@ const hasTitle = (r: DoctorReport, title: string) => r.checks.some((c) => c.titl
 
 // A sandboxed loop: read-write builder (codex) + read-only critic (gemini) + a check.
 const SANDBOXED = {
-	profiles: { builder: "codex:gpt-5.5", critic: "gemini" },
+	profiles: { builder: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" }, critic: "gemini" },
 	routines: {
 		implement: {
 			input: "task",
@@ -192,28 +193,40 @@ describe("formatDoctor", () => {
 	});
 });
 
-function fakeAdapterProbe(over: Partial<{ reachOk: boolean; readOnlyHeld: boolean; readWriteWorked: boolean }> = {}): AdapterProbe {
+function fakeAdapterProbe(over: Partial<{ reachOk: boolean; readOnlyHeld: boolean; readWriteWorked: boolean }> = {}): AdapterProbe & { reached: AgentConfig[]; permissioned: AgentConfig[] } {
+	const reached: AgentConfig[] = [];
+	const permissioned: AgentConfig[] = [];
 	return {
-		reach: async () => ({ ok: over.reachOk ?? true, detail: "ok" }),
-		permissions: async () => ({ readOnlyHeld: over.readOnlyHeld ?? true, readWriteWorked: over.readWriteWorked ?? true, detail: "" }),
+		reached,
+		permissioned,
+		reach: async (profile) => {
+			reached.push(profile);
+			return { ok: over.reachOk ?? true, detail: "ok" };
+		},
+		permissions: async (profile) => {
+			permissioned.push(profile);
+			return { readOnlyHeld: over.readOnlyHeld ?? true, readWriteWorked: over.readWriteWorked ?? true, detail: "" };
+		},
 	};
 }
 
 describe("runDoctor --real (injected AdapterProbe)", () => {
 	test("real checks pass for reachable adapters whose permissions hold", async () => {
 		const dir = project(SANDBOXED);
-		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe());
-		expect(statusOf(r, "real codex:gpt-5.5")).toBe("pass");
+		const probe = fakeAdapterProbe();
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), probe);
+		expect(statusOf(r, "real codex:gpt-5.5 reasoning=xhigh")).toBe("pass");
 		expect(statusOf(r, "real gemini")).toBe("pass");
 		expect(statusOf(r, "real codex read-only")).toBe("pass");
 		expect(statusOf(r, "real codex read-write")).toBe("pass");
+		expect(probe.reached).toContainEqual({ adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" });
 		expect(r.ok).toBe(true);
 	});
 
 	test("an unreachable adapter / rejected model fails, and its permission probes are skipped", async () => {
 		const dir = project(SANDBOXED);
 		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe({ reachOk: false }));
-		expect(statusOf(r, "real codex:gpt-5.5")).toBe("fail");
+		expect(statusOf(r, "real codex:gpt-5.5 reasoning=xhigh")).toBe("fail");
 		expect(hasTitle(r, "real codex read-only")).toBe(false);
 		expect(r.ok).toBe(false);
 	});
@@ -249,8 +262,8 @@ describe("makeRealAdapterProbe (mechanics over fake adapters)", () => {
 			},
 		};
 		const probe = makeRealAdapterProbe({ codex: writing });
-		expect((await probe.reach("codex", "gpt-5.5")).ok).toBe(true);
-		const p = await probe.permissions("codex", "gpt-5.5");
+		expect((await probe.reach({ adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" })).ok).toBe(true);
+		const p = await probe.permissions({ adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" });
 		expect(p.readOnlyHeld).toBe(true);
 		expect(p.readWriteWorked).toBe(true);
 	});
@@ -262,7 +275,7 @@ describe("makeRealAdapterProbe (mechanics over fake adapters)", () => {
 				return { output: "ok" };
 			},
 		};
-		const p = await makeRealAdapterProbe({ x: leaky }).permissions("x", undefined);
+		const p = await makeRealAdapterProbe({ x: leaky }).permissions({ adapter: "x" });
 		expect(p.readOnlyHeld).toBe(false);
 	});
 
@@ -272,13 +285,13 @@ describe("makeRealAdapterProbe (mechanics over fake adapters)", () => {
 				throw new Error("not authenticated");
 			},
 		};
-		const r = await makeRealAdapterProbe({ x: dead }).reach("x", undefined);
+		const r = await makeRealAdapterProbe({ x: dead }).reach({ adapter: "x" });
 		expect(r.ok).toBe(false);
 		expect(r.detail).toContain("not authenticated");
 	});
 
 	test("an unwired adapter reports not wired", async () => {
-		const r = await makeRealAdapterProbe({}).reach("ghost", undefined);
+		const r = await makeRealAdapterProbe({}).reach({ adapter: "ghost" });
 		expect(r.ok).toBe(false);
 		expect(r.detail).toContain("not wired");
 	});

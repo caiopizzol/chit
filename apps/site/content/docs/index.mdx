@@ -38,8 +38,8 @@ Chit keeps that orchestration explicit:
 {
 	"profiles": {
 		"planner": "claude:sonnet",
-		"builder": "codex:gpt-5.5",
-		"critic": "gemini"
+		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
+		"critic": { "adapter": "codex", "model": "gpt-5.5", "reasoningEffort": "xhigh" }
 	},
 	"routines": {
 		"feature-flow": {

@@ -108,8 +108,17 @@ describe("profile validation: built-in adapter/model pairs (schema)", () => {
 		expect(okSchema("claude:claude-opus-4-8")).toBe(true); // full name via the prefix pattern
 		expect(okSchema("gemini:gemini-3-flash")).toBe(true);
 		expect(okSchema("gemini")).toBe(true);
-		expect(okSchema({ adapter: "claude", model: "default" })).toBe(true);
-		expect(okSchema({ adapter: "codex" })).toBe(true); // omitted model
+		expect(okSchema({ adapter: "claude", model: "default", effort: "max" })).toBe(true);
+		expect(okSchema({ adapter: "codex", reasoningEffort: "xhigh" })).toBe(true); // omitted model
 		expect(okSchema({ adapter: "my-adapter", model: "whatever" })).toBe(true); // custom, opaque model
+	});
+
+	test("validates adapter-specific profile options", () => {
+		expect(okSchema({ adapter: "claude", effort: "max" })).toBe(true);
+		expect(okSchema({ adapter: "codex", reasoningEffort: "xhigh" })).toBe(true);
+		expect(okSchema({ adapter: "claude", effort: "xhigh" })).toBe(false);
+		expect(okSchema({ adapter: "codex", effort: "max" })).toBe(false);
+		expect(okSchema({ adapter: "claude", reasoningEffort: "xhigh" })).toBe(false);
+		expect(okSchema({ adapter: "gemini", reasoningEffort: "xhigh" })).toBe(false);
 	});
 });

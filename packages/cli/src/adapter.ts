@@ -20,6 +20,10 @@ export interface AdapterRequest {
 	// Resolved model for this call (from the agent's config); undefined / "default"
 	// means the adapter's default model.
 	model?: string;
+	// Resolved profile options. They are adapter-specific and validated before the
+	// run starts; adapters that do not understand a field simply never receive it.
+	effort?: "low" | "medium" | "high" | "max";
+	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 	instructions: string;
 	prompt: string;
 	// Surfaced and passed through so the model is explicit, but NOT yet sandboxed
@@ -58,6 +62,20 @@ export function fakeAdapter(reply: (req: AdapterRequest) => string = () => "ok")
 	};
 }
 
+export function claudeCliArgs(req: Pick<AdapterRequest, "model" | "filesystem" | "effort">): string[] {
+	const permission =
+		req.filesystem === "read-write"
+			? ["--permission-mode", "acceptEdits"]
+			: req.filesystem === "read-only"
+				? ["--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash"]
+				: ["--tools", ""];
+	// `--model` and `--effort` go BEFORE the permission flags: the read-only mapping
+	// ends in a variadic `--disallowedTools`, which would otherwise swallow later args.
+	const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
+	const effort = req.effort !== undefined ? ["--effort", req.effort] : [];
+	return ["claude", "-p", ...model, ...effort, ...permission];
+}
+
 // The real claude adapter. Composes instructions + prompt and pipes them to `claude -p`
 // (print mode: one non-interactive response, then exit), reading stdout as the
 // participant's output. Runs in the routine's cwd. For write-capable participants
@@ -76,16 +94,7 @@ export const claudeCliAdapter: Adapter = {
 		//                 flow and under `-p` it can route its answer through ExitPlanMode, yielding
 		//                 empty stdout (a real composed flow saw a planning step produce 0 chars).
 		//   none       -> no tools at all.
-		const permission =
-			req.filesystem === "read-write"
-				? ["--permission-mode", "acceptEdits"]
-				: req.filesystem === "read-only"
-					? ["--permission-mode", "default", "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash"]
-					: ["--tools", ""];
-		// `--model` goes BEFORE the permission flags: the read-only mapping ends in a
-		// variadic `--disallowedTools`, which would otherwise swallow the model args.
-		const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
-		const args = ["claude", "-p", ...model, ...permission];
+		const args = claudeCliArgs(req);
 		const r = await spawnCapture(args, {
 			cwd: req.cwd,
 			stdin: composed,
@@ -104,6 +113,14 @@ export const claudeCliAdapter: Adapter = {
 		return { output: r.stdout.trim() };
 	},
 };
+
+export function codexCliArgs(req: Pick<AdapterRequest, "model" | "filesystem" | "reasoningEffort">, outFile: string): string[] {
+	const sandbox = req.filesystem === "read-write" ? "workspace-write" : "read-only";
+	const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
+	const reasoning =
+		req.reasoningEffort !== undefined ? ["-c", `model_reasoning_effort="${req.reasoningEffort}"`] : [];
+	return ["codex", "exec", "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral", ...model, ...reasoning, "-o", outFile, "-"];
+}
 
 // A second real adapter: the gemini CLI. Verified empirically (the same checks claude
 // needed): `gemini -p` returns its answer on stdout; `--approval-mode plan` is genuinely
@@ -153,13 +170,11 @@ export const codexCliAdapter: Adapter = {
 			throw new Error('codex has no no-tools mode, so a `filesystem: "none"` participant cannot use the codex adapter (use read-only, or bind it to another adapter)');
 		}
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
-		const sandbox = req.filesystem === "read-write" ? "workspace-write" : "read-only";
-		const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
 		// One ephemeral temp dir per call for the final-message file; removed in `finally`.
 		const dir = mkdtempSync(join(tmpdir(), "chit-codex-"));
 		const outFile = join(dir, "last.txt");
 		try {
-			const args = ["codex", "exec", "--cd", req.cwd, "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral", ...model, "-o", outFile, "-"];
+			const args = ["codex", "exec", "--cd", req.cwd, ...codexCliArgs(req, outFile).slice(2)];
 			const r = await spawnCapture(args, {
 				cwd: req.cwd,
 				stdin: composed,
@@ -211,7 +226,12 @@ export function dispatchingAdapter(agents: Record<string, AgentConfig>, registry
 					`agent "${req.agent}" uses adapter "${agentCfg.adapter}", which is not available (wired adapters: ${Object.keys(registry).join(", ") || "none"})`,
 				);
 			}
-			return adapter.call({ ...req, ...(agentCfg.model !== undefined && { model: agentCfg.model }) });
+			return adapter.call({
+				...req,
+				...(agentCfg.model !== undefined && { model: agentCfg.model }),
+				...(agentCfg.effort !== undefined && { effort: agentCfg.effort }),
+				...(agentCfg.reasoningEffort !== undefined && { reasoningEffort: agentCfg.reasoningEffort }),
+			});
 		},
 	};
 }

@@ -3,7 +3,7 @@
 // These are always-on (fake-backed) so they prove the binding model with no real calls.
 
 import { describe, expect, test } from "bun:test";
-import { type Adapter, dispatchingAdapter, fakeAdapter } from "./adapter.ts";
+import { claudeCliArgs, codexCliArgs, type Adapter, dispatchingAdapter, fakeAdapter } from "./adapter.ts";
 import { fakeCheckRunner } from "./check-runner.ts";
 import { type ChitConfig, parseConfig } from "./config.ts";
 import { runConverge } from "./converge.ts";
@@ -14,14 +14,22 @@ import { fakeSandboxFactory } from "./sandbox.ts";
 const baseReq = (agent: string) => ({ agent, instructions: "i", prompt: "p", filesystem: "none" as const, cwd: "/x" });
 
 describe("dispatchingAdapter", () => {
-	test("routes each call to its configured adapter and passes the model through", async () => {
+	test("routes each call to its configured adapter and passes profile settings through", async () => {
 		const claude = fakeAdapter((r) => `claude:${r.model ?? "-"}`);
 		const codex = fakeAdapter((r) => `codex:${r.model ?? "-"}`);
-		const a = dispatchingAdapter({ builder: { adapter: "codex", model: "o1" }, critic: { adapter: "claude" } }, { claude, codex });
-		expect((await a.call(baseReq("builder"))).output).toBe("codex:o1");
+		const a = dispatchingAdapter(
+			{
+				builder: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+				critic: { adapter: "claude", effort: "max" },
+			},
+			{ claude, codex },
+		);
+		expect((await a.call(baseReq("builder"))).output).toBe("codex:gpt-5.5");
 		expect((await a.call(baseReq("critic"))).output).toBe("claude:-");
-		expect(codex.calls[0]?.model).toBe("o1"); // the resolved model reached the adapter
+		expect(codex.calls[0]?.model).toBe("gpt-5.5"); // the resolved model reached the adapter
+		expect(codex.calls[0]?.reasoningEffort).toBe("xhigh");
 		expect(claude.calls[0]?.model).toBeUndefined();
+		expect(claude.calls[0]?.effort).toBe("max");
 	});
 
 	test("fails cleanly on an unknown agent id", async () => {
@@ -32,6 +40,44 @@ describe("dispatchingAdapter", () => {
 	test("fails cleanly on an adapter type that is not wired", async () => {
 		const a = dispatchingAdapter({ x: { adapter: "openai" } }, { claude: fakeAdapter() });
 		await expect(a.call(baseReq("x"))).rejects.toThrow(/uses adapter "openai", which is not available/);
+	});
+});
+
+describe("real adapter argument builders", () => {
+	test("passes claude effort before variadic tool permission args", () => {
+		expect(claudeCliArgs({ filesystem: "read-only", model: "claude-opus-4-8", effort: "max" })).toEqual([
+			"claude",
+			"-p",
+			"--model",
+			"claude-opus-4-8",
+			"--effort",
+			"max",
+			"--permission-mode",
+			"default",
+			"--disallowedTools",
+			"Edit",
+			"Write",
+			"NotebookEdit",
+			"Bash",
+		]);
+	});
+
+	test("passes codex reasoning effort as a config override", () => {
+		expect(codexCliArgs({ filesystem: "read-write", model: "gpt-5.5", reasoningEffort: "xhigh" }, "/tmp/last.txt")).toEqual([
+			"codex",
+			"exec",
+			"--sandbox",
+			"workspace-write",
+			"--skip-git-repo-check",
+			"--ephemeral",
+			"--model",
+			"gpt-5.5",
+			"-c",
+			'model_reasoning_effort="xhigh"',
+			"-o",
+			"/tmp/last.txt",
+			"-",
+		]);
 	});
 });
 

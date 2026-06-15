@@ -12,7 +12,8 @@ One shape. You describe the work; **how it runs is derived**, never chosen.
 
 - A **routine** is the one concept you configure: a declared workflow, usually inline in
   `chit.config.json`, extractable to a file when it grows.
-- **Profiles** are local adapter/model bindings, e.g. `"builder": "codex:gpt-5.5"`.
+- **Profiles** are local adapter/model bindings, e.g. `"builder": "codex:gpt-5.5"` or
+  `{ "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" }`.
 - **Routine agents** are the actors inside one routine. Each points at a profile and
   declares instructions plus filesystem permission.
 - **Steps** are `call` (ask a routine agent), `format` (assemble text), `check` (run a

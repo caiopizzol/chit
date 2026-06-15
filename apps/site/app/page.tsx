@@ -49,8 +49,8 @@ export default function Home() {
 				</p>
 				<pre>{`{
   "profiles": {
-    "builder": "codex:gpt-5.5",
-    "critic": "gemini"
+    "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
+    "critic": { "adapter": "codex", "model": "gpt-5.5", "reasoningEffort": "xhigh" }
   },
   "routines": {
     "implement": {
@@ -101,8 +101,8 @@ inputs:
   task  required
 
 agents:
-  builder  builder -> codex (gpt-5.5)  filesystem: read-write
-  critic   critic -> gemini            filesystem: read-only
+  builder  builder -> claude:claude-opus-4-8 effort=max      filesystem: read-write
+  critic   critic -> codex:gpt-5.5 reasoning=xhigh           filesystem: read-only
 
 steps:
   1. build       call builder

@@ -39,7 +39,7 @@ Profiles are machine-local. They let the same routine run with different adapter
 |---|---|---|
 | adapter | `"critic": "gemini"` | Use the adapter default model. |
 | adapter:model | `"builder": "codex:gpt-5.5"` | Use one explicit model. |
-| object | `"judge": { "adapter": "claude", "model": "haiku" }` | Same binding, written explicitly. |
+| object | `"builder": { "adapter": "claude", "model": "opus", "effort": "max" }` | Explicit binding with adapter options. |
 
 Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use object form.
 
@@ -47,12 +47,19 @@ Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use 
 {
 	"profiles": {
 		"planner": "claude:sonnet",
-		"builder": "codex:gpt-5.5",
-		"critic": "gemini",
+		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
+		"critic": { "adapter": "codex", "model": "gpt-5.5", "reasoningEffort": "xhigh" },
 		"local": { "adapter": "my-adapter", "model": "custom-model" }
 	}
 }
 ```
+
+Profile options are adapter-specific and validated before a run starts.
+
+| Field | Adapter | Values | Passed to |
+|---|---|---|---|
+| `effort` | `claude` | `low`, `medium`, `high`, `max` | `claude --effort` |
+| `reasoningEffort` | `codex` | `minimal`, `low`, `medium`, `high`, `xhigh` | `codex -c model_reasoning_effort=...` |
 
 ## Routines
 
@@ -209,7 +216,8 @@ The parser rejects, among others:
 | Unknown adapter shorthand | `"x": "ollama:llama3"` | Custom adapters must use object form. |
 | Impossible built-in model | `"x": "codex:sonnet"` | `sonnet` is a Claude model, not a Codex model. |
 | Trailing colon | `"x": "codex:"` | Use `"codex"` for the default model. |
-| Unknown agent field | `{ "adapter": "claude", "temperature": 1 }` | Only `adapter` and `model`. |
+| Unknown profile field | `{ "adapter": "claude", "temperature": 1 }` | Allowed: `adapter`, `model`, `effort`, `reasoningEffort`. |
+| Wrong adapter option | `{ "adapter": "codex", "effort": "max" }` | `effort` belongs to Claude; `reasoningEffort` belongs to Codex. |
 | Escaping routine path | `{ "file": "../secret.json" }` | Routine files cannot escape the project. |
 | Non-positive `maxIterations` | `0` | Must be a positive integer. |
 | A routine with no `steps` | `{ "input": "task" }` | `steps` must be an array. |

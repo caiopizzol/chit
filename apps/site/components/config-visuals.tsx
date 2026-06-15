@@ -52,7 +52,7 @@ export function DerivedBehavior() {
 }
 
 const ANNOTATIONS: { field: string; note: string }[] = [
-	{ field: "profiles", note: "Names bound to local adapters and models. Machine-local." },
+	{ field: "profiles", note: "Names bound to local adapters, models, and effort settings. Machine-local." },
 	{ field: "agents", note: "The actors in this routine. Each points at a profile." },
 	{ field: "filesystem: read-write", note: "May edit, so the run is sandboxed in a worktree." },
 	{ field: "steps", note: "Ordered. The non-id field picks the kind." },
@@ -62,8 +62,8 @@ const ANNOTATIONS: { field: string; note: string }[] = [
 
 const ANNOTATED_CONFIG = `{
   "profiles": {
-    "builder": "codex:gpt-5.5",
-    "critic": "gemini"
+    "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
+    "critic": { "adapter": "codex", "model": "gpt-5.5", "reasoningEffort": "xhigh" }
   },
   "routines": {
     "implement": {

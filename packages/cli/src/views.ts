@@ -42,10 +42,18 @@ function startOffset(startedAt: number | undefined, runStart: number): string {
 // A call step's label, including the resolved binding it actually ran on (adapter, plus
 // model when not the default) so trace is an audit record. Legacy receipts without a
 // binding show just the call.
-function callLabel(s: { participant?: string; adapter?: string; model?: string }): string {
+function bindingLabel(s: { adapter: string; model?: string; effort?: string; reasoningEffort?: string }): string {
+	const parts = [s.adapter];
+	if (s.model !== undefined && s.model !== "default") parts[0] = `${s.adapter}:${s.model}`;
+	if (s.effort !== undefined) parts.push(`effort=${s.effort}`);
+	if (s.reasoningEffort !== undefined) parts.push(`reasoning=${s.reasoningEffort}`);
+	return parts.join(" ");
+}
+
+function callLabel(s: { participant?: string; adapter?: string; model?: string; effort?: string; reasoningEffort?: string }): string {
 	const base = `call ${s.participant}`;
 	if (s.adapter === undefined) return base;
-	return `${base} (${s.adapter}${s.model !== undefined && s.model !== "default" ? `:${s.model}` : ""})`;
+	return `${base} (${bindingLabel({ adapter: s.adapter, ...(s.model !== undefined && { model: s.model }), ...(s.effort !== undefined && { effort: s.effort }), ...(s.reasoningEffort !== undefined && { reasoningEffort: s.reasoningEffort }) })})`;
 }
 
 // A one-line preview of an `ask` question for inspect (questions are often multi-line,
@@ -181,7 +189,7 @@ export function formatInspect(routine: ResolvedRoutine): string {
 			const binding = routine.agents?.[p.agent];
 			const agentCol =
 				binding !== undefined
-					? `${p.agent} -> ${binding.adapter}${binding.model && binding.model !== "default" ? ` (${binding.model})` : ""}`
+					? `${p.agent} -> ${bindingLabel(binding)}`
 					: p.agent;
 			out.push(`  ${pad(id, pw)}  ${pad(agentCol, 22)}  filesystem: ${p.filesystem}`);
 		}

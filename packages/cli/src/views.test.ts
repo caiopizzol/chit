@@ -111,10 +111,15 @@ describe("formatInspect", () => {
 
 	test("shows each participant's agent binding (agent -> adapter[/model])", () => {
 		const out = formatInspect(
-			routineFrom(CONVERGE, { agents: { codex: { adapter: "codex" }, claude: { adapter: "claude", model: "sonnet" } } }),
+			routineFrom(CONVERGE, {
+				agents: {
+					codex: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+					claude: { adapter: "claude", model: "sonnet", effort: "max" },
+				},
+			}),
 		);
-		expect(out).toContain("codex -> codex"); // builder's agent "codex" backed by the codex adapter
-		expect(out).toContain("claude -> claude (sonnet)"); // critic's agent shows the non-default model
+		expect(out).toContain("codex -> codex:gpt-5.5 reasoning=xhigh");
+		expect(out).toContain("claude -> claude:sonnet effort=max");
 	});
 
 	test("surfaces effective limits, including explicit overrides and a \"none\" opt-out", () => {
@@ -333,9 +338,22 @@ describe("formatTrace", () => {
 	test("shows the resolved adapter/model on a call step (audit of what ran)", () => {
 		const withBinding: RunReceipt = {
 			...base,
-			steps: [{ id: "grill", kind: "call", participant: "griller", agent: "claude", adapter: "claude", model: "sonnet", status: "ok", startedAt: 0, elapsedMs: 5 }],
+			steps: [
+				{
+					id: "grill",
+					kind: "call",
+					participant: "griller",
+					agent: "claude",
+					adapter: "claude",
+					model: "sonnet",
+					effort: "max",
+					status: "ok",
+					startedAt: 0,
+					elapsedMs: 5,
+				},
+			],
 		};
-		expect(formatTrace(withBinding)).toContain("call griller (claude:sonnet)");
+		expect(formatTrace(withBinding)).toContain("call griller (claude:sonnet effort=max)");
 	});
 
 	test("failed: shows the error and no output line", () => {

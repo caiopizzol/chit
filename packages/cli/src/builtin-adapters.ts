@@ -15,6 +15,9 @@ export interface BuiltInAdapterSpec {
 	modelPatterns: RegExp[];
 }
 
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "max"] as const;
+export const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+
 export const BUILT_IN_ADAPTERS: Record<string, BuiltInAdapterSpec> = {
 	claude: { models: ["default", "sonnet", "opus", "haiku", "fable"], modelPatterns: [/^claude-/] },
 	codex: { models: ["default", "gpt-5.5", "gpt-5.4-mini"], modelPatterns: [/^gpt-/, /^o\d/] },
@@ -74,6 +77,8 @@ export function buildProfileSchema(): Record<string, unknown> {
 			properties: {
 				adapter: { const: adapter },
 				model: { type: "string", anyOf: [{ enum: spec.models }, ...spec.modelPatterns.map((re) => ({ pattern: re.source }))] },
+				...(adapter === "claude" && { effort: { enum: [...CLAUDE_EFFORTS] } }),
+				...(adapter === "codex" && { reasoningEffort: { enum: [...CODEX_REASONING_EFFORTS] } }),
 			},
 		});
 	}
