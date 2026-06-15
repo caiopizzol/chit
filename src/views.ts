@@ -116,7 +116,9 @@ export function formatInspect(routine: ResolvedRoutine): string {
 	const pnames = Object.keys(m.participants);
 	if (pnames.length > 0) {
 		const pw = Math.max(...pnames.map((n) => n.length));
-		out.push("participants:");
+		// The routine config calls these "agents" (each bound to a root profile); the runtime
+		// type still calls them participants. Show the user-facing name here.
+		out.push("agents:");
 		for (const [id, p] of Object.entries(m.participants)) {
 			const binding = routine.agents?.[p.agent];
 			const agentCol =
