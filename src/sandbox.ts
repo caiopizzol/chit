@@ -14,6 +14,10 @@ export interface Sandbox {
 	diff(): Promise<string>;
 	diffStat(): Promise<string>;
 	status(): Promise<string[]>;
+	// The exact, re-appliable patch of the sandbox's changes (a git binary diff, so binary
+	// files survive). Stored on a dry run so `chit apply <run-id>` can apply THIS reviewed
+	// patch later, instead of re-running the models and producing a different diff.
+	patch(): Promise<string>;
 	// Apply the sandbox's changes back to the origin tree. Caller gates this on confirm.
 	apply(): Promise<void>;
 	// Tear down without applying.
@@ -27,6 +31,11 @@ export interface SandboxFactory {
 	// commit the sandbox will start from (recorded on the receipt for a coherent apply later).
 	preflight(originCwd: string): Promise<{ baseCommit: string }>;
 	create(originCwd: string, runId: string): Promise<Sandbox>;
+	// Apply a stored patch (from a prior dry run) back to the origin, the `chit apply` path.
+	// Refuses unless HEAD still equals expectedBase AND the tree is clean AND the patch applies
+	// cleanly -- so the operator applies EXACTLY the diff they reviewed, onto the same base.
+	// Throws ApplyError (with operator-facing guidance) when a precondition fails.
+	applyPatch(originCwd: string, patch: string, expectedBase: string): Promise<void>;
 }
 
 // The origin has uncommitted changes, so a HEAD-based sandbox would run on a different tree
@@ -35,6 +44,15 @@ export class DirtyWorktreeError extends Error {
 	constructor(readonly detail: string) {
 		super(detail);
 		this.name = "DirtyWorktreeError";
+	}
+}
+
+// A stored patch could not be applied: HEAD moved off the base, the tree is dirty, or the
+// patch does not apply cleanly. Thrown by applyPatch; the CLI turns it into a clear message.
+export class ApplyError extends Error {
+	constructor(readonly detail: string) {
+		super(detail);
+		this.name = "ApplyError";
 	}
 }
 
@@ -59,6 +77,9 @@ export function fakeSandbox(opts: { workDir?: string; diff?: string } = {}): Fak
 		async status() {
 			return opts.diff ? ["M\tfile"] : [];
 		},
+		async patch() {
+			return opts.diff ?? "";
+		},
 		async apply() {
 			sb.applied = true;
 		},
@@ -69,7 +90,9 @@ export function fakeSandbox(opts: { workDir?: string; diff?: string } = {}): Fak
 	return sb;
 }
 
-export function fakeSandboxFactory(opts: { workDir?: string; diff?: string; dirty?: boolean; baseCommit?: string } = {}): SandboxFactory {
+export function fakeSandboxFactory(
+	opts: { workDir?: string; diff?: string; dirty?: boolean; baseCommit?: string; applyError?: string; onApplyPatch?: (patch: string, base: string) => void } = {},
+): SandboxFactory {
 	return {
 		async preflight() {
 			if (opts.dirty) throw new DirtyWorktreeError("Sandboxed runs start from HEAD. Commit or stash your changes first.");
@@ -77,6 +100,10 @@ export function fakeSandboxFactory(opts: { workDir?: string; diff?: string; dirt
 		},
 		async create() {
 			return fakeSandbox(opts);
+		},
+		async applyPatch(_originCwd, patch, base) {
+			if (opts.applyError) throw new ApplyError(opts.applyError);
+			opts.onApplyPatch?.(patch, base);
 		},
 	};
 }
@@ -108,6 +135,11 @@ async function gitOrThrow(args: string[], cwd: string, stdin?: string): Promise<
 // deps would fail. Symlink it from origin and keep it out of every diff/stage.
 const EXCLUDE_NM = ":(exclude)node_modules";
 
+// chit writes its own receipts/patches under .chit/. That bookkeeping is not the operator's
+// uncommitted work, so it must never count as a "dirty" tree in the preflight / apply checks
+// (a fresh repo where .chit is not gitignored would otherwise always look dirty).
+const DIRTY_CHECK_PATHSPEC = ["--", ".", ":(exclude).chit", EXCLUDE_NM];
+
 // The liveness lock filename inside a sandbox's parent dir. Holds the owning run's
 // pid so `chit cleanup` can tell an interrupted-run leftover from a live sandbox.
 const OWNER_LOCK = "owner.pid";
@@ -117,10 +149,10 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		const top = await git(["rev-parse", "--show-toplevel"], originCwd);
 		if (!top.ok) throw new Error(`a sandboxed run needs a git repository (cwd: ${originCwd})`);
 		const repoRoot = top.out.trim();
-		// `git status --porcelain` reports tracked changes AND untracked files (gitignored
-		// paths like node_modules / .chit are excluded). Any output means the tree differs
+		// `git status --porcelain` reports tracked changes AND untracked files; we exclude
+		// chit's own .chit/ (and node_modules). Any remaining output means the tree differs
 		// from HEAD, which is exactly what makes a HEAD-based sandbox incoherent.
-		const status = await gitOrThrow(["status", "--porcelain"], repoRoot);
+		const status = await gitOrThrow(["status", "--porcelain", ...DIRTY_CHECK_PATHSPEC], repoRoot);
 		if (status.trim() !== "") {
 			throw new DirtyWorktreeError("Sandboxed runs start from HEAD. Commit or stash your changes first.");
 		}
@@ -143,6 +175,12 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		}
 
 		const stage = () => gitOrThrow(["add", "-A", "--", ".", EXCLUDE_NM], workDir);
+		// The re-appliable patch: a staged binary diff. Used both to store (dry run) and to
+		// apply (--apply), so what `chit apply` re-plays is byte-identical to what ran here.
+		const binaryPatch = async () => {
+			await stage();
+			return gitOrThrow(["diff", "--cached", "--binary", "--", ".", EXCLUDE_NM], workDir);
+		};
 
 		return {
 			workDir,
@@ -159,9 +197,11 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 				const out = await gitOrThrow(["diff", "--cached", "--name-status", "--", ".", EXCLUDE_NM], workDir);
 				return out.split("\n").filter(Boolean);
 			},
+			async patch() {
+				return binaryPatch();
+			},
 			async apply() {
-				await stage();
-				const patch = await gitOrThrow(["diff", "--cached", "--binary", "--", ".", EXCLUDE_NM], workDir);
+				const patch = await binaryPatch();
 				if (patch.trim() === "") return;
 				const r = await git(["apply", "--whitespace=nowarn"], repoRoot, patch);
 				if (!r.ok) throw new Error(`could not apply sandbox changes to ${repoRoot}: ${r.err.trim()}`);
@@ -178,6 +218,27 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 				rmSync(parent, { recursive: true, force: true });
 			},
 		};
+	},
+	async applyPatch(originCwd, patch, expectedBase) {
+		const top = await git(["rev-parse", "--show-toplevel"], originCwd);
+		if (!top.ok) throw new Error(`apply needs a git repository (cwd: ${originCwd})`);
+		const repoRoot = top.out.trim();
+		// Same base: the patch was cut against expectedBase; if HEAD has moved, the diff the
+		// operator reviewed no longer describes a change onto THIS tree.
+		const head = (await gitOrThrow(["rev-parse", "HEAD"], repoRoot)).trim();
+		if (head !== expectedBase) {
+			throw new ApplyError(`this patch was made against ${expectedBase.slice(0, 12)} but HEAD is now ${head.slice(0, 12)}. Re-run the routine on the current tree.`);
+		}
+		// Clean tree: don't blend the reviewed patch with unrelated uncommitted edits (chit's
+		// own .chit/ bookkeeping is excluded, so it never blocks an apply).
+		const status = await gitOrThrow(["status", "--porcelain", ...DIRTY_CHECK_PATHSPEC], repoRoot);
+		if (status.trim() !== "") throw new ApplyError("your tree has uncommitted changes. Commit or stash them first.");
+		if (patch.trim() === "") throw new ApplyError("this run produced no changes to apply.");
+		// Dry-run the apply before committing to it, so a non-applying patch fails cleanly.
+		const check = await git(["apply", "--check", "--whitespace=nowarn"], repoRoot, patch);
+		if (!check.ok) throw new ApplyError(`the patch does not apply cleanly: ${check.err.trim()}`);
+		const r = await git(["apply", "--whitespace=nowarn"], repoRoot, patch);
+		if (!r.ok) throw new ApplyError(`could not apply: ${r.err.trim()}`);
 	},
 };
 

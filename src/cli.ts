@@ -17,8 +17,8 @@ import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
-import { DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
-import { saveReceipt, loadReceipt } from "./store.ts";
+import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
+import { loadPatch, loadReceipt, savePatch, saveReceipt } from "./store.ts";
 import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } from "./views.ts";
 
 export interface CliDeps {
@@ -54,6 +54,7 @@ const USAGE = `chit -- run declared routines
       --scope <name>                  name the run's scope (session grouping)
       --apply                         (sandboxed routines) apply the result to your tree; default is a dry run
   chit trace <run-id>                 show the receipt for a past run
+  chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
 
 A routine is a declared workflow. Its manifest is the source of truth: inputs,
@@ -217,6 +218,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				);
 				saveReceipt(deps.cwd, result.receipt);
 				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
+				if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "" && result.receipt.status === "completed") savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
 				const r = result.receipt;
 				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
 				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.kind === "ask" ? "ask" : s.routine}: ${s.status}`);
@@ -237,7 +239,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- sandbox discarded. re-run with --apply to keep these changes.  run ${r.runId}`,
+							: `\ndry run -- the diff above is saved. apply exactly it with: chit apply ${r.runId}   (or re-run with --apply)`,
 					);
 					return 0;
 				}
@@ -274,6 +276,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					args.scope !== undefined ? { scope: args.scope } : {},
 				);
 				saveReceipt(deps.cwd, result.receipt);
+				// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
+				if (result.receipt.status === "converged" && result.patch.trim() !== "") savePatch(deps.cwd, result.receipt.runId, result.patch);
 				const r = result.receipt;
 				deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
 				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
@@ -285,7 +289,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					deps.out(
 						result.applied
 							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- sandbox discarded. re-run with --apply to keep these changes.  run ${r.runId}`,
+							: `\ndry run -- the diff above is saved. apply exactly it with: chit apply ${r.runId}   (or re-run with --apply)`,
 					);
 					return 0;
 				}
@@ -343,6 +347,31 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const id = rest[0];
 			if (id === undefined) return fail(deps, "trace needs a run id");
 			deps.out(formatTrace(loadReceipt(deps.cwd, id)));
+			return 0;
+		}
+
+		if (command === "apply") {
+			// Apply EXACTLY the patch a prior dry run produced (and the operator reviewed),
+			// rather than re-running the models. The sandbox gate checks base + clean tree.
+			const id = rest[0];
+			if (id === undefined) return fail(deps, "apply needs a run id");
+			const receipt = loadReceipt(deps.cwd, id); // throws a clear error if the run is unknown
+			const base = "baseCommit" in receipt ? receipt.baseCommit : undefined;
+			if (base === undefined) return fail(deps, `run ${JSON.stringify(id)} is not a sandboxed run, so there is nothing to apply`);
+			const patch = loadPatch(deps.cwd, id);
+			if (patch === undefined || patch.trim() === "") {
+				return fail(deps, `run ${JSON.stringify(id)} has no stored patch to apply (it produced no changes, or did not converge)`);
+			}
+			try {
+				await deps.sandboxFactory.applyPatch(deps.cwd, patch, base);
+			} catch (e) {
+				if (e instanceof ApplyError) {
+					deps.err(e.detail);
+					return 1;
+				}
+				throw e;
+			}
+			deps.out(`applied run ${id} to ${deps.cwd}.  (chit trace ${id})`);
 			return 0;
 		}
 

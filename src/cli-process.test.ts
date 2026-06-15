@@ -4,7 +4,7 @@
 // adapter-registry wiring, and the no-config / unknown-command paths an operator hits.
 // The deterministic cases need no model; one guarded case runs a real routine.
 
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -121,6 +121,63 @@ describe("CLI process: the real binary (no model)", () => {
 		const no = run(["run", "settle", "--input", "answer=no"], cwd);
 		expect(no.code).toBe(1);
 		expect(no.err).toMatch(/did-not-converge/);
+	});
+
+	// The full review gate through the real binary, no model: a check that writes a file gives a
+	// real diff. A dry run stores the exact patch and leaves the tree untouched; `chit apply`
+	// re-plays that patch onto the real tree. (A model-less stand-in for grill -> ... -> impl.)
+	test("dry-run stores a patch that `chit apply` re-plays to the real tree (no model)", () => {
+		const cwd = tmp();
+		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
+		sh("git init -q && git config user.email t@t.co && git config user.name t");
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { manifestPath: "writer.json" } }, agents: {} }));
+		writeFileSync(
+			join(cwd, "writer.json"),
+			JSON.stringify({
+				id: "writer",
+				inputs: {},
+				steps: [{ id: "make", check: [{ command: "sh", args: ["-c", "echo hello-from-check > out.txt"] }] }],
+				repeat: { until: "checks-pass", maxIterations: 1 },
+			}),
+		);
+		sh("git add -A && git commit -q -m init");
+
+		// dry run: converges, stores a patch, does NOT touch the origin
+		const dry = run(["run", "writer"], cwd);
+		expect(dry.code).toBe(0);
+		expect(dry.out).toMatch(/chit apply run-/);
+		expect(existsSync(join(cwd, "out.txt"))).toBe(false); // dry-run discarded the sandbox
+		const runId = dry.out.match(/chit apply (run-[a-f0-9]+)/)?.[1];
+		expect(runId).toBeDefined();
+
+		// apply: re-plays exactly the stored patch onto the real tree
+		const applied = run(["apply", runId as string], cwd);
+		expect(applied.code).toBe(0);
+		expect(applied.out).toContain(`applied run ${runId}`);
+		expect(existsSync(join(cwd, "out.txt"))).toBe(true);
+		expect(readFileSync(join(cwd, "out.txt"), "utf-8").trim()).toBe("hello-from-check");
+	});
+
+	test("a sandboxed run refuses a dirty origin (preflight), through the real binary", () => {
+		const cwd = tmp();
+		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
+		sh("git init -q && git config user.email t@t.co && git config user.name t");
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { manifestPath: "writer.json" } }, agents: {} }));
+		writeFileSync(
+			join(cwd, "writer.json"),
+			JSON.stringify({
+				id: "writer",
+				inputs: {},
+				steps: [{ id: "make", check: [{ command: "sh", args: ["-c", "true"] }] }],
+				repeat: { until: "checks-pass", maxIterations: 1 },
+			}),
+		);
+		sh("git add -A && git commit -q -m init");
+		writeFileSync(join(cwd, "dirty.txt"), "uncommitted\n"); // dirty the origin
+
+		const r = run(["run", "writer"], cwd);
+		expect(r.code).toBe(1);
+		expect(r.err).toMatch(/Commit or stash/);
 	});
 });
 

@@ -39,3 +39,23 @@ export function loadReceipt(cwd: string, runId: string): AnyReceipt {
 	}
 	return JSON.parse(readFileSync(path, "utf-8")) as AnyReceipt;
 }
+
+// A sandboxed run's exact diff, stored beside its receipt so `chit apply <run-id>` can
+// re-play the reviewed patch without re-running the models (which would yield a different
+// diff). Only written when there is something to apply (a converged sandboxed run).
+export function patchPath(cwd: string, runId: string): string {
+	return join(runsDir(cwd), `${runId}.patch`);
+}
+
+export function savePatch(cwd: string, runId: string, patch: string): string {
+	const dir = runsDir(cwd);
+	mkdirSync(dir, { recursive: true });
+	const path = patchPath(cwd, runId);
+	writeFileSync(path, patch, "utf-8");
+	return path;
+}
+
+export function loadPatch(cwd: string, runId: string): string | undefined {
+	const path = patchPath(cwd, runId);
+	return existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+}

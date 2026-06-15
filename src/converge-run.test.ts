@@ -39,6 +39,7 @@ function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {})
 				sandbox = fakeSandbox({ workDir: "/sandbox", diff: over.sandboxDiff ?? "diff body" });
 				return sandbox;
 			},
+			async applyPatch() {},
 		},
 		adapter,
 		checkRunner: over.checkRunner ?? fakeCheckRunner(),
@@ -105,7 +106,7 @@ describe("runConvergeInSandbox", () => {
 		};
 		let t = 0;
 		const deps: ConvergeRunDeps = {
-			sandboxFactory: { async preflight() { return { baseCommit: "base0000" }; }, async create() { return sb; } },
+			sandboxFactory: { async preflight() { return { baseCommit: "base0000" }; }, async create() { return sb; }, async applyPatch() {} },
 			adapter: fakeAdapter((req) => `${req.agent}|${req.prompt}`),
 			checkRunner: fakeCheckRunner(),
 			cwd: "/origin",

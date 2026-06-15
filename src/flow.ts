@@ -170,6 +170,9 @@ export interface FlowRunResult {
 	// One-shot sub-receipts contain their final output body; the flow receipt does not.
 	subReceipts: Array<RunReceipt | ConvergeReceipt>;
 	terminalDiff?: string;
+	// The terminal sandboxed step's exact patch, for the CLI to store so `chit apply <flowRunId>`
+	// re-plays the reviewed diff.
+	terminalPatch?: string;
 	applied?: boolean;
 	// Set when the terminal sandboxed step converged but its write-back failed.
 	applyError?: string;
@@ -215,6 +218,7 @@ export async function runFlow(
 	let failed: string | undefined;
 	let cancelled = false;
 	let terminalDiff: string | undefined;
+	let terminalPatch: string | undefined;
 	let applied: boolean | undefined;
 	let applyError: string | undefined;
 
@@ -298,6 +302,7 @@ export async function runFlow(
 			);
 			subReceipts.push(r.receipt);
 			terminalDiff = r.diff;
+			terminalPatch = r.patch;
 			applied = r.applied;
 			if (r.applyError !== undefined) applyError = r.applyError;
 			ctx.steps[step.id] = { output: r.diff };
@@ -392,6 +397,7 @@ export async function runFlow(
 		},
 		subReceipts,
 		...(terminalDiff !== undefined && { terminalDiff }),
+		...(terminalPatch !== undefined && { terminalPatch }),
 		...(applied !== undefined && { applied }),
 		...(applyError !== undefined && { applyError }),
 	};

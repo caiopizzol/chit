@@ -475,6 +475,26 @@ file), NOT stdout (stdout carries progress + a token-count footer).
   `codex` CLI in ~68s. 238 pass + 11 skip, typecheck clean. (Gate item 5, --apply-after-checks, is the same
   adapter-agnostic git-apply path already proven; the codex dogfood would exercise it end to end.)
 
+## Increment 23: a coherent base + a real review gate (preflight, then `chit apply`)
+Two related fixes to make a sandboxed feature-flow trustworthy, both verified against the code/git first:
+- PREFLIGHT (increment 23a): a sandbox is a `git worktree` from HEAD, so uncommitted origin changes are
+  invisible to the run and could be clobbered on apply (confirmed empirically: a worktree from HEAD lacks an
+  uncommitted edit). Any write-capable run now refuses a dirty origin upfront -- "Commit or stash your changes
+  first." -- and records the base commit on the receipt. The check runs in the CLI BEFORE any model call, so a
+  flow fails fast (before grill/plan), not after. A SandboxFactory.preflight seam (real git-status; fake clean
+  or dirty on demand). The two acceptance tests that provoked an apply conflict via a dirty origin now assert
+  the refusal -- that conflict can't happen anymore; the apply-failure handling stays covered by a fake test.
+- `chit apply <run-id>` (increment 23b): the old "re-run with --apply" RE-RAN the models, producing a
+  DIFFERENT diff than the one reviewed. Now a dry run stores the exact patch (.chit/runs/<id>.patch, a git
+  binary diff); `chit apply <id>` re-plays THAT patch through a gate -- same base (HEAD still == the recorded
+  base), clean tree, and `git apply --check` -- so you apply exactly what you reviewed. SandboxFactory gains
+  patch() + applyPatch(); ApplyError carries operator guidance. The dry-run hint now points at `chit apply`.
+- CAUGHT BY THE E2E: the dirty-check must exclude chit's own `.chit/` state dir (untracked receipts would
+  otherwise mark a fresh repo dirty and block apply). Excluded via a `:(exclude).chit` pathspec, verified.
+- VERIFIED: +9 tests incl. a model-less real-binary E2E of the FULL cycle (a check writes a file -> dry run
+  stores the patch + leaves origin clean -> `chit apply` re-plays it onto the real tree) and a real-binary
+  dirty-refusal. 246 pass + 11 skip, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs

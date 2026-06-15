@@ -37,6 +37,9 @@ export interface ConvergeRunDeps {
 export interface ConvergeRunResult {
 	receipt: ConvergeReceipt;
 	diff: string;
+	// The exact, re-appliable patch (a staged binary diff) of the run's changes. The CLI
+	// stores it beside the receipt so `chit apply <run-id>` re-plays this reviewed diff.
+	patch: string;
 	applied: boolean;
 	// Set when the run converged but the write-back (sandbox.apply) failed. The receipt
 	// carries the same message, so an apply failure still leaves durable evidence.
@@ -76,6 +79,8 @@ export async function runConvergeInSandbox(
 		const diff = await sandbox.diff();
 		const diffStat = await sandbox.diffStat();
 		const status = await sandbox.status();
+		// The exact patch, captured BEFORE the sandbox is discarded, for `chit apply`.
+		const patch = await sandbox.patch();
 
 		let applyError: string | undefined;
 		if (receipt.status === "converged" && deps.apply) {
@@ -98,6 +103,7 @@ export async function runConvergeInSandbox(
 				...(applyError !== undefined && { applyError }),
 			},
 			diff,
+			patch,
 			applied,
 			...(applyError !== undefined && { applyError }),
 		};

@@ -82,14 +82,20 @@ beforeAll(() => {
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-function harness(over: { adapter?: Adapter; checkRunner?: CheckRunner; sandboxDiff?: string } = {}) {
+function harness(
+	over: { adapter?: Adapter; checkRunner?: CheckRunner; sandboxDiff?: string; applyError?: string; onApplyPatch?: (patch: string, base: string) => void } = {},
+) {
 	const out: string[] = [];
 	const err: string[] = [];
 	const deps: CliDeps = {
 		cwd: dir,
 		adapters: { claude: over.adapter ?? fakeAdapter() },
 		checkRunner: over.checkRunner ?? fakeCheckRunner(),
-		sandboxFactory: fakeSandboxFactory({ diff: over.sandboxDiff ?? "diff --git a/x b/x" }),
+		sandboxFactory: fakeSandboxFactory({
+			diff: over.sandboxDiff ?? "diff --git a/x b/x",
+			...(over.applyError !== undefined && { applyError: over.applyError }),
+			...(over.onApplyPatch !== undefined && { onApplyPatch: over.onApplyPatch }),
+		}),
 		now: () => 0,
 		newRunId: () => "run-test",
 		out: (l) => out.push(l),
@@ -157,7 +163,8 @@ describe("chit run", () => {
 		const text = out.join("\n");
 		expect(text).toContain("run converged");
 		expect(text).toContain("diff --git");
-		expect(text).toMatch(/dry run -- sandbox discarded/);
+		expect(text).toMatch(/dry run/);
+		expect(text).toMatch(/chit apply run-test/); // the hint points at the reviewable apply gate
 	});
 
 	test("applies a converged converge run with --apply", async () => {
@@ -214,6 +221,51 @@ describe("chit trace", () => {
 		const { deps, err } = harness();
 		expect(await runCli(["trace", "nope"], deps)).toBe(1);
 		expect(err.join("\n")).toMatch(/no run "nope" found/);
+	});
+});
+
+describe("chit apply", () => {
+	test("a dry run stores a patch that `chit apply` re-plays exactly (same base)", async () => {
+		let appliedPatch: string | undefined;
+		let appliedBase: string | undefined;
+		const { deps, out } = harness({
+			sandboxDiff: "PATCH-BODY",
+			onApplyPatch: (patch, base) => {
+				appliedPatch = patch;
+				appliedBase = base;
+			},
+		});
+		expect(await runCli(["run", "impl-review", "--input", "task=x"], deps)).toBe(0); // dry run stores the patch
+		expect(await runCli(["apply", "run-test"], deps)).toBe(0);
+		expect(out.join("\n")).toContain("applied run run-test");
+		expect(appliedPatch).toBe("PATCH-BODY"); // exactly the reviewed diff, not a re-roll
+		expect(appliedBase).toBe("base0000"); // applied onto the recorded base
+	});
+
+	test("refuses an unknown run id", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["apply", "ghost"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/no run "ghost" found/);
+	});
+
+	test("has nothing to apply for a text (non-sandboxed) run", async () => {
+		const { deps, err } = harness({ adapter: fakeAdapter(() => "report") });
+		await runCli(["run", "feature-griller", "--input", "idea=x"], deps); // a text run: no base, no patch
+		expect(await runCli(["apply", "run-test"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/not a sandboxed run/);
+	});
+
+	test("surfaces the apply gate's refusal (e.g. HEAD moved off the base)", async () => {
+		const { deps, err } = harness({ sandboxDiff: "PATCH", applyError: "this patch was made against abc123 but HEAD is now def456. Re-run the routine on the current tree." });
+		await runCli(["run", "impl-review", "--input", "task=x"], deps); // stores a patch
+		expect(await runCli(["apply", "run-test"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/HEAD is now def456/);
+	});
+
+	test("needs a run id", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["apply"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/apply needs a run id/);
 	});
 });
 
