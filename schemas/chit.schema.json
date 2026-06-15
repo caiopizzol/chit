@@ -5,152 +5,379 @@
 	"description": "Authoring schema for a Chit config file. Semantic rules are still enforced by the Chit parser and resolver.",
 	"type": "object",
 	"additionalProperties": false,
-	"required": ["routines"],
+	"required": [
+		"routines"
+	],
 	"properties": {
-		"$schema": { "type": "string" },
+		"$schema": {
+			"type": "string"
+		},
 		"profiles": {
 			"type": "object",
 			"description": "Preferred name for local adapter/model bindings.",
-			"additionalProperties": { "$ref": "#/$defs/profile" }
+			"additionalProperties": {
+				"$ref": "#/$defs/profile"
+			}
 		},
 		"agents": {
 			"type": "object",
 			"description": "Compatibility alias for profiles.",
-			"additionalProperties": { "$ref": "#/$defs/profile" }
+			"additionalProperties": {
+				"$ref": "#/$defs/profile"
+			}
 		},
 		"routines": {
 			"type": "object",
-			"additionalProperties": { "$ref": "#/$defs/routineEntry" }
+			"additionalProperties": {
+				"$ref": "#/$defs/routineEntry"
+			}
 		}
 	},
 	"$defs": {
 		"profile": {
+			"description": "A model binding: a built-in adapter shorthand/object, or a custom adapter in object form.",
 			"oneOf": [
 				{
 					"type": "string",
-					"description": "Adapter or adapter:model shorthand, for example codex:gpt-5.5 or gemini."
+					"pattern": "^claude(:(default|sonnet|opus|haiku|fable|claude-.*))?$",
+					"description": "claude profile shorthand (e.g. \"claude\" or \"claude:<model>\")"
 				},
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": ["adapter"],
+					"required": [
+						"adapter"
+					],
 					"properties": {
-						"adapter": { "type": "string", "minLength": 1 },
-						"model": { "type": "string" }
+						"adapter": {
+							"const": "claude"
+						},
+						"model": {
+							"type": "string",
+							"anyOf": [
+								{
+									"enum": [
+										"default",
+										"sonnet",
+										"opus",
+										"haiku",
+										"fable"
+									]
+								},
+								{
+									"pattern": "^claude-"
+								}
+							]
+						}
+					}
+				},
+				{
+					"type": "string",
+					"pattern": "^codex(:(default|gpt-5\\.5|gpt-5\\.4-mini|gpt-.*|o\\d.*))?$",
+					"description": "codex profile shorthand (e.g. \"codex\" or \"codex:<model>\")"
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": [
+						"adapter"
+					],
+					"properties": {
+						"adapter": {
+							"const": "codex"
+						},
+						"model": {
+							"type": "string",
+							"anyOf": [
+								{
+									"enum": [
+										"default",
+										"gpt-5.5",
+										"gpt-5.4-mini"
+									]
+								},
+								{
+									"pattern": "^gpt-"
+								},
+								{
+									"pattern": "^o\\d"
+								}
+							]
+						}
+					}
+				},
+				{
+					"type": "string",
+					"pattern": "^gemini(:(default|gemini-.*))?$",
+					"description": "gemini profile shorthand (e.g. \"gemini\" or \"gemini:<model>\")"
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": [
+						"adapter"
+					],
+					"properties": {
+						"adapter": {
+							"const": "gemini"
+						},
+						"model": {
+							"type": "string",
+							"anyOf": [
+								{
+									"enum": [
+										"default"
+									]
+								},
+								{
+									"pattern": "^gemini-"
+								}
+							]
+						}
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": [
+						"adapter"
+					],
+					"properties": {
+						"adapter": {
+							"type": "string",
+							"minLength": 1,
+							"not": {
+								"enum": [
+									"claude",
+									"codex",
+									"gemini"
+								]
+							}
+						},
+						"model": {
+							"type": "string"
+						}
 					}
 				}
 			]
 		},
 		"routineEntry": {
 			"oneOf": [
-				{ "type": "string", "description": "Path to a routine file." },
-				{ "$ref": "#/$defs/fileRoutine" },
-				{ "$ref": "#/$defs/inlineRoutine" }
+				{
+					"type": "string",
+					"description": "Path to a routine file."
+				},
+				{
+					"$ref": "#/$defs/fileRoutine"
+				},
+				{
+					"$ref": "#/$defs/inlineRoutine"
+				}
 			]
 		},
 		"fileRoutine": {
 			"type": "object",
 			"additionalProperties": false,
 			"oneOf": [
-				{ "required": ["file"] },
-				{ "required": ["manifestPath"] }
+				{
+					"required": [
+						"file"
+					]
+				},
+				{
+					"required": [
+						"manifestPath"
+					]
+				}
 			],
 			"properties": {
-				"file": { "type": "string", "minLength": 1 },
-				"manifestPath": { "type": "string", "minLength": 1 },
-				"description": { "type": "string" },
-				"defaults": { "$ref": "#/$defs/defaults" }
+				"file": {
+					"type": "string",
+					"minLength": 1
+				},
+				"manifestPath": {
+					"type": "string",
+					"minLength": 1
+				},
+				"description": {
+					"type": "string"
+				},
+				"defaults": {
+					"$ref": "#/$defs/defaults"
+				}
 			}
 		},
 		"inlineRoutine": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": ["steps"],
+			"required": [
+				"steps"
+			],
 			"properties": {
-				"id": { "type": "string" },
-				"description": { "type": "string" },
-				"input": { "type": "string", "minLength": 1 },
+				"id": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"input": {
+					"type": "string",
+					"minLength": 1
+				},
 				"inputs": {
 					"oneOf": [
 						{
 							"type": "array",
-							"items": { "type": "string", "minLength": 1 }
+							"items": {
+								"type": "string",
+								"minLength": 1
+							}
 						},
 						{
 							"type": "object",
-							"additionalProperties": { "$ref": "#/$defs/inputSpec" }
+							"additionalProperties": {
+								"$ref": "#/$defs/inputSpec"
+							}
 						}
 					]
 				},
 				"agents": {
 					"type": "object",
-					"additionalProperties": { "$ref": "#/$defs/participant" }
+					"additionalProperties": {
+						"$ref": "#/$defs/participant"
+					}
 				},
 				"participants": {
 					"type": "object",
-					"additionalProperties": { "$ref": "#/$defs/participant" }
+					"additionalProperties": {
+						"$ref": "#/$defs/participant"
+					}
 				},
 				"steps": {
 					"type": "array",
 					"minItems": 1,
-					"items": { "$ref": "#/$defs/step" }
+					"items": {
+						"$ref": "#/$defs/step"
+					}
 				},
-				"repeat": { "$ref": "#/$defs/repeat" },
-				"output": { "type": "string" },
-				"limits": { "$ref": "#/$defs/limits" },
-				"defaults": { "$ref": "#/$defs/defaults" }
+				"repeat": {
+					"$ref": "#/$defs/repeat"
+				},
+				"output": {
+					"type": "string"
+				},
+				"limits": {
+					"$ref": "#/$defs/limits"
+				},
+				"defaults": {
+					"$ref": "#/$defs/defaults"
+				}
 			}
 		},
 		"inputSpec": {
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
-				"type": { "const": "string" },
-				"required": { "type": "boolean" },
-				"description": { "type": "string" }
+				"type": {
+					"const": "string"
+				},
+				"required": {
+					"type": "boolean"
+				},
+				"description": {
+					"type": "string"
+				}
 			}
 		},
 		"participant": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": ["instructions", "filesystem"],
+			"required": [
+				"instructions",
+				"filesystem"
+			],
 			"properties": {
-				"profile": { "type": "string", "minLength": 1 },
-				"agent": { "type": "string", "minLength": 1 },
-				"instructions": { "type": "string", "minLength": 1 },
+				"profile": {
+					"type": "string",
+					"minLength": 1
+				},
+				"agent": {
+					"type": "string",
+					"minLength": 1
+				},
+				"instructions": {
+					"type": "string",
+					"minLength": 1
+				},
 				"filesystem": {
-					"enum": ["none", "read-only", "read-write"]
+					"enum": [
+						"none",
+						"read-only",
+						"read-write"
+					]
 				}
 			}
 		},
 		"step": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": ["id"],
+			"required": [
+				"id"
+			],
 			"properties": {
-				"id": { "type": "string", "minLength": 1 },
-				"call": { "type": "string", "minLength": 1 },
-				"prompt": { "type": "string", "minLength": 1 },
-				"format": { "type": "string", "minLength": 1 },
-				"check": { "$ref": "#/$defs/check" },
-				"routine": { "type": "string", "minLength": 1 },
+				"id": {
+					"type": "string",
+					"minLength": 1
+				},
+				"call": {
+					"type": "string",
+					"minLength": 1
+				},
+				"prompt": {
+					"type": "string",
+					"minLength": 1
+				},
+				"format": {
+					"type": "string",
+					"minLength": 1
+				},
+				"check": {
+					"$ref": "#/$defs/check"
+				},
+				"routine": {
+					"type": "string",
+					"minLength": 1
+				},
 				"inputs": {
 					"type": "object",
-					"additionalProperties": { "type": "string" }
+					"additionalProperties": {
+						"type": "string"
+					}
 				},
-				"ask": { "type": "string", "minLength": 1 }
+				"ask": {
+					"type": "string",
+					"minLength": 1
+				}
 			}
 		},
 		"check": {
 			"oneOf": [
-				{ "type": "string", "minLength": 1 },
+				{
+					"type": "string",
+					"minLength": 1
+				},
 				{
 					"type": "array",
 					"minItems": 1,
 					"items": {
 						"oneOf": [
-							{ "type": "string", "minLength": 1 },
-							{ "$ref": "#/$defs/checkCommand" }
+							{
+								"type": "string",
+								"minLength": 1
+							},
+							{
+								"$ref": "#/$defs/checkCommand"
+							}
 						]
 					}
 				}
@@ -159,40 +386,64 @@
 		"checkCommand": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": ["command"],
+			"required": [
+				"command"
+			],
 			"properties": {
-				"command": { "type": "string", "minLength": 1 },
+				"command": {
+					"type": "string",
+					"minLength": 1
+				},
 				"args": {
 					"type": "array",
-					"items": { "type": "string" }
+					"items": {
+						"type": "string"
+					}
 				}
 			}
 		},
 		"repeat": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": ["until"],
+			"required": [
+				"until"
+			],
 			"properties": {
-				"until": { "$ref": "#/$defs/repeatUntil" },
-				"maxIterations": { "type": "integer", "minimum": 1 }
+				"until": {
+					"$ref": "#/$defs/repeatUntil"
+				},
+				"maxIterations": {
+					"type": "integer",
+					"minimum": 1
+				}
 			}
 		},
 		"repeatUntil": {
 			"oneOf": [
-				{ "const": "checks-pass" },
-				{ "$ref": "#/$defs/stepEquals" },
+				{
+					"const": "checks-pass"
+				},
+				{
+					"$ref": "#/$defs/stepEquals"
+				},
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": ["all"],
+					"required": [
+						"all"
+					],
 					"properties": {
 						"all": {
 							"type": "array",
 							"minItems": 1,
 							"items": {
 								"oneOf": [
-									{ "const": "checks-pass" },
-									{ "$ref": "#/$defs/stepEquals" }
+									{
+										"const": "checks-pass"
+									},
+									{
+										"$ref": "#/$defs/stepEquals"
+									}
 								]
 							}
 						}
@@ -203,31 +454,51 @@
 		"stepEquals": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": ["step", "equals"],
+			"required": [
+				"step",
+				"equals"
+			],
 			"properties": {
-				"step": { "type": "string", "minLength": 1 },
-				"equals": { "type": "string" }
+				"step": {
+					"type": "string",
+					"minLength": 1
+				},
+				"equals": {
+					"type": "string"
+				}
 			}
 		},
 		"limits": {
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
-				"callTimeoutMinutes": { "$ref": "#/$defs/minutes" },
-				"runTimeoutMinutes": { "$ref": "#/$defs/minutes" }
+				"callTimeoutMinutes": {
+					"$ref": "#/$defs/minutes"
+				},
+				"runTimeoutMinutes": {
+					"$ref": "#/$defs/minutes"
+				}
 			}
 		},
 		"defaults": {
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
-				"maxIterations": { "type": "integer", "minimum": 1 }
+				"maxIterations": {
+					"type": "integer",
+					"minimum": 1
+				}
 			}
 		},
 		"minutes": {
 			"oneOf": [
-				{ "type": "number", "exclusiveMinimum": 0 },
-				{ "const": "none" }
+				{
+					"type": "number",
+					"exclusiveMinimum": 0
+				},
+				{
+					"const": "none"
+				}
 			]
 		}
 	}

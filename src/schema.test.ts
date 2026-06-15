@@ -3,6 +3,7 @@ import type { AnySchema } from "ajv";
 import Ajv2020 from "ajv/dist/2020";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildProfileSchema } from "./builtin-adapters.ts";
 import { parseConfig } from "./config.ts";
 
 function readJson(path: string): unknown {
@@ -71,5 +72,38 @@ describe("schemas/chit.schema.json", () => {
 		const ok = validate(raw);
 		expect(ok, ajv.errorsText(validate.errors)).toBe(true);
 		expect(() => parseConfig(raw, "inline.json")).not.toThrow();
+	});
+});
+
+describe("profile validation: built-in adapter/model pairs (schema)", () => {
+	const ajv = new Ajv2020({ allErrors: true });
+	const validate = ajv.compile(schema);
+	const okSchema = (profile: unknown): boolean => validate({ profiles: { x: profile }, routines: {} }) === true;
+
+	test("the schema's profile def is generated from the adapter registry (no drift)", () => {
+		expect((schema as { $defs: { profile: unknown } }).$defs.profile).toEqual(buildProfileSchema());
+	});
+
+	test("rejects impossible built-in adapter/model pairs", () => {
+		expect(okSchema("codex:sonnet")).toBe(false); // sonnet is a claude model
+		expect(okSchema("claude:gpt-5.5")).toBe(false); // gpt is codex
+		expect(okSchema({ adapter: "codex", model: "sonnet" })).toBe(false);
+		expect(okSchema("gemini:opus")).toBe(false);
+	});
+
+	test("rejects a custom adapter in shorthand (object form is required for custom)", () => {
+		expect(okSchema("my-adapter:whatever")).toBe(false);
+		expect(okSchema("my-adapter")).toBe(false);
+	});
+
+	test("accepts valid built-in pairs, custom object form, and default/omitted model", () => {
+		expect(okSchema("codex:gpt-5.5")).toBe(true);
+		expect(okSchema("claude:sonnet")).toBe(true);
+		expect(okSchema("claude:claude-opus-4-8")).toBe(true); // full name via the prefix pattern
+		expect(okSchema("gemini:gemini-3-flash")).toBe(true);
+		expect(okSchema("gemini")).toBe(true);
+		expect(okSchema({ adapter: "claude", model: "default" })).toBe(true);
+		expect(okSchema({ adapter: "codex" })).toBe(true); // omitted model
+		expect(okSchema({ adapter: "my-adapter", model: "whatever" })).toBe(true); // custom, opaque model
 	});
 });

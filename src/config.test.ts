@@ -162,3 +162,23 @@ describe("parseConfig -- agents", () => {
 		expect(() => parse({ ...VALID, agents: { x: { adapter: "claude", model: 5 } } })).toThrow(/`model` must be a string/);
 	});
 });
+
+describe("parseConfig -- built-in adapter/model validation (the runtime guard)", () => {
+	test("rejects an impossible built-in pair before execution (shorthand and object)", () => {
+		expect(() => parse({ ...VALID, profiles: { x: "codex:sonnet" } })).toThrow(/model "sonnet" is not valid for adapter "codex"/);
+		expect(() => parse({ ...VALID, profiles: { x: "claude:gpt-5.5" } })).toThrow(/model "gpt-5.5" is not valid for adapter "claude"/);
+		expect(() => parse({ ...VALID, agents: { x: { adapter: "gemini", model: "opus" } } })).toThrow(/not valid for adapter "gemini"/);
+	});
+
+	test("rejects a custom adapter in shorthand (must use the object form)", () => {
+		expect(() => parse({ ...VALID, profiles: { x: "my-adapter:m" } })).toThrow(/unknown adapter "my-adapter"/);
+	});
+
+	test("accepts valid built-in pairs, full names, default, and omitted model", () => {
+		expect(() => parse({ ...VALID, profiles: { a: "codex:gpt-5.5", b: "claude:sonnet", c: "claude:claude-opus-4-8", d: "gemini", e: "claude:default" } })).not.toThrow();
+	});
+
+	test("leaves a custom adapter's model opaque in the object form", () => {
+		expect(() => parse({ ...VALID, agents: { x: { adapter: "my-adapter", model: "whatever" } } })).not.toThrow();
+	});
+});

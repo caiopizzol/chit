@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { BUILT_IN_ADAPTER_IDS, isBuiltInAdapter, isStructurallyValidModel } from "./builtin-adapters.ts";
 import { type Manifest, parseManifest } from "./manifest.ts";
 
 export interface RoutineConfig {
@@ -161,11 +162,30 @@ function parseDefaults(raw: unknown, where: string): RoutineConfig["defaults"] {
 	return mi !== undefined ? { maxIterations: mi } : {};
 }
 
+// A built-in adapter's model must structurally belong to it (codex:sonnet is rejected here,
+// before a run, not deep in execution). "default"/omitted always pass, and a custom adapter's
+// model is opaque. This is structural only -- account access is `chit doctor`'s job.
+function validateBuiltInModel(adapter: string, model: string | undefined, where: string): void {
+	if (model === undefined || model === "default" || !isBuiltInAdapter(adapter)) return;
+	if (!isStructurallyValidModel(adapter, model)) {
+		throw new ConfigError(where, `model "${model}" is not valid for adapter "${adapter}"`);
+	}
+}
+
 function parseAgentConfig(entry: unknown, where: string): AgentConfig {
 	if (typeof entry === "string") {
 		const [adapter, ...rest] = entry.split(":");
 		if (!adapter) throw new ConfigError(where, "profile string must start with an adapter name");
 		const model = rest.join(":");
+		// Shorthand is reserved for built-in adapters; a custom adapter must use the object form,
+		// so the structural model rules are never silently skipped for an unknown adapter.
+		if (!isBuiltInAdapter(adapter)) {
+			throw new ConfigError(
+				where,
+				`unknown adapter "${adapter}" (built-in: ${BUILT_IN_ADAPTER_IDS.join(", ")}). A custom adapter must use the object form { "adapter": "${adapter}", "model": "..." }`,
+			);
+		}
+		validateBuiltInModel(adapter, model || undefined, where);
 		return { adapter, ...(model ? { model } : {}) };
 	}
 	if (!isObject(entry)) throw new ConfigError(where, "must be an object or adapter string");
@@ -178,5 +198,6 @@ function parseAgentConfig(entry: unknown, where: string): AgentConfig {
 	if (entry.model !== undefined && typeof entry.model !== "string") {
 		throw new ConfigError(where, "`model` must be a string");
 	}
+	validateBuiltInModel(entry.adapter, typeof entry.model === "string" ? entry.model : undefined, where);
 	return { adapter: entry.adapter, ...(typeof entry.model === "string" && { model: entry.model }) };
 }
