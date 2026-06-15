@@ -1,0 +1,22 @@
+{
+	"id": "grill",
+	"description": "Question an idea before planning or coding.",
+	"inputs": {
+		"idea": { "type": "string", "required": true, "description": "the idea to question" }
+	},
+	"participants": {
+		"griller": {
+			"agent": "griller",
+			"instructions": "You run a short read-only grilling session. Surface missing decisions and the smallest useful first slice. Do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "out",
+			"call": "griller",
+			"prompt": "Idea:\n{{ inputs.idea }}\n\nReturn concise markdown with: Questions, Risks, Suggested first slice."
+		}
+	],
+	"output": "out"
+}

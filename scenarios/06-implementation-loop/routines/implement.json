@@ -1,0 +1,36 @@
+{
+	"id": "implement",
+	"description": "Build, review, and verify in a sandbox.",
+	"inputs": {
+		"task": { "type": "string", "required": true, "description": "the change to make" }
+	},
+	"participants": {
+		"builder": {
+			"agent": "builder",
+			"instructions": "Implement a small, well-scoped change. Use CommonJS when writing JavaScript files.",
+			"filesystem": "read-write"
+		},
+		"critic": {
+			"agent": "critic",
+			"instructions": "Review the diff for correctness and scope. You do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nPrior review:\n{{ steps.critique.output }}\n\nFailing checks:\n{{ steps.verify.output }}"
+		},
+		{
+			"id": "critique",
+			"call": "critic",
+			"prompt": "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nGive concise feedback. Do not edit files."
+		},
+		{
+			"id": "verify",
+			"check": [{ "command": "node", "args": ["-e", "console.log('ok')"] }]
+		}
+	],
+	"repeat": { "until": "checks-pass", "maxIterations": 3 }
+}

@@ -3,17 +3,19 @@
 A from-scratch proof of one idea: **a routine is a declared workflow.** Chit can
 **list** it, **inspect** it, **run** it, and show **what happened**. CLI only.
 
-It reuses Chit's *concepts* (manifests, participants, receipts, content digests) but
+It reuses Chit's *concepts* (routines, agents, receipts, content digests) but
 shares no code with the main runtime, so the product shape can be judged on its own.
 
 ## The model
 
 One shape. You describe the work; **how it runs is derived**, never chosen.
 
-- A **routine** is the one concept you configure: a name pointing at a manifest.
-- A **manifest** is the source of truth: inputs, participants, ordered steps, an
-  optional `repeat`, and optional `limits` (time bounds). Config never restates any of this.
-- **Steps** are `call` (ask a participant), `format` (assemble text), `check` (run a
+- A **routine** is the one concept you configure: a declared workflow, usually inline in
+  `chit.config.json`, extractable to a file when it grows.
+- **Profiles** are local adapter/model bindings, e.g. `"builder": "codex:gpt-5.5"`.
+- **Routine agents** are the actors inside one routine. Each points at a profile and
+  declares instructions plus filesystem permission.
+- **Steps** are `call` (ask a routine agent), `format` (assemble text), `check` (run a
   command), `routine` (run another routine), or `ask` (pause for one operator answer,
   fed forward like any step output). "build"/"critique" are just step ids,
   "builder"/"critic" just participant names -- there is no built-in implementer/reviewer.
@@ -23,10 +25,8 @@ One shape. You describe the work; **how it runs is derived**, never chosen.
   written to the receipt. Gates belong in text routines or compositions (where execution
   pauses cleanly between steps), not inside a sandboxed/looping routine; put the gate in the
   composition that calls it instead.
-- **Agents are bound in config, not baked in.** A participant names an agent id; the config's
-  `agents` registry says what that id IS -- which adapter backs it and which model. So you
-  define your own builder, critic, planner, etc., and point each at the agent/model you want,
-  without Chit knowing those roles. The manifest is the workflow; the config is the local binding.
+- **Profiles are bound in config, not baked in.** You define your own builder, critic,
+  planner, etc., and point each at the adapter/model you want, without Chit knowing those roles.
 - **Behavior is derived from the shape -- there is no `policy` field:**
 
 ```
@@ -56,7 +56,7 @@ chit trace <run-id>                the receipt for a past run
 
 ```bash
 bun install                       # only needed for `bun run typecheck`
-bun run src/index.ts init my-review            # scaffold a runnable routine + config
+bun run src/index.ts init my-review            # scaffold a runnable inline routine + config
 bun run src/index.ts routines
 bun run src/index.ts inspect feature-griller
 bun run src/index.ts run feature-griller --input idea="add dark mode"
@@ -69,7 +69,8 @@ picked per agent in config (no API keys, no HTTP). Tests inject fakes, so they s
 
 ## Boundaries (kept on purpose)
 
-- **Manifest is authoritative.** Inputs live in the manifest, never duplicated into config.
+- **The routine is authoritative.** Inputs, agents, steps, repeat, and limits live in the
+  routine. The routine can be inline in config or extracted with `{ "file": "routines/name.json" }`.
 - **No fixed roles.** A looping routine is ordered steps (`call` / `check`); the roles are just
   step and participant names you choose.
 - **Sandboxed routines run live, safely.** A routine that writes or runs checks executes inside a
@@ -102,7 +103,7 @@ claude, gemini, and codex, each picked per agent in config.)
 
 ```
 src/manifest.ts     the one routine shape: parser + behavior derivation (no policy field)
-src/config.ts       thin config: routine names + manifest paths, plus the agents registry (id -> adapter/model)
+src/config.ts       authoring config: profiles, inline routines, file-backed routines
 src/routine.ts      resolve a routine: config + bound manifest + digest
 src/inputs.ts       validate operator inputs
 src/template.ts     {{ inputs.x }} / {{ steps.y.output }} / {{ iteration }} / {{ diff }}
@@ -116,7 +117,7 @@ src/converge-run.ts orchestrates a sandboxed run in a worktree (apply-on-confirm
 src/flow.ts         composition: run sub-routines in order, pass outputs forward
 src/store.ts        receipts on disk under .chit/runs (internal per-kind tag)
 src/views.ts        routine list / inspect / trace rendering
-src/scaffold.ts     `chit init` templates: write a runnable routine + register it
+src/scaffold.ts     `chit init` templates: write a runnable inline routine + register it
 src/cli.ts          the verbs: init / routines / inspect / run / trace / cleanup
 src/index.ts        the bin
 ```

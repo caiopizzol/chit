@@ -1,0 +1,10 @@
+{
+	"id": "clarify",
+	"description": "Ask one question and echo the answer.",
+	"inputs": {},
+	"steps": [
+		{ "id": "answer", "ask": "What should I call this run?" },
+		{ "id": "out", "format": "Got it: {{ steps.answer.output }}" }
+	],
+	"output": "out"
+}

@@ -1,0 +1,17 @@
+{
+	"id": "plan",
+	"inputs": {
+		"brief": { "type": "string", "required": true }
+	},
+	"participants": {
+		"planner": {
+			"agent": "planner",
+			"instructions": "Turn a grilled idea into a short implementation plan. Do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "out", "call": "planner", "prompt": "Grilled idea:\n{{ inputs.brief }}\n\nReturn a short plan with verification." }
+	],
+	"output": "out"
+}

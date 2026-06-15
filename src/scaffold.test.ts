@@ -24,12 +24,13 @@ describe("scaffoldRoutine", () => {
 		const cwd = tmp();
 		const res = scaffoldRoutine(cwd, "review", "text");
 		expect(res.createdConfig).toBe(true);
-		expect(res.manifestPath).toBe("examples/review.json");
-		expect(existsSync(join(cwd, "examples/review.json"))).toBe(true);
+		expect(res.routineRef).toBe("chit.config.json#routines.review");
+		expect(existsSync(join(cwd, "examples/review.json"))).toBe(false);
 
 		// registered in the config and resolves to a valid text routine
 		const config = loadConfig(cwd);
-		expect(config.routines.review?.manifestPath).toBe("examples/review.json");
+		expect(config.routines.review?.manifestPath).toBe("chit.config.json#routines.review");
+		expect(config.agents).toEqual({ claude: { adapter: "claude" } });
 		const routine = resolveRoutine(config, "review", cwd);
 		expect(kindLabel(routine.manifest)).toBe("text");
 
@@ -79,7 +80,20 @@ describe("scaffoldRoutine", () => {
 		writeFileSync(join(cwd, "chit.config.json"), '{"routines":[]}'); // routines is an array, not an object
 		expect(() => scaffoldRoutine(cwd, "new-one", "text")).toThrow(/invalid|routines/i);
 		// nothing was written: no manifest, and the bad config is left exactly as it was
-		expect(existsSync(join(cwd, "examples/new-one.json"))).toBe(false);
 		expect(readFileSync(join(cwd, "chit.config.json"), "utf-8")).toBe('{"routines":[]}');
+	});
+
+	test("adds inline routines to an existing old-style agents registry", () => {
+		const cwd = tmp();
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ agents: { claude: { adapter: "claude", model: "default" } }, routines: {} }));
+		scaffoldRoutine(cwd, "review", "text");
+		const raw = JSON.parse(readFileSync(join(cwd, "chit.config.json"), "utf-8")) as {
+			agents?: Record<string, unknown>;
+			profiles?: Record<string, unknown>;
+			routines: Record<string, unknown>;
+		};
+		expect(raw.profiles).toBeUndefined();
+		expect(raw.agents).toEqual({ claude: { adapter: "claude", model: "default" } });
+		expect(raw.routines.review).toMatchObject({ input: "topic" });
 	});
 });

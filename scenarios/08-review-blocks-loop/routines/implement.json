@@ -1,0 +1,25 @@
+{
+	"id": "implement",
+	"description": "Build until checks pass and the reviewer returns pass.",
+	"inputs": {
+		"task": { "type": "string", "required": true }
+	},
+	"participants": {
+		"builder": {
+			"agent": "builder",
+			"instructions": "Implement the task and revise from reviewer feedback.",
+			"filesystem": "read-write"
+		},
+		"critic": {
+			"agent": "critic",
+			"instructions": "Approve only correct, in-scope diffs. You do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nReview feedback:\n{{ steps.critique.output }}\nCheck feedback:\n{{ steps.verify.output }}" },
+		{ "id": "critique", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nIf this is correct and in scope, reply with exactly: pass\nOtherwise provide one concrete issue and do not write pass." },
+		{ "id": "verify", "check": [{ "command": "node", "args": ["-e", "console.log('ok')"] }] }
+	],
+	"repeat": { "until": { "all": ["checks-pass", { "step": "critique", "equals": "pass" }] }, "maxIterations": 3 }
+}

@@ -350,7 +350,7 @@ describe("chit init", () => {
 		const { deps, out } = initDeps(cwd);
 
 		expect(await runCli(["init", "myrev"], deps)).toBe(0);
-		expect(out.join("\n")).toContain("created examples/myrev.json");
+		expect(out.join("\n")).toContain("created chit.config.json#routines.myrev");
 
 		out.length = 0;
 		expect(await runCli(["routines"], deps)).toBe(0);

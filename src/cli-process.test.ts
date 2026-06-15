@@ -32,8 +32,9 @@ describe("CLI process: the real binary (no model)", () => {
 		const cwd = tmp();
 		let r = run(["init", "myrev"], cwd);
 		expect(r.code).toBe(0);
-		expect(r.out).toContain("created examples/myrev.json");
+		expect(r.out).toContain("created chit.config.json#routines.myrev");
 		expect(existsSync(join(cwd, "chit.config.json"))).toBe(true);
+		expect(existsSync(join(cwd, "examples/myrev.json"))).toBe(false);
 
 		r = run(["routines"], cwd);
 		expect(r.code).toBe(0);

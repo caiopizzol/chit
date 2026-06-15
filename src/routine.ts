@@ -51,25 +51,33 @@ export function resolveRoutine(
 			`unknown routine ${JSON.stringify(id)}${known.length > 0 ? ` (known: ${known.join(", ")})` : " (none configured)"}`,
 		);
 	}
-	const manifestAbs = isAbsolute(entry.manifestPath)
-		? entry.manifestPath
-		: resolve(cwd, entry.manifestPath);
-
 	let text: string;
-	try {
-		text = readFile(manifestAbs);
-	} catch (e) {
-		throw new RoutineError(`could not read manifest for ${JSON.stringify(id)} at ${entry.manifestPath}: ${(e as Error).message}`);
-	}
+	let manifest: Manifest;
+	let manifestAbs: string;
+	if (entry.manifest !== undefined) {
+		manifest = entry.manifest;
+		text = entry.manifestText ?? `${JSON.stringify(entry.manifest, null, "\t")}\n`;
+		manifestAbs = resolve(cwd, "chit.config.json");
+	} else {
+		manifestAbs = isAbsolute(entry.manifestPath)
+			? entry.manifestPath
+			: resolve(cwd, entry.manifestPath);
 
-	let raw: unknown;
-	try {
-		raw = JSON.parse(text);
-	} catch (e) {
-		throw new RoutineError(`manifest for ${JSON.stringify(id)} is not valid JSON: ${(e as Error).message}`);
-	}
+		try {
+			text = readFile(manifestAbs);
+		} catch (e) {
+			throw new RoutineError(`could not read manifest for ${JSON.stringify(id)} at ${entry.manifestPath}: ${(e as Error).message}`);
+		}
 
-	const manifest: Manifest = parseManifest(raw, entry.manifestPath);
+		let raw: unknown;
+		try {
+			raw = JSON.parse(text);
+		} catch (e) {
+			throw new RoutineError(`manifest for ${JSON.stringify(id)} is not valid JSON: ${(e as Error).message}`);
+		}
+
+		manifest = parseManifest(raw, entry.manifestPath);
+	}
 
 	// Bind each participant's agent id to its config entry, so the run knows which
 	// adapter/model backs it. A participant that references an undefined agent fails HERE,

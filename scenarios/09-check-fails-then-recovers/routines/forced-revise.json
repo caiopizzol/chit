@@ -1,0 +1,24 @@
+{
+	"id": "forced-revise",
+	"description": "Force a recovery loop from check output.",
+	"inputs": {},
+	"participants": {
+		"builder": {
+			"agent": "builder",
+			"instructions": "Create or edit files so the check passes. Revise from failing check output.",
+			"filesystem": "read-write"
+		}
+	},
+	"steps": [
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Create or fix src/secret.txt so the check passes.\n\nIteration {{ iteration }}.\nOn iteration 1, make a plausible guess. If the check failed, the output below reveals the exact required line:\n{{ steps.verify.output }}"
+		},
+		{
+			"id": "verify",
+			"check": [{ "command": "grep", "args": ["-qxF", "open-sesame-42", "src/secret.txt"] }]
+		}
+	],
+	"repeat": { "until": "checks-pass", "maxIterations": 4 }
+}

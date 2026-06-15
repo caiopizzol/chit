@@ -1,0 +1,18 @@
+{
+	"routines": {
+		"panel-review": {
+			"manifestPath": "routines/panel-review.json",
+			"description": "Produce a recommendation to hand into a later run."
+		},
+		"implement-with-context": {
+			"manifestPath": "routines/implement-with-context.json",
+			"description": "Use manually pasted prior-run context."
+		}
+	},
+	"agents": {
+		"explorer": { "adapter": "gemini", "model": "default" },
+		"judge": { "adapter": "claude", "model": "sonnet" },
+		"builder": { "adapter": "codex", "model": "gpt-5.5" },
+		"critic": { "adapter": "gemini", "model": "default" }
+	}
+}

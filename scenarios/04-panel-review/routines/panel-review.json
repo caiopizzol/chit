@@ -1,0 +1,30 @@
+{
+	"id": "panel-review",
+	"description": "Run two read-only opinions, then have a judge choose the stronger one.",
+	"inputs": {
+		"question": { "type": "string", "required": true, "description": "question or proposal to review" }
+	},
+	"participants": {
+		"explorer": {
+			"agent": "fast",
+			"instructions": "Give the simplest useful answer. Inspect files read-only if useful.",
+			"filesystem": "read-only"
+		},
+		"critic": {
+			"agent": "critic",
+			"instructions": "Challenge assumptions, missing cases, and scope creep. Inspect files read-only if useful.",
+			"filesystem": "read-only"
+		},
+		"judge": {
+			"agent": "judge",
+			"instructions": "Compare the prior answers and write the final recommendation. Be concise.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "first", "call": "explorer", "prompt": "{{ inputs.question }}" },
+		{ "id": "second", "call": "critic", "prompt": "Question:\n{{ inputs.question }}\n\nFirst answer:\n{{ steps.first.output }}" },
+		{ "id": "final", "call": "judge", "prompt": "Question:\n{{ inputs.question }}\n\nAnswer A:\n{{ steps.first.output }}\n\nAnswer B:\n{{ steps.second.output }}\n\nReturn the best recommendation." }
+	],
+	"output": "final"
+}

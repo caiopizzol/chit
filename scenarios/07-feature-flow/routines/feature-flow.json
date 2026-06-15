@@ -1,0 +1,12 @@
+{
+	"id": "feature-flow",
+	"inputs": {
+		"idea": { "type": "string", "required": true }
+	},
+	"steps": [
+		{ "id": "grill", "routine": "grill", "inputs": { "idea": "{{ inputs.idea }}" } },
+		{ "id": "plan", "routine": "plan", "inputs": { "brief": "{{ steps.grill.output }}" } },
+		{ "id": "approve", "ask": "Review the plan before implementing:\n\n{{ steps.plan.output }}\n\nAdjustments or scope limits? (blank = proceed)" },
+		{ "id": "impl", "routine": "implement", "inputs": { "task": "{{ steps.plan.output }}\n\nOperator adjustments:\n{{ steps.approve.output }}" } }
+	]
+}

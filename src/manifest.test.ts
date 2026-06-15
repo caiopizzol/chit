@@ -72,6 +72,41 @@ describe("parseManifest -- one shape, no policy", () => {
 		expect(kindLabel(m)).toBe("text");
 	});
 
+	test("parses the authoring shorthand: input, agents, profile, and string check", () => {
+		const m = parse({
+			id: "implement",
+			input: "task",
+			agents: {
+				builder: { profile: "codex", instructions: "Build.", filesystem: "read-write" },
+			},
+			steps: [
+				{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
+				{ id: "verify", check: "bun test" },
+			],
+			repeat: { until: "checks-pass", maxIterations: 3 },
+		});
+		expect(m.inputs).toEqual({ task: { type: "string", required: true } });
+		expect(m.participants.builder).toEqual({
+			id: "builder",
+			agent: "codex",
+			instructions: "Build.",
+			filesystem: "read-write",
+		});
+		expect(m.steps.at(-1)).toEqual({
+			id: "verify",
+			kind: "check",
+			checks: [{ command: "sh", args: ["-c", "bun test"] }],
+		});
+	});
+
+	test("parses inputs as an array of required string inputs", () => {
+		const m = parse({ ...TEXT, input: undefined, inputs: ["idea", "context"] });
+		expect(m.inputs).toEqual({
+			idea: { type: "string", required: true },
+			context: { type: "string", required: true },
+		});
+	});
+
 	test("parses a loop execution routine; checks + repeat make it sandboxed", () => {
 		const m = parse(LOOP);
 		expect(m.repeat).toEqual({ until: "checks-pass", maxIterations: 3 });
@@ -146,6 +181,18 @@ describe("parseManifest -- rules", () => {
 	test("rejects an unknown filesystem permission", () => {
 		const participants = { griller: { agent: "claude", instructions: "x", filesystem: "root" } };
 		expect(() => parse({ ...TEXT, participants })).toThrow(/`filesystem` must be one of/);
+	});
+
+	test("rejects alias conflicts", () => {
+		expect(() => parse({ ...TEXT, input: "idea" })).toThrow(/`input` and `inputs` are aliases/);
+		expect(() => parse({ ...TEXT, agents: {} })).toThrow(/`agents` and `participants` are aliases/);
+		expect(() =>
+			parse({
+				id: "x",
+				agents: { p: { agent: "a", profile: "b", instructions: "x", filesystem: "read-only" } },
+				steps: [{ id: "out", call: "p", prompt: "x" }],
+			}),
+		).toThrow(/`agent` and `profile` are aliases/);
 	});
 
 	test("rejects a non-positive repeat maxIterations", () => {

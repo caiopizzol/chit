@@ -1,0 +1,9 @@
+{
+	"routines": {
+		"clarify": {
+			"manifestPath": "routines/clarify.json",
+			"description": "Ask one operator question and format the answer."
+		}
+	},
+	"agents": {}
+}

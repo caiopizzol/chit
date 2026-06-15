@@ -46,7 +46,7 @@ export interface CliDeps {
 
 const USAGE = `chit -- run declared routines
 
-  chit init [<name>] [--template text|loop|check]   scaffold a runnable routine (default: a text "example")
+  chit init [<name>] [--template text|loop|check]   scaffold a runnable inline routine
   chit routines                       list the routines declared in chit.config.json
   chit inspect <routine>              show what a routine needs and what it will run
   chit run <routine> [opts]           run a routine; a sandboxed routine is a DRY RUN (review, then chit apply)
@@ -57,10 +57,9 @@ const USAGE = `chit -- run declared routines
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
 
-A routine is a declared workflow. Its manifest is the source of truth: inputs,
-participants, ordered steps, and an optional repeat. Config only names it. How it
-runs is derived from the shape -- routine steps compose, a repeat loops, and a
-read-write participant or a check runs it in a sandbox.`;
+A routine is a declared workflow. The config can keep small routines inline or
+point a routine at a file. How it runs is derived from the shape -- routine steps
+compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.`;
 
 function parseRunArgs(rest: string[]): {
 	id?: string;
@@ -133,14 +132,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const args = parseInitArgs(rest);
 			if (args.error) return fail(deps, args.error);
 			const result = scaffoldRoutine(deps.cwd, args.name, args.template);
-			deps.out(`created ${result.manifestPath}  (${result.template} routine)`);
+			deps.out(`created ${result.routineRef}  (${result.template} routine)`);
 			deps.out(`${result.createdConfig ? "created" : "updated"} chit.config.json`);
 			deps.out("");
 			deps.out("next:");
 			deps.out(`  chit inspect ${args.name}`);
 			const runHint = `  chit run ${args.name}${result.inputHint ? ` ${result.inputHint}` : ""}`;
 			deps.out(args.template === "text" ? runHint : `${runHint}            # dry run by default; review, then: chit apply <run-id>`);
-			deps.out(`\nedit ${result.manifestPath} to make it yours (prompts, participants, checks).`);
+			deps.out(`\nedit ${result.routineRef} to make it yours (prompts, agents, checks).`);
 			return 0;
 		}
 

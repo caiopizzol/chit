@@ -1,0 +1,13 @@
+{
+	"routines": {
+		"implement": {
+			"manifestPath": "routines/implement.json",
+			"description": "Build, review, and verify in a sandbox.",
+			"defaults": { "maxIterations": 3 }
+		}
+	},
+	"agents": {
+		"builder": { "adapter": "codex", "model": "gpt-5.5" },
+		"critic": { "adapter": "gemini", "model": "default" }
+	}
+}

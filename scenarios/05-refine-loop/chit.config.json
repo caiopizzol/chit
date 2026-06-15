@@ -1,0 +1,12 @@
+{
+	"routines": {
+		"refine": {
+			"manifestPath": "routines/refine.json",
+			"description": "Draft and critique text until the critic says ship."
+		}
+	},
+	"agents": {
+		"writer": { "adapter": "claude", "model": "default" },
+		"critic": { "adapter": "gemini", "model": "default" }
+	}
+}

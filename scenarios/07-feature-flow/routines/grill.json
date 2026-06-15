@@ -1,0 +1,17 @@
+{
+	"id": "grill",
+	"inputs": {
+		"idea": { "type": "string", "required": true }
+	},
+	"participants": {
+		"griller": {
+			"agent": "griller",
+			"instructions": "Question the idea and suggest the smallest sensible default. Do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "out", "call": "griller", "prompt": "Idea:\n{{ inputs.idea }}\n\nAsk the 2-3 sharpest questions and state the smallest sensible default." }
+	],
+	"output": "out"
+}

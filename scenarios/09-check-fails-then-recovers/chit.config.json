@@ -1,0 +1,11 @@
+{
+	"routines": {
+		"forced-revise": {
+			"manifestPath": "routines/forced-revise.json",
+			"description": "Force a recovery loop from check output."
+		}
+	},
+	"agents": {
+		"builder": { "adapter": "claude", "model": "default" }
+	}
+}

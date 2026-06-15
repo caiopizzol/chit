@@ -177,6 +177,14 @@ function requireKeys(raw: Record<string, unknown>, allowed: Set<string>, source:
 
 function parseInputs(raw: unknown, source: string): Record<string, InputSpec> {
 	if (raw === undefined) return {};
+	if (Array.isArray(raw)) {
+		const out: Record<string, InputSpec> = {};
+		for (const [i, name] of raw.entries()) {
+			if (typeof name !== "string" || !name) throw new ManifestError(`${source}.inputs[${i}]`, "must be a non-empty input name");
+			out[name] = { type: "string", required: true };
+		}
+		return out;
+	}
 	if (!isObject(raw)) throw new ManifestError(source, "`inputs` must be an object");
 	const out: Record<string, InputSpec> = {};
 	for (const [name, spec] of Object.entries(raw)) {
@@ -206,9 +214,13 @@ function parseParticipants(raw: unknown, source: string): Record<string, Partici
 	for (const [id, spec] of Object.entries(raw)) {
 		const where = `${source}.participants.${id}`;
 		if (!isObject(spec)) throw new ManifestError(where, "must be an object");
-		requireKeys(spec, new Set(["agent", "instructions", "filesystem"]), where);
-		if (typeof spec.agent !== "string" || !spec.agent) {
-			throw new ManifestError(where, "`agent` must be a non-empty string");
+		requireKeys(spec, new Set(["agent", "profile", "instructions", "filesystem"]), where);
+		if (spec.agent !== undefined && spec.profile !== undefined) {
+			throw new ManifestError(where, "`agent` and `profile` are aliases; use one of them");
+		}
+		const agent = spec.profile ?? spec.agent;
+		if (typeof agent !== "string" || !agent) {
+			throw new ManifestError(where, "`profile` must be a non-empty string");
 		}
 		if (typeof spec.instructions !== "string" || !spec.instructions) {
 			throw new ManifestError(where, "`instructions` must be a non-empty string");
@@ -216,17 +228,25 @@ function parseParticipants(raw: unknown, source: string): Record<string, Partici
 		if (typeof spec.filesystem !== "string" || !FILESYSTEMS.has(spec.filesystem as Filesystem)) {
 			throw new ManifestError(where, `\`filesystem\` must be one of: ${[...FILESYSTEMS].join(", ")}`);
 		}
-		out[id] = { id, agent: spec.agent, instructions: spec.instructions, filesystem: spec.filesystem as Filesystem };
+		out[id] = { id, agent, instructions: spec.instructions, filesystem: spec.filesystem as Filesystem };
 	}
 	return out;
 }
 
 function parseCheckArray(raw: unknown, where: string): Check[] {
+	if (typeof raw === "string") {
+		if (!raw) throw new ManifestError(where, "`check` string must not be empty");
+		return [{ command: "sh", args: ["-c", raw] }];
+	}
 	if (!Array.isArray(raw) || raw.length === 0) {
-		throw new ManifestError(where, "`check` must be a non-empty array of commands");
+		throw new ManifestError(where, "`check` must be a command string or a non-empty array of commands");
 	}
 	return raw.map((c, i) => {
 		const at = `${where}[${i}]`;
+		if (typeof c === "string") {
+			if (!c) throw new ManifestError(at, "check command string must not be empty");
+			return { command: "sh", args: ["-c", c] };
+		}
 		if (!isObject(c)) throw new ManifestError(at, "must be an object");
 		requireKeys(c, new Set(["command", "args"]), at);
 		if (typeof c.command !== "string" || !c.command) throw new ManifestError(at, "`command` must be a non-empty string");
@@ -295,10 +315,17 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	if (raw.description !== undefined && typeof raw.description !== "string") {
 		throw new ManifestError(source, "`description` must be a string");
 	}
-	requireKeys(raw, new Set(["id", "description", "inputs", "participants", "steps", "repeat", "output", "limits"]), source);
+	requireKeys(raw, new Set(["id", "description", "input", "inputs", "agents", "participants", "steps", "repeat", "output", "limits"]), source);
 
-	const inputs = parseInputs(raw.inputs, source);
-	const participants = parseParticipants(raw.participants, source);
+	if (raw.input !== undefined && raw.inputs !== undefined) {
+		throw new ManifestError(source, "`input` and `inputs` are aliases; use one of them");
+	}
+	const inputRaw = raw.input !== undefined ? [raw.input] : raw.inputs;
+	const inputs = parseInputs(inputRaw, source);
+	if (raw.agents !== undefined && raw.participants !== undefined) {
+		throw new ManifestError(source, "`agents` and `participants` are aliases; use one of them");
+	}
+	const participants = parseParticipants(raw.agents ?? raw.participants, source);
 	const steps = parseSteps(raw.steps, source, participants);
 
 	// Rule 1: no step mixing -- `routine` steps (a composition) OR call/format/check

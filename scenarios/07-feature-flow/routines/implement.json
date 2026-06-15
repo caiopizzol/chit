@@ -1,0 +1,24 @@
+{
+	"id": "implement",
+	"inputs": {
+		"task": { "type": "string", "required": true }
+	},
+	"participants": {
+		"builder": {
+			"agent": "builder",
+			"instructions": "Implement a small scoped change. Use CommonJS for JavaScript files.",
+			"filesystem": "read-write"
+		},
+		"critic": {
+			"agent": "critic",
+			"instructions": "Review the diff for correctness and scope. You write nothing.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nReview:\n{{ steps.critique.output }}\nChecks:\n{{ steps.verify.output }}" },
+		{ "id": "critique", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nIf correct and in scope, reply exactly: pass\nOtherwise provide one concrete issue and do not write pass." },
+		{ "id": "verify", "check": [{ "command": "node", "args": ["-e", "console.log('ok')"] }] }
+	],
+	"repeat": { "until": { "all": ["checks-pass", { "step": "critique", "equals": "pass" }] }, "maxIterations": 3 }
+}

@@ -1,0 +1,13 @@
+{
+	"routines": {
+		"panel-review": {
+			"manifestPath": "routines/panel-review.json",
+			"description": "Two reviewers and a judge compare an answer."
+		}
+	},
+	"agents": {
+		"fast": { "adapter": "gemini", "model": "default" },
+		"critic": { "adapter": "claude", "model": "haiku" },
+		"judge": { "adapter": "claude", "model": "sonnet" }
+	}
+}

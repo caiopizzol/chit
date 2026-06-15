@@ -1,0 +1,23 @@
+{
+	"id": "panel-review",
+	"inputs": {
+		"question": { "type": "string", "required": true }
+	},
+	"participants": {
+		"explorer": {
+			"agent": "explorer",
+			"instructions": "Answer with the smallest useful first slice.",
+			"filesystem": "read-only"
+		},
+		"judge": {
+			"agent": "judge",
+			"instructions": "Turn the answer into a concise recommendation.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "first", "call": "explorer", "prompt": "{{ inputs.question }}" },
+		{ "id": "final", "call": "judge", "prompt": "Question:\n{{ inputs.question }}\n\nCandidate answer:\n{{ steps.first.output }}\n\nReturn the recommendation to hand into the next run." }
+	],
+	"output": "final"
+}

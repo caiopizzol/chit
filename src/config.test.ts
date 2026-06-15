@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError, parseConfig } from "./config.ts";
+import { resolveRoutine } from "./routine.ts";
 
 const VALID = {
 	routines: {
@@ -10,6 +11,36 @@ const VALID = {
 		"impl-review": {
 			manifestPath: "examples/impl-review.json",
 			defaults: { maxIterations: 3 },
+		},
+	},
+};
+
+const INLINE = {
+	profiles: {
+		builder: "codex:gpt-5.5",
+		critic: { adapter: "gemini" },
+	},
+	routines: {
+		implement: {
+			input: "task",
+			agents: {
+				builder: {
+					profile: "builder",
+					instructions: "Build.",
+					filesystem: "read-write",
+				},
+				critic: {
+					profile: "critic",
+					instructions: "Review.",
+					filesystem: "read-only",
+				},
+			},
+			steps: [
+				{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
+				{ id: "review", call: "critic", prompt: "{{ diff }}" },
+				{ id: "verify", check: "bun test" },
+			],
+			repeat: { until: "checks-pass", maxIterations: 3 },
 		},
 	},
 };
@@ -35,17 +66,16 @@ describe("parseConfig", () => {
 	});
 
 	test("rejects a missing manifestPath", () => {
-		expect(() => parse({ routines: { ok: { description: "x" } } })).toThrow(/`manifestPath` must be/);
+		expect(() => parse({ routines: { ok: { description: "x" } } })).toThrow(/`steps` must be an array/);
 	});
 
 	test("rejects a manifestPath that escapes with ..", () => {
-		expect(() => parse({ routines: { ok: { manifestPath: "../secrets.json" } } })).toThrow(/must not contain/);
+		expect(() => parse({ routines: { ok: { file: "../secrets.json" } } })).toThrow(/must not contain/);
 	});
 
-	test("rejects an unknown per-routine field (no inputs in config)", () => {
-		expect(() => parse({ routines: { ok: { manifestPath: "m.json", inputs: {} } } })).toThrow(
-			/unknown field "inputs"/,
-		);
+	test("parses file as the friendlier alias for manifestPath", () => {
+		const c = parse({ routines: { ok: { file: "m.json" } } });
+		expect(c.routines.ok?.manifestPath).toBe("m.json");
 	});
 
 	test("rejects a non-positive default maxIterations", () => {
@@ -63,6 +93,38 @@ describe("parseConfig", () => {
 			expect((e as ConfigError).source).toBe("chit.config.json");
 		}
 	});
+
+	test("parses an inline routine from the config file", () => {
+		const c = parse(INLINE);
+		const r = c.routines.implement;
+		expect(r?.manifestPath).toBe("chit.config.json#routines.implement");
+		expect(r?.manifest?.inputs).toEqual({ task: { type: "string", required: true } });
+		expect(r?.manifest?.participants.builder).toEqual({
+			id: "builder",
+			agent: "builder",
+			instructions: "Build.",
+			filesystem: "read-write",
+		});
+		expect(r?.manifest?.steps.at(-1)).toEqual({
+			id: "verify",
+			kind: "check",
+			checks: [{ command: "sh", args: ["-c", "bun test"] }],
+		});
+	});
+
+	test("an inline routine resolves without reading a manifest file", () => {
+		const c = parse(INLINE);
+		const r = resolveRoutine(c, "implement", "/tmp/project", () => {
+			throw new Error("should not read");
+		});
+		expect(r.manifestPath).toBe("chit.config.json#routines.implement");
+		expect(r.manifestAbs).toBe("/tmp/project/chit.config.json");
+		expect(r.digest).toStartWith("sha256:");
+		expect(r.agents).toEqual({
+			builder: { adapter: "codex", model: "gpt-5.5" },
+			critic: { adapter: "gemini" },
+		});
+	});
 });
 
 describe("parseConfig -- agents", () => {
@@ -73,6 +135,15 @@ describe("parseConfig -- agents", () => {
 	test("parses an agents registry (adapter + optional model)", () => {
 		const c = parse({ ...VALID, agents: { builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } } });
 		expect(c.agents).toEqual({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } });
+	});
+
+	test("parses profiles as the preferred name, including string shorthand", () => {
+		const c = parse({ ...VALID, profiles: { builder: "codex:gpt-5.5", critic: "gemini" } });
+		expect(c.agents).toEqual({ builder: { adapter: "codex", model: "gpt-5.5" }, critic: { adapter: "gemini" } });
+	});
+
+	test("rejects using both profiles and agents", () => {
+		expect(() => parse({ ...VALID, profiles: {}, agents: {} })).toThrow(/use one/);
 	});
 
 	test("rejects a non-object agents", () => {

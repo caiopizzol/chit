@@ -1,13 +1,15 @@
-// The config layer is deliberately thin: it NAMES routines and points each at a
-// manifest, plus optional run defaults. It never restates inputs, participants,
-// or steps -- that all lives in the manifest. This split is the product model:
-// "routines" is the one concept a user configures.
+// The config layer is deliberately thin: it names routines and binds model
+// profiles. A routine can be inline for first-run DX, or point at a separate
+// file once it grows. Both normalize to the same Manifest shape before runtime.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type Manifest, parseManifest } from "./manifest.ts";
 
 export interface RoutineConfig {
 	manifestPath: string;
+	manifest?: Manifest;
+	manifestText?: string;
 	description?: string;
 	defaults?: { maxIterations?: number };
 }
@@ -22,6 +24,8 @@ export interface AgentConfig {
 
 export interface ChitConfig {
 	routines: Record<string, RoutineConfig>;
+	// Internal normalized name. The authoring file may use `profiles` (preferred)
+	// or the older `agents` alias.
 	agents: Record<string, AgentConfig>;
 }
 
@@ -60,7 +64,7 @@ const ROUTINE_ID_RE = /^[a-z][a-z0-9-]*$/;
 export function parseConfig(raw: unknown, source: string): ChitConfig {
 	if (!isObject(raw)) throw new ConfigError(source, "config must be an object");
 	for (const k of Object.keys(raw)) {
-		if (k !== "routines" && k !== "agents") throw new ConfigError(source, `unknown field "${k}"`);
+		if (k !== "$schema" && k !== "routines" && k !== "agents" && k !== "profiles") throw new ConfigError(source, `unknown field "${k}"`);
 	}
 	if (!isObject(raw.routines)) throw new ConfigError(source, "`routines` must be an object");
 	const routines: Record<string, RoutineConfig> = {};
@@ -69,61 +73,110 @@ export function parseConfig(raw: unknown, source: string): ChitConfig {
 		if (!ROUTINE_ID_RE.test(id)) {
 			throw new ConfigError(where, "routine id must be kebab-case (start with a letter)");
 		}
-		if (!isObject(entry)) throw new ConfigError(where, "must be an object");
+		routines[id] = parseRoutineConfigEntry(id, entry, where);
+	}
+
+	const agents: Record<string, AgentConfig> = {};
+	if (raw.agents !== undefined && raw.profiles !== undefined) {
+		throw new ConfigError(source, "`profiles` and `agents` are aliases; use one of them");
+	}
+	const rawProfiles = raw.profiles ?? raw.agents;
+	if (rawProfiles !== undefined) {
+		const profileField = raw.profiles !== undefined ? "profiles" : "agents";
+		if (!isObject(rawProfiles)) throw new ConfigError(source, `\`${profileField}\` must be an object`);
+		for (const [id, entry] of Object.entries(rawProfiles)) {
+			const where = `${source}.${profileField}.${id}`;
+			agents[id] = parseAgentConfig(entry, where);
+		}
+	}
+
+	return { routines, agents };
+}
+
+function parseRoutineConfigEntry(id: string, entry: unknown, where: string): RoutineConfig {
+	if (typeof entry === "string") {
+		return fileRoutine(entry, where);
+	}
+	if (!isObject(entry)) throw new ConfigError(where, "must be an object or a file path string");
+
+	const hasFile = entry.file !== undefined || entry.manifestPath !== undefined;
+	if (hasFile) {
 		for (const k of Object.keys(entry)) {
-			if (!["manifestPath", "description", "defaults"].includes(k)) {
+			if (!["file", "manifestPath", "description", "defaults"].includes(k)) {
 				throw new ConfigError(where, `unknown field "${k}"`);
 			}
 		}
-		if (typeof entry.manifestPath !== "string" || !entry.manifestPath) {
-			throw new ConfigError(where, "`manifestPath` must be a non-empty string");
+		if (entry.file !== undefined && entry.manifestPath !== undefined) {
+			throw new ConfigError(where, "`file` and `manifestPath` are aliases; use one of them");
 		}
-		// Minimal path safety: a routine cannot reach outside the config's folder.
-		// (The hardened runtime does full repo-relative confinement; here we just
-		// refuse the obvious escape so a proof config stays self-contained.)
-		if (entry.manifestPath.includes("..")) {
-			throw new ConfigError(where, "`manifestPath` must not contain `..`");
-		}
-		if (entry.description !== undefined && typeof entry.description !== "string") {
-			throw new ConfigError(where, "`description` must be a string");
-		}
-		let defaults: RoutineConfig["defaults"];
-		if (entry.defaults !== undefined) {
-			if (!isObject(entry.defaults)) throw new ConfigError(where, "`defaults` must be an object");
-			for (const k of Object.keys(entry.defaults)) {
-				if (k !== "maxIterations") throw new ConfigError(`${where}.defaults`, `unknown field "${k}"`);
-			}
-			const mi = entry.defaults.maxIterations;
-			if (mi !== undefined && (typeof mi !== "number" || !Number.isInteger(mi) || mi < 1)) {
-				throw new ConfigError(`${where}.defaults`, "`maxIterations` must be a positive integer");
-			}
-			defaults = mi !== undefined ? { maxIterations: mi } : {};
-		}
-		routines[id] = {
-			manifestPath: entry.manifestPath,
+		const file = entry.file ?? entry.manifestPath;
+		const routine = fileRoutine(file, where);
+		const defaults = parseDefaults(entry.defaults, where);
+		return {
+			...routine,
 			...(typeof entry.description === "string" && { description: entry.description }),
 			...(defaults !== undefined && { defaults }),
 		};
 	}
 
-	const agents: Record<string, AgentConfig> = {};
-	if (raw.agents !== undefined) {
-		if (!isObject(raw.agents)) throw new ConfigError(source, "`agents` must be an object");
-		for (const [id, entry] of Object.entries(raw.agents)) {
-			const where = `${source}.agents.${id}`;
-			if (!isObject(entry)) throw new ConfigError(where, "must be an object");
-			for (const k of Object.keys(entry)) {
-				if (k !== "adapter" && k !== "model") throw new ConfigError(where, `unknown field "${k}"`);
-			}
-			if (typeof entry.adapter !== "string" || !entry.adapter) {
-				throw new ConfigError(where, "`adapter` must be a non-empty string");
-			}
-			if (entry.model !== undefined && typeof entry.model !== "string") {
-				throw new ConfigError(where, "`model` must be a string");
-			}
-			agents[id] = { adapter: entry.adapter, ...(typeof entry.model === "string" && { model: entry.model }) };
-		}
+	const defaults = parseDefaults(entry.defaults, where);
+	const manifestRaw = { ...entry, id };
+	delete (manifestRaw as Record<string, unknown>).defaults;
+	let manifest: Manifest;
+	try {
+		manifest = parseManifest(manifestRaw, where);
+	} catch (e) {
+		throw new ConfigError(where, (e as Error).message);
 	}
+	const manifestText = `${JSON.stringify(manifest, null, "\t")}\n`;
+	return {
+		manifestPath: `chit.config.json#routines.${id}`,
+		manifest,
+		manifestText,
+		...(manifest.description !== undefined && { description: manifest.description }),
+		...(defaults !== undefined && { defaults }),
+	};
+}
 
-	return { routines, agents };
+function fileRoutine(file: unknown, where: string): RoutineConfig {
+	if (typeof file !== "string" || !file) {
+		throw new ConfigError(where, "`file` must be a non-empty string");
+	}
+	if (file.includes("..")) {
+		throw new ConfigError(where, "`file` must not contain `..`");
+	}
+	return { manifestPath: file };
+}
+
+function parseDefaults(raw: unknown, where: string): RoutineConfig["defaults"] {
+	if (raw === undefined) return undefined;
+	if (!isObject(raw)) throw new ConfigError(where, "`defaults` must be an object");
+	for (const k of Object.keys(raw)) {
+		if (k !== "maxIterations") throw new ConfigError(`${where}.defaults`, `unknown field "${k}"`);
+	}
+	const mi = raw.maxIterations;
+	if (mi !== undefined && (typeof mi !== "number" || !Number.isInteger(mi) || mi < 1)) {
+		throw new ConfigError(`${where}.defaults`, "`maxIterations` must be a positive integer");
+	}
+	return mi !== undefined ? { maxIterations: mi } : {};
+}
+
+function parseAgentConfig(entry: unknown, where: string): AgentConfig {
+	if (typeof entry === "string") {
+		const [adapter, ...rest] = entry.split(":");
+		if (!adapter) throw new ConfigError(where, "profile string must start with an adapter name");
+		const model = rest.join(":");
+		return { adapter, ...(model ? { model } : {}) };
+	}
+	if (!isObject(entry)) throw new ConfigError(where, "must be an object or adapter string");
+	for (const k of Object.keys(entry)) {
+		if (k !== "adapter" && k !== "model") throw new ConfigError(where, `unknown field "${k}"`);
+	}
+	if (typeof entry.adapter !== "string" || !entry.adapter) {
+		throw new ConfigError(where, "`adapter` must be a non-empty string");
+	}
+	if (entry.model !== undefined && typeof entry.model !== "string") {
+		throw new ConfigError(where, "`model` must be a string");
+	}
+	return { adapter: entry.adapter, ...(typeof entry.model === "string" && { model: entry.model }) };
 }

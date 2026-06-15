@@ -1,0 +1,25 @@
+{
+	"id": "implement-with-context",
+	"inputs": {
+		"task": { "type": "string", "required": true },
+		"context": { "type": "string", "required": true, "description": "manual output from a prior run" }
+	},
+	"participants": {
+		"builder": {
+			"agent": "builder",
+			"instructions": "Implement the task using the supplied prior-run context. Keep the change small.",
+			"filesystem": "read-write"
+		},
+		"critic": {
+			"agent": "critic",
+			"instructions": "Review for correctness, scope, and whether the prior context was honored.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}\n\nPrior-run context:\n{{ inputs.context }}\n\nIteration {{ iteration }}.\nReview:\n{{ steps.critique.output }}\nChecks:\n{{ steps.verify.output }}" },
+		{ "id": "critique", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nPrior-run context:\n{{ inputs.context }}\n\nDiff:\n{{ diff }}\n\nIf correct and in scope, reply exactly: pass\nOtherwise provide one issue and do not write pass." },
+		{ "id": "verify", "check": [{ "command": "node", "args": ["-e", "console.log('ok')"] }] }
+	],
+	"repeat": { "until": { "all": ["checks-pass", { "step": "critique", "equals": "pass" }] }, "maxIterations": 3 }
+}

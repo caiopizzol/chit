@@ -1,0 +1,23 @@
+{
+	"id": "plan",
+	"description": "Turn a goal into a small implementation plan.",
+	"inputs": {
+		"goal": { "type": "string", "required": true, "description": "what to build" }
+	},
+	"participants": {
+		"planner": {
+			"agent": "planner",
+			"instructions": "You inspect the project read-only and write a short ordered implementation plan. Do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "out",
+			"call": "planner",
+			"prompt": "Goal:\n{{ inputs.goal }}\n\nReturn a short ordered plan. Include files to touch and verification."
+		}
+	],
+	"output": "out",
+	"limits": { "callTimeoutMinutes": 30 }
+}

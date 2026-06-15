@@ -1,0 +1,12 @@
+{
+	"routines": {
+		"implement": {
+			"manifestPath": "routines/implement.json",
+			"description": "Build until checks pass and the reviewer returns pass."
+		}
+	},
+	"agents": {
+		"builder": { "adapter": "codex", "model": "gpt-5.5" },
+		"critic": { "adapter": "gemini", "model": "default" }
+	}
+}

@@ -1,0 +1,33 @@
+{
+	"id": "refine",
+	"description": "Draft and critique text until the critic says ship.",
+	"inputs": {
+		"brief": { "type": "string", "required": true, "description": "what to write" }
+	},
+	"participants": {
+		"writer": {
+			"agent": "writer",
+			"instructions": "Draft and revise short text. You write no files.",
+			"filesystem": "read-only"
+		},
+		"critic": {
+			"agent": "critic",
+			"instructions": "Judge the draft against the brief. You write no files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "draft",
+			"call": "writer",
+			"prompt": "Brief:\n{{ inputs.brief }}\n\nIteration {{ iteration }}.\nLatest critique, empty on first pass:\n{{ steps.verdict.output }}\n\nProduce the best draft you can."
+		},
+		{
+			"id": "verdict",
+			"call": "critic",
+			"prompt": "Brief:\n{{ inputs.brief }}\n\nDraft:\n{{ steps.draft.output }}\n\nIf this is ready, reply with exactly: ship\nOtherwise reply with one concrete improvement and do not write the word ship."
+		}
+	],
+	"repeat": { "until": { "step": "verdict", "equals": "ship" }, "maxIterations": 4 },
+	"output": "draft"
+}
