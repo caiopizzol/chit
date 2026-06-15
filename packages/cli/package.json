@@ -1,0 +1,20 @@
+{
+	"name": "chit-minimal",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "A routine-first proof of the Chit product model: list, inspect, run, trace.",
+	"bin": {
+		"chit": "./src/index.ts"
+	},
+	"scripts": {
+		"chit": "bun run src/index.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"ajv": "^8.20.0",
+		"typescript": "^5.6.0"
+	}
+}

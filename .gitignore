@@ -1,3 +1,12 @@
 node_modules/
 .chit/
 *.log
+
+# site (Next.js + Fumadocs) build + generated output
+.next/
+out/
+.source/
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+.env*.local

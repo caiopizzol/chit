@@ -1,20 +1,22 @@
 {
-	"name": "chit-minimal",
+	"name": "chit-minimal-workspace",
 	"version": "0.0.0",
 	"private": true,
-	"type": "module",
-	"description": "A routine-first proof of the Chit product model: list, inspect, run, trace.",
-	"bin": {
-		"chit": "./src/index.ts"
-	},
+	"workspaces": ["apps/*", "packages/*"],
 	"scripts": {
-		"chit": "bun run src/index.ts",
-		"test": "bun test",
-		"typecheck": "tsc --noEmit"
-	},
-	"devDependencies": {
-		"@types/bun": "latest",
-		"ajv": "^8.20.0",
-		"typescript": "^5.6.0"
+		"chit": "bun packages/cli/src/index.ts",
+		"cli": "bun packages/cli/src/index.ts",
+		"test": "bun --filter '*' test",
+		"typecheck": "bun --filter '*' typecheck",
+		"site:dev": "bun --filter @chit-run/site dev",
+		"site:build": "bun --filter @chit-run/site build",
+		"site:preview": "bun --filter @chit-run/site preview",
+		"site:typecheck": "bun --filter @chit-run/site typecheck",
+		"site:deploy": "bun --filter @chit-run/site deploy",
+		"docs:dev": "bun run site:dev",
+		"docs:build": "bun run site:build",
+		"docs:preview": "bun run site:preview",
+		"docs:typecheck": "bun run site:typecheck",
+		"docs:deploy": "bun run site:deploy"
 	}
 }
