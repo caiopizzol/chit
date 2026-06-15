@@ -128,6 +128,12 @@ Prompts, formats, ask questions, and routine inputs can read prior context.
 | `{{ iteration }}` | Current loop iteration. |
 | `{{ diff }}` | Current sandbox diff. |
 
+<Callout title="A forwarded answer is persisted downstream">
+	An `ask` step does not store the answer on its own receipt. But once you forward it
+	(`{{ steps.<id>.output }}`) into a sub-routine's input or a routine's output, it is saved
+	there in plaintext, like any input. Treat a forwarded answer as recorded.
+</Callout>
+
 ## Loops
 
 Loops live under `repeat`. The stop condition is `repeat.until`.
@@ -149,9 +155,11 @@ Loops live under `repeat`. The stop condition is `repeat.until`.
 
 A judged loop (`{ step, equals }`, or an `all` that contains one) must set `maxIterations`. A `checks-pass` loop may omit it; Chit uses a default cap of 5 iterations.
 
-<Callout title="Prefer checks when they can prove the result">
-	Model verdicts are useful, but deterministic checks are the strongest convergence signal.
-	Use a blocking model verdict only when judgment is the point of the routine.
+<Callout title="Checks are the convergence contract">
+	Model verdicts are useful, but deterministic checks are the strongest convergence signal;
+	use a blocking model verdict only when judgment is the point of the routine. A loop converges
+	when its checks pass, so checks-pass proves only what the checks cover: if a check does not
+	exercise the new behavior, a green run has not proven the new behavior works.
 </Callout>
 
 ## Limits

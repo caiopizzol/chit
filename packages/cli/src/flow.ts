@@ -119,7 +119,8 @@ export function resolveFlow(
 }
 
 // A routine step records the sub-run it launched; an `ask` step records only status +
-// timing (the answer is never persisted). `kind` is optional on the routine variant so
+// timing -- the ask receipt omits the answer, though a forwarded answer can still land in a
+// downstream sub-run's persisted inputs. `kind` is optional on the routine variant so
 // legacy flow receipts (written before ask existed, with no `kind`) still type-check and
 // render as routine steps.
 export type FlowStepReceipt =

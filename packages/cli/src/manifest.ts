@@ -58,8 +58,9 @@ export interface RoutineStep {
 }
 // A human-input gate: pause, ask the operator one question, and feed their typed
 // answer forward as this step's output ({{ steps.<id>.output }}). It produces text
-// like call/format, but the text comes from a person, not a model. The answer lives
-// only in the in-memory step context; it is never written to the receipt (see store.ts).
+// like call/format, but the text comes from a person, not a model. The ask step does not
+// write the answer to its own receipt, but forwarding it into a sub-routine input persists it
+// there like any input (see store.ts).
 export interface AskStep {
 	id: string;
 	kind: "ask";

@@ -21,10 +21,11 @@ One shape. You describe the work; **how it runs is derived**, never chosen.
   "builder"/"critic" just participant names -- there is no built-in implementer/reviewer.
 - **An `ask` step is a human-input gate.** It pauses, asks the operator one question
   (which can template in earlier output, e.g. "approve this plan: {{ steps.plan.output }}"),
-  and feeds the typed answer to later steps. The answer lives only in memory -- it is never
-  written to the receipt. Gates belong in text routines or compositions (where execution
-  pauses cleanly between steps), not inside a sandboxed/looping routine; put the gate in the
-  composition that calls it instead.
+  and feeds the typed answer to later steps. The ask step does not record the answer on its own
+  receipt, but a forwarded answer is persisted like any other value once it flows into a
+  sub-routine's input or a run's output (receipts store those in plaintext). Gates belong in
+  text routines or compositions (where execution pauses cleanly between steps), not inside a
+  sandboxed/looping routine; put the gate in the composition that calls it instead.
 - **Profiles are bound in config, not baked in.** You define your own builder, critic,
   planner, etc., and point each at the adapter/model you want, without Chit knowing those roles.
 - **Behavior is derived from the shape -- there is no `policy` field:**
