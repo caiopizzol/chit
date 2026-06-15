@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterRegistry } from "./adapter.ts";
-import { isBuiltInAdapter } from "./builtin-adapters.ts";
+import { adapterSupportsFilesystem, isBuiltInAdapter } from "./builtin-adapters.ts";
 import { type ChitConfig, ConfigError, loadConfig } from "./config.ts";
 import { type Check, isSandboxed } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
@@ -108,6 +108,20 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 			checks.push({ status: "pass", title: `adapter ${adapter}`, detail: "CLI found on PATH" });
 		} else {
 			checks.push({ status: "fail", title: `adapter ${adapter}`, detail: `"${adapter}" CLI not found on PATH; a routine that calls it will fail` });
+		}
+	}
+
+	// 3b. A participant's filesystem must be one its bound adapter can honor. codex has no
+	//     no-tools mode, so codex + filesystem "none" throws at run time -- catch it before a run.
+	for (const r of resolved) {
+		for (const p of Object.values(r.manifest.participants)) {
+			const binding = r.agents?.[p.agent];
+			if (binding === undefined || adapterSupportsFilesystem(binding.adapter, p.filesystem)) continue;
+			checks.push({
+				status: "fail",
+				title: `${r.id}.${p.id}`,
+				detail: `${binding.adapter} cannot honor filesystem "${p.filesystem}"; use read-only or bind it to another adapter`,
+			});
 		}
 	}
 

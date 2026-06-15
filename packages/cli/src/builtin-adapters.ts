@@ -27,6 +27,15 @@ export function isBuiltInAdapter(adapter: string): boolean {
 	return adapter in BUILT_IN_ADAPTERS;
 }
 
+// Can a built-in adapter honor a participant's filesystem permission? codex exec has no
+// no-tools mode, so a `none` participant cannot use codex -- the codex adapter throws at call
+// time, so `chit doctor` uses this to catch the mismatch before a run rather than mid-run. Other
+// built-ins map all three levels; a custom adapter is opaque (assumed capable).
+export function adapterSupportsFilesystem(adapter: string, filesystem: string): boolean {
+	if (adapter === "codex" && filesystem === "none") return false;
+	return true;
+}
+
 // Does `model` structurally belong to a built-in `adapter`? "default" and the listed aliases pass,
 // else it must match a known prefix pattern. A non-built-in adapter returns true (opaque).
 export function isStructurallyValidModel(adapter: string, model: string): boolean {

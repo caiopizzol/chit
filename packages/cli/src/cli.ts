@@ -172,8 +172,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		}
 
 		if (command === "doctor") {
-			const real = rest.includes("--real");
-			const adapterProbe = real ? makeRealAdapterProbe(deps.adapters) : undefined;
+			const unknown = rest.find((a) => a !== "--real");
+			if (unknown !== undefined) return fail(deps, `unknown option ${unknown} (chit doctor accepts --real)`);
+			const adapterProbe = rest.includes("--real") ? makeRealAdapterProbe(deps.adapters) : undefined;
 			const report = await runDoctor(deps.cwd, deps.doctorProbes ?? realDoctorProbes, adapterProbe);
 			deps.out(formatDoctor(report));
 			return report.ok ? 0 : 1;

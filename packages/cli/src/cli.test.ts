@@ -370,6 +370,14 @@ describe("chit init", () => {
 	});
 });
 
+describe("chit doctor", () => {
+	test("rejects an unknown option instead of silently running offline", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["doctor", "--reel"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/unknown option --reel/);
+	});
+});
+
 describe("chit help", () => {
 	test("prints usage with no args", async () => {
 		const { deps, out } = harness();

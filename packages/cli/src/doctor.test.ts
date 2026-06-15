@@ -135,6 +135,38 @@ describe("runDoctor", () => {
 		expect(hasTitle(r, "git")).toBe(false); // not sandboxed
 		expect(r.ok).toBe(true);
 	});
+
+	test("flags an adapter that cannot honor a participant's filesystem (codex + none)", async () => {
+		const dir = project({
+			profiles: { worker: "codex:gpt-5.5" },
+			routines: {
+				ask: {
+					input: "q",
+					agents: { worker: { profile: "worker", instructions: "Answer.", filesystem: "none" } },
+					steps: [{ id: "a", call: "worker", prompt: "{{ inputs.q }}" }],
+				},
+			},
+		});
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex"] }));
+		expect(statusOf(r, "ask.worker")).toBe("fail");
+		expect(r.ok).toBe(false);
+	});
+
+	test("accepts codex with a non-none filesystem", async () => {
+		const dir = project({
+			profiles: { worker: "codex:gpt-5.5" },
+			routines: {
+				ask: {
+					input: "q",
+					agents: { worker: { profile: "worker", instructions: "Answer.", filesystem: "read-only" } },
+					steps: [{ id: "a", call: "worker", prompt: "{{ inputs.q }}" }],
+				},
+			},
+		});
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex"] }));
+		expect(hasTitle(r, "ask.worker")).toBe(false);
+		expect(r.ok).toBe(true);
+	});
 });
 
 describe("formatDoctor", () => {
