@@ -19,8 +19,8 @@ import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
-import { loadPatch, loadReceipt, savePatch, saveReceipt } from "./store.ts";
-import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } from "./views.ts";
+import { hasPatch, listReceipts, loadPatch, loadReceipt, savePatch, saveReceipt } from "./store.ts";
+import { formatInspect, formatRoutineList, formatRunList, formatTrace, type RoutineListItem, type RunListItem } from "./views.ts";
 
 export interface CliDeps {
 	cwd: string;
@@ -52,11 +52,12 @@ const USAGE = `chit -- run declared routines
 
   chit init [<name>] [--template text|loop|check]   scaffold a runnable inline routine
   chit routines                       list the routines declared in chit.config.json
+  chit runs [--scope <name>]          list past runs (id, routine, status, scope, age)
   chit inspect <routine>              show what a routine needs and what it will run
   chit doctor [--real]                check the environment is ready (--real makes tiny model calls)
   chit run <routine> [opts]           run a routine; a sandboxed routine is a DRY RUN (review, then chit apply)
       --input <name>=<value>          supply an input (repeatable)
-      --scope <name>                  name the run's scope (session grouping)
+      --scope <name>                  tag the run (e.g. a Linear/Jira id); read it back with chit runs --scope
       --auto-apply                    automation: apply immediately, skipping the dry-run review (prefer chit apply)
   chit trace <run-id>                 show the receipt for a past run
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
@@ -160,6 +161,33 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				}
 			});
 			deps.out(formatRoutineList(items));
+			return 0;
+		}
+
+		if (command === "runs") {
+			let scope: string | undefined;
+			for (let i = 0; i < rest.length; i++) {
+				const a = rest[i];
+				if (a === "--scope") {
+					scope = rest[++i];
+					if (scope === undefined) return fail(deps, "--scope expects a value");
+				} else {
+					return fail(deps, `unknown option ${a} (chit runs accepts --scope <name>)`);
+				}
+			}
+			const now = deps.now();
+			const items: RunListItem[] = listReceipts(deps.cwd)
+				.filter((r) => scope === undefined || r.scope === scope)
+				.map((r) => ({
+					runId: r.runId,
+					routineId: r.routineId,
+					status: r.status,
+					...(r.scope !== undefined && { scope: r.scope }),
+					ageMs: now - r.startedAt,
+					inputKeys: Object.keys(r.inputs),
+					hasPatch: hasPatch(deps.cwd, r.runId),
+				}));
+			deps.out(formatRunList(items, scope));
 			return 0;
 		}
 

@@ -5,7 +5,7 @@
 // dump, but the final output and inputs do sit here. Whether to store the body by
 // default, keep a blob ref, or require opt-in audit is an open design question.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
@@ -40,6 +40,25 @@ export function loadReceipt(cwd: string, runId: string): AnyReceipt {
 	return JSON.parse(readFileSync(path, "utf-8")) as AnyReceipt;
 }
 
+// Every stored receipt, for the run-history view. Reads the receipt JSONs under .chit/runs,
+// skipping the .patch siblings and any file that does not parse (a corrupt or partial receipt
+// must not break the whole history). A pure read: it derives history from the evidence already
+// on disk and stores nothing new. Ordering is the caller's job.
+export function listReceipts(cwd: string): AnyReceipt[] {
+	const dir = runsDir(cwd);
+	if (!existsSync(dir)) return [];
+	const receipts: AnyReceipt[] = [];
+	for (const name of readdirSync(dir)) {
+		if (!name.endsWith(".json")) continue;
+		try {
+			receipts.push(JSON.parse(readFileSync(join(dir, name), "utf-8")) as AnyReceipt);
+		} catch {
+			// Skip an unreadable receipt rather than fail the list.
+		}
+	}
+	return receipts;
+}
+
 // A sandboxed run's exact diff, stored beside its receipt so `chit apply <run-id>` can
 // re-play the reviewed patch without re-running the models (which would yield a different
 // diff). Only written when there is something to apply (a converged sandboxed run).
@@ -58,4 +77,10 @@ export function savePatch(cwd: string, runId: string, patch: string): string {
 export function loadPatch(cwd: string, runId: string): string | undefined {
 	const path = patchPath(cwd, runId);
 	return existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+}
+
+// Whether a reviewable patch is stored for a run (a converged sandboxed dry run leaves one).
+// Cheaper than loadPatch when the body is not needed -- the run-history view only wants the flag.
+export function hasPatch(cwd: string, runId: string): boolean {
+	return existsSync(patchPath(cwd, runId));
 }

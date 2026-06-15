@@ -69,6 +69,52 @@ export function formatRoutineList(items: RoutineListItem[]): string {
 	return [`routines (${items.length}):`, ...lines].join("\n");
 }
 
+// Compact "how long ago" for the run history. The receipt stores absolute startedAt; the caller
+// passes the elapsed-since value so this stays a pure render.
+function ageLabel(ms: number): string {
+	if (ms < 1000) return "just now";
+	const s = Math.floor(ms / 1000);
+	if (s < 60) return `${s}s ago`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m ago`;
+	const h = Math.floor(m / 60);
+	if (h < 24) return `${h}h ago`;
+	return `${Math.floor(h / 24)}d ago`;
+}
+
+// One row of the run history. Everything here is derived from a stored receipt (plus whether a
+// .patch sits beside it); nothing new is tracked. `hasPatch` means an exact reviewable patch is
+// on disk for `chit apply` -- it does NOT mean the run was applied (that is not on the receipt).
+export interface RunListItem {
+	runId: string;
+	routineId: string;
+	status: string;
+	scope?: string;
+	ageMs: number;
+	inputKeys: string[];
+	hasPatch: boolean;
+}
+
+// The run history: the evidence Chit already stores, read back. Newest first. `scopeFilter` is
+// only used to phrase the empty/header line; the caller does the filtering.
+export function formatRunList(items: RunListItem[], scopeFilter?: string): string {
+	if (items.length === 0) {
+		return scopeFilter !== undefined ? `No runs found for scope "${scopeFilter}".` : "No runs yet. Run a routine, then `chit runs` shows the history.";
+	}
+	const rows = [...items].sort((a, b) => a.ageMs - b.ageMs);
+	const wId = Math.max(...rows.map((r) => r.runId.length));
+	const wRoutine = Math.max(...rows.map((r) => r.routineId.length));
+	const wStatus = Math.max(...rows.map((r) => r.status.length));
+	const wScope = Math.max(5, ...rows.map((r) => (r.scope ?? "-").length));
+	const lines = rows.map((r) => {
+		const inputs = r.inputKeys.length > 0 ? r.inputKeys.join(",") : "-";
+		const patch = r.hasPatch ? "  patch" : "";
+		return `  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  ${pad(r.status, wStatus)}  ${pad(r.scope ?? "-", wScope)}  ${pad(ageLabel(r.ageMs), 9)}  ${inputs}${patch}`.trimEnd();
+	});
+	const header = scopeFilter !== undefined ? `runs in scope "${scopeFilter}" (${rows.length}):` : `runs (${rows.length}):`;
+	return [header, ...lines].join("\n");
+}
+
 export function formatInspect(routine: ResolvedRoutine): string {
 	const m = routine.manifest;
 	const out: string[] = [];
