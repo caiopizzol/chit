@@ -6,6 +6,7 @@
 // composition go through converge.ts and flow.ts. Dispatch in cli.ts picks one.)
 
 import type { Adapter } from "./adapter.ts";
+import { formatElapsed } from "./elapsed.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
@@ -117,8 +118,10 @@ export async function runOneShot(
 					...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
 					...(deps.signal !== undefined && { signal: deps.signal }),
 				});
+				const callElapsed = deps.now() - stepStart;
+				deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(callElapsed)}`);
 				ctx.steps[step.id] = { output: result.output };
-				steps.push({ id: step.id, kind: "call", participant: step.call, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				steps.push({ id: step.id, kind: "call", participant: step.call, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: callElapsed });
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
 				steps.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });

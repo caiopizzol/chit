@@ -205,6 +205,29 @@ describe("chit run", () => {
 	});
 });
 
+describe("chit run live progress", () => {
+	test("reports elapsed as each call completes (one-shot)", async () => {
+		const { deps } = harness({ adapter: fakeAdapter(() => "x") });
+		let clock = 0;
+		deps.now = () => (clock += 1000);
+		const progress: string[] = [];
+		deps.onProgress = (l) => progress.push(l);
+		await runCli(["run", "feature-griller", "--input", "idea=x"], deps);
+		expect(progress.some((l) => /call griller done in/.test(l))).toBe(true);
+	});
+
+	test("reports call and check elapsed (sandboxed loop)", async () => {
+		const { deps } = harness({ sandboxDiff: "diff --git a/x b/x" });
+		let clock = 0;
+		deps.now = () => (clock += 1000);
+		const progress: string[] = [];
+		deps.onProgress = (l) => progress.push(l);
+		await runCli(["run", "impl-review", "--input", "task=x"], deps);
+		expect(progress.some((l) => /call builder done in/.test(l))).toBe(true);
+		expect(progress.some((l) => /check bun test → ok in/.test(l))).toBe(true);
+	});
+});
+
 describe("chit trace", () => {
 	test("traces a run after it has executed", async () => {
 		const run = harness({ adapter: fakeAdapter(() => "report body") });

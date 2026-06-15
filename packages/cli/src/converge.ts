@@ -16,6 +16,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
+import { formatElapsed } from "./elapsed.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { renderTemplate } from "./template.ts";
@@ -202,6 +203,7 @@ export async function runConverge(
 						...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
 						...(deps.signal !== undefined && { signal: deps.signal }),
 					});
+					deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(deps.now() - stepStart)}`);
 					ctx.steps[step.id] = { output: result.output };
 					stepReceipts.push({
 						id: step.id,
@@ -223,8 +225,9 @@ export async function runConverge(
 						const checkStart = deps.now();
 						const res = await deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal);
 						const label = [cmd.command, ...cmd.args].join(" ");
-							deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"}`);
-						checks.push({ command: label, ok: res.ok, startedAt: checkStart, elapsedMs: deps.now() - checkStart });
+						const checkElapsed = deps.now() - checkStart;
+						deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"} in ${formatElapsed(checkElapsed)}`);
+						checks.push({ command: label, ok: res.ok, startedAt: checkStart, elapsedMs: checkElapsed });
 						if (!res.ok) {
 							stepPassed = false;
 							failures.push(`$ ${label}\n${res.output}`.trim());
