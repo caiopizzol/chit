@@ -56,13 +56,25 @@ chit trace <run-id>                the receipt for a past run
 ## Quickstart
 
 ```bash
-bun install                       # only needed for `bun run typecheck`
-bun run src/index.ts init my-review            # scaffold a runnable inline routine + config
+bun install                                      # from the repo root: set up the workspace
+
+cd packages/cli                                  # the example routines and config live here
+bun run src/index.ts doctor                      # check the environment is ready
 bun run src/index.ts routines
 bun run src/index.ts inspect feature-griller
 bun run src/index.ts run feature-griller --input idea="add dark mode"
 bun run src/index.ts trace <run-id>
-bun test                          # fast, all fake-backed (no real model calls)
+bun test                                         # fast, all fake-backed (no real model calls)
+```
+
+To use chit in your own project, link the bin once, then call it from there:
+
+```bash
+cd packages/cli && bun link                      # register the chit bin (once)
+
+cd /path/to/your-project
+bun link chit-minimal                            # link chit into your project
+bunx chit doctor                                 # check the environment, from your repo
 ```
 
 `run` executes for real by shelling out to an already-installed CLI - `claude`, `gemini`, or `codex`,

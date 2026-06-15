@@ -177,16 +177,22 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 					<p className="lede">
 						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you
 						already have installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No
-						API keys, no HTTP.
+						API keys, no HTTP. Link the <code>chit</code> bin once, then run it in any project.
 					</p>
 					<pre className="terminal">
 						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
 						{"\n"}
 						<span className="cmd">$ cd chit && bun install</span>
 						{"\n"}
-						<span className="cmd">$ bun run chit init implement --template loop</span>
+						<span className="cmd">$ cd packages/cli && bun link</span>
+						{"\n\n"}
+						<span className="meta"># then, in your own project:</span>
 						{"\n"}
-						<span className="cmd">$ bun run chit --help</span>
+						<span className="cmd">$ bun link chit-minimal</span>
+						{"\n"}
+						<span className="cmd">$ bunx chit doctor</span>
+						{"\n"}
+						<span className="cmd">$ bunx chit init implement --template loop</span>
 					</pre>
 					<p className="lede" style={{ marginTop: 16 }}>
 						Start with <a className="inline-link" href="/docs">the docs</a>: the routine model, the
