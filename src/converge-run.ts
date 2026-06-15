@@ -23,6 +23,9 @@ export interface ConvergeRunDeps {
 	maxIterations?: number;
 	maxWallMs?: number;
 	onProgress?: (line: string) => void;
+	// The origin commit the run is based on (from the caller's preflight). Recorded on the
+	// receipt so a later `chit apply` can refuse a base that no longer matches HEAD.
+	baseCommit?: string;
 	// Operator-cancellation signal (Ctrl-C). Threaded into the loop; the sandbox is
 	// torn down in `finally` regardless, so a cancelled run leaves no worktree behind.
 	signal?: AbortSignal;
@@ -91,6 +94,7 @@ export async function runConvergeInSandbox(
 			receipt: {
 				...receipt,
 				sandbox: { workDir: sandbox.workDir, status, ...(diffStat ? { diffStat } : {}) },
+				...(deps.baseCommit !== undefined && { baseCommit: deps.baseCommit }),
 				...(applyError !== undefined && { applyError }),
 			},
 			diff,

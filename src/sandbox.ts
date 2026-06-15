@@ -21,7 +21,21 @@ export interface Sandbox {
 }
 
 export interface SandboxFactory {
+	// Precondition for sandboxing: the origin must be clean. A sandbox starts from HEAD, so
+	// any uncommitted change would be invisible to the run AND could be clobbered when its
+	// result is applied back. Throws DirtyWorktreeError if dirty; otherwise returns the base
+	// commit the sandbox will start from (recorded on the receipt for a coherent apply later).
+	preflight(originCwd: string): Promise<{ baseCommit: string }>;
 	create(originCwd: string, runId: string): Promise<Sandbox>;
+}
+
+// The origin has uncommitted changes, so a HEAD-based sandbox would run on a different tree
+// than the operator sees. Thrown by preflight; the CLI turns it into a clear refusal.
+export class DirtyWorktreeError extends Error {
+	constructor(readonly detail: string) {
+		super(detail);
+		this.name = "DirtyWorktreeError";
+	}
 }
 
 // --- fake (tests) ---
@@ -55,8 +69,16 @@ export function fakeSandbox(opts: { workDir?: string; diff?: string } = {}): Fak
 	return sb;
 }
 
-export function fakeSandboxFactory(opts: { workDir?: string; diff?: string } = {}): SandboxFactory {
-	return { async create() { return fakeSandbox(opts); } };
+export function fakeSandboxFactory(opts: { workDir?: string; diff?: string; dirty?: boolean; baseCommit?: string } = {}): SandboxFactory {
+	return {
+		async preflight() {
+			if (opts.dirty) throw new DirtyWorktreeError("Sandboxed runs start from HEAD. Commit or stash your changes first.");
+			return { baseCommit: opts.baseCommit ?? "base0000" };
+		},
+		async create() {
+			return fakeSandbox(opts);
+		},
+	};
 }
 
 // --- real: git worktree ---
@@ -91,6 +113,20 @@ const EXCLUDE_NM = ":(exclude)node_modules";
 const OWNER_LOCK = "owner.pid";
 
 export const gitWorktreeSandboxFactory: SandboxFactory = {
+	async preflight(originCwd) {
+		const top = await git(["rev-parse", "--show-toplevel"], originCwd);
+		if (!top.ok) throw new Error(`a sandboxed run needs a git repository (cwd: ${originCwd})`);
+		const repoRoot = top.out.trim();
+		// `git status --porcelain` reports tracked changes AND untracked files (gitignored
+		// paths like node_modules / .chit are excluded). Any output means the tree differs
+		// from HEAD, which is exactly what makes a HEAD-based sandbox incoherent.
+		const status = await gitOrThrow(["status", "--porcelain"], repoRoot);
+		if (status.trim() !== "") {
+			throw new DirtyWorktreeError("Sandboxed runs start from HEAD. Commit or stash your changes first.");
+		}
+		const base = (await gitOrThrow(["rev-parse", "HEAD"], repoRoot)).trim();
+		return { baseCommit: base };
+	},
 	async create(originCwd, runId) {
 		const head = await git(["rev-parse", "--show-toplevel"], originCwd);
 		if (!head.ok) throw new Error(`converge needs a git repository to sandbox into (cwd: ${originCwd})`);

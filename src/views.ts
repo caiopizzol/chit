@@ -164,6 +164,8 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	if (r.scope) out.push(`scope:    ${r.scope}`);
 	out.push(`elapsed:  ${r.elapsedMs}ms`);
 	out.push(`digest:   ${shortDigest(r.digest)}`);
+	// A sandboxed run records the origin commit it started from (preflight guaranteed clean).
+	if ("baseCommit" in r && r.baseCommit) out.push(`base:     ${r.baseCommit.slice(0, 12)}`);
 	const inputKeys = Object.keys(r.inputs);
 
 	if (r.policy === "flow") {

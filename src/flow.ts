@@ -156,6 +156,9 @@ export interface FlowReceipt {
 	status: "completed" | "failed" | "cancelled";
 	steps: FlowStepReceipt[];
 	error?: string;
+	// The origin commit the run is based on (preflight requires a clean tree). Recorded for a
+	// coherent `chit apply` of the terminal sandboxed step's patch.
+	baseCommit?: string;
 	// Set when the terminal sandboxed step converged but its write-back to origin failed.
 	// Persisted here so `chit trace <flowRunId>` shows it, not just the sub-run's receipt.
 	applyError?: string;
@@ -187,6 +190,9 @@ export interface FlowDeps {
 	// Human-input seam for `ask` gates between sub-routines (the bin reads stdin; tests
 	// inject a deterministic answer). Required only if the composition has an ask step.
 	askUser?: (question: string) => Promise<string>;
+	// The origin commit the flow is based on (from the caller's preflight), threaded into the
+	// terminal sandboxed sub-run and recorded on the flow receipt.
+	baseCommit?: string;
 	apply: boolean;
 }
 
@@ -285,6 +291,7 @@ export async function runFlow(
 					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 					...(deps.signal !== undefined && { signal: deps.signal }),
+					...(deps.baseCommit !== undefined && { baseCommit: deps.baseCommit }),
 					apply: deps.apply,
 				},
 				opts,
@@ -378,6 +385,7 @@ export async function runFlow(
 			elapsedMs: finishedAt - startedAt,
 			status: cancelled ? "cancelled" : failed === undefined ? "completed" : "failed",
 			steps: stepReceipts,
+			...(deps.baseCommit !== undefined && { baseCommit: deps.baseCommit }),
 			...(failed !== undefined && { error: failed }),
 			...(cancelled && { error: "cancelled by operator" }),
 			...(applyError !== undefined && { applyError }),

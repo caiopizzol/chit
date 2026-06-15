@@ -5,7 +5,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
+import type { ConvergeReceipt } from "./converge.ts";
 import { fakeSandboxFactory, gitWorktreeSandboxFactory } from "./sandbox.ts";
+import { loadReceipt } from "./store.ts";
 
 let dir: string;
 
@@ -162,6 +164,13 @@ describe("chit run", () => {
 		const { deps, out } = harness();
 		expect(await runCli(["run", "impl-review", "--input", "task=x", "--apply"], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/applied to/);
+	});
+
+	test("a sandboxed run records the base commit (from preflight) on its receipt", async () => {
+		const { deps } = harness();
+		expect(await runCli(["run", "impl-review", "--input", "task=x"], deps)).toBe(0);
+		const receipt = loadReceipt(dir, "run-test") as ConvergeReceipt;
+		expect(receipt.baseCommit).toBe("base0000"); // the fake factory's preflight base
 	});
 
 	test("rejects a malformed --input", async () => {

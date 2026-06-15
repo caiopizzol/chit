@@ -308,32 +308,31 @@ describe("acceptance matrix -- failure cases", () => {
 		expect(existsSync(join(repo, "built.txt"))).toBe(false); // impl never ran
 	});
 
-	test("dirty-origin apply conflict: --apply fails cleanly without corrupting origin", async () => {
+	test("dirty origin is refused before a sandboxed run (a sandbox starts from HEAD)", async () => {
 		const writeySeed = {
 			id: "writey-seed",
 			participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
 			steps: [{ id: "go", call: "w", prompt: "edit the seed" }],
 		};
 		const repo = newRepo({ "writey-seed": writeySeed }, { routines: { "writey-seed": { manifestPath: "writey-seed.json" } } });
-		// dirty the origin: change the same file the model will edit, so the patch context conflicts
-		writeFileSync(join(repo, "seed.txt"), "changed in origin\n");
-		const adapter = modelStub((req) => {
-			if (req.filesystem === "read-write") writeFileSync(join(req.cwd, "seed.txt"), "edited in sandbox\n");
+		writeFileSync(join(repo, "seed.txt"), "uncommitted change\n"); // dirty the origin
+		let called = false;
+		const adapter = modelStub(() => {
+			called = true;
 			return "done";
 		});
 		const { deps, err } = harness(repo, adapter);
-		expect(await runCli(["run", "writey-seed", "--apply"], deps)).toBe(1);
-		expect(err.join("\n")).toMatch(/could not apply|apply/i);
-		expect(readFileSync(join(repo, "seed.txt"), "utf-8")).toBe("changed in origin\n"); // origin not corrupted
+		// even a DRY run is refused: it would compute a diff against HEAD, not your real tree
+		expect(await runCli(["run", "writey-seed"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/Commit or stash/);
+		expect(called).toBe(false); // refused before any model call
+		expect(readFileSync(join(repo, "seed.txt"), "utf-8")).toBe("uncommitted change\n"); // untouched
 		const worktrees = Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString();
-		expect(worktrees.includes("chit-sbx-")).toBe(false); // sandbox still discarded
-		// the converged-but-unapplied run still leaves durable evidence
-		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;
-		expect(receipt.status).toBe("converged");
-		expect(receipt.applyError).toMatch(/could not apply/);
+		expect(worktrees.includes("chit-sbx-")).toBe(false); // no sandbox was ever created
+		expect(() => loadReceipt(repo, "run-accept-0")).toThrow(); // the run never started, so no receipt
 	});
 
-	test("composition: a terminal apply conflict is visible from the flow run id", async () => {
+	test("a flow with a sandboxed step refuses a dirty origin upfront, before any sub-routine runs", async () => {
 		const impl = {
 			id: "impl",
 			inputs: { task: { type: "string" } },
@@ -352,25 +351,18 @@ describe("acceptance matrix -- failure cases", () => {
 			{ griller: GRILLER, impl, flow },
 			{ routines: { griller: { manifestPath: "griller.json" }, impl: { manifestPath: "impl.json" }, flow: { manifestPath: "flow.json" } } },
 		);
-		writeFileSync(join(repo, "seed.txt"), "changed in origin\n"); // dirty origin -> the terminal apply conflicts
-		const adapter = modelStub((req) => {
-			if (req.filesystem === "read-write") {
-				writeFileSync(join(req.cwd, "seed.txt"), "edited in sandbox\n");
-				return "done";
-			}
-			return "GRILLED";
+		writeFileSync(join(repo, "seed.txt"), "uncommitted change\n"); // dirty the origin
+		let called = false;
+		const adapter = modelStub(() => {
+			called = true;
+			return "x";
 		});
 		const { deps, err } = harness(repo, adapter);
-		expect(await runCli(["run", "flow", "--input", "idea=x", "--apply"], deps)).toBe(1);
-		expect(err.join("\n")).toMatch(/could not apply/);
-		expect(readFileSync(join(repo, "seed.txt"), "utf-8")).toBe("changed in origin\n"); // origin uncorrupted
-
-		// the failure is visible from the FLOW run id the CLI points the user to, not just the sub-run
-		const flowReceipt = loadReceipt(repo, "run-accept-0") as FlowReceipt;
-		expect(flowReceipt.policy).toBe("flow");
-		expect(flowReceipt.status).toBe("completed"); // every sub-run succeeded; only the write-back failed
-		expect(flowReceipt.applyError).toMatch(/could not apply/);
-		expect(formatTrace(flowReceipt)).toMatch(/apply:.*could not apply/);
+		expect(await runCli(["run", "flow", "--input", "idea=x"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/Commit or stash/);
+		// fail-fast: the dirty check ran BEFORE grill, so no model call happened and no run id was used
+		expect(called).toBe(false);
+		expect(() => loadReceipt(repo, "run-accept-0")).toThrow();
 	});
 
 	test("interrupted in-flight: an abort during a running check cancels and discards", async () => {

@@ -62,6 +62,9 @@ export interface ConvergeReceipt {
 	// The exit condition this loop ran under (audit: what "converged" meant). Defaults to
 	// "checks-pass" for a single-pass sandboxed routine that has no `repeat`.
 	until: RepeatUntil;
+	// The origin commit the sandbox started from (preflight requires a clean tree). Recorded
+	// so `chit apply` can refuse to apply onto a different base.
+	baseCommit?: string;
 	startedAt: number;
 	finishedAt: number;
 	elapsedMs: number;

@@ -17,7 +17,7 @@ import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
-import { reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
+import { DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { saveReceipt, loadReceipt } from "./store.ts";
 import { formatInspect, formatRoutineList, formatTrace, type RoutineListItem } from "./views.ts";
 
@@ -189,6 +189,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				} catch (e) {
 					return fail(deps, (e as Error).message);
 				}
+				// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now --
+				// before grill/plan run -- and capture the base commit for the receipt.
+				let flowBase: string | undefined;
+				if (resolvedFlow.steps.some((st) => st.kind === "routine" && isSandboxed(st.routine.manifest))) {
+					const pf = await preflightSandbox(deps);
+					if (!pf.ok) return 1;
+					flowBase = pf.baseCommit;
+				}
 				const result = await runFlow(
 					resolvedFlow,
 					validation.values,
@@ -202,6 +210,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 						...(deps.signal !== undefined && { signal: deps.signal }),
 						...(deps.askUser !== undefined && { askUser: deps.askUser }),
+						...(flowBase !== undefined && { baseCommit: flowBase }),
 						apply: args.apply,
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
@@ -244,6 +253,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				// A routine that writes or runs checks executes inside a sandbox (a git
 				// worktree): edits land on the copy, not your tree. Dry run by default
 				// (show the diff, discard it); `--apply` writes the result back.
+				const pf = await preflightSandbox(deps);
+				if (!pf.ok) return 1;
 				const result = await runConvergeInSandbox(
 					routine,
 					validation.values,
@@ -254,6 +265,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						cwd: deps.cwd,
 						now: deps.now,
 						newRunId: deps.newRunId,
+						baseCommit: pf.baseCommit,
 						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
 						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 						...(deps.signal !== undefined && { signal: deps.signal }),
@@ -355,4 +367,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 function fail(deps: CliDeps, message: string): number {
 	deps.err(`error: ${message}`);
 	return 1;
+}
+
+// A sandboxed run starts from HEAD, so refuse upfront if the origin is dirty (and capture the
+// base commit for the receipt). Called BEFORE any model call, so a flow with a dirty tree fails
+// fast rather than after grilling/planning. A clean refusal prints just the guidance, no "error:".
+async function preflightSandbox(deps: CliDeps): Promise<{ ok: true; baseCommit: string } | { ok: false }> {
+	try {
+		const { baseCommit } = await deps.sandboxFactory.preflight(deps.cwd);
+		return { ok: true, baseCommit };
+	} catch (e) {
+		if (e instanceof DirtyWorktreeError) {
+			deps.err(e.detail);
+			return { ok: false };
+		}
+		throw e;
+	}
 }
