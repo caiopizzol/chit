@@ -174,6 +174,17 @@ describe("parseConfig -- built-in adapter/model validation (the runtime guard)",
 		expect(() => parse({ ...VALID, profiles: { x: "my-adapter:m" } })).toThrow(/unknown adapter "my-adapter"/);
 	});
 
+	test("rejects a trailing ':' with no model for every built-in (the parser/schema drift trap)", () => {
+		for (const s of ["codex:", "claude:", "gemini:"]) {
+			expect(() => parse({ ...VALID, profiles: { x: s } })).toThrow(/trailing ":" but no model/);
+		}
+	});
+
+	test("accepts a bare built-in (no colon) as the default model -- what the trailing-colon error points to", () => {
+		const c = parse({ ...VALID, profiles: { a: "codex", b: "claude", c: "gemini" } });
+		expect(c.agents).toEqual({ a: { adapter: "codex" }, b: { adapter: "claude" }, c: { adapter: "gemini" } });
+	});
+
 	test("accepts valid built-in pairs, full names, default, and omitted model", () => {
 		expect(() => parse({ ...VALID, profiles: { a: "codex:gpt-5.5", b: "claude:sonnet", c: "claude:claude-opus-4-8", d: "gemini", e: "claude:default" } })).not.toThrow();
 	});

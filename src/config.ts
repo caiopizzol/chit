@@ -185,6 +185,12 @@ function parseAgentConfig(entry: unknown, where: string): AgentConfig {
 				`unknown adapter "${adapter}" (built-in: ${BUILT_IN_ADAPTER_IDS.join(", ")}). A custom adapter must use the object form { "adapter": "${adapter}", "model": "..." }`,
 			);
 		}
+		// A trailing ":" with no model (e.g. "codex:") would silently mean "default", but the schema
+		// rejects it -- so reject it here too, keeping the parser and schema in lockstep. Drop the
+		// colon ("codex") to get the default model.
+		if (rest.length > 0 && model === "") {
+			throw new ConfigError(where, `profile "${entry}" has a trailing ":" but no model; use "${adapter}" for the default model`);
+		}
 		validateBuiltInModel(adapter, model || undefined, where);
 		return { adapter, ...(model ? { model } : {}) };
 	}

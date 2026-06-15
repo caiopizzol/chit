@@ -96,6 +96,12 @@ describe("profile validation: built-in adapter/model pairs (schema)", () => {
 		expect(okSchema("my-adapter")).toBe(false);
 	});
 
+	test("rejects a trailing ':' with no model (lockstep with the parser)", () => {
+		expect(okSchema("codex:")).toBe(false);
+		expect(okSchema("claude:")).toBe(false);
+		expect(okSchema("gemini:")).toBe(false);
+	});
+
 	test("accepts valid built-in pairs, custom object form, and default/omitted model", () => {
 		expect(okSchema("codex:gpt-5.5")).toBe(true);
 		expect(okSchema("claude:sonnet")).toBe(true);
