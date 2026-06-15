@@ -296,4 +296,219 @@
 			min-height: 1rem;
 		}
 	}
+
+	/* ----- config mockup visuals (components/config-visuals.tsx) ----- */
+	/* EXPERIMENTAL: paired with /docs/mockups. Remove this block with the mockups. */
+	.cfg-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.75rem;
+		margin: 1.5rem 0;
+	}
+	.cfg-grid-3 {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+	.cfg-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #f4f2ea;
+		padding: 0.85rem;
+	}
+	.cfg-card-head {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.82rem;
+		font-weight: 700;
+	}
+	.cfg-card p {
+		margin: 0;
+		font-size: 0.84rem;
+		line-height: 1.4;
+		color: #2a2a2a;
+	}
+	.cfg-chip,
+	.cfg-card-code {
+		align-self: flex-start;
+		max-width: 100%;
+		overflow-x: auto;
+		border: 1px solid #c7bfab;
+		border-radius: 6px;
+		background: #e0dbc6;
+		padding: 0.15rem 0.45rem;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.72rem;
+		color: #2a2a2a;
+	}
+	.cfg-card-code {
+		white-space: pre;
+		margin: 0;
+	}
+	.cfg-mono {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-weight: 700;
+		font-size: 0.78rem;
+	}
+	.cfg-scale {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.5rem;
+		margin: 1.5rem 0;
+	}
+	.cfg-scale-seg {
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #f4f2ea;
+		padding: 0.75rem;
+	}
+	.cfg-scale-muted {
+		background: #e0dbc6;
+	}
+	.cfg-scale-dark {
+		background: #0a0a0a;
+		color: #f4f2ea;
+	}
+	.cfg-scale-dark p {
+		color: #eae5d5;
+	}
+	.cfg-scale-head {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		margin-bottom: 0.35rem;
+	}
+	.cfg-scale-rank {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.1rem;
+		height: 1.1rem;
+		border: 1px solid currentColor;
+		border-radius: 50%;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.68rem;
+	}
+	.cfg-scale-seg p {
+		margin: 0;
+		font-size: 0.82rem;
+		line-height: 1.4;
+		color: #2a2a2a;
+	}
+	.cfg-derive {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.cfg-derive-row {
+		display: grid;
+		grid-template-columns: 1.2rem minmax(0, 1fr) 1.5rem minmax(0, 1fr);
+		gap: 0.5rem;
+		align-items: center;
+		border: 1px solid #c7bfab;
+		border-radius: 8px;
+		background: #f4f2ea;
+		padding: 0.5rem 0.6rem;
+		font-size: 0.84rem;
+	}
+	.cfg-derive-shape,
+	.cfg-derive-arrow,
+	.cfg-derive-behavior {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+	}
+	.cfg-derive-shape {
+		text-align: center;
+	}
+	.cfg-derive-arrow {
+		color: #807766;
+		text-align: center;
+	}
+	.cfg-derive-behavior {
+		font-size: 0.78rem;
+	}
+	.cfg-annotated {
+		display: grid;
+		grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+		gap: 0.75rem;
+		align-items: start;
+		margin: 1.5rem 0;
+	}
+	.cfg-annotated-code {
+		margin: 0;
+		overflow-x: auto;
+		border: 1px solid #c7bfab;
+		border-left: 3px solid #0a0a0a;
+		border-radius: 6px;
+		background: #e0dbc6;
+		padding: 0.85rem;
+		font-size: 0.72rem;
+		line-height: 1.5;
+	}
+	.cfg-annotated-notes {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.cfg-note {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		border-left: 2px solid #c7bfab;
+		padding: 0.1rem 0 0.1rem 0.6rem;
+		font-size: 0.82rem;
+		color: #2a2a2a;
+	}
+	.cfg-reject {
+		display: flex;
+		flex-direction: column;
+		margin: 1.5rem 0;
+		border-top: 1px solid #0a0a0a;
+	}
+	.cfg-reject-row {
+		display: grid;
+		grid-template-columns: 1.2rem auto minmax(0, 1fr);
+		gap: 0.6rem;
+		align-items: baseline;
+		border-bottom: 1px dashed #0a0a0a;
+		padding: 0.6rem 0;
+	}
+	.cfg-reject-shape {
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+	}
+	.cfg-reject-ex {
+		border-radius: 4px;
+		background: #e0dbc6;
+		padding: 0.05rem 0.3rem;
+		font-family: var(--font-chit-mono), "JetBrains Mono", ui-monospace, monospace;
+		font-size: 0.76rem;
+		white-space: nowrap;
+	}
+	.cfg-reject-why {
+		font-size: 0.84rem;
+		color: #2a2a2a;
+	}
+	@media (max-width: 760px) {
+		.cfg-grid,
+		.cfg-grid-3,
+		.cfg-scale,
+		.cfg-annotated {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.cfg-derive-row {
+			grid-template-columns: 1.2rem minmax(0, 1fr);
+		}
+		.cfg-derive-arrow {
+			display: none;
+		}
+		.cfg-derive-behavior {
+			grid-column: 2;
+		}
+		.cfg-reject-row {
+			grid-template-columns: 1.2rem minmax(0, 1fr);
+		}
+		.cfg-reject-ex {
+			grid-column: 2;
+			white-space: normal;
+		}
+	}
 }
