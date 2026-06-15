@@ -196,9 +196,9 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 
 				<h3>Honest about being early</h3>
 				<p className="lede">
-					Not here yet: Studio, MCP tools, batch, durable resume. They come back once the one-shape
-					model is obvious. Multi-vendor adapters are in: claude, codex, and gemini, picked per
-					agent in config.
+					Still intentionally small: no scheduler, hosted service, dynamic routing, durable resume,
+					or visual config editor. Adapters are in: claude, codex, and gemini, picked per agent in
+					config.
 				</p>
 			</div>
 

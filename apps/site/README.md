@@ -19,7 +19,6 @@ bun run dev        # local dev server
 bun run build      # static export to apps/site/out
 bun run preview    # serve the built site
 bun run typecheck  # fumadocs-mdx typegen + tsc
-bun run check      # biome
 ```
 
 From the repo root: `bun run site:dev`, `bun run site:build`,

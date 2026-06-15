@@ -95,9 +95,9 @@ picked per agent in config (no API keys, no HTTP). Tests inject fakes, so they s
 
 ## Deliberately not here
 
-Studio, MCP tools, plan/batch, a config editor, durable resume.
-They come back once the one-shape model feels obvious. (Multi-provider adapters are now in:
-claude, gemini, and codex, each picked per agent in config.)
+A scheduler, hosted service, dynamic routing, visual config editor, or durable resume.
+They can come later if the config model proves them out. Adapter support is in:
+claude, gemini, and codex, each picked per agent in config.
 
 ## Layout
 
