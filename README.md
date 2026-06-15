@@ -55,6 +55,10 @@ chit trace <run-id> [--full]       the receipt for a past run (--full adds the s
 chit runs [--scope <id>]           past runs (id, routine, status, scope, age); --scope is your work key
 ```
 
+`chit runs` shows each run's patch state (`pending` / `applied` / `blocked` / `conflicts`), derived
+from git. It says whether the stored patch can be applied from here, not whether the change already
+exists in the repo: a committed change can read `blocked` once its patch no longer applies cleanly.
+
 ## Quickstart
 
 ```bash

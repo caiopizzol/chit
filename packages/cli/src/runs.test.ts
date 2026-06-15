@@ -221,11 +221,11 @@ describe("patchStatus (derived from git)", () => {
 		expect(await patchStatus(dir, "run-p", base)).toBe("applied");
 	});
 
-	test("stale when HEAD moved off the recorded base and the patch is unapplied", async () => {
+	test("blocked when HEAD moved off the recorded base and the patch is unapplied", async () => {
 		const { dir, base } = gitRepo();
 		savePatch(dir, "run-p", pendingPatch(dir));
 		writeFileSync(join(dir, "b.txt"), "other\n");
 		sh(dir, "git add -A && git commit -q -m move");
-		expect(await patchStatus(dir, "run-p", base)).toBe("stale");
+		expect(await patchStatus(dir, "run-p", base)).toBe("blocked");
 	});
 });
