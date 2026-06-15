@@ -167,9 +167,9 @@ describe("chit run", () => {
 		expect(text).toMatch(/chit apply run-test/); // the hint points at the reviewable apply gate
 	});
 
-	test("applies a converged converge run with --apply", async () => {
+	test("applies a converged run immediately with --auto-apply", async () => {
 		const { deps, out } = harness();
-		expect(await runCli(["run", "impl-review", "--input", "task=x", "--apply"], deps)).toBe(0);
+		expect(await runCli(["run", "impl-review", "--input", "task=x", "--auto-apply"], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/applied to/);
 	});
 

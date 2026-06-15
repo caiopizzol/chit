@@ -49,10 +49,10 @@ const USAGE = `chit -- run declared routines
   chit init [<name>] [--template text|loop|check]   scaffold a runnable routine (default: a text "example")
   chit routines                       list the routines declared in chit.config.json
   chit inspect <routine>              show what a routine needs and what it will run
-  chit run <routine> [opts]           run a routine and print its output
+  chit run <routine> [opts]           run a routine; a sandboxed routine is a DRY RUN (review, then chit apply)
       --input <name>=<value>          supply an input (repeatable)
       --scope <name>                  name the run's scope (session grouping)
-      --apply                         (sandboxed routines) apply the result to your tree; default is a dry run
+      --auto-apply                    automation: apply immediately, skipping the dry-run review (prefer chit apply)
   chit trace <run-id>                 show the receipt for a past run
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
@@ -85,7 +85,7 @@ function parseRunArgs(rest: string[]): {
 		} else if (a === "--scope") {
 			scope = rest[++i];
 			if (scope === undefined) return { id, inputs, apply, error: "--scope expects a value" };
-		} else if (a === "--apply") {
+		} else if (a === "--auto-apply") {
 			apply = true;
 		} else if (a?.startsWith("--")) {
 			return { id, inputs, apply, error: `unknown option ${a}` };

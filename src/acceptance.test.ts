@@ -112,10 +112,10 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		expect(existsSync(join(repo, "made.txt"))).toBe(false); // origin untouched
 	});
 
-	test("single-pass sandboxed: --apply writes the result back to origin", async () => {
+	test("single-pass sandboxed: --auto-apply writes the result back to origin", async () => {
 		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { manifestPath: "writey.json" } } });
 		const { deps, out } = harness(repo, writeMade);
-		expect(await runCli(["run", "writey", "--apply"], deps)).toBe(0);
+		expect(await runCli(["run", "writey", "--auto-apply"], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/applied to/);
 		expect(readFileSync(join(repo, "made.txt"), "utf-8")).toBe("made\n"); // origin written
 	});
@@ -142,7 +142,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 			return "working";
 		});
 		const { deps, out } = harness(repo, adapter);
-		expect(await runCli(["run", "impl", "--input", "task=x", "--apply"], deps)).toBe(0);
+		expect(await runCli(["run", "impl", "--input", "task=x", "--auto-apply"], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/run converged \(2 iterations\)/);
 		expect(out.join("\n")).toMatch(/applied to/);
 		expect(existsSync(join(repo, "ready.txt"))).toBe(true);
@@ -198,7 +198,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 			return "GRILLED-IDEA";
 		});
 		const { deps, out } = harness(repo, adapter);
-		expect(await runCli(["run", "flow", "--input", "idea=feature", "--apply"], deps)).toBe(0);
+		expect(await runCli(["run", "flow", "--input", "idea=feature", "--auto-apply"], deps)).toBe(0);
 		const text = out.join("\n");
 		expect(text).toContain("grill -> griller: completed");
 		expect(text).toContain("impl -> impl: converged");
@@ -232,7 +232,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 });
 
 describe("acceptance matrix -- failure cases", () => {
-	test("did-not-converge: --apply does NOT write a non-converged result", async () => {
+	test("did-not-converge: --auto-apply does NOT write a non-converged result", async () => {
 		const impl = {
 			id: "impl",
 			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
@@ -249,7 +249,7 @@ describe("acceptance matrix -- failure cases", () => {
 			return "tried";
 		});
 		const { deps, out } = harness(repo, adapter);
-		expect(await runCli(["run", "impl", "--apply"], deps)).toBe(1);
+		expect(await runCli(["run", "impl", "--auto-apply"], deps)).toBe(1);
 		expect(out.join("\n")).toMatch(/run did-not-converge/);
 		expect(existsSync(join(repo, "attempt.txt"))).toBe(false); // never applied
 		const receipt = loadReceipt(repo, "run-accept-0") as ConvergeReceipt;

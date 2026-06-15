@@ -511,6 +511,14 @@ critic's feedback feeds the next iteration. Still generic (no hardcoded "reviewe
   confirmed). Existing examples keep their advisory critics; the capability is opt-in per manifest. 255 pass +
   11 skip, typecheck clean.
 
+## Increment 25: make the reviewed-apply flow the default (rename --apply -> --auto-apply)
+Reviewer caveat: `chit run --apply` applied immediately after a model run, an UNLABELED bypass of the
+dry-run-then-review path now that `chit apply <run-id>` exists. Renamed the flag to `--auto-apply` (honest:
+it auto-applies, skipping review) and reframed USAGE so a sandboxed `chit run` is a DRY RUN by default and
+the reviewed path (run -> review the diff -> `chit apply`) is primary; `--auto-apply` is the explicit
+automation bypass. Internal `apply` boolean unchanged; only the user-facing flag + USAGE + test argv. The
+one-shot path is kept (a real automation mode) but no longer the unlabeled default. 255 pass, typecheck clean.
+
 ## State of the proof
 The minimal model is proven end to end: one manifest shape, behavior derived from structure; text /
 sandboxed-loop / check-only / composition all run through the real CLI against real git; dry-run vs
