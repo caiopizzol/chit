@@ -43,24 +43,18 @@ export default function Home() {
 				<section id="install">
 					<h2>Start in an existing project</h2>
 					<p className="lede">
-						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you already have
-						installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No API keys, no HTTP. Link the{" "}
-						<code>chit</code> bin once, then run it in any project.
+						chit is early. It runs under Bun and shells out to the agent CLIs you already have installed (
+						<code>claude</code>, <code>codex</code>, <code>gemini</code>). No API keys, no HTTP. Install it once, then
+						run it in any project.
 					</p>
 					<pre className="terminal">
-						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
-						{"\n"}
-						<span className="cmd">$ cd chit && bun install</span>
-						{"\n"}
-						<span className="cmd">$ cd packages/cli && bun link</span>
+						<span className="cmd">$ bun add -g @chit-run/cli</span>
 						{"\n\n"}
-						<span className="meta"># then, in your own project:</span>
+						<span className="meta"># then, in your project:</span>
 						{"\n"}
-						<span className="cmd">$ bun link @chit-run/cli</span>
+						<span className="cmd">$ chit doctor</span>
 						{"\n"}
-						<span className="cmd">$ bunx chit doctor</span>
-						{"\n"}
-						<span className="cmd">$ bunx chit init implement --template loop</span>
+						<span className="cmd">$ chit init implement --template loop</span>
 					</pre>
 					<p className="lede" style={{ marginTop: 16 }}>
 						Full walkthrough in{" "}

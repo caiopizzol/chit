@@ -15,31 +15,24 @@ Chit shells out to the agent CLIs you already use, so install and sign in to at 
 - `codex`
 - `gemini`
 
-Chit itself runs under [Bun](https://bun.sh). Step 4 (`chit doctor`) checks all of this for you.
+Chit installs and runs under [Bun](https://bun.sh). Step 3 (`chit doctor`) checks all of this for you.
 
-## 1. Link Chit once
-
-Chit is early and source-first, so you link the CLI from a clone instead of installing from npm:
+## 1. Install Chit
 
 ```sh
-git clone https://github.com/caiopizzol/chit
-cd chit && bun install
-cd packages/cli && bun link
+bun add -g @chit-run/cli
 ```
 
-## 2. Add it to your project
+This puts the `chit` command on your PATH. Move into the project you want to work in:
 
 ```sh
 cd /path/to/your-project
-bun link @chit-run/cli
 ```
 
-`bunx chit` now runs Chit inside your project.
-
-## 3. Create your first routine
+## 2. Create your first routine
 
 ```sh
-bunx chit init implement --template loop
+chit init implement --template loop
 ```
 
 This writes `chit.config.json` with:
@@ -54,35 +47,35 @@ Edit two things before you run:
 
 The [Config reference](/docs/config) documents every field.
 
-## 4. Check readiness
+## 3. Check readiness
 
 ```sh
-bunx chit doctor
+chit doctor
 ```
 
 Confirms the config parses, the routines resolve, and your agent CLIs are on PATH. Add `--real` to probe that each adapter can actually reach its model.
 
-## 5. Inspect before spending model calls
+## 4. Inspect before spending model calls
 
 ```sh
-bunx chit inspect implement
+chit inspect implement
 ```
 
 Resolves the routine, binds each agent to a real adapter and model, and prints the steps and limits. An invalid config fails here, before any model runs.
 
-## 6. Run it
+## 5. Run it
 
 ```sh
-bunx chit run implement --input task="add a --version flag"
+chit run implement --input task="add a --version flag"
 ```
 
 A routine with a check or a read-write agent runs in a disposable git worktree. It is a dry run: it produces a patch and stops. Your working tree is untouched.
 
-## 7. Review, then apply
+## 6. Review, then apply
 
 ```sh
-bunx chit trace --full <run-id>
-bunx chit apply <run-id>
+chit trace --full <run-id>
+chit apply <run-id>
 ```
 
 `trace` shows what each step and iteration did, with the resolved bindings and the saved patch. `apply` replays that exact patch through a gate: same HEAD, clean tree, `git apply --check`.
@@ -91,13 +84,13 @@ bunx chit apply <run-id>
 
 | Goal | Command |
 |---|---|
-| Check setup | `bunx chit doctor` |
-| List routines | `bunx chit routines` |
-| Understand a routine | `bunx chit inspect implement` |
-| Run safely (dry run) | `bunx chit run implement --input task="..."` |
-| List past runs | `bunx chit runs [--scope <id>]` |
-| Review a result | `bunx chit trace --full <run-id>` |
-| Apply a patch | `bunx chit apply <run-id>` |
+| Check setup | `chit doctor` |
+| List routines | `chit routines` |
+| Understand a routine | `chit inspect implement` |
+| Run safely (dry run) | `chit run implement --input task="..."` |
+| List past runs | `chit runs [--scope <id>]` |
+| Review a result | `chit trace --full <run-id>` |
+| Apply a patch | `chit apply <run-id>` |
 
 ## How a run is derived
 

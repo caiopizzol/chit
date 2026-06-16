@@ -8,19 +8,17 @@ You declare a routine. Chit resolves the models, runs each step, passes context 
 
 ## Get started
 
-Chit shells out to the agent CLIs you already use, so install at least one (`claude`, `codex`, or `gemini`). Then link Chit once and run it in your project:
+Chit shells out to the agent CLIs you already use, so install at least one (`claude`, `codex`, or `gemini`). Then install Chit and run it in your project:
 
 ```sh
-git clone https://github.com/caiopizzol/chit
-cd chit && bun install && cd packages/cli && bun link
+bun add -g @chit-run/cli          # or: npm install -g @chit-run/cli
 
 cd /path/to/your-project
-bun link @chit-run/cli
-bunx chit init implement --template loop   # writes chit.config.json
-bunx chit doctor                           # check config + agent CLIs
-bunx chit inspect implement                # see what will run
-bunx chit run implement --input task="add a --version flag"   # dry run -> patch
-bunx chit apply <run-id>                   # apply the reviewed patch
+chit init implement --template loop   # writes chit.config.json
+chit doctor                           # check config + agent CLIs
+chit inspect implement                # see what will run
+chit run implement --input task="add a --version flag"   # dry run -> patch
+chit apply <run-id>                   # apply the reviewed patch
 ```
 
 The generated routine ships a placeholder check; swap it for your real command (e.g. `bun test`). Full walkthrough: [chit.run/docs](https://chit.run/docs).
@@ -117,10 +115,11 @@ chit trace --full run-a1b5efea
 
 ## Develop Chit
 
-To work on Chit itself, run the CLI from source and the test suite:
+To work on Chit itself, clone and run from source:
 
 ```sh
-bun install
+git clone https://github.com/caiopizzol/chit
+cd chit && bun install
 cd packages/cli
 bun run src/index.ts routines
 bun run src/index.ts run feature-griller --input idea="add dark mode"
