@@ -1,11 +1,11 @@
-// A routine is ONE shape: inputs + participants + ordered steps + optional repeat
+// A routine is ONE shape: inputs + agents + ordered steps + optional repeat
 // + optional output. There is no `policy` field -- behavior is DERIVED from the
 // structure, so the user describes the work, not its execution category:
 //
 //   steps are `routine` steps                 -> composition (run them in order)
 //   `repeat` present                          -> loop until its `until` condition holds
 //                                                (checks pass, or a step's output equals X)
-//   any read-write participant OR check step  -> runs in a git-worktree sandbox
+//   any read-write agent OR check step        -> runs in a git-worktree sandbox
 //   pure read-only (call/format, maybe a loop) -> runs read-only in the cwd
 //
 // Parsing validates STRUCTURE (and the no-mixing / repeat / output rules, which
@@ -147,7 +147,7 @@ export function hasWriteParticipant(m: Manifest): boolean {
 }
 
 // A routine touches the filesystem if it can run commands (checks) or edit files
-// (a read-write participant). Those get the worktree boundary; pure read-only
+// (a read-write agent). Those get the worktree boundary; pure read-only
 // call/format routines run in the cwd.
 export function isSandboxed(m: Manifest): boolean {
 	return hasChecks(m) || hasWriteParticipant(m);
@@ -220,17 +220,13 @@ function parseInputs(raw: unknown, source: string): Record<string, InputSpec> {
 
 function parseParticipants(raw: unknown, source: string): Record<string, Participant> {
 	if (raw === undefined) return {};
-	if (!isObject(raw)) throw new ManifestError(source, "`participants` must be an object");
+	if (!isObject(raw)) throw new ManifestError(source, "`agents` must be an object");
 	const out: Record<string, Participant> = {};
 	for (const [id, spec] of Object.entries(raw)) {
-		const where = `${source}.participants.${id}`;
+		const where = `${source}.agents.${id}`;
 		if (!isObject(spec)) throw new ManifestError(where, "must be an object");
-		requireKeys(spec, new Set(["agent", "profile", "instructions", "filesystem"]), where);
-		if (spec.agent !== undefined && spec.profile !== undefined) {
-			throw new ManifestError(where, "`agent` and `profile` are aliases; use one of them");
-		}
-		const agent = spec.profile ?? spec.agent;
-		if (typeof agent !== "string" || !agent) {
+		requireKeys(spec, new Set(["profile", "instructions", "filesystem"]), where);
+		if (typeof spec.profile !== "string" || !spec.profile) {
 			throw new ManifestError(where, "`profile` must be a non-empty string");
 		}
 		if (typeof spec.instructions !== "string" || !spec.instructions) {
@@ -239,7 +235,7 @@ function parseParticipants(raw: unknown, source: string): Record<string, Partici
 		if (typeof spec.filesystem !== "string" || !FILESYSTEMS.has(spec.filesystem as Filesystem)) {
 			throw new ManifestError(where, `\`filesystem\` must be one of: ${[...FILESYSTEMS].join(", ")}`);
 		}
-		out[id] = { id, agent, instructions: spec.instructions, filesystem: spec.filesystem as Filesystem };
+		out[id] = { id, agent: spec.profile, instructions: spec.instructions, filesystem: spec.filesystem as Filesystem };
 	}
 	return out;
 }
@@ -288,7 +284,7 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 		if (kind === "call") {
 			requireKeys(s, new Set(["id", "call", "prompt", "json"]), where);
 			if (typeof s.call !== "string" || !(s.call in participants)) {
-				throw new ManifestError(where, `\`call\` must name a participant (got ${JSON.stringify(s.call)})`);
+				throw new ManifestError(where, `\`call\` must name an agent (got ${JSON.stringify(s.call)})`);
 			}
 			if (typeof s.prompt !== "string" || !s.prompt) throw new ManifestError(where, "`prompt` must be a non-empty string");
 			let json: { schema: JsonSchema } | undefined;
@@ -335,17 +331,14 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	if (raw.description !== undefined && typeof raw.description !== "string") {
 		throw new ManifestError(source, "`description` must be a string");
 	}
-	requireKeys(raw, new Set(["id", "description", "input", "inputs", "agents", "participants", "steps", "repeat", "output", "limits"]), source);
+	requireKeys(raw, new Set(["id", "description", "input", "inputs", "agents", "steps", "repeat", "output", "limits"]), source);
 
 	if (raw.input !== undefined && raw.inputs !== undefined) {
 		throw new ManifestError(source, "`input` and `inputs` are aliases; use one of them");
 	}
 	const inputRaw = raw.input !== undefined ? [raw.input] : raw.inputs;
 	const inputs = parseInputs(inputRaw, source);
-	if (raw.agents !== undefined && raw.participants !== undefined) {
-		throw new ManifestError(source, "`agents` and `participants` are aliases; use one of them");
-	}
-	const participants = parseParticipants(raw.agents ?? raw.participants, source);
+	const participants = parseParticipants(raw.agents, source);
 	const steps = parseSteps(raw.steps, source, participants);
 
 	// Rule 1: no step mixing -- `routine` steps (a composition) OR call/format/check
@@ -359,7 +352,7 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 
 	// Rule 4: `ask` (human input) is supported only where execution pauses cleanly between
 	// steps -- a single-pass text routine or a composition. It is NOT supported inside a
-	// sandboxed routine (a check step or a read-write participant) NOR a loop (`repeat`),
+	// sandboxed routine (a check step or a read-write agent) NOR a loop (`repeat`),
 	// where the converge executor re-runs steps and "ask once vs every iteration" is undefined.
 	// Put the gate in the composition that calls this routine instead.
 	const sandboxed = steps.some((s) => s.kind === "check") || Object.values(participants).some((p) => p.filesystem === "read-write");
@@ -367,7 +360,7 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	if (steps.some((s) => s.kind === "ask") && !composition && (sandboxed || looping)) {
 		throw new ManifestError(
 			source,
-			"an `ask` step is not supported in a sandboxed or looping routine (it has a check step, a read-write participant, or a `repeat`). Put the ask in the composition that calls this routine, or in a single-pass read-only text routine.",
+			"an `ask` step is not supported in a sandboxed or looping routine (it has a check step, a read-write agent, or a `repeat`). Put the ask in the composition that calls this routine, or in a single-pass read-only text routine.",
 		);
 	}
 

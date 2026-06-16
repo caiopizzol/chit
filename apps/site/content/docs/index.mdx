@@ -7,7 +7,7 @@ Chit turns the agent workflow you already run by hand into config.
 
 You declare the routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt.
 
-There is no built-in implementer, reviewer, planner, griller, or goal mode. Those are routine names, participant ids, and prompts you define.
+There is no built-in implementer, reviewer, planner, griller, or goal mode. Those are routine names, agent ids, and prompts you define.
 
 <Cards>
 	<Card href="/docs/config" title="Read the config model">
@@ -39,7 +39,7 @@ Chit keeps that orchestration explicit:
 	"profiles": {
 		"planner": "claude:sonnet",
 		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-		"critic": { "adapter": "codex", "model": "gpt-5.5", "effort": "xhigh" }
+		"critic": { "adapter": "codex", "model": "gpt-5.5" }
 	},
 	"routines": {
 		"feature-flow": {

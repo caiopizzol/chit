@@ -14,14 +14,7 @@
 		},
 		"profiles": {
 			"type": "object",
-			"description": "Preferred name for local adapter/model bindings.",
-			"additionalProperties": {
-				"$ref": "#/$defs/profile"
-			}
-		},
-		"agents": {
-			"type": "object",
-			"description": "Compatibility alias for profiles.",
+			"description": "Local adapter/model bindings.",
 			"additionalProperties": {
 				"$ref": "#/$defs/profile"
 			}
@@ -185,10 +178,6 @@
 		"routineEntry": {
 			"oneOf": [
 				{
-					"type": "string",
-					"description": "Path to a routine file."
-				},
-				{
 					"$ref": "#/$defs/fileRoutine"
 				},
 				{
@@ -199,24 +188,11 @@
 		"fileRoutine": {
 			"type": "object",
 			"additionalProperties": false,
-			"oneOf": [
-				{
-					"required": [
-						"file"
-					]
-				},
-				{
-					"required": [
-						"manifestPath"
-					]
-				}
+			"required": [
+				"file"
 			],
 			"properties": {
 				"file": {
-					"type": "string",
-					"minLength": 1
-				},
-				"manifestPath": {
 					"type": "string",
 					"minLength": 1
 				},
@@ -265,13 +241,7 @@
 				"agents": {
 					"type": "object",
 					"additionalProperties": {
-						"$ref": "#/$defs/participant"
-					}
-				},
-				"participants": {
-					"type": "object",
-					"additionalProperties": {
-						"$ref": "#/$defs/participant"
+						"$ref": "#/$defs/agent"
 					}
 				},
 				"steps": {
@@ -310,19 +280,16 @@
 				}
 			}
 		},
-		"participant": {
+		"agent": {
 			"type": "object",
 			"additionalProperties": false,
 			"required": [
+				"profile",
 				"instructions",
 				"filesystem"
 			],
 			"properties": {
 				"profile": {
-					"type": "string",
-					"minLength": 1
-				},
-				"agent": {
 					"type": "string",
 					"minLength": 1
 				},

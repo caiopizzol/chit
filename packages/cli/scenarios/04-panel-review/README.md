@@ -1,6 +1,6 @@
 # 04 - Panel Review
 
-Purpose: test multiple participants and model bindings in one read-only routine.
+Purpose: test multiple routine agents and model bindings in one read-only routine.
 
 ```sh
 BIN=../../src/index.ts

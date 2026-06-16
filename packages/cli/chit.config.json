@@ -1,40 +1,40 @@
 {
 	"routines": {
 		"feature-griller": {
-			"manifestPath": "examples/feature-griller.json",
+			"file": "examples/feature-griller.json",
 			"description": "Question a feature idea before implementation."
 		},
 		"planning": {
-			"manifestPath": "examples/planning.json",
+			"file": "examples/planning.json",
 			"description": "Turn a goal into a small, ordered implementation plan."
 		},
 		"implementation-review": {
-			"manifestPath": "examples/implementation-review.json",
+			"file": "examples/implementation-review.json",
 			"description": "Implement, review, and verify a code slice.",
 			"defaults": { "maxIterations": 3 }
 		},
 		"sandbox-smoke": {
-			"manifestPath": "examples/sandbox-smoke.json",
+			"file": "examples/sandbox-smoke.json",
 			"description": "Tiny real converge smoke (creates smoke.txt in a sandbox)."
 		},
 		"forced-revise": {
-			"manifestPath": "examples/forced-revise.json",
+			"file": "examples/forced-revise.json",
 			"description": "Forces a real multi-iteration recovery (learn-from-failing-check)."
 		},
 		"feature-flow": {
-			"manifestPath": "examples/feature-flow.json",
+			"file": "examples/feature-flow.json",
 			"description": "Composed: grill -> plan -> approve gate -> implementation-review."
 		},
 		"clarify": {
-			"manifestPath": "examples/clarify.json",
+			"file": "examples/clarify.json",
 			"description": "Model-less demo of an ask gate (asks one question, echoes the answer)."
 		},
 		"refine": {
-			"manifestPath": "examples/refine.json",
+			"file": "examples/refine.json",
 			"description": "Draft-and-critique loop until the critic says ship (a model-judged loop, no checks)."
 		}
 	},
-	"agents": {
+	"profiles": {
 		"claude": { "adapter": "claude", "model": "default" },
 		"builder": { "adapter": "claude", "model": "default" },
 		"critic": { "adapter": "claude", "model": "default" }

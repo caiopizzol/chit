@@ -3,9 +3,9 @@
 	"inputs": {
 		"idea": { "type": "string", "required": true }
 	},
-	"participants": {
+	"agents": {
 		"griller": {
-			"agent": "griller",
+			"profile": "griller",
 			"instructions": "Question the idea and suggest the smallest sensible default. Do not edit files.",
 			"filesystem": "read-only"
 		}

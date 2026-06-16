@@ -1,5 +1,5 @@
 {
-	"name": "chit-minimal-workspace",
+	"name": "chit-workspace",
 	"version": "0.0.0",
 	"private": true,
 	"workspaces": ["apps/*", "packages/*"],

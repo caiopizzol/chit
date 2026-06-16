@@ -3,14 +3,14 @@
 	"inputs": {
 		"question": { "type": "string", "required": true }
 	},
-	"participants": {
+	"agents": {
 		"explorer": {
-			"agent": "explorer",
+			"profile": "explorer",
 			"instructions": "Answer with the smallest useful first slice.",
 			"filesystem": "read-only"
 		},
 		"judge": {
-			"agent": "judge",
+			"profile": "judge",
 			"instructions": "Turn the answer into a concise recommendation.",
 			"filesystem": "read-only"
 		}

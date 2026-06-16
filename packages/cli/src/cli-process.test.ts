@@ -77,7 +77,7 @@ describe("CLI process: the real binary (no model)", () => {
 	// routine keeps this deterministic -- no model needed.
 	test("an ask step reads the operator's answer from stdin and feeds it forward", () => {
 		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { echo: { manifestPath: "echo.json" } }, agents: {} }));
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { echo: { file: "echo.json" } }, profiles: {} }));
 		writeFileSync(
 			join(cwd, "echo.json"),
 			JSON.stringify({
@@ -100,7 +100,7 @@ describe("CLI process: the real binary (no model)", () => {
 	// convergence, exit codes, and text output at the process boundary.
 	test("a { step, equals } loop runs in the cwd, converges, and prints its result (no model, no sandbox)", () => {
 		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { settle: { manifestPath: "settle.json" } }, agents: {} }));
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { settle: { file: "settle.json" } }, profiles: {} }));
 		writeFileSync(
 			join(cwd, "settle.json"),
 			JSON.stringify({
@@ -131,7 +131,7 @@ describe("CLI process: the real binary (no model)", () => {
 		const cwd = tmp();
 		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
 		sh("git init -q && git config user.email t@t.co && git config user.name t");
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { manifestPath: "writer.json" } }, agents: {} }));
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }));
 		writeFileSync(
 			join(cwd, "writer.json"),
 			JSON.stringify({
@@ -163,7 +163,7 @@ describe("CLI process: the real binary (no model)", () => {
 		const cwd = tmp();
 		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
 		sh("git init -q && git config user.email t@t.co && git config user.name t");
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { manifestPath: "writer.json" } }, agents: {} }));
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }));
 		writeFileSync(
 			join(cwd, "writer.json"),
 			JSON.stringify({

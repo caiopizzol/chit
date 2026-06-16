@@ -15,7 +15,7 @@ const GRILLER = {
 	id: "feature-griller",
 	description: "Question a feature idea.",
 	inputs: { idea: { type: "string" }, context: { type: "string", required: false } },
-	participants: { griller: { agent: "claude", instructions: "Read-only.", filesystem: "read-only" } },
+	agents: { griller: { profile: "claude", instructions: "Read-only.", filesystem: "read-only" } },
 	steps: [
 		{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
 		{ id: "out", format: "{{ steps.grill.output }}" },
@@ -26,9 +26,9 @@ const GRILLER = {
 const REVIEW = {
 	id: "impl-review",
 	inputs: { task: { type: "string" } },
-	participants: {
-		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
-		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+	agents: {
+		builder: { profile: "codex", instructions: "Implement.", filesystem: "read-write" },
+		critic: { profile: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
@@ -43,9 +43,9 @@ const REVIEW = {
 const GOAL = {
 	id: "goal-loop",
 	inputs: { goal: { type: "string" } },
-	participants: {
-		worker: { agent: "claude", instructions: "Work toward the goal.", filesystem: "read-only" },
-		judge: { agent: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
+	agents: {
+		worker: { profile: "claude", instructions: "Work toward the goal.", filesystem: "read-only" },
+		judge: { profile: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "work", call: "worker", prompt: "Goal {{ inputs.goal }} prev=[{{ steps.done.output }}]" },
@@ -65,13 +65,13 @@ beforeAll(() => {
 		join(dir, "chit.config.json"),
 		JSON.stringify({
 			routines: {
-				"feature-griller": { manifestPath: "examples/feature-griller.json", description: "Question a feature idea." },
-				"impl-review": { manifestPath: "examples/impl-review.json", description: "Implement and review." },
-				"goal-loop": { manifestPath: "examples/goal-loop.json", description: "Loop until an evaluator says yes." },
+				"feature-griller": { file: "examples/feature-griller.json", description: "Question a feature idea." },
+				"impl-review": { file: "examples/impl-review.json", description: "Implement and review." },
+				"goal-loop": { file: "examples/goal-loop.json", description: "Loop until an evaluator says yes." },
 			},
-			// impl-review's two participants use different agent ids ("codex" / "claude"); both
-			// resolve to the claude adapter here, proving per-participant agent binding.
-			agents: {
+			// impl-review's two routine agents use different profile ids ("codex" / "claude"); both
+			// resolve to the claude adapter here, proving per-agent profile binding.
+			profiles: {
 				claude: { adapter: "claude", model: "default" },
 				codex: { adapter: "claude", model: "default" },
 				judge: { adapter: "claude", model: "default" },

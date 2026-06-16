@@ -14,9 +14,9 @@ import type { ResolvedRoutine } from "./routine.ts";
 const CONVERGE = {
 	id: "impl-review",
 	inputs: { task: { type: "string" } },
-	participants: {
-		builder: { agent: "codex", instructions: "Build.", filesystem: "read-write" },
-		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+	agents: {
+		builder: { profile: "codex", instructions: "Build.", filesystem: "read-write" },
+		critic: { profile: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
 	steps: [
 		{
@@ -243,9 +243,9 @@ describe("runConverge -- { step, equals } convergence (a user-authored /goal loo
 	const GOAL = {
 		id: "goal-loop",
 		inputs: { goal: { type: "string" } },
-		participants: {
-			worker: { agent: "worker", instructions: "Work toward the goal.", filesystem: "read-only" },
-			judge: { agent: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
+		agents: {
+			worker: { profile: "worker", instructions: "Work toward the goal.", filesystem: "read-only" },
+			judge: { profile: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
 		},
 		steps: [
 			{ id: "work", call: "worker", prompt: "Goal {{ inputs.goal }} iter {{ iteration }} prev=[{{ steps.done.output }}]" },
@@ -306,9 +306,9 @@ describe("runConverge -- compound { all } convergence (a model review can BLOCK)
 	const GATED = {
 		id: "gated",
 		inputs: {},
-		participants: {
-			builder: { agent: "builder", instructions: "Build.", filesystem: "read-write" },
-			critic: { agent: "critic", instructions: "Judge.", filesystem: "read-only" },
+		agents: {
+			builder: { profile: "builder", instructions: "Build.", filesystem: "read-write" },
+			critic: { profile: "critic", instructions: "Judge.", filesystem: "read-only" },
 		},
 		steps: [
 			{ id: "build", call: "builder", prompt: "iter {{ iteration }} prev=[{{ steps.critique.output }}]" },
@@ -350,9 +350,9 @@ describe("runConverge -- structured verdict (json + path condition)", () => {
 	const JSON_LOOP = {
 		id: "json-loop",
 		inputs: { task: { type: "string" } },
-		participants: {
-			worker: { agent: "claude", instructions: "Work.", filesystem: "read-only" },
-			judge: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+		agents: {
+			worker: { profile: "claude", instructions: "Work.", filesystem: "read-only" },
+			judge: { profile: "claude", instructions: "Judge.", filesystem: "read-only" },
 		},
 		steps: [
 			{ id: "work", call: "worker", prompt: "do {{ inputs.task }} iter {{ iteration }} prev=[{{ steps.verdict.output }}]" },
@@ -408,7 +408,7 @@ describe("runConverge -- structured validation gates convergence", () => {
 	const GATED = {
 		id: "gated",
 		inputs: { task: { type: "string" } },
-		participants: { reviewer: { agent: "claude", instructions: "Review.", filesystem: "read-only" } },
+		agents: { reviewer: { profile: "claude", instructions: "Review.", filesystem: "read-only" } },
 		steps: [
 			{ id: "judge", call: "reviewer", prompt: "judge iter {{ iteration }}", json: { schema: { type: "object", required: ["passed"], properties: { passed: { type: "boolean" } } } } },
 			{ id: "verify", check: "bun test" },

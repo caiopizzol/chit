@@ -25,8 +25,8 @@ import { formatInspect, formatReceiptBodies, formatRoutineList, formatRunList, f
 export interface CliDeps {
 	cwd: string;
 	// Real adapters keyed by adapter type (e.g. { claude: claudeCliAdapter }). The run
-	// command builds a dispatching adapter from this + the config's agent bindings, so a
-	// participant's agent id picks the adapter and model.
+	// command builds a dispatching adapter from this + the config's profile bindings, so a
+	// routine agent's profile id picks the adapter and model.
 	adapters: AdapterRegistry;
 	// For sandboxed routines: the check seam and the write-safety sandbox.
 	checkRunner: CheckRunner;
@@ -50,7 +50,7 @@ export interface CliDeps {
 
 const USAGE = `chit -- run declared routines
 
-  chit init [<name>] [--template text|loop|check]   scaffold a runnable inline routine
+  chit init [<name>] [--template text|loop|check]   scaffold a runnable routine
   chit routines                       list the routines declared in chit.config.json
   chit runs [--scope <name>]          list past runs (id, routine, status, scope, age)
   chit inspect <routine>              show what a routine needs and what it will run
@@ -63,9 +63,8 @@ const USAGE = `chit -- run declared routines
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
 
-A routine is a declared workflow. The config can keep small routines inline or
-point a routine at a file. How it runs is derived from the shape -- routine steps
-compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.`;
+A routine is a declared workflow. How it runs is derived from the shape: routine
+steps compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.`;
 
 function parseRunArgs(rest: string[]): {
 	id?: string;
@@ -217,7 +216,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const config = loadConfig(deps.cwd);
 			const routine = resolveRoutine(config, args.id, deps.cwd);
 			// One adapter for the executors; it routes each call to the configured adapter
-			// and model for that participant's agent id.
+			// and model for that routine agent's profile id.
 			const adapter = dispatchingAdapter(config.agents, deps.adapters);
 
 			const validation = validateInputs(routine.manifest, args.inputs);
@@ -233,8 +232,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				} catch (e) {
 					return fail(deps, (e as Error).message);
 				}
-				// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now --
-				// before grill/plan run -- and capture the base commit for the receipt.
+				// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now
+				// before grill/plan run, and capture the base commit for the receipt.
 				let flowBase: string | undefined;
 				if (resolvedFlow.steps.some((st) => st.kind === "routine" && isSandboxed(st.routine.manifest))) {
 					const pf = await preflightSandbox(deps);

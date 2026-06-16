@@ -12,7 +12,7 @@ function routineFrom(raw: unknown): ResolvedRoutine {
 const GRILLER = {
 	id: "griller",
 	inputs: { idea: { type: "string" } },
-	participants: { griller: { agent: "claude", instructions: "Read-only.", filesystem: "read-only" } },
+	agents: { griller: { profile: "claude", instructions: "Read-only.", filesystem: "read-only" } },
 	steps: [
 		{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
 		{ id: "out", format: "REPORT:\n{{ steps.grill.output }}" },
@@ -45,7 +45,7 @@ describe("runOneShot", () => {
 		expect(r.steps[1]?.startedAt ?? 0).toBeGreaterThan(r.steps[0]?.startedAt ?? 0);
 	});
 
-	test("passes the participant's instructions, filesystem, and cwd to the adapter", async () => {
+	test("passes the agent's instructions, filesystem, and cwd to the adapter", async () => {
 		const adapter = fakeAdapter();
 		await runOneShot(routineFrom(GRILLER), { idea: "x" }, deps(adapter));
 		expect(adapter.calls[0]).toMatchObject({
@@ -155,7 +155,7 @@ describe("runOneShot -- ask steps", () => {
 	const ASK = {
 		id: "clarify",
 		inputs: { idea: { type: "string" } },
-		participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+		agents: { griller: { profile: "claude", instructions: "Grill.", filesystem: "read-only" } },
 		steps: [
 			{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
 			{ id: "decide", ask: "Refine?\n{{ steps.grill.output }}" },
@@ -205,7 +205,7 @@ describe("runOneShot -- ask steps", () => {
 		const trailing = {
 			id: "trailing",
 			inputs: { idea: { type: "string" } },
-			participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+			agents: { griller: { profile: "claude", instructions: "Grill.", filesystem: "read-only" } },
 			steps: [
 				{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
 				{ id: "decide", ask: "any notes?" },
@@ -234,7 +234,7 @@ describe("runOneShot -- structured call output", () => {
 	const EXTRACT = {
 		id: "extract",
 		inputs: { text: { type: "string" } },
-		participants: { reader: { agent: "claude", instructions: "Extract.", filesystem: "read-only" } },
+		agents: { reader: { profile: "claude", instructions: "Extract.", filesystem: "read-only" } },
 		steps: [
 			{
 				id: "fields",

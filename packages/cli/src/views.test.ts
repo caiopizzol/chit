@@ -23,7 +23,7 @@ const ONE_SHOT = {
 	id: "feature-griller",
 	description: "Question a feature idea.",
 	inputs: { idea: { type: "string" }, context: { type: "string", required: false, description: "background" } },
-	participants: { griller: { agent: "claude", instructions: "Read-only.", filesystem: "read-only" } },
+	agents: { griller: { profile: "claude", instructions: "Read-only.", filesystem: "read-only" } },
 	steps: [
 		{ id: "grill", call: "griller", prompt: "p" },
 		{ id: "out", format: "f" },
@@ -35,9 +35,9 @@ const CONVERGE = {
 	id: "impl-review",
 	description: "Implement and review.",
 	inputs: { task: { type: "string" } },
-	participants: {
-		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
-		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+	agents: {
+		builder: { profile: "codex", instructions: "Implement.", filesystem: "read-write" },
+		critic: { profile: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
@@ -158,7 +158,7 @@ describe("formatInspect", () => {
 		const gated = {
 			id: "clarify",
 			inputs: { idea: { type: "string" } },
-			participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+			agents: { griller: { profile: "claude", instructions: "Grill.", filesystem: "read-only" } },
 			steps: [
 				{ id: "grill", call: "griller", prompt: "p" },
 				{ id: "decide", ask: "anything to add?" },

@@ -2,9 +2,9 @@
 	"id": "forced-revise",
 	"description": "Force a recovery loop from check output.",
 	"inputs": {},
-	"participants": {
+	"agents": {
 		"builder": {
-			"agent": "builder",
+			"profile": "builder",
 			"instructions": "Create or edit files so the check passes. Revise from failing check output.",
 			"filesystem": "read-write"
 		}

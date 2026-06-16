@@ -68,9 +68,9 @@ function realDeps(): RunDeps {
 					{
 						id: "two-agents",
 						inputs: {},
-						participants: {
-							builder: { agent: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" },
-							critic: { agent: "critic", instructions: "You only read and comment. Do NOT edit any file.", filesystem: "read-only" },
+						agents: {
+							builder: { profile: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" },
+							critic: { profile: "critic", instructions: "You only read and comment. Do NOT edit any file.", filesystem: "read-only" },
 						},
 						steps: [
 							{ id: "build", call: "builder", prompt: "Append a single line to note.md." },
@@ -141,9 +141,9 @@ function realDeps(): RunDeps {
 					{
 						id: "mixed",
 						inputs: {},
-						participants: {
-							builder: { agent: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" },
-							critic: { agent: "critic", instructions: "You only read and comment. Do NOT edit any file.", filesystem: "read-only" },
+						agents: {
+							builder: { profile: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" },
+							critic: { profile: "critic", instructions: "You only read and comment. Do NOT edit any file.", filesystem: "read-only" },
 						},
 						steps: [
 							{ id: "build", call: "builder", prompt: "Append a single line to note.md." },
@@ -204,7 +204,7 @@ function realDeps(): RunDeps {
 
 // Codex input-validation that needs no model (always runs): `none` has no codex mapping.
 describe("codex adapter: filesystem none is rejected (no real call)", () => {
-	test("rejects a `none` participant before spawning anything", async () => {
+	test("rejects a `none` agent before spawning anything", async () => {
 		await expect(
 			codexCliAdapter.call({ agent: "x", instructions: "i", prompt: "p", filesystem: "none", cwd: tmpdir() }),
 		).rejects.toThrow(/no no-tools mode/);
@@ -291,7 +291,7 @@ describe("codex adapter: filesystem none is rejected (no real call)", () => {
 					{
 						id: "codex-build",
 						inputs: {},
-						participants: { builder: { agent: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" } },
+						agents: { builder: { profile: "builder", instructions: "Append one short line to note.md and nothing else.", filesystem: "read-write" } },
 						steps: [
 							{ id: "build", call: "builder", prompt: "Append a single line to note.md." },
 							{ id: "verify", check: [{ command: "sh", args: ["-c", "test -f note.md"] }] },

@@ -4,14 +4,14 @@
 		"task": { "type": "string", "required": true },
 		"context": { "type": "string", "required": true, "description": "manual output from a prior run" }
 	},
-	"participants": {
+	"agents": {
 		"builder": {
-			"agent": "builder",
+			"profile": "builder",
 			"instructions": "Implement the task using the supplied prior-run context. Keep the change small.",
 			"filesystem": "read-write"
 		},
 		"critic": {
-			"agent": "critic",
+			"profile": "critic",
 			"instructions": "Review for correctness, scope, and whether the prior context was honored.",
 			"filesystem": "read-only"
 		}

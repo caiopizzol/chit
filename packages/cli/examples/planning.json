@@ -4,9 +4,9 @@
 	"inputs": {
 		"goal": { "type": "string", "required": true, "description": "what you want built" }
 	},
-	"participants": {
+	"agents": {
 		"planner": {
-			"agent": "claude",
+			"profile": "claude",
 			"instructions": "You design a small, sequential implementation plan for a software goal. Inspect the repo at your cwd read-only to ground every step in real files. You write nothing.",
 			"filesystem": "read-only"
 		}

@@ -4,14 +4,14 @@
 	"inputs": {
 		"task": { "type": "string", "required": true, "description": "the change to make" }
 	},
-	"participants": {
+	"agents": {
 		"builder": {
-			"agent": "builder",
+			"profile": "builder",
 			"instructions": "Implement a small, well-scoped change. Use CommonJS when writing JavaScript files.",
 			"filesystem": "read-write"
 		},
 		"critic": {
-			"agent": "critic",
+			"profile": "critic",
 			"instructions": "Review the diff for correctness and scope. You do not edit files.",
 			"filesystem": "read-only"
 		}

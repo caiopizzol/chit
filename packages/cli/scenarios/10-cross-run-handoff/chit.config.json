@@ -1,15 +1,15 @@
 {
 	"routines": {
 		"panel-review": {
-			"manifestPath": "routines/panel-review.json",
+			"file": "routines/panel-review.json",
 			"description": "Produce a recommendation to hand into a later run."
 		},
 		"implement-with-context": {
-			"manifestPath": "routines/implement-with-context.json",
+			"file": "routines/implement-with-context.json",
 			"description": "Use manually pasted prior-run context."
 		}
 	},
-	"agents": {
+	"profiles": {
 		"explorer": { "adapter": "gemini", "model": "default" },
 		"judge": { "adapter": "claude", "model": "sonnet" },
 		"builder": { "adapter": "codex", "model": "gpt-5.5" },

@@ -83,17 +83,22 @@ describe("scaffoldRoutine", () => {
 		expect(readFileSync(join(cwd, "chit.config.json"), "utf-8")).toBe('{"routines":[]}');
 	});
 
-	test("adds inline routines to an existing old-style agents registry", () => {
+	test("adds inline routines to an existing profiles registry", () => {
 		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ agents: { claude: { adapter: "claude", model: "default" } }, routines: {} }));
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ profiles: { claude: { adapter: "claude", model: "default" } }, routines: {} }));
 		scaffoldRoutine(cwd, "review", "text");
 		const raw = JSON.parse(readFileSync(join(cwd, "chit.config.json"), "utf-8")) as {
-			agents?: Record<string, unknown>;
 			profiles?: Record<string, unknown>;
 			routines: Record<string, unknown>;
 		};
-		expect(raw.profiles).toBeUndefined();
-		expect(raw.agents).toEqual({ claude: { adapter: "claude", model: "default" } });
+		expect(raw.profiles).toEqual({ claude: { adapter: "claude", model: "default" } });
 		expect(raw.routines.review).toMatchObject({ input: "topic" });
+	});
+
+	test("rejects an existing config that still uses the old top-level agents alias", () => {
+		const cwd = tmp();
+		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ agents: { claude: { adapter: "claude" } }, routines: {} }));
+		expect(() => scaffoldRoutine(cwd, "review", "text")).toThrow(/unknown field "agents"/);
+		expect(JSON.parse(readFileSync(join(cwd, "chit.config.json"), "utf-8")).routines).toEqual({});
 	});
 });

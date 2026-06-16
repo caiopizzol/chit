@@ -18,7 +18,7 @@ export interface ResolvedRoutine {
 	manifest: Manifest;
 	defaults?: { maxIterations?: number };
 	digest: string;
-	// Each participant's agent id bound to its config entry (adapter + model). Set by
+	// Each referenced profile id bound to its config entry (adapter + model). Set by
 	// resolveRoutine; inspect surfaces it. (Optional so hand-built test routines may omit it.)
 	agents?: Record<string, AgentConfig>;
 }
@@ -79,8 +79,8 @@ export function resolveRoutine(
 		manifest = parseManifest(raw, entry.manifestPath);
 	}
 
-	// Bind each participant's agent id to its config entry, so the run knows which
-	// adapter/model backs it. A participant that references an undefined agent fails HERE,
+	// Bind each routine agent's profile id to its config entry, so the run knows which
+	// adapter/model backs it. A missing profile fails HERE,
 	// at resolve, not mid-run.
 	const agents: Record<string, AgentConfig> = {};
 	for (const p of Object.values(manifest.participants)) {
@@ -88,7 +88,7 @@ export function resolveRoutine(
 		if (agentCfg === undefined) {
 			const known = Object.keys(config.agents).sort();
 			throw new RoutineError(
-				`routine ${JSON.stringify(id)} uses agent ${JSON.stringify(p.agent)}, which is not defined under "agents" in chit.config.json${known.length > 0 ? ` (configured: ${known.join(", ")})` : " (no agents configured)"}`,
+				`routine ${JSON.stringify(id)} uses profile ${JSON.stringify(p.agent)}, which is not defined under "profiles" in chit.config.json${known.length > 0 ? ` (configured: ${known.join(", ")})` : " (no profiles configured)"}`,
 			);
 		}
 		agents[p.agent] = agentCfg;

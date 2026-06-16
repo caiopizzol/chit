@@ -5,9 +5,9 @@
 		"idea": { "type": "string", "required": true, "description": "the feature idea to interrogate" },
 		"context": { "type": "string", "required": false, "description": "any extra background" }
 	},
-	"participants": {
+	"agents": {
 		"griller": {
-			"agent": "claude",
+			"profile": "claude",
 			"instructions": "You run a read-only grilling session for a proposed software change. Inspect the repository at your cwd enough to ground questions in real files. Do not edit files. Do not write an implementation plan. Surface the missing product, design, architecture, testing, and rollout decisions that would change the first slice.",
 			"filesystem": "read-only"
 		}

@@ -14,10 +14,10 @@ import type { Filesystem } from "./manifest.ts";
 import { spawnCapture } from "./proc.ts";
 
 export interface AdapterRequest {
-	// The participant's agent id (a profile, e.g. "builder"). The dispatcher resolves
-	// it to a configured adapter + model; an underlying adapter just records it.
+	// The resolved profile id, e.g. "builder". The dispatcher resolves it to a
+	// configured adapter + model; an underlying adapter just records it.
 	agent: string;
-	// Resolved model for this call (from the agent's config); undefined / "default"
+	// Resolved model for this call (from the profile config); undefined / "default"
 	// means the adapter's default model.
 	model?: string;
 	// Resolved profile options. They are adapter-specific and validated before the
@@ -77,10 +77,10 @@ export function claudeCliArgs(req: Pick<AdapterRequest, "model" | "filesystem" |
 
 // The real claude adapter. Composes instructions + prompt and pipes them to `claude -p`
 // (print mode: one non-interactive response, then exit), reading stdout as the
-// participant's output. Runs in the routine's cwd. For write-capable participants
+// call's output. Runs in the routine's cwd. For write-capable agents
 // we use acceptEdits, but live converge passes a sandbox cwd, never the caller cwd.
-// The agent id is not checked here -- the dispatcher only routes "claude"-adapter
-// agents to this adapter.
+// The profile id is not checked here. The dispatcher only routes "claude" profiles
+// to this adapter.
 export const claudeCliAdapter: Adapter = {
 	async call(req) {
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
@@ -165,7 +165,7 @@ export const geminiCliAdapter: Adapter = {
 export const codexCliAdapter: Adapter = {
 	async call(req) {
 		if (req.filesystem === "none") {
-			throw new Error('codex has no no-tools mode, so a `filesystem: "none"` participant cannot use the codex adapter (use read-only, or bind it to another adapter)');
+			throw new Error('codex has no no-tools mode, so a `filesystem: "none"` agent cannot use the codex adapter (use read-only, or bind it to another adapter)');
 		}
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
 		// One ephemeral temp dir per call for the final-message file; removed in `finally`.
@@ -203,25 +203,25 @@ export const codexCliAdapter: Adapter = {
 };
 
 // A registry of real adapters keyed by adapter type (the `adapter` field of an
-// agent config). The bin wires { claude, gemini, codex }; adding another backend is one
+// profile config). The bin wires { claude, gemini, codex }; adding another backend is one
 // more entry, not a redesign.
 export type AdapterRegistry = Record<string, Adapter>;
 
 // The binding seam: the executors call ONE adapter (this one). It resolves each
-// call's agent id to the configured adapter + model, then routes to the real adapter.
-// Errors here are config errors -- an unknown agent id, or an adapter type that is
+// call's profile id to the configured adapter + model, then routes to the real adapter.
+// Errors here are config errors: an unknown profile id, or an adapter type that is
 // named in the config but not wired into the registry.
 export function dispatchingAdapter(agents: Record<string, AgentConfig>, registry: AdapterRegistry): Adapter {
 	return {
 		async call(req) {
 			const agentCfg = agents[req.agent];
 			if (agentCfg === undefined) {
-				throw new Error(`no agent "${req.agent}" is configured (add it under "agents" in chit.config.json)`);
+				throw new Error(`no profile "${req.agent}" is configured (add it under "profiles" in chit.config.json)`);
 			}
 			const adapter = registry[agentCfg.adapter];
 			if (adapter === undefined) {
 				throw new Error(
-					`agent "${req.agent}" uses adapter "${agentCfg.adapter}", which is not available (wired adapters: ${Object.keys(registry).join(", ") || "none"})`,
+					`profile "${req.agent}" uses adapter "${agentCfg.adapter}", which is not available (wired adapters: ${Object.keys(registry).join(", ") || "none"})`,
 				);
 			}
 			return adapter.call({

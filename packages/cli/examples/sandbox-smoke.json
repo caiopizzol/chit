@@ -2,9 +2,9 @@
 	"id": "sandbox-smoke",
 	"description": "Tiny real converge smoke: a builder creates a file, a check verifies it, in a sandbox.",
 	"inputs": {},
-	"participants": {
+	"agents": {
 		"builder": {
-			"agent": "claude",
+			"profile": "claude",
 			"instructions": "You create or edit files to satisfy the task. Make the smallest possible change and stop.",
 			"filesystem": "read-write"
 		}

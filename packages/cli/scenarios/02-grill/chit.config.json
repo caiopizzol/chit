@@ -1,11 +1,11 @@
 {
 	"routines": {
 		"grill": {
-			"manifestPath": "routines/grill.json",
+			"file": "routines/grill.json",
 			"description": "Question an idea before planning or coding."
 		}
 	},
-	"agents": {
+	"profiles": {
 		"griller": { "adapter": "claude", "model": "default" }
 	}
 }

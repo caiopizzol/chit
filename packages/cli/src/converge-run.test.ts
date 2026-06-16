@@ -9,9 +9,9 @@ import { type FakeSandbox, fakeSandbox } from "./sandbox.ts";
 const CONVERGE = {
 	id: "impl-review",
 	inputs: { task: { type: "string" } },
-	participants: {
-		builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
-		critic: { agent: "claude", instructions: "Review {{ diff }}.", filesystem: "read-only" },
+	agents: {
+		builder: { profile: "claude", instructions: "Build.", filesystem: "read-write" },
+		critic: { profile: "claude", instructions: "Review {{ diff }}.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "build", call: "builder", prompt: "{{ inputs.task }} {{ iteration }}" },

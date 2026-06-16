@@ -1,5 +1,5 @@
-// Configurable agents: a participant references an agent id; the config binds that id
-// to an actual adapter + model; the runtime resolves participant -> agent -> adapter.
+// Configurable agents: a routine agent references a profile id; the config binds
+// that profile to an actual adapter + model.
 // These are always-on (fake-backed) so they prove the binding model with no real calls.
 
 import { describe, expect, test } from "bun:test";
@@ -32,9 +32,9 @@ describe("dispatchingAdapter", () => {
 		expect(claude.calls[0]?.effort).toBe("max");
 	});
 
-	test("fails cleanly on an unknown agent id", async () => {
+	test("fails cleanly on an unknown profile id", async () => {
 		const a = dispatchingAdapter({}, { claude: fakeAdapter() });
-		await expect(a.call(baseReq("ghost"))).rejects.toThrow(/no agent "ghost" is configured/);
+		await expect(a.call(baseReq("ghost"))).rejects.toThrow(/no profile "ghost" is configured/);
 	});
 
 	test("fails cleanly on an adapter type that is not wired", async () => {
@@ -85,9 +85,9 @@ describe("agent binding at resolve time", () => {
 	const MANIFEST = JSON.stringify({
 		id: "r",
 		inputs: { task: { type: "string" } },
-		participants: {
-			b: { agent: "builder", instructions: "build", filesystem: "read-write" },
-			c: { agent: "critic", instructions: "review", filesystem: "read-only" },
+		agents: {
+			b: { profile: "builder", instructions: "build", filesystem: "read-write" },
+			c: { profile: "critic", instructions: "review", filesystem: "read-only" },
 		},
 		steps: [
 			{ id: "build", call: "b", prompt: "{{ inputs.task }}" },
@@ -96,18 +96,18 @@ describe("agent binding at resolve time", () => {
 		],
 		repeat: { until: "checks-pass", maxIterations: 1 },
 	});
-	const cfg = (agents: unknown): ChitConfig => parseConfig({ routines: { r: { manifestPath: "r.json" } }, agents }, "t.json");
+	const cfg = (profiles: unknown): ChitConfig => parseConfig({ routines: { r: { file: "r.json" } }, profiles }, "t.json");
 
-	test("binds each participant's agent id to its config entry", () => {
+	test("binds each routine agent's profile id to its config entry", () => {
 		const r = resolveRoutine(cfg({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } }), "r", "/x", () => MANIFEST);
 		expect(r.agents).toEqual({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } });
 	});
 
-	test("a participant referencing an undefined agent fails at resolve, not mid-run", () => {
-		expect(() => resolveRoutine(cfg({ builder: { adapter: "claude" } }), "r", "/x", () => MANIFEST)).toThrow(/uses agent "critic", which is not defined/);
+	test("a routine agent referencing an undefined profile fails at resolve, not mid-run", () => {
+		expect(() => resolveRoutine(cfg({ builder: { adapter: "claude" } }), "r", "/x", () => MANIFEST)).toThrow(/uses profile "critic", which is not defined/);
 	});
 
-	test("different participants drive different configured adapters end to end", async () => {
+	test("different routine agents drive different configured adapters end to end", async () => {
 		const routine = resolveRoutine(cfg({ builder: { adapter: "codex" }, critic: { adapter: "claude" } }), "r", "/x", () => MANIFEST);
 		const claude = fakeAdapter(() => "reviewed");
 		const codex = fakeAdapter(() => "built");
@@ -135,7 +135,7 @@ describe("agent binding at resolve time", () => {
 		let t = 0;
 		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
 		expect(r.status).toBe("failed");
-		// the failed build step records which agent/adapter it ran on, not just the participant
+		// the failed build step records which profile/adapter it ran on, not just the routine agent
 		expect(r.iterations[0]?.steps.find((s) => s.id === "build")).toMatchObject({ status: "failed", agent: "builder", adapter: "codex" });
 	});
 
@@ -145,7 +145,7 @@ describe("agent binding at resolve time", () => {
 		const adapter = dispatchingAdapter(routine.agents ?? {}, { claude });
 		let t = 0;
 		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
-		// the adapter saw each participant's configured model
+		// the adapter saw each routine agent's configured model
 		expect(Object.fromEntries(claude.calls.map((c) => [c.agent, c.model]))).toEqual({ builder: "sonnet", critic: "haiku" });
 		// and the receipt records the resolved model per call step
 		const steps = r.iterations[0]?.steps ?? [];
@@ -158,14 +158,14 @@ describe("composition across differently configured agents", () => {
 	test("a flow passes output across sub-routines backed by different agents", async () => {
 		const config = parseConfig(
 			{
-				routines: { a: { manifestPath: "a.json" }, b: { manifestPath: "b.json" }, flow: { manifestPath: "flow.json" } },
-				agents: { alpha: { adapter: "ad1" }, beta: { adapter: "ad2" } },
+				routines: { a: { file: "a.json" }, b: { file: "b.json" }, flow: { file: "flow.json" } },
+				profiles: { alpha: { adapter: "ad1" }, beta: { adapter: "ad2" } },
 			},
 			"t.json",
 		);
 		const manifests: Record<string, string> = {
-			"a.json": JSON.stringify({ id: "a", inputs: { x: { type: "string" } }, participants: { p: { agent: "alpha", instructions: "i", filesystem: "read-only" } }, steps: [{ id: "out", call: "p", prompt: "{{ inputs.x }}" }], output: "out" }),
-			"b.json": JSON.stringify({ id: "b", inputs: { y: { type: "string" } }, participants: { p: { agent: "beta", instructions: "i", filesystem: "read-only" } }, steps: [{ id: "out", call: "p", prompt: "{{ inputs.y }}" }], output: "out" }),
+			"a.json": JSON.stringify({ id: "a", inputs: { x: { type: "string" } }, agents: { p: { profile: "alpha", instructions: "i", filesystem: "read-only" } }, steps: [{ id: "out", call: "p", prompt: "{{ inputs.x }}" }], output: "out" }),
+			"b.json": JSON.stringify({ id: "b", inputs: { y: { type: "string" } }, agents: { p: { profile: "beta", instructions: "i", filesystem: "read-only" } }, steps: [{ id: "out", call: "p", prompt: "{{ inputs.y }}" }], output: "out" }),
 			"flow.json": JSON.stringify({ id: "flow", inputs: { x: { type: "string" } }, steps: [{ id: "s1", routine: "a", inputs: { x: "{{ inputs.x }}" } }, { id: "s2", routine: "b", inputs: { y: "{{ steps.s1.output }}" } }] }),
 		};
 		const read = (abs: string) => manifests[abs.split("/").pop() as string] as string;

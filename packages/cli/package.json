@@ -1,9 +1,9 @@
 {
-	"name": "chit-minimal",
+	"name": "@chit-run/cli",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "A routine-first proof of the Chit product model: list, inspect, run, trace.",
+	"description": "A thin local runtime for declared multi-model workflows.",
 	"bin": {
 		"chit": "./src/index.ts"
 	},

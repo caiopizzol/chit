@@ -50,7 +50,7 @@ export default function Home() {
 				<pre>{`{
   "profiles": {
     "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-    "critic": { "adapter": "codex", "model": "gpt-5.5", "effort": "xhigh" }
+    "critic": { "adapter": "codex", "model": "gpt-5.5" }
   },
   "routines": {
     "implement": {
@@ -102,7 +102,7 @@ inputs:
 
 agents:
   builder  builder -> claude:claude-opus-4-8 effort=max      filesystem: read-write
-  critic   critic -> codex:gpt-5.5 effort=xhigh              filesystem: read-only
+  critic   critic -> codex:gpt-5.5                            filesystem: read-only
 
 steps:
   1. build       call builder
@@ -188,7 +188,7 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 						{"\n\n"}
 						<span className="meta"># then, in your own project:</span>
 						{"\n"}
-						<span className="cmd">$ bun link chit-minimal</span>
+						<span className="cmd">$ bun link @chit-run/cli</span>
 						{"\n"}
 						<span className="cmd">$ bunx chit doctor</span>
 						{"\n"}

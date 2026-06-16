@@ -4,14 +4,14 @@
 	"inputs": {
 		"brief": { "type": "string", "required": true, "description": "what to write" }
 	},
-	"participants": {
+	"agents": {
 		"writer": {
-			"agent": "writer",
+			"profile": "writer",
 			"instructions": "Draft and revise short text. You write no files.",
 			"filesystem": "read-only"
 		},
 		"critic": {
-			"agent": "critic",
+			"profile": "critic",
 			"instructions": "Judge the draft against the brief. You write no files.",
 			"filesystem": "read-only"
 		}

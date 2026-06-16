@@ -2,9 +2,9 @@
 	"id": "forced-revise",
 	"description": "Forces a real multi-iteration recovery: the builder can only learn the required content from the failing check, so it must revise after iteration 1.",
 	"inputs": {},
-	"participants": {
+	"agents": {
 		"builder": {
-			"agent": "claude",
+			"profile": "claude",
 			"instructions": "You create or edit files to make the check that runs after you pass. Make the smallest change.",
 			"filesystem": "read-write"
 		}

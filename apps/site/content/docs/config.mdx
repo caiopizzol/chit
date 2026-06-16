@@ -5,88 +5,99 @@ description: The compact reference for chit.config.json.
 
 Chit has one public config surface: `chit.config.json`.
 
-The schema answers two questions:
+The config answers two questions:
 
-1. Which local adapters and models can routines use?
+1. Which local models can routines use?
 2. Which routines can this project run?
 
 <Callout title="The split">
-	`profiles` bind names to local adapters and models. `routines` declare the workflow.
-	A routine agent points to a profile, so the workflow stays separate from the local model choice.
+	`profiles` bind names to local adapters and models. `routines` declare workflows.
+	A routine agent points at a profile, so model choice stays outside the workflow.
 </Callout>
 
-## Schema At A Glance
-
-This is the shape to understand first. `profiles` declare local model bindings. `routines` declare what runs.
+## Shape
 
 <AnnotatedConfig />
 
-This one routine is an implementation loop because it has `repeat`. It is sandboxed because it has a read-write agent and a check.
-
-## Root Fields
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `$schema` | string | no | JSON Schema URL for editor hints. |
-| `profiles` | object | yes | Local adapter and model bindings. |
-| `routines` | object | yes | Named routine definitions. |
-
-## Profiles
-
-Profiles are machine-local. They let the same routine run with different adapters or models without editing the routine.
-
-| Shape | Example | Meaning |
-|---|---|---|
-| adapter | `"critic": "gemini"` | Use the adapter default model. |
-| adapter:model | `"builder": "codex:gpt-5.5"` | Use one explicit model. |
-| object | `"builder": { "adapter": "claude", "model": "opus", "effort": "max" }` | Explicit binding with adapter options. |
-
-Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use object form.
-
 ```json
 {
+	"$schema": "https://chit.run/schemas/chit.schema.json",
 	"profiles": {
-		"planner": "claude:sonnet",
 		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-		"critic": { "adapter": "codex", "model": "gpt-5.5", "effort": "xhigh" },
-		"local": { "adapter": "my-adapter", "model": "custom-model" }
+		"critic": { "adapter": "codex", "model": "gpt-5.5" }
+	},
+	"routines": {
+		"implement": {
+			"input": "task",
+			"agents": {
+				"builder": { "profile": "builder", "instructions": "Implement.", "filesystem": "read-write" },
+				"critic": { "profile": "critic", "instructions": "Review.", "filesystem": "read-only" }
+			},
+			"steps": [
+				{ "id": "build", "call": "builder", "prompt": "{{ inputs.task }}" },
+				{ "id": "review", "call": "critic", "prompt": "{{ diff }}" },
+				{ "id": "verify", "check": "bun test" }
+			],
+			"repeat": { "until": "checks-pass", "maxIterations": 3 }
+		}
 	}
 }
 ```
 
-Profile options are adapter-specific and validated before a run starts.
+## Root Fields
 
-| Field | Adapter | Values | Passed to |
-|---|---|---|---|
-| `effort` | `claude` | `low`, `medium`, `high`, `max` | `claude --effort` |
-| `effort` | `codex` | `minimal`, `low`, `medium`, `high`, `xhigh` | `codex -c model_reasoning_effort=...` |
+| Field | Type | Required | Description |
+|---|---|---:|---|
+| `$schema` | string | no | JSON Schema URL for editor hints. |
+| `profiles` | object | when routines call agents | Local adapter and model bindings. |
+| `routines` | object | yes | Named routine definitions. |
+
+## Profiles
+
+Profiles are local. They let one routine run with different adapters or models without editing the routine.
+
+| Shape | Example | Meaning |
+|---|---|---|
+| adapter | `"critic": "codex"` | Use the adapter default model. |
+| adapter:model | `"critic": "codex:gpt-5.5"` | Use one explicit model. |
+| object | `"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" }` | Explicit binding with adapter options. |
+
+Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use object form.
+
+| Option | Adapter | Values |
+|---|---|---|
+| `effort` | `claude` | `low`, `medium`, `high`, `max` |
+| `effort` | `codex` | `minimal`, `low`, `medium`, `high`, `xhigh` |
+
+<Callout title="Structural validation">
+	Chit rejects impossible built-in pairs like `codex:sonnet` before execution.
+	It does not prove your account can use a model. Use `chit doctor --real` for live probes.
+</Callout>
 
 ## Routines
 
-A routine is a declared workflow. It can be text-only, composed from other routines, looped, check-only, sandboxed, or human-gated. Chit derives that from the fields.
+A routine is an ordered workflow. Chit derives whether it is a text run, flow, loop, or sandboxed run from the fields.
 
 | Field | Type | Required | Description |
-|---|---|---|---|
+|---|---|---:|---|
 | `input` | string | no | Shorthand for one required string input. |
 | `inputs` | array or object | no | Multiple inputs, or full input definitions. |
-| `agents` | object | with `call` steps | Participants inside the routine. |
+| `agents` | object | with `call` steps | Agents local to this routine. |
 | `steps` | array | yes | Ordered steps. |
 | `repeat` | object | no | Loop stop condition and cap. |
 | `output` | string | no | Step id used as the routine output. |
 | `limits` | object | no | Per-call and whole-run time bounds. |
+| `file` | string | no | In `routines.<id>`, points to a routine JSON file instead of declaring it there. |
 
-<Callout title="Names are yours">
-	`builder`, `critic`, `planner`, `judge`, and `griller` are not built into Chit.
-	They are ids you choose.
-</Callout>
+Names like `builder`, `critic`, `planner`, and `judge` are not built in. They are ids you choose.
 
-## Routine Agents
+## Agents
 
-Routine agents are local to one routine. Each points at a profile and declares stable instructions.
+Routine agents are local to one routine.
 
 | Field | Type | Required | Description |
-|---|---|---|---|
-| `profile` | string | yes | Profile id from the root `profiles` object. |
+|---|---|---:|---|
+| `profile` | string | yes | Profile id from root `profiles`. |
 | `instructions` | string | yes | Stable instructions for this agent in this routine. |
 | `filesystem` | string | yes | `none`, `read-only`, or `read-write`. |
 
@@ -94,26 +105,25 @@ Routine agents are local to one routine. Each points at a profile and declares s
 
 ## Steps
 
-Every step has an `id`. One other field chooses the step kind.
+Every step has an `id`. Exactly one other field chooses the step kind.
 
-| Step kind | Required fields | Output | Description |
-|---|---|---:|---|
-| `call` | `id`, `call`, `prompt` | yes | Calls a routine agent. |
-| `ask` | `id`, `ask` | yes | Pauses for one operator answer. |
-| `check` | `id`, `check` | yes | Runs one or more commands. |
-| `format` | `id`, `format` | yes | Builds text from templates. |
-| `routine` | `id`, `routine`, `inputs` | yes | Runs another routine. |
+| Step kind | Required fields | Description |
+|---|---|---|
+| `call` | `id`, `call`, `prompt` | Calls a routine agent. |
+| `ask` | `id`, `ask` | Pauses for one operator answer. |
+| `check` | `id`, `check` | Runs one or more commands. |
+| `format` | `id`, `format` | Builds text from templates. |
+| `routine` | `id`, `routine`, `inputs` | Runs another routine. |
 
 ```json
 [
 	{ "id": "plan", "call": "planner", "prompt": "Plan:\n{{ inputs.idea }}" },
 	{ "id": "approve", "ask": "Adjust this plan?\n{{ steps.plan.output }}" },
-	{ "id": "build", "routine": "implement", "inputs": { "task": "{{ steps.plan.output }}\n{{ steps.approve.output }}" } },
-	{ "id": "verify", "check": "bun test" }
+	{ "id": "build", "routine": "implement", "inputs": { "task": "{{ steps.plan.output }}\n{{ steps.approve.output }}" } }
 ]
 ```
 
-Checks can be strings or argv objects.
+Checks can be command strings or argv objects.
 
 ```json
 { "id": "verify", "check": "bun test" }
@@ -123,6 +133,30 @@ Checks can be strings or argv objects.
 { "id": "verify", "check": [{ "command": "bun", "args": ["test"] }] }
 ```
 
+## Structured Call Output
+
+A `call` step can require JSON. Chit parses the model output, validates it against the schema subset, stores the normalized JSON, and can use a field as a loop condition.
+
+```json
+{
+	"id": "review",
+	"call": "critic",
+	"prompt": "Review the diff. Return JSON only: { \"passed\": boolean, \"issues\": string[] }.",
+	"json": {
+		"schema": {
+			"type": "object",
+			"required": ["passed", "issues"],
+			"properties": {
+				"passed": { "type": "boolean" },
+				"issues": { "type": "array", "items": { "type": "string" } }
+			}
+		}
+	}
+}
+```
+
+The supported schema subset is intentionally small: `object`, `array`, `string`, `number`, `integer`, `boolean`, `required`, `properties`, `items`, `enum`, and `additionalProperties`.
+
 ## Templates
 
 Prompts, formats, ask questions, and routine inputs can read prior context.
@@ -131,15 +165,10 @@ Prompts, formats, ask questions, and routine inputs can read prior context.
 |---|---|
 | `{{ inputs.task }}` | A user input passed to the routine. |
 | `{{ steps.plan.output }}` | Output from an earlier step. |
-| `{{ steps.verify.output }}` | Check result from an earlier step. |
 | `{{ iteration }}` | Current loop iteration. |
 | `{{ diff }}` | Current sandbox diff. |
 
-<Callout title="A forwarded answer is persisted downstream">
-	An `ask` step does not store the answer on its own receipt. But once you forward it
-	(`{{ steps.<id>.output }}`) into a sub-routine's input or a routine's output, it is saved
-	there in plaintext, like any input. Treat a forwarded answer as recorded.
-</Callout>
+An `ask` step does not store the answer on its own receipt. If you forward the answer into a later routine input or output, it is stored there in plaintext like any other input.
 
 ## Loops
 
@@ -147,51 +176,42 @@ Loops live under `repeat`. The stop condition is `repeat.until`.
 
 | Condition | Example | Best use |
 |---|---|---|
-| checks pass | `"checks-pass"` | Implementation and verification loops. |
-| exact step output | `{ "step": "review", "equals": "pass" }` | A model or human verdict controls completion. |
-| all conditions | `{ "all": ["checks-pass", { "step": "review", "equals": "pass" }] }` | Checks and review both block convergence. |
+| checks pass | `"checks-pass"` | Implementation loops with deterministic checks. |
+| exact step output | `{ "step": "verdict", "equals": "pass" }` | A constrained text verdict controls completion. |
+| structured field | `{ "step": "review", "path": "passed", "equals": true }` | A model returns JSON and one field controls completion. |
+| all conditions | `{ "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }] }` | Checks and review both block convergence. |
 
 ```json
 {
 	"repeat": {
-		"until": { "all": ["checks-pass", { "step": "review", "equals": "pass" }] },
+		"until": {
+			"all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }]
+		},
 		"maxIterations": 3
 	}
 }
 ```
 
-A judged loop (`{ step, equals }`, or an `all` that contains one) must set `maxIterations`. A `checks-pass` loop may omit it; Chit uses a default cap of 5 iterations.
+Judged loops must set `maxIterations`. A `checks-pass` loop may omit it; Chit uses a default cap of 5 iterations.
 
-<Callout title="Checks are the convergence contract">
-	Model verdicts are useful, but deterministic checks are the strongest convergence signal;
-	use a blocking model verdict only when judgment is the point of the routine. A loop converges
-	when its checks pass, so checks-pass proves only what the checks cover: if a check does not
-	exercise the new behavior, a green run has not proven the new behavior works.
+<Callout title="Checks are the strongest gate">
+	Model verdicts are useful when judgment is the point. Deterministic checks are still the strongest convergence signal, but they only prove what they actually exercise.
 </Callout>
 
 ## Limits
 
-```json
-{
-	"limits": {
-		"callTimeoutMinutes": 10,
-		"runTimeoutMinutes": 60
-	}
-}
-```
-
 | Field | Type | Default | Description |
-|---|---|---|---|
+|---|---|---:|---|
 | `callTimeoutMinutes` | number or `"none"` | 30 | Hard timeout for each model call and check command. |
-| `runTimeoutMinutes` | number or `"none"` | 120 | Cooperative wall-time budget for the whole run. Checked between steps. |
+| `runTimeoutMinutes` | number or `"none"` | 120 | Cooperative wall-time budget for the whole run, checked between steps. |
 
 ## Runtime Behavior
 
-You do not choose an execution mode. Chit derives it from the routine's shape.
+You do not choose an execution mode. Chit derives it from the routine shape.
 
 <DerivedBehavior />
 
-A sandboxed run is a dry run: it produces a patch and stops. Review it, then `chit apply <run-id>` writes it back.
+A sandboxed run is a dry run. It produces a patch and stops. Review it, then `chit apply <run-id>` writes it back.
 
 <SandboxApplyVisual />
 
@@ -204,32 +224,19 @@ Two layers check config.
 | JSON Schema | Editor hints and shape validation. |
 | Parser | Authoritative runtime validation before any model is called. |
 
-The schema's profile rules are generated from the same adapter registry the parser uses, so built-in adapter/model rules stay aligned.
-
 The parser rejects, among others:
 
 | Rejected | Example | Reason |
 |---|---|---|
-| Unknown top-level field | `{ "recipes": {} }` | Allowed: `$schema`, `profiles` (or `agents`), `routines`. |
-| `profiles` and `agents` together | both keys set | They are aliases. Use one. |
+| Unknown top-level field | `{ "recipes": {} }` | Allowed: `$schema`, `profiles`, `routines`. |
+| Old root alias | `{ "agents": {} }` | Use `profiles`. |
+| Bare routine string | `{ "routines": { "x": "x.json" } }` | Use object form. |
+| Old file alias | `{ "manifestPath": "x.json" }` | Use `file`. |
 | Non-kebab routine id | `"Build_It"` | Ids match `^[a-z][a-z0-9-]*$`. |
 | Unknown adapter shorthand | `"x": "ollama:llama3"` | Custom adapters must use object form. |
 | Impossible built-in model | `"x": "codex:sonnet"` | `sonnet` is a Claude model, not a Codex model. |
 | Trailing colon | `"x": "codex:"` | Use `"codex"` for the default model. |
 | Unknown profile field | `{ "adapter": "claude", "temperature": 1 }` | Allowed: `adapter`, `model`, `effort`. |
-| Wrong effort value | `{ "adapter": "codex", "effort": "max" }` | Codex supports `minimal`, `low`, `medium`, `high`, `xhigh`; Claude supports `low`, `medium`, `high`, `max`. |
+| Wrong effort value | `{ "adapter": "codex", "effort": "max" }` | Codex supports `minimal`, `low`, `medium`, `high`, `xhigh`. |
 | Escaping routine path | `{ "file": "../secret.json" }` | Routine files cannot escape the project. |
-| Non-positive `maxIterations` | `0` | Must be a positive integer. |
-| A routine with no `steps` | `{ "input": "task" }` | `steps` must be an array. |
 | Judged loop with no cap | `{ "until": { "step": "review", "equals": "pass" } }` | Judged loops must set `maxIterations`. |
-
-<Callout title="Structural, not live">
-	Validation proves the config is well-formed. It does not prove your local account can use a model.
-	`codex:gpt-5.5` is structurally valid, but still fails at execution if the local Codex CLI cannot use that model.
-</Callout>
-
-## Compatibility
-
-New configs should use `profiles`, routine `agents`, and agent `profile`.
-
-Chit still accepts older aliases where needed, but the preferred shape is the one documented here.

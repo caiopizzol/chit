@@ -4,9 +4,9 @@
 	"inputs": {
 		"goal": { "type": "string", "required": true, "description": "what to build" }
 	},
-	"participants": {
+	"agents": {
 		"planner": {
-			"agent": "planner",
+			"profile": "planner",
 			"instructions": "You inspect the project read-only and write a short ordered implementation plan. Do not edit files.",
 			"filesystem": "read-only"
 		}

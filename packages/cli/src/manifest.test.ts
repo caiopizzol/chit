@@ -16,7 +16,7 @@ const TEXT = {
 	id: "griller",
 	description: "Question a feature idea.",
 	inputs: { idea: { type: "string" }, context: { type: "string", required: false } },
-	participants: { griller: { agent: "claude", instructions: "Inspect.", filesystem: "read-only" } },
+	agents: { griller: { profile: "claude", instructions: "Inspect.", filesystem: "read-only" } },
 	steps: [
 		{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
 		{ id: "out", format: "{{ steps.grill.output }}" },
@@ -28,9 +28,9 @@ const TEXT = {
 const LOOP = {
 	id: "impl-review",
 	inputs: { task: { type: "string" } },
-	participants: {
-		builder: { agent: "codex", instructions: "Implement.", filesystem: "read-write" },
-		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+	agents: {
+		builder: { profile: "codex", instructions: "Implement.", filesystem: "read-write" },
+		critic: { profile: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "build", call: "builder", prompt: "{{ inputs.task }} {{ iteration }}" },
@@ -126,7 +126,7 @@ describe("parseManifest -- one shape, no policy", () => {
 	test("a read-write participant alone makes a routine sandboxed", () => {
 		const m = parse({
 			id: "edit",
-			participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+			agents: { w: { profile: "claude", instructions: "Edit.", filesystem: "read-write" } },
 			steps: [{ id: "go", call: "w", prompt: "do it" }],
 		});
 		expect(isSandboxed(m)).toBe(true);
@@ -160,9 +160,9 @@ describe("parseManifest -- rules", () => {
 		expect(() => parse({ ...TEXT, output: "nope" })).toThrow(/`output` must name one of the steps/);
 	});
 
-	test("a call step must reference a participant", () => {
+	test("a call step must reference an agent", () => {
 		const steps = [{ id: "x", call: "ghost", prompt: "p" }];
-		expect(() => parse({ ...TEXT, steps, output: "x" })).toThrow(/`call` must name a participant/);
+		expect(() => parse({ ...TEXT, steps, output: "x" })).toThrow(/`call` must name an agent/);
 	});
 
 	test("rejects duplicate step ids", () => {
@@ -179,20 +179,20 @@ describe("parseManifest -- rules", () => {
 	});
 
 	test("rejects an unknown filesystem permission", () => {
-		const participants = { griller: { agent: "claude", instructions: "x", filesystem: "root" } };
-		expect(() => parse({ ...TEXT, participants })).toThrow(/`filesystem` must be one of/);
+		const agents = { griller: { profile: "claude", instructions: "x", filesystem: "root" } };
+		expect(() => parse({ ...TEXT, agents })).toThrow(/`filesystem` must be one of/);
 	});
 
-	test("rejects alias conflicts", () => {
+	test("rejects removed legacy aliases", () => {
 		expect(() => parse({ ...TEXT, input: "idea" })).toThrow(/`input` and `inputs` are aliases/);
-		expect(() => parse({ ...TEXT, agents: {} })).toThrow(/`agents` and `participants` are aliases/);
+		expect(() => parse({ ...TEXT, participants: {} })).toThrow(/unknown field "participants"/);
 		expect(() =>
 			parse({
 				id: "x",
 				agents: { p: { agent: "a", profile: "b", instructions: "x", filesystem: "read-only" } },
 				steps: [{ id: "out", call: "p", prompt: "x" }],
 			}),
-		).toThrow(/`agent` and `profile` are aliases/);
+		).toThrow(/unknown field "agent"/);
 	});
 
 	test("rejects a non-positive repeat maxIterations", () => {
@@ -215,7 +215,7 @@ describe("parseManifest -- ask (human input) steps", () => {
 	const ASK_TEXT = {
 		id: "clarify-flow",
 		inputs: { idea: { type: "string" } },
-		participants: { griller: { agent: "claude", instructions: "Grill.", filesystem: "read-only" } },
+		agents: { griller: { profile: "claude", instructions: "Grill.", filesystem: "read-only" } },
 		steps: [
 			{ id: "grill", call: "griller", prompt: "Idea: {{ inputs.idea }}" },
 			{ id: "decide", ask: "Anything to add?\n{{ steps.grill.output }}" },
@@ -271,7 +271,7 @@ describe("parseManifest -- ask (human input) steps", () => {
 		expect(() =>
 			parse({
 				id: "edit-with-ask",
-				participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+				agents: { w: { profile: "claude", instructions: "Edit.", filesystem: "read-write" } },
 				steps: [
 					{ id: "q", ask: "proceed?" },
 					{ id: "go", call: "w", prompt: "do it" },
@@ -362,9 +362,9 @@ describe("parseManifest -- generic repeat.until", () => {
 	const GOAL = {
 		id: "goal-loop",
 		inputs: { goal: { type: "string" } },
-		participants: {
-			worker: { agent: "claude", instructions: "Work toward the goal.", filesystem: "read-only" },
-			evaluator: { agent: "claude", instructions: "Judge whether the goal is met.", filesystem: "read-only" },
+		agents: {
+			worker: { profile: "claude", instructions: "Work toward the goal.", filesystem: "read-only" },
+			evaluator: { profile: "claude", instructions: "Judge whether the goal is met.", filesystem: "read-only" },
 		},
 		steps: [
 			{ id: "work", call: "worker", prompt: "Goal: {{ inputs.goal }}\nPrior verdict: {{ steps.done.output }}" },
@@ -385,9 +385,9 @@ describe("parseManifest -- generic repeat.until", () => {
 	test("a { step, equals } loop that writes is still sandboxed (loop and sandbox are independent)", () => {
 		const m = parse({
 			...GOAL,
-			participants: {
-				worker: { agent: "claude", instructions: "Edit toward the goal.", filesystem: "read-write" },
-				evaluator: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+			agents: {
+				worker: { profile: "claude", instructions: "Edit toward the goal.", filesystem: "read-write" },
+				evaluator: { profile: "claude", instructions: "Judge.", filesystem: "read-only" },
 			},
 		});
 		expect(isSandboxed(m)).toBe(true); // a read-write participant -> worktree
@@ -425,9 +425,9 @@ describe("parseManifest -- compound repeat.until { all }", () => {
 	const base = {
 		id: "gated",
 		inputs: {},
-		participants: {
-			builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
-			critic: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+		agents: {
+			builder: { profile: "claude", instructions: "Build.", filesystem: "read-write" },
+			critic: { profile: "claude", instructions: "Judge.", filesystem: "read-only" },
 		},
 		steps: [
 			{ id: "build", call: "builder", prompt: "go" },
@@ -467,7 +467,7 @@ describe("parseManifest -- structured call output (json + path condition)", () =
 	const base = {
 		id: "review-loop",
 		inputs: { task: { type: "string" } },
-		participants: { critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" } },
+		agents: { critic: { profile: "claude", instructions: "Review.", filesystem: "read-only" } },
 	};
 	const reviewStep = {
 		id: "review",

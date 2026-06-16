@@ -15,14 +15,14 @@ function routine(raw: { id: string; [key: string]: unknown }): ResolvedRoutine {
 const GRILL = routine({
 	id: "grill",
 	inputs: { idea: { type: "string" } },
-	participants: { g: { agent: "claude", instructions: "Inspect.", filesystem: "read-only" } },
+	agents: { g: { profile: "claude", instructions: "Inspect.", filesystem: "read-only" } },
 	steps: [{ id: "out", call: "g", prompt: "grill {{ inputs.idea }}" }],
 	output: "out",
 });
 const PLAN = routine({
 	id: "plan",
 	inputs: { goal: { type: "string" } },
-	participants: { p: { agent: "claude", instructions: "Plan.", filesystem: "read-only" } },
+	agents: { p: { profile: "claude", instructions: "Plan.", filesystem: "read-only" } },
 	steps: [{ id: "out", call: "p", prompt: "plan {{ inputs.goal }}" }],
 	output: "out",
 });
@@ -30,9 +30,9 @@ const PLAN = routine({
 const IMPL = routine({
 	id: "impl",
 	inputs: { task: { type: "string" } },
-	participants: {
-		builder: { agent: "claude", instructions: "Build.", filesystem: "read-write" },
-		critic: { agent: "claude", instructions: "Review.", filesystem: "read-only" },
+	agents: {
+		builder: { profile: "claude", instructions: "Build.", filesystem: "read-write" },
+		critic: { profile: "claude", instructions: "Review.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
@@ -43,16 +43,16 @@ const IMPL = routine({
 // A sandboxed single-pass sub-routine (read-write, no repeat).
 const WRITEY = routine({
 	id: "writey",
-	participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+	agents: { w: { profile: "claude", instructions: "Edit.", filesystem: "read-write" } },
 	steps: [{ id: "out", call: "w", prompt: "do it" }],
 });
 // A NON-sandboxed loop sub-routine: read-only, { step, equals } exit -> loops in the cwd.
 const REFINE = routine({
 	id: "refine",
 	inputs: { brief: { type: "string" } },
-	participants: {
-		writer: { agent: "claude", instructions: "Draft.", filesystem: "read-only" },
-		critic: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+	agents: {
+		writer: { profile: "claude", instructions: "Draft.", filesystem: "read-only" },
+		critic: { profile: "claude", instructions: "Judge.", filesystem: "read-only" },
 	},
 	steps: [
 		{ id: "draft", call: "writer", prompt: "brief {{ inputs.brief }} prev=[{{ steps.verdict.output }}]" },

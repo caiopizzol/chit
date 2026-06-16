@@ -4,14 +4,14 @@
 	"inputs": {
 		"brief": { "type": "string", "required": true, "description": "what to write, and any constraints" }
 	},
-	"participants": {
+	"agents": {
 		"writer": {
-			"agent": "claude",
+			"profile": "claude",
 			"instructions": "You draft and then revise a short piece of writing. On each pass, improve the draft using the latest critique. You only produce text; you write no files.",
 			"filesystem": "read-only"
 		},
 		"critic": {
-			"agent": "claude",
+			"profile": "claude",
 			"instructions": "You judge whether a draft is ready to ship against the brief. You only read and judge; you write no files.",
 			"filesystem": "read-only"
 		}

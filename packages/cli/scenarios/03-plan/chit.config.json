@@ -1,11 +1,11 @@
 {
 	"routines": {
 		"plan": {
-			"manifestPath": "routines/plan.json",
+			"file": "routines/plan.json",
 			"description": "Turn a goal into a small implementation plan."
 		}
 	},
-	"agents": {
+	"profiles": {
 		"planner": { "adapter": "claude", "model": "default" }
 	}
 }

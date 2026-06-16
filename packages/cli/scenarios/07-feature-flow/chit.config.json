@@ -1,11 +1,11 @@
 {
 	"routines": {
-		"grill": { "manifestPath": "routines/grill.json" },
-		"plan": { "manifestPath": "routines/plan.json" },
-		"implement": { "manifestPath": "routines/implement.json", "defaults": { "maxIterations": 3 } },
-		"feature-flow": { "manifestPath": "routines/feature-flow.json" }
+		"grill": { "file": "routines/grill.json" },
+		"plan": { "file": "routines/plan.json" },
+		"implement": { "file": "routines/implement.json", "defaults": { "maxIterations": 3 } },
+		"feature-flow": { "file": "routines/feature-flow.json" }
 	},
-	"agents": {
+	"profiles": {
 		"griller": { "adapter": "claude", "model": "default" },
 		"planner": { "adapter": "claude", "model": "sonnet" },
 		"builder": { "adapter": "codex", "model": "gpt-5.5" },

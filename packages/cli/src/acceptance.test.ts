@@ -42,8 +42,8 @@ function newRepo(manifests: Record<string, unknown>, config: unknown): string {
 	};
 	sh("git init -q && git config user.email t@t.co && git config user.name tester");
 	for (const [name, m] of Object.entries(manifests)) writeFileSync(join(repo, `${name}.json`), JSON.stringify(m));
-	// every test manifest uses agent "claude"; bind it unless the config says otherwise
-	const full = { agents: { claude: { adapter: "claude", model: "default" } }, ...(config as object) };
+	// every test manifest uses profile "claude"; bind it unless the config says otherwise
+	const full = { profiles: { claude: { adapter: "claude", model: "default" } }, ...(config as object) };
 	writeFileSync(join(repo, "chit.config.json"), JSON.stringify(full));
 	writeFileSync(join(repo, "seed.txt"), "seed\n");
 	sh("git add -A && git commit -q -m init");
@@ -78,13 +78,13 @@ function harness(repo: string, adapter: Adapter, over: Partial<CliDeps> = {}) {
 const GRILLER = {
 	id: "griller",
 	inputs: { idea: { type: "string" } },
-	participants: { g: { agent: "claude", instructions: "Inspect.", filesystem: "read-only" } },
+	agents: { g: { profile: "claude", instructions: "Inspect.", filesystem: "read-only" } },
 	steps: [{ id: "out", call: "g", prompt: "grill {{ inputs.idea }}" }],
 	output: "out",
 };
 const WRITEY = {
 	id: "writey",
-	participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+	agents: { w: { profile: "claude", instructions: "Edit.", filesystem: "read-write" } },
 	steps: [{ id: "go", call: "w", prompt: "do it" }],
 };
 // A read-write call that creates `made.txt` in its (sandbox) cwd.
@@ -95,7 +95,7 @@ const writeMade = modelStub((req) => {
 
 describe("acceptance matrix (real git sandbox, faked model)", () => {
 	test("text: runs read-only in the cwd and prints output, no sandbox", async () => {
-		const repo = newRepo({ griller: GRILLER }, { routines: { griller: { manifestPath: "griller.json" } } });
+		const repo = newRepo({ griller: GRILLER }, { routines: { griller: { file: "griller.json" } } });
 		const { deps, out } = harness(repo, modelStub((req) => `GRILLED(${req.prompt})`));
 		expect(await runCli(["run", "griller", "--input", "idea=dark mode"], deps)).toBe(0);
 		expect(out.join("\n")).toContain("GRILLED(grill dark mode)");
@@ -103,7 +103,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 	});
 
 	test("single-pass sandboxed: dry-run shows the diff and leaves origin untouched", async () => {
-		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { manifestPath: "writey.json" } } });
+		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { file: "writey.json" } } });
 		const { deps, out } = harness(repo, writeMade);
 		expect(await runCli(["run", "writey"], deps)).toBe(0);
 		const text = out.join("\n");
@@ -113,7 +113,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 	});
 
 	test("single-pass sandboxed: --auto-apply writes the result back to origin", async () => {
-		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { manifestPath: "writey.json" } } });
+		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { file: "writey.json" } } });
 		const { deps, out } = harness(repo, writeMade);
 		expect(await runCli(["run", "writey", "--auto-apply"], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/applied to/);
@@ -124,14 +124,14 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		const impl = {
 			id: "impl",
 			inputs: { task: { type: "string" } },
-			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			agents: { b: { profile: "claude", instructions: "Build.", filesystem: "read-write" } },
 			steps: [
 				{ id: "build", call: "b", prompt: "{{ inputs.task }} iter {{ iteration }}" },
 				{ id: "verify", check: [{ command: "sh", args: ["-c", "test -f ready.txt"] }] },
 			],
 			repeat: { until: "checks-pass", maxIterations: 3 },
 		};
-		const repo = newRepo({ impl }, { routines: { impl: { manifestPath: "impl.json" } } });
+		const repo = newRepo({ impl }, { routines: { impl: { file: "impl.json" } } });
 		// the builder only produces the file the check wants on its SECOND turn
 		let builds = 0;
 		const adapter = modelStub((req) => {
@@ -163,7 +163,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 			steps: [{ id: "verify", check: [{ command: "sh", args: ["-c", "true"] }] }],
 			repeat: { until: "checks-pass", maxIterations: 1 },
 		};
-		const repo = newRepo({ smoke }, { routines: { smoke: { manifestPath: "smoke.json" } } });
+		const repo = newRepo({ smoke }, { routines: { smoke: { file: "smoke.json" } } });
 		const { deps, out } = harness(repo, modelStub(() => "")); // this routine makes no calls
 		expect(await runCli(["run", "smoke"], deps)).toBe(0);
 		const text = out.join("\n");
@@ -175,7 +175,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		const impl = {
 			id: "impl",
 			inputs: { task: { type: "string" } },
-			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			agents: { b: { profile: "claude", instructions: "Build.", filesystem: "read-write" } },
 			steps: [{ id: "go", call: "b", prompt: "build {{ inputs.task }}" }],
 		};
 		const flow = {
@@ -188,7 +188,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		};
 		const repo = newRepo(
 			{ griller: GRILLER, impl, flow },
-			{ routines: { griller: { manifestPath: "griller.json" }, impl: { manifestPath: "impl.json" }, flow: { manifestPath: "flow.json" } } },
+			{ routines: { griller: { file: "griller.json" }, impl: { file: "impl.json" }, flow: { file: "flow.json" } } },
 		);
 		const adapter = modelStub((req) => {
 			if (req.filesystem === "read-write") {
@@ -215,7 +215,7 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 	});
 
 	test("interrupted: a pre-aborted run cancels, discards the worktree, exits 130", async () => {
-		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { manifestPath: "writey.json" } } });
+		const repo = newRepo({ writey: WRITEY }, { routines: { writey: { file: "writey.json" } } });
 		const controller = new AbortController();
 		controller.abort();
 		const { deps, err } = harness(repo, writeMade, { signal: controller.signal });
@@ -235,14 +235,14 @@ describe("acceptance matrix -- failure cases", () => {
 	test("did-not-converge: --auto-apply does NOT write a non-converged result", async () => {
 		const impl = {
 			id: "impl",
-			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			agents: { b: { profile: "claude", instructions: "Build.", filesystem: "read-write" } },
 			steps: [
 				{ id: "build", call: "b", prompt: "try" },
 				{ id: "verify", check: [{ command: "sh", args: ["-c", "test -f goal.txt"] }] }, // never created
 			],
 			repeat: { until: "checks-pass", maxIterations: 2 },
 		};
-		const repo = newRepo({ impl }, { routines: { impl: { manifestPath: "impl.json" } } });
+		const repo = newRepo({ impl }, { routines: { impl: { file: "impl.json" } } });
 		// the builder writes a file, but never the one the check wants
 		const adapter = modelStub((req) => {
 			if (req.filesystem === "read-write") writeFileSync(join(req.cwd, "attempt.txt"), "x\n");
@@ -258,7 +258,7 @@ describe("acceptance matrix -- failure cases", () => {
 	});
 
 	test("failed: a throwing model call yields a failed receipt and exit 1", async () => {
-		const repo = newRepo({ griller: GRILLER }, { routines: { griller: { manifestPath: "griller.json" } } });
+		const repo = newRepo({ griller: GRILLER }, { routines: { griller: { file: "griller.json" } } });
 		const adapter: Adapter = {
 			async call() {
 				throw new Error("model exploded");
@@ -276,7 +276,7 @@ describe("acceptance matrix -- failure cases", () => {
 		const impl = {
 			id: "impl",
 			inputs: { task: { type: "string" } },
-			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			agents: { b: { profile: "claude", instructions: "Build.", filesystem: "read-write" } },
 			steps: [{ id: "go", call: "b", prompt: "build {{ inputs.task }}" }],
 		};
 		const flow = {
@@ -289,7 +289,7 @@ describe("acceptance matrix -- failure cases", () => {
 		};
 		const repo = newRepo(
 			{ griller: GRILLER, impl, flow },
-			{ routines: { griller: { manifestPath: "griller.json" }, impl: { manifestPath: "impl.json" }, flow: { manifestPath: "flow.json" } } },
+			{ routines: { griller: { file: "griller.json" }, impl: { file: "impl.json" }, flow: { file: "flow.json" } } },
 		);
 		// the first sub-run (grill, read-only) throws; the sandboxed impl must never run
 		const adapter: Adapter = {
@@ -311,10 +311,10 @@ describe("acceptance matrix -- failure cases", () => {
 	test("dirty origin is refused before a sandboxed run (a sandbox starts from HEAD)", async () => {
 		const writeySeed = {
 			id: "writey-seed",
-			participants: { w: { agent: "claude", instructions: "Edit.", filesystem: "read-write" } },
+			agents: { w: { profile: "claude", instructions: "Edit.", filesystem: "read-write" } },
 			steps: [{ id: "go", call: "w", prompt: "edit the seed" }],
 		};
-		const repo = newRepo({ "writey-seed": writeySeed }, { routines: { "writey-seed": { manifestPath: "writey-seed.json" } } });
+		const repo = newRepo({ "writey-seed": writeySeed }, { routines: { "writey-seed": { file: "writey-seed.json" } } });
 		writeFileSync(join(repo, "seed.txt"), "uncommitted change\n"); // dirty the origin
 		let called = false;
 		const adapter = modelStub(() => {
@@ -336,7 +336,7 @@ describe("acceptance matrix -- failure cases", () => {
 		const impl = {
 			id: "impl",
 			inputs: { task: { type: "string" } },
-			participants: { b: { agent: "claude", instructions: "Build.", filesystem: "read-write" } },
+			agents: { b: { profile: "claude", instructions: "Build.", filesystem: "read-write" } },
 			steps: [{ id: "go", call: "b", prompt: "build {{ inputs.task }}" }],
 		};
 		const flow = {
@@ -349,7 +349,7 @@ describe("acceptance matrix -- failure cases", () => {
 		};
 		const repo = newRepo(
 			{ griller: GRILLER, impl, flow },
-			{ routines: { griller: { manifestPath: "griller.json" }, impl: { manifestPath: "impl.json" }, flow: { manifestPath: "flow.json" } } },
+			{ routines: { griller: { file: "griller.json" }, impl: { file: "impl.json" }, flow: { file: "flow.json" } } },
 		);
 		writeFileSync(join(repo, "seed.txt"), "uncommitted change\n"); // dirty the origin
 		let called = false;
@@ -372,7 +372,7 @@ describe("acceptance matrix -- failure cases", () => {
 			steps: [{ id: "wait", check: [{ command: "sh", args: ["-c", "sleep 2"] }] }],
 			repeat: { until: "checks-pass", maxIterations: 1 },
 		};
-		const repo = newRepo({ slow }, { routines: { slow: { manifestPath: "slow.json" } } });
+		const repo = newRepo({ slow }, { routines: { slow: { file: "slow.json" } } });
 		const controller = new AbortController();
 		const { deps, err } = harness(repo, modelStub(() => ""), { signal: controller.signal });
 		// abort asynchronously, after the run has started and the sleep check is in flight

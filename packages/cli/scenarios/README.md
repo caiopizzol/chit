@@ -24,7 +24,7 @@ two-step form (free-form `review` for feedback + a constrained `verdict` for the
 | `01-clarify` | Human input with no model call. |
 | `02-grill` | A read-only grilling session. |
 | `03-plan` | Goal to plan, read-only. |
-| `04-panel-review` | Multiple model participants with a final judge. |
+| `04-panel-review` | Multiple routine agents with a final judge. |
 | `05-refine-loop` | A read-only loop that stops when an evaluator says `ship`. |
 | `06-implementation-loop` | The default: builder + advisory reviewer + a deterministic check as the gate. |
 | `07-feature-flow` | Grill -> plan -> human gate -> implementation loop. |

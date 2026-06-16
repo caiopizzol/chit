@@ -3,9 +3,9 @@
 	"inputs": {
 		"brief": { "type": "string", "required": true }
 	},
-	"participants": {
+	"agents": {
 		"planner": {
-			"agent": "planner",
+			"profile": "planner",
 			"instructions": "Turn a grilled idea into a short implementation plan. Do not edit files.",
 			"filesystem": "read-only"
 		}

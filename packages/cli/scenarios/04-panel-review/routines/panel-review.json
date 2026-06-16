@@ -4,19 +4,19 @@
 	"inputs": {
 		"question": { "type": "string", "required": true, "description": "question or proposal to review" }
 	},
-	"participants": {
+	"agents": {
 		"explorer": {
-			"agent": "fast",
+			"profile": "fast",
 			"instructions": "Give the simplest useful answer. Inspect files read-only if useful.",
 			"filesystem": "read-only"
 		},
 		"critic": {
-			"agent": "critic",
+			"profile": "critic",
 			"instructions": "Challenge assumptions, missing cases, and scope creep. Inspect files read-only if useful.",
 			"filesystem": "read-only"
 		},
 		"judge": {
-			"agent": "judge",
+			"profile": "judge",
 			"instructions": "Compare the prior answers and write the final recommendation. Be concise.",
 			"filesystem": "read-only"
 		}

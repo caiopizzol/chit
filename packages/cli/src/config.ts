@@ -28,8 +28,7 @@ export interface AgentConfig {
 
 export interface ChitConfig {
 	routines: Record<string, RoutineConfig>;
-	// Internal normalized name. The authoring file may use `profiles` (preferred)
-	// or the older `agents` alias.
+	// Local adapter/model bindings. Public config uses `profiles` only.
 	agents: Record<string, AgentConfig>;
 }
 
@@ -68,7 +67,7 @@ const ROUTINE_ID_RE = /^[a-z][a-z0-9-]*$/;
 export function parseConfig(raw: unknown, source: string): ChitConfig {
 	if (!isObject(raw)) throw new ConfigError(source, "config must be an object");
 	for (const k of Object.keys(raw)) {
-		if (k !== "$schema" && k !== "routines" && k !== "agents" && k !== "profiles") throw new ConfigError(source, `unknown field "${k}"`);
+		if (k !== "$schema" && k !== "routines" && k !== "profiles") throw new ConfigError(source, `unknown field "${k}"`);
 	}
 	if (!isObject(raw.routines)) throw new ConfigError(source, "`routines` must be an object");
 	const routines: Record<string, RoutineConfig> = {};
@@ -81,15 +80,10 @@ export function parseConfig(raw: unknown, source: string): ChitConfig {
 	}
 
 	const agents: Record<string, AgentConfig> = {};
-	if (raw.agents !== undefined && raw.profiles !== undefined) {
-		throw new ConfigError(source, "`profiles` and `agents` are aliases; use one of them");
-	}
-	const rawProfiles = raw.profiles ?? raw.agents;
-	if (rawProfiles !== undefined) {
-		const profileField = raw.profiles !== undefined ? "profiles" : "agents";
-		if (!isObject(rawProfiles)) throw new ConfigError(source, `\`${profileField}\` must be an object`);
-		for (const [id, entry] of Object.entries(rawProfiles)) {
-			const where = `${source}.${profileField}.${id}`;
+	if (raw.profiles !== undefined) {
+		if (!isObject(raw.profiles)) throw new ConfigError(source, "`profiles` must be an object");
+		for (const [id, entry] of Object.entries(raw.profiles)) {
+			const where = `${source}.profiles.${id}`;
 			agents[id] = parseAgentConfig(entry, where);
 		}
 	}
@@ -98,23 +92,16 @@ export function parseConfig(raw: unknown, source: string): ChitConfig {
 }
 
 function parseRoutineConfigEntry(id: string, entry: unknown, where: string): RoutineConfig {
-	if (typeof entry === "string") {
-		return fileRoutine(entry, where);
-	}
-	if (!isObject(entry)) throw new ConfigError(where, "must be an object or a file path string");
+	if (!isObject(entry)) throw new ConfigError(where, "must be an object");
 
-	const hasFile = entry.file !== undefined || entry.manifestPath !== undefined;
+	const hasFile = entry.file !== undefined;
 	if (hasFile) {
 		for (const k of Object.keys(entry)) {
-			if (!["file", "manifestPath", "description", "defaults"].includes(k)) {
+			if (!["file", "description", "defaults"].includes(k)) {
 				throw new ConfigError(where, `unknown field "${k}"`);
 			}
 		}
-		if (entry.file !== undefined && entry.manifestPath !== undefined) {
-			throw new ConfigError(where, "`file` and `manifestPath` are aliases; use one of them");
-		}
-		const file = entry.file ?? entry.manifestPath;
-		const routine = fileRoutine(file, where);
+		const routine = fileRoutine(entry.file, where);
 		const defaults = parseDefaults(entry.defaults, where);
 		return {
 			...routine,

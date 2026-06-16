@@ -24,7 +24,7 @@ const ROUTINE_ID_RE = /^[a-z][a-z0-9-]*$/;
 // runs `true` and treats the rest as a comment.
 const PLACEHOLDER_CHECK = { command: "sh", args: ["-c", "true # replace with your real check, e.g. bun test"] };
 
-function textManifest(id: string): unknown {
+function textManifest(): unknown {
 	return {
 		description: "Turn an input into text, grounded in the repo (read-only, runs in your cwd).",
 		input: "topic",
@@ -43,7 +43,7 @@ function textManifest(id: string): unknown {
 	};
 }
 
-function loopManifest(id: string): unknown {
+function loopManifest(): unknown {
 	return {
 		description: "Implement a change, review it, and verify with a check until it passes (sandboxed).",
 		input: "task",
@@ -72,7 +72,7 @@ function loopManifest(id: string): unknown {
 	};
 }
 
-function checkManifest(id: string): unknown {
+function checkManifest(): unknown {
 	return {
 		description: "Run a check command in a sandbox until it passes.",
 		inputs: {},
@@ -82,9 +82,9 @@ function checkManifest(id: string): unknown {
 }
 
 function manifestFor(id: string, template: Template): unknown {
-	if (template === "loop") return loopManifest(id);
-	if (template === "check") return checkManifest(id);
-	return textManifest(id);
+	if (template === "loop") return loopManifest();
+	if (template === "check") return checkManifest();
+	return textManifest();
 }
 
 export interface ScaffoldResult {
@@ -110,7 +110,7 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 	// scaffolded routine unrunnable) and never leaves a half-written state. We keep the raw
 	// object (parseConfig has confirmed routines is a proper object) to preserve entries.
 	const configPath = join(cwd, "chit.config.json");
-	let config: { routines: Record<string, unknown>; profiles?: Record<string, unknown>; agents?: Record<string, unknown> };
+	let config: { routines: Record<string, unknown>; profiles?: Record<string, unknown> };
 	let createdConfig = false;
 	if (existsSync(configPath)) {
 		let raw: unknown;
@@ -124,7 +124,7 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 		} catch (e) {
 			throw new Error(`existing chit.config.json is invalid, fix it before running init: ${(e as Error).message}`);
 		}
-		config = raw as { routines: Record<string, unknown>; agents?: Record<string, unknown> };
+		config = raw as { routines: Record<string, unknown>; profiles?: Record<string, unknown> };
 	} else {
 		config = { profiles: {}, routines: {} };
 		createdConfig = true;
@@ -136,9 +136,8 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 
 	const manifest = manifestFor(name, template) as { description?: string };
 	routines[name] = manifest;
-	// The generated participants reference an agent id; make sure each is bound in the
-	// registry (default: the claude adapter), or the scaffolded routine won't resolve.
-	const profileRegistry = config.profiles ?? config.agents ?? (config.profiles = {});
+	// The generated routine agents reference profile ids; make sure each is bound.
+	const profileRegistry = config.profiles ?? (config.profiles = {});
 	const participants = (manifest as { agents?: Record<string, { profile: string }> }).agents ?? {};
 	for (const p of Object.values(participants)) {
 		if (profileRegistry[p.profile] === undefined) profileRegistry[p.profile] = "claude";

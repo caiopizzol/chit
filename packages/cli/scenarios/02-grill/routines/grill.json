@@ -4,9 +4,9 @@
 	"inputs": {
 		"idea": { "type": "string", "required": true, "description": "the idea to question" }
 	},
-	"participants": {
+	"agents": {
 		"griller": {
-			"agent": "griller",
+			"profile": "griller",
 			"instructions": "You run a short read-only grilling session. Surface missing decisions and the smallest useful first slice. Do not edit files.",
 			"filesystem": "read-only"
 		}
