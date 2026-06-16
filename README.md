@@ -1,5 +1,7 @@
 # Chit
 
+[![npm version](https://img.shields.io/npm/v/@chit-run/cli.svg)](https://www.npmjs.com/package/@chit-run/cli)
+
 Chit is a thin local runtime for multi-model agent workflows.
 
 You declare a routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt. There are no built-in roles like implementer, reviewer, planner, griller, or goal. Those are names and prompts you define.
@@ -102,17 +104,10 @@ chit doctor [--real]              # validate config and local tools
 chit routines                     # list routines and derived kinds
 chit inspect <routine>            # show what will run
 chit run <routine> --input k=v    # run a routine
-chit runs [--scope <id>]          # list past runs
+chit runs                         # list past runs
 chit trace <run-id> [--full]      # inspect a receipt
 chit apply <run-id>               # apply a stored dry-run patch
 chit cleanup                      # remove stale sandboxes
-```
-
-`--scope` is a work key, usually a Linear or Jira id. It lets you resume by asking what Chit has already run for that work item:
-
-```sh
-chit runs --scope WEB-123
-chit trace --full run-a1b5efea
 ```
 
 ## Develop Chit
