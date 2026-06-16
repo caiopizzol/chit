@@ -5,6 +5,7 @@ Chit is a thin local runtime for multi-model agent workflows.
 You declare a routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt. There are no built-in roles like implementer, reviewer, planner, griller, or goal. Those are names and prompts you define.
 
 Website: https://chit.run
+<br/>
 Docs: https://chit.run/docs
 
 ## Get started
