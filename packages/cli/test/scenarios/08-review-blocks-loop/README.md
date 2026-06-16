@@ -9,7 +9,7 @@ the verdict as reliable as a model verdict gets, the review is split into two st
 - `verdict`: a constrained call ("reply exactly `pass` or `revise`"). This is the signal the loop gates on.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN inspect implement
 ```
 

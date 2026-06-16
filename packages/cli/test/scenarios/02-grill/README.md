@@ -3,7 +3,7 @@
 Purpose: test a read-only grilling session. The model questions an idea and suggests a small first slice.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN run grill --input idea="add a slugify helper"
 ```
 

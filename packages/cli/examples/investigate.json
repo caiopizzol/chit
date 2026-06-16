@@ -1,0 +1,29 @@
+{
+	"id": "investigate",
+	"description": "Investigate a bug read-only before deciding what to fix.",
+	"inputs": {
+		"bug": { "type": "string", "required": true, "description": "the bug report, symptom, or failure to investigate" },
+		"context": {
+			"type": "string",
+			"required": false,
+			"description": "logs, reproduction steps, ticket details, or prior notes"
+		}
+	},
+	"agents": {
+		"investigator": {
+			"profile": "planner",
+			"instructions": "You investigate software bugs read-only. Inspect the repo and identify likely causes with evidence. You write no files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "investigate",
+			"call": "investigator",
+			"prompt": "Bug:\n{{ inputs.bug }}\n\nContext:\n{{ inputs.context }}\n\nInspect the repo read-only. Return: likely cause, evidence from files, what to verify next, and the smallest safe fix slice. Do not edit files."
+		},
+		{ "id": "out", "format": "{{ steps.investigate.output }}" }
+	],
+	"output": "out",
+	"limits": { "callTimeoutMinutes": 45 }
+}

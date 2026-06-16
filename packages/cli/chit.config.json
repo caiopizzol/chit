@@ -1,52 +1,35 @@
 {
 	"routines": {
-		"feature-griller": {
-			"file": "examples/feature-griller.json",
-			"description": "Question a feature idea before implementation."
+		"plan": {
+			"file": "examples/plan.json",
+			"description": "Turn a backlog item or feature request into a small plan."
 		},
-		"planning": {
-			"file": "examples/planning.json",
-			"description": "Turn a goal into a small, ordered implementation plan."
+		"investigate": {
+			"file": "examples/investigate.json",
+			"description": "Triage a bug read-only before changing code."
 		},
-		"implementation-review": {
-			"file": "examples/implementation-review.json",
-			"description": "Implement, review, and verify a code slice.",
+		"implement": {
+			"file": "examples/implement.json",
+			"description": "Implement a feature with review and checks.",
 			"defaults": { "maxIterations": 3 }
 		},
-		"sandbox-smoke": {
-			"file": "examples/sandbox-smoke.json",
-			"description": "Tiny real converge smoke (creates smoke.txt in a sandbox)."
+		"fix": {
+			"file": "examples/fix.json",
+			"description": "Fix a bug using optional investigation notes."
 		},
-		"forced-revise": {
-			"file": "examples/forced-revise.json",
-			"description": "Forces a real multi-iteration recovery (learn-from-failing-check)."
-		},
-		"feature-flow": {
-			"file": "examples/feature-flow.json",
-			"description": "Composed: grill -> plan -> approve gate -> implementation-review."
-		},
-		"clarify": {
-			"file": "examples/clarify.json",
-			"description": "Model-less demo of an ask gate (asks one question, echoes the answer)."
+		"review": {
+			"file": "examples/review.json",
+			"description": "Review a pasted diff, PR summary, or proposed change."
 		},
 		"goal": {
 			"file": "examples/goal.json",
 			"description": "Draft and refine a goal contract until a structured judge marks it ready."
-		},
-		"panel-review": {
-			"file": "examples/panel-review.json",
-			"description": "Multi-model panel: two independent answers, one judged recommendation."
-		},
-		"refine": {
-			"file": "examples/refine.json",
-			"description": "Draft-and-critique loop until the critic says ship (a model-judged loop, no checks)."
 		}
 	},
 	"profiles": {
-		"claude": { "adapter": "claude", "model": "default" },
+		"planner": { "adapter": "claude", "model": "default" },
 		"builder": { "adapter": "claude", "model": "default" },
-		"critic": { "adapter": "claude", "model": "default" },
-		"fast": { "adapter": "gemini", "model": "default" },
+		"reviewer": { "adapter": "codex", "model": "default" },
 		"judge": { "adapter": "codex", "model": "default" }
 	}
 }

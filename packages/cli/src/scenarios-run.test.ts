@@ -21,7 +21,7 @@ import { type CliDeps, runCli } from "./cli.ts";
 import { fakeSandboxFactory, gitWorktreeSandboxFactory } from "./sandbox.ts";
 import { loadPatch } from "./store.ts";
 
-const scenariosDir = join(process.cwd(), "scenarios");
+const scenariosDir = join(process.cwd(), "test/scenarios");
 const temps: string[] = [];
 afterAll(() => {
 	for (const t of temps) rmSync(t, { recursive: true, force: true });

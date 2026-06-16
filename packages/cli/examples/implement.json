@@ -1,0 +1,56 @@
+{
+	"id": "implement",
+	"description": "Implement a backlog task, review it, and verify with checks until both pass.",
+	"inputs": {
+		"task": { "type": "string", "required": true, "description": "the backlog item or feature slice to implement" },
+		"context": {
+			"type": "string",
+			"required": false,
+			"description": "extra notes, plan, ticket context, or constraints"
+		}
+	},
+	"agents": {
+		"builder": {
+			"profile": "builder",
+			"instructions": "You implement a small, well-scoped code slice. Keep changes minimal and aligned with the task.",
+			"filesystem": "read-write"
+		},
+		"reviewer": {
+			"profile": "reviewer",
+			"instructions": "You review the diff for correctness, scope, and missing verification. Return structured JSON only. You do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Task:\n{{ inputs.task }}\n\nContext:\n{{ inputs.context }}\n\nIteration {{ iteration }}.\nPrior review:\n{{ steps.review.output }}\n\nFailing checks from last iteration:\n{{ steps.verify.output }}\n\nMake the smallest change that moves toward passing the checks and review."
+		},
+		{
+			"id": "review",
+			"call": "reviewer",
+			"prompt": "Task:\n{{ inputs.task }}\n\nContext:\n{{ inputs.context }}\n\nDiff:\n{{ diff }}\n\nReturn JSON only, no prose: { \"passed\": boolean, \"issues\": string[] }. Set passed to true only when the diff correctly and minimally accomplishes the task with no blocking issues.",
+			"json": {
+				"schema": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["passed", "issues"],
+					"properties": {
+						"passed": { "type": "boolean" },
+						"issues": { "type": "array", "items": { "type": "string" } }
+					}
+				}
+			}
+		},
+		{
+			"id": "verify",
+			"check": [{ "command": "bun", "args": ["run", "typecheck"] }, { "command": "bun", "args": ["test"] }]
+		}
+	],
+	"repeat": {
+		"until": { "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }] },
+		"maxIterations": 3
+	},
+	"limits": { "runTimeoutMinutes": 60 }
+}

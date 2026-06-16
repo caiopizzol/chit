@@ -95,7 +95,7 @@ chit apply run-a1b5efea
 
 ## Examples
 
-The examples are normal routines, not built-in modes. `examples/feature-griller.json` is a grill-before-planning routine, `examples/goal.json` is a goal loop, `examples/panel-review.json` is a multi-model panel, and `examples/implementation-review.json` is the build-review-check loop scaffolded by `chit init`.
+The examples are normal routines, not built-in modes: [plan](packages/cli/examples/plan.json), [investigate](packages/cli/examples/investigate.json), [implement](packages/cli/examples/implement.json), [fix](packages/cli/examples/fix.json), [review](packages/cli/examples/review.json), and [goal](packages/cli/examples/goal.json).
 
 ## Commands
 
@@ -120,7 +120,7 @@ git clone https://github.com/caiopizzol/chit
 cd chit && bun install
 cd packages/cli
 bun run src/index.ts routines
-bun run src/index.ts run feature-griller --input idea="add dark mode"
+bun run src/index.ts run plan --input task="add dark mode"
 bun test
 ```
 

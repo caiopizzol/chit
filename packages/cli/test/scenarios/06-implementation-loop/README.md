@@ -6,7 +6,7 @@ feedback that feeds the next iteration, and a deterministic `check` is the conve
 For a model verdict that can BLOCK convergence, see `08` -- but it is fragile, so prefer this.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN run implement --input task="Create math.js exporting add(a,b), plus keep the smoke check passing."
 ```
 

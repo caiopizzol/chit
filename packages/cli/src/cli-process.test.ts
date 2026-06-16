@@ -195,8 +195,8 @@ describe("CLI process: the real binary (no model)", () => {
 });
 
 (process.env.CHIT_REAL_SMOKE === "1" ? describe : describe.skip)("CLI process: a real run through the binary", () => {
-	test("`bun src/index.ts run feature-griller` returns output and exits 0", () => {
-		const r = Bun.spawnSync(["bun", BIN, "run", "feature-griller", "--input", "idea=add a status command"], {
+	test("`bun src/index.ts run plan` returns output and exits 0", () => {
+		const r = Bun.spawnSync(["bun", BIN, "run", "plan", "--input", "task=add a status command"], {
 			cwd: REPO,
 		});
 		expect(r.exitCode).toBe(0);

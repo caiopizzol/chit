@@ -14,7 +14,7 @@ const schema = readJson(join(process.cwd(), "schemas/chit.schema.json")) as AnyS
 
 function configPaths(): string[] {
 	const paths = [join(process.cwd(), "chit.config.json")];
-	const scenarios = join(process.cwd(), "scenarios");
+	const scenarios = join(process.cwd(), "test/scenarios");
 	for (const dir of readdirSync(scenarios, { withFileTypes: true })) {
 		if (dir.isDirectory()) paths.push(join(scenarios, dir.name, "chit.config.json"));
 	}

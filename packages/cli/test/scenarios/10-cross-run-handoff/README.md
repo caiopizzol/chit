@@ -5,7 +5,7 @@ Purpose: show the current explicit handoff pattern between separate runs.
 Run the panel first:
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN run panel-review --input question="What should the first slice be?"
 ```
 

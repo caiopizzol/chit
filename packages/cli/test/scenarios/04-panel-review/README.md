@@ -3,7 +3,7 @@
 Purpose: test multiple routine agents and model bindings in one read-only routine.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN run panel-review --input question="Should we add slugify now?"
 ```
 

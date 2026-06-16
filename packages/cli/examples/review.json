@@ -1,0 +1,29 @@
+{
+	"id": "review",
+	"description": "Review a pasted diff, PR summary, or proposed change without editing files.",
+	"inputs": {
+		"change": {
+			"type": "string",
+			"required": true,
+			"description": "the diff, PR summary, or change description to review"
+		},
+		"context": { "type": "string", "required": false, "description": "review focus, ticket context, or constraints" }
+	},
+	"agents": {
+		"reviewer": {
+			"profile": "reviewer",
+			"instructions": "You do a concise code review. Prioritize correctness, regressions, and missing tests. You write no files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "review",
+			"call": "reviewer",
+			"prompt": "Change to review:\n{{ inputs.change }}\n\nContext:\n{{ inputs.context }}\n\nInspect the repo read-only if useful. Return findings first, ordered by severity. Keep it concise. Do not edit files."
+		},
+		{ "id": "out", "format": "{{ steps.review.output }}" }
+	],
+	"output": "out",
+	"limits": { "callTimeoutMinutes": 45 }
+}

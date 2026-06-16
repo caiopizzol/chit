@@ -11,7 +11,7 @@
 	},
 	"agents": {
 		"drafter": {
-			"profile": "claude",
+			"profile": "planner",
 			"instructions": "You turn a rough objective into a clear goal contract. You inspect the repo read-only when useful. You write no files.",
 			"filesystem": "read-only"
 		},

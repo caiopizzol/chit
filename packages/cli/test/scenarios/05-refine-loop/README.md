@@ -3,7 +3,7 @@
 Purpose: test a read-only loop where a critic decides when a draft is ready.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN run refine --input brief="Write one paragraph explaining Chit routines."
 ```
 

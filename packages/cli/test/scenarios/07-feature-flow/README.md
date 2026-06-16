@@ -3,7 +3,7 @@
 Purpose: test grill -> plan -> human gate -> sandboxed implementation in one flow.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 printf 'Keep the first slice tiny.\n' | bun run $BIN run feature-flow --input idea="add slugify(input)"
 ```
 

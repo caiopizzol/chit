@@ -1,0 +1,56 @@
+{
+	"id": "fix",
+	"description": "Fix a bug using optional investigation notes, review the diff, and verify with checks.",
+	"inputs": {
+		"bug": { "type": "string", "required": true, "description": "the bug to fix" },
+		"context": {
+			"type": "string",
+			"required": false,
+			"description": "investigation notes, logs, reproduction steps, or constraints"
+		}
+	},
+	"agents": {
+		"builder": {
+			"profile": "builder",
+			"instructions": "You fix the bug with the smallest correct change and keep the scope tight.",
+			"filesystem": "read-write"
+		},
+		"reviewer": {
+			"profile": "reviewer",
+			"instructions": "You review the bug fix for correctness, regressions, and test coverage. Return structured JSON only. You do not edit files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "fix",
+			"call": "builder",
+			"prompt": "Bug:\n{{ inputs.bug }}\n\nContext and investigation notes:\n{{ inputs.context }}\n\nIteration {{ iteration }}.\nPrior review:\n{{ steps.review.output }}\n\nFailing checks:\n{{ steps.verify.output }}\n\nMake the smallest correct fix."
+		},
+		{
+			"id": "review",
+			"call": "reviewer",
+			"prompt": "Bug:\n{{ inputs.bug }}\n\nContext:\n{{ inputs.context }}\n\nDiff:\n{{ diff }}\n\nReturn JSON only, no prose: { \"passed\": boolean, \"issues\": string[] }. Set passed to true only when the bug fix is correct, scoped, and verified.",
+			"json": {
+				"schema": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["passed", "issues"],
+					"properties": {
+						"passed": { "type": "boolean" },
+						"issues": { "type": "array", "items": { "type": "string" } }
+					}
+				}
+			}
+		},
+		{
+			"id": "verify",
+			"check": [{ "command": "bun", "args": ["run", "typecheck"] }, { "command": "bun", "args": ["test"] }]
+		}
+	],
+	"repeat": {
+		"until": { "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }] },
+		"maxIterations": 3
+	},
+	"limits": { "runTimeoutMinutes": 60 }
+}

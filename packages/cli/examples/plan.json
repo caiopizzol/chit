@@ -1,0 +1,25 @@
+{
+	"id": "plan",
+	"description": "Turn a backlog item or feature request into a small implementation plan grounded in the repo.",
+	"inputs": {
+		"task": { "type": "string", "required": true, "description": "the backlog item, feature request, or bug to plan" },
+		"context": { "type": "string", "required": false, "description": "ticket details, links, logs, or constraints" }
+	},
+	"agents": {
+		"planner": {
+			"profile": "planner",
+			"instructions": "You design a small, sequential implementation plan. Inspect the repo read-only to ground every step in real files. You write nothing.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "plan",
+			"call": "planner",
+			"prompt": "Task:\n{{ inputs.task }}\n\nContext:\n{{ inputs.context }}\n\nInspect the repo read-only. Return a concise numbered plan. For each step: title, files likely touched, and verification. Prefer small steps over one large step. Do not edit files."
+		},
+		{ "id": "out", "format": "{{ steps.plan.output }}" }
+	],
+	"output": "out",
+	"limits": { "callTimeoutMinutes": 45 }
+}

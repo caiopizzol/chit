@@ -30,16 +30,16 @@ function realDeps(): RunDeps {
 }
 
 (REAL ? describe : describe.skip)("real-claude smoke: read-only routines return output", () => {
-	test("feature-griller returns non-empty output", async () => {
-		const routine = resolveRoutine(loadConfig(CWD), "feature-griller", CWD);
-		const r = await runOneShot(routine, { idea: "add a dark mode toggle" }, realDeps());
+	test("investigate returns non-empty output", async () => {
+		const routine = resolveRoutine(loadConfig(CWD), "investigate", CWD);
+		const r = await runOneShot(routine, { bug: "dark mode toggle fails to persist" }, realDeps());
 		expect(r.status).toBe("completed");
 		expect((r.output ?? "").length).toBeGreaterThan(50);
 	}, 600_000);
 
-	test("planning returns non-empty output", async () => {
-		const routine = resolveRoutine(loadConfig(CWD), "planning", CWD);
-		const r = await runOneShot(routine, { goal: "add a dark mode toggle" }, realDeps());
+	test("plan returns non-empty output", async () => {
+		const routine = resolveRoutine(loadConfig(CWD), "plan", CWD);
+		const r = await runOneShot(routine, { task: "add a dark mode toggle" }, realDeps());
 		expect(r.status).toBe("completed");
 		expect((r.output ?? "").length).toBeGreaterThan(50);
 	}, 600_000);

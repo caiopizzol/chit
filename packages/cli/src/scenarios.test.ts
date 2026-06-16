@@ -6,7 +6,7 @@ import { resolveFlow } from "./flow.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { type ResolvedRoutine, resolveRoutine } from "./routine.ts";
 
-const scenariosDir = join(process.cwd(), "scenarios");
+const scenariosDir = join(process.cwd(), "test/scenarios");
 
 function readJson(path: string): unknown {
 	return JSON.parse(readFileSync(path, "utf-8"));

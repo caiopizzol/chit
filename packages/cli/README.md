@@ -38,16 +38,36 @@ A routine with a check or a writing agent runs in a disposable git sandbox, dry-
       },
       "steps": [
         { "id": "build",  "call": "builder",  "prompt": "{{ inputs.task }}" },
-        { "id": "review", "call": "reviewer", "prompt": "{{ diff }}" },
+        {
+          "id": "review",
+          "call": "reviewer",
+          "prompt": "{{ diff }}",
+          "json": {
+            "schema": {
+              "type": "object",
+              "required": ["passed"],
+              "properties": { "passed": { "type": "boolean" } }
+            }
+          }
+        },
         { "id": "verify", "check": "bun test" }
       ],
-      "repeat": { "until": "checks-pass", "maxIterations": 3 }
+      "repeat": {
+        "until": {
+          "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }]
+        },
+        "maxIterations": 3
+      }
     }
   }
 }
 ```
 
 How it runs is derived from the routine's shape: a `repeat` makes it a loop; a check or a writing agent makes it sandboxed.
+
+## Examples
+
+Starter examples: [plan](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/plan.json), [investigate](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/investigate.json), [implement](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/implement.json), [fix](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/fix.json), [review](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/review.json), and [goal](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/goal.json).
 
 ## Early
 

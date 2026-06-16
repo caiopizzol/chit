@@ -17,6 +17,7 @@
 	"files": [
 		"src",
 		"schemas",
+		"examples",
 		"!src/**/*.test.ts"
 	],
 	"publishConfig": {

@@ -3,7 +3,7 @@
 Purpose: test a real multi-iteration loop where the builder must learn from the failing check output.
 
 ```sh
-BIN=../../src/index.ts
+BIN=../../../src/index.ts
 bun run $BIN run forced-revise
 ```
 
