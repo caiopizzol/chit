@@ -7,6 +7,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import { formatElapsed } from "./elapsed.ts";
+import { withHeartbeat } from "./heartbeat.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { evaluateStructured } from "./structured.ts";
@@ -118,7 +119,7 @@ export async function runOneShot(
 				const participant = manifest.participants[step.call];
 				if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
 				deps.onProgress?.(`  call ${step.call} (${participant.agent}) …`);
-				const result = await deps.adapter.call({
+				const result = await withHeartbeat(() => deps.adapter.call({
 					agent: participant.agent,
 					instructions: participant.instructions,
 					prompt: renderTemplate(step.prompt, ctx),
@@ -126,7 +127,7 @@ export async function runOneShot(
 					cwd: deps.cwd,
 					...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
 					...(deps.signal !== undefined && { signal: deps.signal }),
-				});
+				}), { label: `call ${step.call}`, now: deps.now, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) });
 				const callElapsed = deps.now() - stepStart;
 				deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(callElapsed)}`);
 				// Structured output: validate against the schema. A one-shot has no retry loop, so

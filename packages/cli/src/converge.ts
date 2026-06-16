@@ -17,6 +17,7 @@
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { formatElapsed } from "./elapsed.ts";
+import { withHeartbeat } from "./heartbeat.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { evaluateStructured, readPath } from "./structured.ts";
@@ -213,7 +214,7 @@ export async function runConverge(
 					const participant = manifest.participants[step.call];
 					if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
 					deps.onProgress?.(`  call ${step.call} (${participant.agent})`);
-						const result = await deps.adapter.call({
+						const result = await withHeartbeat(() => deps.adapter.call({
 						agent: participant.agent,
 						instructions: participant.instructions,
 						prompt: renderTemplate(step.prompt, ctx),
@@ -221,7 +222,7 @@ export async function runConverge(
 						cwd: deps.cwd,
 						...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
 						...(deps.signal !== undefined && { signal: deps.signal }),
-					});
+					}), { label: `call ${step.call}`, now: deps.now, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) });
 					deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(deps.now() - stepStart)}`);
 					// Structured output: parse + validate the model's text against the declared schema.
 					// A soft failure (call succeeded, output did not match) is NOT a runError -- store the
@@ -264,8 +265,8 @@ export async function runConverge(
 					let stepPassed = true;
 					for (const cmd of step.checks) {
 						const checkStart = deps.now();
-						const res = await deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal);
 						const label = [cmd.command, ...cmd.args].join(" ");
+						const res = await withHeartbeat(() => deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal), { label: `check ${label}`, now: deps.now, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) });
 						const checkElapsed = deps.now() - checkStart;
 						deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"} in ${formatElapsed(checkElapsed)}`);
 						checks.push({ command: label, ok: res.ok, startedAt: checkStart, elapsedMs: checkElapsed });
