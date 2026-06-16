@@ -1,6 +1,6 @@
 {
 	"id": "feature-griller",
-	"description": "Question a feature idea before implementation: surface the decisions and risks that should be settled first.",
+	"description": "Grill a feature idea before implementation: ask what must be decided before a plan is safe to execute.",
 	"inputs": {
 		"idea": { "type": "string", "required": true, "description": "the feature idea to interrogate" },
 		"context": { "type": "string", "required": false, "description": "any extra background" }
@@ -8,7 +8,7 @@
 	"agents": {
 		"griller": {
 			"profile": "claude",
-			"instructions": "You run a read-only grilling session for a proposed software change. Inspect the repository at your cwd enough to ground questions in real files. Do not edit files. Do not write an implementation plan. Surface the missing product, design, architecture, testing, and rollout decisions that would change the first slice.",
+			"instructions": "You run a read-only grilling session for a proposed software change. Inspect the repository at your cwd enough to answer questions grounded in real files. Do not edit files. Do not write an implementation plan. Surface the missing product, design, architecture, testing, and rollout decisions that would change the first slice.",
 			"filesystem": "read-only"
 		}
 	},
@@ -16,7 +16,7 @@
 		{
 			"id": "grill",
 			"call": "griller",
-			"prompt": "Feature idea:\n{{ inputs.idea }}\n\nAdditional context:\n{{ inputs.context }}\n\nInspect the repo at your cwd in read-only mode. Return markdown with these sections: Understanding, Repo Signals, Questions (prioritized, each with why it matters), Risks, Suggested First Slice. Do not edit files."
+			"prompt": "Feature idea:\n{{ inputs.idea }}\n\nAdditional context:\n{{ inputs.context }}\n\nInspect the repo at your cwd in read-only mode. If a question can be answered from the codebase, answer it from the codebase instead of asking. Return markdown with these sections: Understanding, Repo Signals, Questions (prioritized, each with why it matters and your recommended answer), Risks, Suggested First Slice. Do not edit files."
 		},
 		{ "id": "out", "format": "{{ steps.grill.output }}" }
 	],

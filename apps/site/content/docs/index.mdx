@@ -105,6 +105,17 @@ You do not choose an execution mode. Chit reads the routine shape.
 
 A sandboxed run is dry-run by default: a patch you inspect, then `chit apply` writes the exact reviewed result.
 
+## Patterns to copy
+
+These are examples, not built-in modes.
+
+| Pattern | Example | What it shows |
+|---|---|---|
+| Grill before planning | `examples/feature-griller.json` | Similar shape to [Matt Pocock `grill-me`](https://github.com/mattpocock/skills/blob/main/skills/productivity/grill-me/SKILL.md): question the plan before implementation. |
+| Goal loop | `examples/goal.json` | Similar shape to [Claude `/goal`](https://code.claude.com/docs/en/goal) and [Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex): draft, judge, continue until ready. |
+| Multi-model panel | `examples/panel-review.json` | Similar shape to [OpenRouter Fusion](https://openrouter.ai/docs/guides/features/server-tools/fusion): two models answer independently; a judge compares them. |
+| Build and review loop | `examples/implementation-review.json` | One model writes in a sandbox, another reviews, and checks gate convergence. |
+
 <Cards>
 	<Card href="/docs/config" title="Config reference">
 		Every field: profiles, routines, agents, steps, repeat, structured output, and validation.

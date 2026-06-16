@@ -1,0 +1,47 @@
+{
+	"id": "panel-review",
+	"description": "Ask two models independently, then have a judge compare the answers and return the final recommendation.",
+	"inputs": {
+		"question": {
+			"type": "string",
+			"required": true,
+			"description": "the decision, design, or review question to ask the panel"
+		}
+	},
+	"agents": {
+		"explorer": {
+			"profile": "fast",
+			"instructions": "You answer quickly and directly. Surface the strongest practical path and the main risk. You write no files.",
+			"filesystem": "read-only"
+		},
+		"challenger": {
+			"profile": "critic",
+			"instructions": "You answer independently and look for the mistake, missing trade-off, or smaller first slice. You write no files.",
+			"filesystem": "read-only"
+		},
+		"judge": {
+			"profile": "judge",
+			"instructions": "You compare panel answers and produce the final recommendation. Prefer the answer best supported by concrete evidence. You write no files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "answer-a",
+			"call": "explorer",
+			"prompt": "Question:\n{{ inputs.question }}\n\nGive your best answer. Be concrete and brief."
+		},
+		{
+			"id": "answer-b",
+			"call": "challenger",
+			"prompt": "Question:\n{{ inputs.question }}\n\nAnswer independently. Challenge assumptions, name risks, and suggest a smaller first slice if appropriate."
+		},
+		{
+			"id": "final",
+			"call": "judge",
+			"prompt": "Question:\n{{ inputs.question }}\n\nAnswer A:\n{{ steps.answer-a.output }}\n\nAnswer B:\n{{ steps.answer-b.output }}\n\nCompare the answers. Return the final recommendation, what both answers agree on, what they disagree on, and what to do next."
+		}
+	],
+	"output": "final",
+	"limits": { "callTimeoutMinutes": 45 }
+}

@@ -29,6 +29,14 @@
 			"file": "examples/clarify.json",
 			"description": "Model-less demo of an ask gate (asks one question, echoes the answer)."
 		},
+		"goal": {
+			"file": "examples/goal.json",
+			"description": "Draft and refine a goal contract until a structured judge marks it ready."
+		},
+		"panel-review": {
+			"file": "examples/panel-review.json",
+			"description": "Multi-model panel: two independent answers, one judged recommendation."
+		},
 		"refine": {
 			"file": "examples/refine.json",
 			"description": "Draft-and-critique loop until the critic says ship (a model-judged loop, no checks)."
@@ -37,6 +45,8 @@
 	"profiles": {
 		"claude": { "adapter": "claude", "model": "default" },
 		"builder": { "adapter": "claude", "model": "default" },
-		"critic": { "adapter": "claude", "model": "default" }
+		"critic": { "adapter": "claude", "model": "default" },
+		"fast": { "adapter": "gemini", "model": "default" },
+		"judge": { "adapter": "codex", "model": "default" }
 	}
 }

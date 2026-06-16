@@ -12,20 +12,17 @@ Docs: https://chit.run/docs
 
 ## Get started
 
-Chit shells out to the agent CLIs you already use, so install at least one (`claude`, `codex`, or `gemini`). Then install Chit and run it in your project:
+Chit shells out to the agent CLIs you already use, so install at least one (`claude`, `codex`, or `gemini`). Then:
 
 ```sh
 bun add -g @chit-run/cli
-
 cd /path/to/your-project
-chit init implement --template loop   # writes chit.config.json
-chit doctor                           # check config + agent CLIs
-chit inspect implement                # see what will run
-chit run implement --input task="add a --version flag"   # dry run -> patch
-chit apply <run-id>                   # apply the reviewed patch
+chit init implement --template loop
+chit run implement --input task="add a --version flag"
+chit apply <run-id>
 ```
 
-The generated routine ships a placeholder check; swap it for your real command (e.g. `bun test`). Full walkthrough: [chit.run/docs](https://chit.run/docs).
+`chit init` writes `chit.config.json`. Replace the placeholder check with your real command, such as `bun test`. Full walkthrough: [chit.run/docs](https://chit.run/docs).
 
 ## The Config Model
 
@@ -95,6 +92,17 @@ chit run implement --input task="add a version command"
 chit trace --full run-a1b5efea
 chit apply run-a1b5efea
 ```
+
+## Patterns To Copy
+
+These are normal routines, not built-in modes.
+
+| Pattern | Chit example | Related pattern |
+|---|---|---|
+| Grill before planning | `examples/feature-griller.json` | [Matt Pocock `grill-me`](https://github.com/mattpocock/skills/blob/main/skills/productivity/grill-me/SKILL.md) |
+| Goal loop | `examples/goal.json` | [Claude `/goal`](https://code.claude.com/docs/en/goal), [Claude `/loop`](https://code.claude.com/docs/en/scheduled-tasks), [Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex) |
+| Multi-model panel | `examples/panel-review.json` | [OpenRouter Fusion](https://openrouter.ai/docs/guides/features/server-tools/fusion) |
+| Build and review loop | `examples/implementation-review.json` | One model builds, another reviews, checks gate the result |
 
 ## Commands
 

@@ -1,0 +1,50 @@
+{
+	"id": "goal",
+	"description": "Draft a goal contract, judge it with structured output, and keep refining until the judge says it is ready.",
+	"inputs": {
+		"objective": {
+			"type": "string",
+			"required": true,
+			"description": "the outcome you want the routine to turn into a goal"
+		},
+		"constraints": { "type": "string", "required": false, "description": "verification, boundaries, and non-goals" }
+	},
+	"agents": {
+		"drafter": {
+			"profile": "claude",
+			"instructions": "You turn a rough objective into a clear goal contract. You inspect the repo read-only when useful. You write no files.",
+			"filesystem": "read-only"
+		},
+		"judge": {
+			"profile": "judge",
+			"instructions": "You judge whether a goal contract is ready to guide implementation. Return structured JSON only. You write no files.",
+			"filesystem": "read-only"
+		}
+	},
+	"steps": [
+		{
+			"id": "draft",
+			"call": "drafter",
+			"prompt": "Objective:\n{{ inputs.objective }}\n\nConstraints and context:\n{{ inputs.constraints }}\n\nIteration {{ iteration }}.\nPrevious judge verdict:\n{{ steps.verdict.output }}\n\nDraft a concise goal contract with: Goal, Verification, Constraints, Non-goals, Blocked condition. Address every missing item from the previous verdict."
+		},
+		{
+			"id": "verdict",
+			"call": "judge",
+			"prompt": "Objective:\n{{ inputs.objective }}\n\nConstraints and context:\n{{ inputs.constraints }}\n\nDraft goal contract:\n{{ steps.draft.output }}\n\nReturn JSON only, no prose. Set ready to true only if the draft is specific enough to guide the first implementation and has a clear verification surface. If not ready, list only the blocking gaps in missing.",
+			"json": {
+				"schema": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["ready", "missing"],
+					"properties": {
+						"ready": { "type": "boolean" },
+						"missing": { "type": "array", "items": { "type": "string" } }
+					}
+				}
+			}
+		}
+	],
+	"repeat": { "until": { "step": "verdict", "path": "ready", "equals": true }, "maxIterations": 5 },
+	"output": "draft",
+	"limits": { "runTimeoutMinutes": 60 }
+}
