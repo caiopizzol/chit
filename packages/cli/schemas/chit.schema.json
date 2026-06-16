@@ -5,9 +5,7 @@
 	"description": "Authoring schema for a Chit config file. Semantic rules are still enforced by the Chit parser and resolver.",
 	"type": "object",
 	"additionalProperties": false,
-	"required": [
-		"routines"
-	],
+	"required": ["routines"],
 	"properties": {
 		"$schema": {
 			"type": "string"
@@ -38,9 +36,7 @@
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": [
-						"adapter"
-					],
+					"required": ["adapter"],
 					"properties": {
 						"adapter": {
 							"const": "claude"
@@ -49,13 +45,7 @@
 							"type": "string",
 							"anyOf": [
 								{
-									"enum": [
-										"default",
-										"sonnet",
-										"opus",
-										"haiku",
-										"fable"
-									]
+									"enum": ["default", "sonnet", "opus", "haiku", "fable"]
 								},
 								{
 									"pattern": "^claude-"
@@ -63,12 +53,7 @@
 							]
 						},
 						"effort": {
-							"enum": [
-								"low",
-								"medium",
-								"high",
-								"max"
-							]
+							"enum": ["low", "medium", "high", "max"]
 						}
 					}
 				},
@@ -80,9 +65,7 @@
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": [
-						"adapter"
-					],
+					"required": ["adapter"],
 					"properties": {
 						"adapter": {
 							"const": "codex"
@@ -91,11 +74,7 @@
 							"type": "string",
 							"anyOf": [
 								{
-									"enum": [
-										"default",
-										"gpt-5.5",
-										"gpt-5.4-mini"
-									]
+									"enum": ["default", "gpt-5.5", "gpt-5.4-mini"]
 								},
 								{
 									"pattern": "^gpt-"
@@ -106,13 +85,7 @@
 							]
 						},
 						"effort": {
-							"enum": [
-								"minimal",
-								"low",
-								"medium",
-								"high",
-								"xhigh"
-							]
+							"enum": ["minimal", "low", "medium", "high", "xhigh"]
 						}
 					}
 				},
@@ -124,9 +97,7 @@
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": [
-						"adapter"
-					],
+					"required": ["adapter"],
 					"properties": {
 						"adapter": {
 							"const": "gemini"
@@ -135,9 +106,7 @@
 							"type": "string",
 							"anyOf": [
 								{
-									"enum": [
-										"default"
-									]
+									"enum": ["default"]
 								},
 								{
 									"pattern": "^gemini-"
@@ -149,19 +118,13 @@
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": [
-						"adapter"
-					],
+					"required": ["adapter"],
 					"properties": {
 						"adapter": {
 							"type": "string",
 							"minLength": 1,
 							"not": {
-								"enum": [
-									"claude",
-									"codex",
-									"gemini"
-								]
+								"enum": ["claude", "codex", "gemini"]
 							}
 						},
 						"model": {
@@ -188,9 +151,7 @@
 		"fileRoutine": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"file"
-			],
+			"required": ["file"],
 			"properties": {
 				"file": {
 					"type": "string",
@@ -207,9 +168,7 @@
 		"inlineRoutine": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"steps"
-			],
+			"required": ["steps"],
 			"properties": {
 				"id": {
 					"type": "string"
@@ -283,11 +242,7 @@
 		"agent": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"profile",
-				"instructions",
-				"filesystem"
-			],
+			"required": ["profile", "instructions", "filesystem"],
 			"properties": {
 				"profile": {
 					"type": "string",
@@ -298,20 +253,14 @@
 					"minLength": 1
 				},
 				"filesystem": {
-					"enum": [
-						"none",
-						"read-only",
-						"read-write"
-					]
+					"enum": ["none", "read-only", "read-write"]
 				}
 			}
 		},
 		"step": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"id"
-			],
+			"required": ["id"],
 			"properties": {
 				"id": {
 					"type": "string",
@@ -377,9 +326,7 @@
 		"checkCommand": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"command"
-			],
+			"required": ["command"],
 			"properties": {
 				"command": {
 					"type": "string",
@@ -396,9 +343,7 @@
 		"repeat": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"until"
-			],
+			"required": ["until"],
 			"properties": {
 				"until": {
 					"$ref": "#/$defs/repeatUntil"
@@ -423,9 +368,7 @@
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": [
-						"all"
-					],
+					"required": ["all"],
 					"properties": {
 						"all": {
 							"type": "array",
@@ -451,10 +394,7 @@
 		"stepEquals": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"step",
-				"equals"
-			],
+			"required": ["step", "equals"],
 			"properties": {
 				"step": {
 					"type": "string",
@@ -468,9 +408,7 @@
 		"jsonOutput": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"schema"
-			],
+			"required": ["schema"],
 			"properties": {
 				"schema": {
 					"type": "object",
@@ -481,11 +419,7 @@
 		"stepPathEquals": {
 			"type": "object",
 			"additionalProperties": false,
-			"required": [
-				"step",
-				"path",
-				"equals"
-			],
+			"required": ["step", "path", "equals"],
 			"properties": {
 				"step": {
 					"type": "string",

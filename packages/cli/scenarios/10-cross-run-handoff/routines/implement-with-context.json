@@ -17,8 +17,16 @@
 		}
 	},
 	"steps": [
-		{ "id": "build", "call": "builder", "prompt": "Task:\n{{ inputs.task }}\n\nPrior-run context:\n{{ inputs.context }}\n\nIteration {{ iteration }}.\nReview:\n{{ steps.critique.output }}\nChecks:\n{{ steps.verify.output }}" },
-		{ "id": "critique", "call": "critic", "prompt": "Task:\n{{ inputs.task }}\n\nPrior-run context:\n{{ inputs.context }}\n\nDiff:\n{{ diff }}\n\nGive concrete feedback on correctness, scope, and whether the prior context was honored. This is guidance for the builder, not a gate." },
+		{
+			"id": "build",
+			"call": "builder",
+			"prompt": "Task:\n{{ inputs.task }}\n\nPrior-run context:\n{{ inputs.context }}\n\nIteration {{ iteration }}.\nReview:\n{{ steps.critique.output }}\nChecks:\n{{ steps.verify.output }}"
+		},
+		{
+			"id": "critique",
+			"call": "critic",
+			"prompt": "Task:\n{{ inputs.task }}\n\nPrior-run context:\n{{ inputs.context }}\n\nDiff:\n{{ diff }}\n\nGive concrete feedback on correctness, scope, and whether the prior context was honored. This is guidance for the builder, not a gate."
+		},
 		{ "id": "verify", "check": [{ "command": "node", "args": ["-e", "console.log('ok')"] }] }
 	],
 	"repeat": { "until": "checks-pass", "maxIterations": 3 }

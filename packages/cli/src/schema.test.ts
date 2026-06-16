@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { AnySchema } from "ajv";
-import Ajv2020 from "ajv/dist/2020";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AnySchema } from "ajv";
+import Ajv2020 from "ajv/dist/2020";
 import { buildProfileSchema } from "./builtin-adapters.ts";
 import { parseConfig } from "./config.ts";
 
@@ -139,7 +139,14 @@ describe("schemas/chit.schema.json -- structured output", () => {
 							id: "verdict",
 							call: "judge",
 							prompt: "{{ inputs.idea }}",
-							json: { schema: { type: "object", required: ["ready"], additionalProperties: false, properties: { ready: { type: "boolean" } } } },
+							json: {
+								schema: {
+									type: "object",
+									required: ["ready"],
+									additionalProperties: false,
+									properties: { ready: { type: "boolean" } },
+								},
+							},
 						},
 					],
 					repeat: { until: { step: "verdict", path: "ready", equals: true }, maxIterations: 3 },

@@ -6,7 +6,15 @@
 
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
-import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, isComposition, isSandboxed, kindLabel, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
+import {
+	effectiveCallTimeoutMs,
+	effectiveRunTimeoutMs,
+	isComposition,
+	isSandboxed,
+	kindLabel,
+	type RepeatCondition,
+	type RepeatUntil,
+} from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
 import type { PatchStatus } from "./store.ts";
@@ -29,7 +37,11 @@ function minutesLabel(ms: number | undefined): string {
 // an `{ all: [...] }` reads as the conditions joined by AND.
 function formatUntil(u: RepeatUntil, checksLabel: string): string {
 	const cond = (c: RepeatCondition): string =>
-		c === "checks-pass" ? checksLabel : "path" in c ? `${c.step}.${c.path} == ${JSON.stringify(c.equals)}` : `${c.step} == ${JSON.stringify(c.equals)}`;
+		c === "checks-pass"
+			? checksLabel
+			: "path" in c
+				? `${c.step}.${c.path} == ${JSON.stringify(c.equals)}`
+				: `${c.step} == ${JSON.stringify(c.equals)}`;
 	return typeof u === "object" && "all" in u ? u.all.map(cond).join(" AND ") : cond(u);
 }
 
@@ -72,9 +84,7 @@ export interface RoutineListItem {
 export function formatRoutineList(items: RoutineListItem[]): string {
 	if (items.length === 0) return "No routines configured. Add some under `routines` in chit.config.json.";
 	const w = Math.max(...items.map((i) => i.id.length));
-	const lines = items.map(
-		(i) => `  ${pad(i.id, w)}  ${pad(i.kind, 12)}  ${i.description ?? ""}`.trimEnd(),
-	);
+	const lines = items.map((i) => `  ${pad(i.id, w)}  ${pad(i.kind, 12)}  ${i.description ?? ""}`.trimEnd());
 	return [`routines (${items.length}):`, ...lines].join("\n");
 }
 
@@ -119,7 +129,9 @@ function inputPreview(inputs: Record<string, string>): string {
 // only used to phrase the empty/header line; the caller does the filtering.
 export function formatRunList(items: RunListItem[], scopeFilter?: string): string {
 	if (items.length === 0) {
-		return scopeFilter !== undefined ? `No runs found for scope "${scopeFilter}".` : "No runs yet. Run a routine, then `chit runs` shows the history.";
+		return scopeFilter !== undefined
+			? `No runs found for scope "${scopeFilter}".`
+			: "No runs yet. Run a routine, then `chit runs` shows the history.";
 	}
 	const rows = [...items].sort((a, b) => a.ageMs - b.ageMs);
 	const wId = Math.max(...rows.map((r) => r.runId.length));
@@ -131,7 +143,8 @@ export function formatRunList(items: RunListItem[], scopeFilter?: string): strin
 		const patch = pad(r.patch === "none" ? "" : r.patch, wPatch);
 		return `  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  ${pad(r.status, wStatus)}  ${pad(r.scope ?? "-", wScope)}  ${pad(ageLabel(r.ageMs), 9)}  ${patch}  ${inputPreview(r.inputs)}`.trimEnd();
 	});
-	const header = scopeFilter !== undefined ? `runs in scope "${scopeFilter}" (${rows.length}):` : `runs (${rows.length}):`;
+	const header =
+		scopeFilter !== undefined ? `runs in scope "${scopeFilter}" (${rows.length}):` : `runs (${rows.length}):`;
 	return [header, ...lines].join("\n");
 }
 
@@ -165,7 +178,9 @@ export function formatInspect(routine: ResolvedRoutine): string {
 			}
 			if (s.kind !== "routine") return;
 			const ins = Object.keys(s.inputs);
-			out.push(`  ${i + 1}. ${pad(s.id, 10)} -> ${pad(s.routine, 22)}${ins.length ? `inputs: ${ins.join(", ")}` : ""}`.trimEnd());
+			out.push(
+				`  ${i + 1}. ${pad(s.id, 10)} -> ${pad(s.routine, 22)}${ins.length ? `inputs: ${ins.join(", ")}` : ""}`.trimEnd(),
+			);
 		});
 		out.push("");
 		// A composition has no direct calls, so only the whole-flow wall-time bound applies.
@@ -187,10 +202,7 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		out.push("agents:");
 		for (const [id, p] of Object.entries(m.participants)) {
 			const binding = routine.agents?.[p.agent];
-			const agentCol =
-				binding !== undefined
-					? `${p.agent} -> ${bindingLabel(binding)}`
-					: p.agent;
+			const agentCol = binding !== undefined ? `${p.agent} -> ${bindingLabel(binding)}` : p.agent;
 			out.push(`  ${pad(id, pw)}  ${pad(agentCol, 22)}  filesystem: ${p.filesystem}`);
 		}
 		out.push("");
@@ -221,7 +233,9 @@ export function formatInspect(routine: ResolvedRoutine): string {
 
 	// Make the time bounds legible. Both apply to an execution routine: the per-call
 	// bound caps any single call or check, the whole-run bound caps the run's wall-time.
-	out.push(`limits: per call ${minutesLabel(effectiveCallTimeoutMs(m))}, whole run ${minutesLabel(effectiveRunTimeoutMs(m))}`);
+	out.push(
+		`limits: per call ${minutesLabel(effectiveCallTimeoutMs(m))}, whole run ${minutesLabel(effectiveRunTimeoutMs(m))}`,
+	);
 
 	if (isSandboxed(m)) {
 		out.push("");
@@ -251,9 +265,13 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 		for (const s of r.steps) {
 			// An ask gate has no sub-routine/sub-run -- show it as `ask` with a "-" run id.
 			if (s.kind === "ask") {
-				out.push(`  ${pad(s.id, w)}  -> ${pad("ask", 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  -`);
+				out.push(
+					`  ${pad(s.id, w)}  -> ${pad("ask", 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  -`,
+				);
 			} else {
-				out.push(`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  ${s.subRunId || "-"}`);
+				out.push(
+					`  ${pad(s.id, w)}  -> ${pad(s.routine, 22)}  ${pad(s.status, 15)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms  ${s.subRunId || "-"}`,
+				);
 			}
 		}
 		if (r.applyError) out.push(`apply:    could not apply to your tree -- ${r.applyError}`);
@@ -303,7 +321,9 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 	const w = Math.max(1, ...r.steps.map((s) => s.id.length));
 	for (const s of r.steps) {
 		const who = s.kind === "call" ? callLabel(s) : s.kind === "ask" ? "ask" : "format";
-		out.push(`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms`);
+		out.push(
+			`  ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms`,
+		);
 	}
 	if (r.status === "failed" || r.status === "cancelled") {
 		out.push(`error:    ${r.error ?? "(unknown)"}`);

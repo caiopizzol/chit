@@ -191,7 +191,8 @@ function parseInputs(raw: unknown, source: string): Record<string, InputSpec> {
 	if (Array.isArray(raw)) {
 		const out: Record<string, InputSpec> = {};
 		for (const [i, name] of raw.entries()) {
-			if (typeof name !== "string" || !name) throw new ManifestError(`${source}.inputs[${i}]`, "must be a non-empty input name");
+			if (typeof name !== "string" || !name)
+				throw new ManifestError(`${source}.inputs[${i}]`, "must be a non-empty input name");
 			out[name] = { type: "string", required: true };
 		}
 		return out;
@@ -256,7 +257,8 @@ function parseCheckArray(raw: unknown, where: string): Check[] {
 		}
 		if (!isObject(c)) throw new ManifestError(at, "must be an object");
 		requireKeys(c, new Set(["command", "args"]), at);
-		if (typeof c.command !== "string" || !c.command) throw new ManifestError(at, "`command` must be a non-empty string");
+		if (typeof c.command !== "string" || !c.command)
+			throw new ManifestError(at, "`command` must be a non-empty string");
 		const args = c.args ?? [];
 		if (!Array.isArray(args) || args.some((a) => typeof a !== "string")) {
 			throw new ManifestError(at, "`args` must be an array of strings");
@@ -286,7 +288,8 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 			if (typeof s.call !== "string" || !(s.call in participants)) {
 				throw new ManifestError(where, `\`call\` must name an agent (got ${JSON.stringify(s.call)})`);
 			}
-			if (typeof s.prompt !== "string" || !s.prompt) throw new ManifestError(where, "`prompt` must be a non-empty string");
+			if (typeof s.prompt !== "string" || !s.prompt)
+				throw new ManifestError(where, "`prompt` must be a non-empty string");
 			let json: { schema: JsonSchema } | undefined;
 			if (s.json !== undefined) {
 				if (!isObject(s.json)) throw new ManifestError(`${where}.json`, "must be an object");
@@ -299,18 +302,21 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 			out.push({ id: s.id, kind: "call", call: s.call, prompt: s.prompt, ...(json !== undefined && { json }) });
 		} else if (kind === "format") {
 			requireKeys(s, new Set(["id", "format"]), where);
-			if (typeof s.format !== "string" || !s.format) throw new ManifestError(where, "`format` must be a non-empty string");
+			if (typeof s.format !== "string" || !s.format)
+				throw new ManifestError(where, "`format` must be a non-empty string");
 			out.push({ id: s.id, kind: "format", format: s.format });
 		} else if (kind === "check") {
 			requireKeys(s, new Set(["id", "check"]), where);
 			out.push({ id: s.id, kind: "check", checks: parseCheckArray(s.check, `${where}.check`) });
 		} else if (kind === "ask") {
 			requireKeys(s, new Set(["id", "ask"]), where);
-			if (typeof s.ask !== "string" || !s.ask) throw new ManifestError(where, "`ask` must be a non-empty question string");
+			if (typeof s.ask !== "string" || !s.ask)
+				throw new ManifestError(where, "`ask` must be a non-empty question string");
 			out.push({ id: s.id, kind: "ask", ask: s.ask });
 		} else {
 			requireKeys(s, new Set(["id", "routine", "inputs"]), where);
-			if (typeof s.routine !== "string" || !s.routine) throw new ManifestError(where, "`routine` must be a non-empty routine id");
+			if (typeof s.routine !== "string" || !s.routine)
+				throw new ManifestError(where, "`routine` must be a non-empty routine id");
 			const inputs: Record<string, string> = {};
 			if (s.inputs !== undefined) {
 				if (!isObject(s.inputs)) throw new ManifestError(`${where}.inputs`, "must be an object");
@@ -331,7 +337,11 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	if (raw.description !== undefined && typeof raw.description !== "string") {
 		throw new ManifestError(source, "`description` must be a string");
 	}
-	requireKeys(raw, new Set(["id", "description", "input", "inputs", "agents", "steps", "repeat", "output", "limits"]), source);
+	requireKeys(
+		raw,
+		new Set(["id", "description", "input", "inputs", "agents", "steps", "repeat", "output", "limits"]),
+		source,
+	);
 
 	if (raw.input !== undefined && raw.inputs !== undefined) {
 		throw new ManifestError(source, "`input` and `inputs` are aliases; use one of them");
@@ -346,7 +356,10 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	const routineCount = steps.filter((s) => s.kind === "routine").length;
 	const execCount = steps.filter((s) => s.kind === "call" || s.kind === "format" || s.kind === "check").length;
 	if (routineCount > 0 && execCount > 0) {
-		throw new ManifestError(source, "steps must be either all `routine` steps (a composition) or call/format/check (an execution), not a mix");
+		throw new ManifestError(
+			source,
+			"steps must be either all `routine` steps (a composition) or call/format/check (an execution), not a mix",
+		);
 	}
 	const composition = routineCount > 0;
 
@@ -355,7 +368,8 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	// sandboxed routine (a check step or a read-write agent) NOR a loop (`repeat`),
 	// where the converge executor re-runs steps and "ask once vs every iteration" is undefined.
 	// Put the gate in the composition that calls this routine instead.
-	const sandboxed = steps.some((s) => s.kind === "check") || Object.values(participants).some((p) => p.filesystem === "read-write");
+	const sandboxed =
+		steps.some((s) => s.kind === "check") || Object.values(participants).some((p) => p.filesystem === "read-write");
 	const looping = raw.repeat !== undefined;
 	if (steps.some((s) => s.kind === "ask") && !composition && (sandboxed || looping)) {
 		throw new ManifestError(
@@ -373,7 +387,11 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	if (raw.repeat !== undefined) {
 		if (!isObject(raw.repeat)) throw new ManifestError(`${source}.repeat`, "must be an object");
 		requireKeys(raw.repeat, new Set(["until", "maxIterations"]), `${source}.repeat`);
-		if (composition) throw new ManifestError(source, "`repeat` is not valid on a composition (a composition's sub-routines repeat themselves)");
+		if (composition)
+			throw new ManifestError(
+				source,
+				"`repeat` is not valid on a composition (a composition's sub-routines repeat themselves)",
+			);
 
 		const mi = raw.repeat.maxIterations;
 		if (mi !== undefined && (typeof mi !== "number" || !Number.isInteger(mi) || mi < 1)) {
@@ -386,32 +404,54 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		const parseCondition = (rawCond: unknown, where: string): RepeatCondition => {
 			if (rawCond === "checks-pass") return "checks-pass";
 			if (isObject(rawCond) && !("all" in rawCond)) {
-				if (typeof rawCond.step !== "string" || !rawCond.step) throw new ManifestError(where, "`step` must be a non-empty step id");
+				if (typeof rawCond.step !== "string" || !rawCond.step)
+					throw new ManifestError(where, "`step` must be a non-empty step id");
 				const target = steps.find((s) => s.id === rawCond.step);
 				if (target === undefined) {
-					throw new ManifestError(source, `\`repeat.until\` references step ${JSON.stringify(rawCond.step)}, which is not a step in this routine`);
+					throw new ManifestError(
+						source,
+						`\`repeat.until\` references step ${JSON.stringify(rawCond.step)}, which is not a step in this routine`,
+					);
 				}
 				if ("path" in rawCond) {
 					// Structured-field condition: read a dot-path from the step's validated JSON output.
 					requireKeys(rawCond, new Set(["step", "path", "equals"]), where);
-					if (typeof rawCond.path !== "string" || !rawCond.path) throw new ManifestError(where, "`path` must be a non-empty dot-path into the step's JSON output");
+					if (typeof rawCond.path !== "string" || !rawCond.path)
+						throw new ManifestError(where, "`path` must be a non-empty dot-path into the step's JSON output");
 					if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(rawCond.path)) {
-						throw new ManifestError(where, `\`path\` ${JSON.stringify(rawCond.path)} must be dot-separated identifiers (e.g. "passed" or "decision.ready")`);
+						throw new ManifestError(
+							where,
+							`\`path\` ${JSON.stringify(rawCond.path)} must be dot-separated identifiers (e.g. "passed" or "decision.ready")`,
+						);
 					}
-					if (typeof rawCond.equals !== "string" && typeof rawCond.equals !== "number" && typeof rawCond.equals !== "boolean") {
-						throw new ManifestError(where, "`equals` must be a string, number, or boolean to compare the JSON field against");
+					if (
+						typeof rawCond.equals !== "string" &&
+						typeof rawCond.equals !== "number" &&
+						typeof rawCond.equals !== "boolean"
+					) {
+						throw new ManifestError(
+							where,
+							"`equals` must be a string, number, or boolean to compare the JSON field against",
+						);
 					}
 					if (target.kind !== "call" || target.json === undefined) {
-						throw new ManifestError(where, `a \`{ step, path }\` condition requires step ${JSON.stringify(rawCond.step)} to be a \`call\` step with a \`json\` schema`);
+						throw new ManifestError(
+							where,
+							`a \`{ step, path }\` condition requires step ${JSON.stringify(rawCond.step)} to be a \`call\` step with a \`json\` schema`,
+						);
 					}
 					return { step: rawCond.step, path: rawCond.path, equals: rawCond.equals };
 				}
 				// Raw-string condition: the step's trimmed text output equals a string.
 				requireKeys(rawCond, new Set(["step", "equals"]), where);
-				if (typeof rawCond.equals !== "string") throw new ManifestError(where, "`equals` must be a string to compare the step's output against");
+				if (typeof rawCond.equals !== "string")
+					throw new ManifestError(where, "`equals` must be a string to compare the step's output against");
 				return { step: rawCond.step, equals: rawCond.equals };
 			}
-			throw new ManifestError(where, '`until` condition must be "checks-pass", { step, equals }, or { step, path, equals }');
+			throw new ManifestError(
+				where,
+				'`until` condition must be "checks-pass", { step, equals }, or { step, path, equals }',
+			);
 		};
 
 		const rawUntil = raw.repeat.until;
@@ -431,10 +471,16 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		}
 
 		if (conds.includes("checks-pass") && !steps.some((s) => s.kind === "check")) {
-			throw new ManifestError(source, '`repeat.until: "checks-pass"` requires at least one `check` step (its convergence signal)');
+			throw new ManifestError(
+				source,
+				'`repeat.until: "checks-pass"` requires at least one `check` step (its convergence signal)',
+			);
 		}
 		if (conds.some((c) => typeof c === "object") && mi === undefined) {
-			throw new ManifestError(source, "a `{ step, equals }` or `{ step, path, equals }` exit condition requires an explicit `maxIterations` (a judged condition has no guaranteed termination)");
+			throw new ManifestError(
+				source,
+				"a `{ step, equals }` or `{ step, path, equals }` exit condition requires an explicit `maxIterations` (a judged condition has no guaranteed termination)",
+			);
 		}
 
 		repeat = { until, ...(typeof mi === "number" && { maxIterations: mi }) };
@@ -448,8 +494,13 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		if (typeof raw.output !== "string") throw new ManifestError(source, "`output` must be a string");
 		const target = steps.find((s) => s.id === raw.output);
 		if (target === undefined) throw new ManifestError(source, "`output` must name one of the steps");
-		if (target.kind === "check") throw new ManifestError(source, "`output` cannot name a `check` step (it produces no text)");
-		if (target.kind === "ask") throw new ManifestError(source, "`output` cannot name an `ask` step (its answer feeds later steps and is not persisted)");
+		if (target.kind === "check")
+			throw new ManifestError(source, "`output` cannot name a `check` step (it produces no text)");
+		if (target.kind === "ask")
+			throw new ManifestError(
+				source,
+				"`output` cannot name an `ask` step (its answer feeds later steps and is not persisted)",
+			);
 		output = raw.output;
 	}
 

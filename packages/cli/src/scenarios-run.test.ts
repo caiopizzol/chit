@@ -58,7 +58,11 @@ const PLANS: Plan[] = [
 	{ dir: "07-feature-flow", routine: "feature-flow", inputs: { idea: "add dark mode" }, reply: "pass" },
 	{ dir: "08-review-blocks-loop", routine: "implement", inputs: { task: "add a --version flag" }, reply: "pass" },
 	{ dir: "09-check-fails-then-recovers", routine: "forced-revise", checks: "fail-then-pass" },
-	{ dir: "10-cross-run-handoff", routine: "implement-with-context", inputs: { task: "apply the review", context: "prior run output" } },
+	{
+		dir: "10-cross-run-handoff",
+		routine: "implement-with-context",
+		inputs: { task: "apply the review", context: "prior run output" },
+	},
 ];
 
 function runArgs(plan: Plan): string[] {

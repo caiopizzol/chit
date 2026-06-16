@@ -26,11 +26,47 @@ export function FilesystemScale() {
 	);
 }
 
-const DERIVED: { shape: string; cond: ReactNode; behavior: string }[] = [
-	{ shape: "○", cond: <>pure read-only <code>call</code> / <code>format</code></>, behavior: "text run, in your cwd" },
-	{ shape: "○", cond: <><code>routine</code> steps</>, behavior: "composition, outputs passed forward" },
-	{ shape: "◐", cond: <>a <code>repeat</code></>, behavior: "loop, until the stop condition" },
-	{ shape: "●", cond: <>a <code>check</code> or a read-write agent</>, behavior: "sandboxed, in a git worktree" },
+const DERIVED: { id: string; shape: string; cond: ReactNode; behavior: string }[] = [
+	{
+		id: "text",
+		shape: "○",
+		cond: (
+			<>
+				pure read-only <code>call</code> / <code>format</code>
+			</>
+		),
+		behavior: "text run, in your cwd",
+	},
+	{
+		id: "composition",
+		shape: "○",
+		cond: (
+			<>
+				<code>routine</code> steps
+			</>
+		),
+		behavior: "composition, outputs passed forward",
+	},
+	{
+		id: "loop",
+		shape: "◐",
+		cond: (
+			<>
+				a <code>repeat</code>
+			</>
+		),
+		behavior: "loop, until the stop condition",
+	},
+	{
+		id: "sandbox",
+		shape: "●",
+		cond: (
+			<>
+				a <code>check</code> or a read-write agent
+			</>
+		),
+		behavior: "sandboxed, in a git worktree",
+	},
 ];
 
 export function DerivedBehavior() {
@@ -38,8 +74,8 @@ export function DerivedBehavior() {
 		<div className="doc-visual">
 			<div className="doc-visual-title">How it runs is derived, not chosen</div>
 			<div className="cfg-derive">
-				{DERIVED.map((d, i) => (
-					<div key={i} className="cfg-derive-row">
+				{DERIVED.map((d) => (
+					<div key={d.id} className="cfg-derive-row">
 						<span className="cfg-derive-shape">{d.shape}</span>
 						<span className="cfg-derive-cond">{d.cond}</span>
 						<span className="cfg-derive-arrow">-&gt;</span>

@@ -160,7 +160,9 @@ describe("parseConfig -- profiles", () => {
 	});
 
 	test("rejects the old file field alias", () => {
-		expect(() => parse({ routines: { ok: { manifestPath: "m.json" } } })).toThrow(/unknown field "manifestPath"|`steps` must be an array/);
+		expect(() => parse({ routines: { ok: { manifestPath: "m.json" } } })).toThrow(
+			/unknown field "manifestPath"|`steps` must be an array/,
+		);
 	});
 
 	test("rejects a non-object profiles", () => {
@@ -172,18 +174,30 @@ describe("parseConfig -- profiles", () => {
 	});
 
 	test("rejects an unknown profile field", () => {
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", temperature: 1 } } })).toThrow(/unknown field "temperature"/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", temperature: 1 } } })).toThrow(
+			/unknown field "temperature"/,
+		);
 	});
 
 	test("rejects a non-string model", () => {
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", model: 5 } } })).toThrow(/`model` must be a string/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", model: 5 } } })).toThrow(
+			/`model` must be a string/,
+		);
 	});
 
 	test("rejects invalid or adapter-mismatched profile effort settings", () => {
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", effort: "xhigh" } } })).toThrow(/effort.*must be one/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", effort: "max" } } })).toThrow(/adapter "codex".*must be one/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", effort: "xhigh" } } })).toThrow(/does not support effort/);
-		expect(parse({ ...VALID, profiles: { x: { adapter: "my-adapter", model: "m", effort: "whatever" } } }).agents.x).toEqual({
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", effort: "xhigh" } } })).toThrow(
+			/effort.*must be one/,
+		);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", effort: "max" } } })).toThrow(
+			/adapter "codex".*must be one/,
+		);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", effort: "xhigh" } } })).toThrow(
+			/does not support effort/,
+		);
+		expect(
+			parse({ ...VALID, profiles: { x: { adapter: "my-adapter", model: "m", effort: "whatever" } } }).agents.x,
+		).toEqual({
 			adapter: "my-adapter",
 			model: "m",
 			effort: "whatever",
@@ -193,9 +207,15 @@ describe("parseConfig -- profiles", () => {
 
 describe("parseConfig -- built-in adapter/model validation (the runtime guard)", () => {
 	test("rejects an impossible built-in pair before execution (shorthand and object)", () => {
-		expect(() => parse({ ...VALID, profiles: { x: "codex:sonnet" } })).toThrow(/model "sonnet" is not valid for adapter "codex"/);
-		expect(() => parse({ ...VALID, profiles: { x: "claude:gpt-5.5" } })).toThrow(/model "gpt-5.5" is not valid for adapter "claude"/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", model: "opus" } } })).toThrow(/not valid for adapter "gemini"/);
+		expect(() => parse({ ...VALID, profiles: { x: "codex:sonnet" } })).toThrow(
+			/model "sonnet" is not valid for adapter "codex"/,
+		);
+		expect(() => parse({ ...VALID, profiles: { x: "claude:gpt-5.5" } })).toThrow(
+			/model "gpt-5.5" is not valid for adapter "claude"/,
+		);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", model: "opus" } } })).toThrow(
+			/not valid for adapter "gemini"/,
+		);
 	});
 
 	test("rejects a custom adapter in shorthand (must use the object form)", () => {
@@ -214,7 +234,18 @@ describe("parseConfig -- built-in adapter/model validation (the runtime guard)",
 	});
 
 	test("accepts valid built-in pairs, full names, default, and omitted model", () => {
-		expect(() => parse({ ...VALID, profiles: { a: "codex:gpt-5.5", b: "claude:sonnet", c: "claude:claude-opus-4-8", d: "gemini", e: "claude:default" } })).not.toThrow();
+		expect(() =>
+			parse({
+				...VALID,
+				profiles: {
+					a: "codex:gpt-5.5",
+					b: "claude:sonnet",
+					c: "claude:claude-opus-4-8",
+					d: "gemini",
+					e: "claude:default",
+				},
+			}),
+		).not.toThrow();
 	});
 
 	test("leaves a custom adapter's model opaque in the object form", () => {

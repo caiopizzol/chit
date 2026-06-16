@@ -76,7 +76,10 @@ export function buildProfileSchema(): Record<string, unknown> {
 			required: ["adapter"],
 			properties: {
 				adapter: { const: adapter },
-				model: { type: "string", anyOf: [{ enum: spec.models }, ...spec.modelPatterns.map((re) => ({ pattern: re.source }))] },
+				model: {
+					type: "string",
+					anyOf: [{ enum: spec.models }, ...spec.modelPatterns.map((re) => ({ pattern: re.source }))],
+				},
 				...(adapter === "claude" && { effort: { enum: [...CLAUDE_EFFORTS] } }),
 				...(adapter === "codex" && { effort: { enum: [...CODEX_EFFORTS] } }),
 			},
@@ -93,5 +96,8 @@ export function buildProfileSchema(): Record<string, unknown> {
 			effort: { type: "string", minLength: 1 },
 		},
 	});
-	return { description: "A model binding: a built-in adapter shorthand/object, or a custom adapter in object form.", oneOf: branches };
+	return {
+		description: "A model binding: a built-in adapter shorthand/object, or a custom adapter in object form.",
+		oneOf: branches,
+	};
 }

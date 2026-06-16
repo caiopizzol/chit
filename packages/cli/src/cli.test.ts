@@ -1,7 +1,7 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
@@ -83,7 +83,13 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function harness(
-	over: { adapter?: Adapter; checkRunner?: CheckRunner; sandboxDiff?: string; applyError?: string; onApplyPatch?: (patch: string, base: string) => void } = {},
+	over: {
+		adapter?: Adapter;
+		checkRunner?: CheckRunner;
+		sandboxDiff?: string;
+		applyError?: string;
+		onApplyPatch?: (patch: string, base: string) => void;
+	} = {},
 ) {
 	const out: string[] = [];
 	const err: string[] = [];
@@ -281,7 +287,10 @@ describe("chit apply", () => {
 	});
 
 	test("surfaces the apply gate's refusal (e.g. HEAD moved off the base)", async () => {
-		const { deps, err } = harness({ sandboxDiff: "PATCH", applyError: "this patch was made against abc123 but HEAD is now def456. Re-run the routine on the current tree." });
+		const { deps, err } = harness({
+			sandboxDiff: "PATCH",
+			applyError: "this patch was made against abc123 but HEAD is now def456. Re-run the routine on the current tree.",
+		});
 		await runCli(["run", "impl-review", "--input", "task=x"], deps); // stores a patch
 		expect(await runCli(["apply", "run-test"], deps)).toBe(1);
 		expect(err.join("\n")).toMatch(/HEAD is now def456/);

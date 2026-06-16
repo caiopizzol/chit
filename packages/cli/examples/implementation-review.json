@@ -29,10 +29,7 @@
 		},
 		{
 			"id": "verify",
-			"check": [
-				{ "command": "bun", "args": ["run", "typecheck"] },
-				{ "command": "bun", "args": ["test"] }
-			]
+			"check": [{ "command": "bun", "args": ["run", "typecheck"] }, { "command": "bun", "args": ["test"] }]
 		}
 	],
 	"repeat": { "until": "checks-pass", "maxIterations": 3 },

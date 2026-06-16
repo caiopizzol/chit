@@ -3,7 +3,7 @@
 // These are always-on (fake-backed) so they prove the binding model with no real calls.
 
 import { describe, expect, test } from "bun:test";
-import { claudeCliArgs, codexCliArgs, type Adapter, dispatchingAdapter, fakeAdapter } from "./adapter.ts";
+import { type Adapter, claudeCliArgs, codexCliArgs, dispatchingAdapter, fakeAdapter } from "./adapter.ts";
 import { fakeCheckRunner } from "./check-runner.ts";
 import { type ChitConfig, parseConfig } from "./config.ts";
 import { runConverge } from "./converge.ts";
@@ -96,24 +96,41 @@ describe("agent binding at resolve time", () => {
 		],
 		repeat: { until: "checks-pass", maxIterations: 1 },
 	});
-	const cfg = (profiles: unknown): ChitConfig => parseConfig({ routines: { r: { file: "r.json" } }, profiles }, "t.json");
+	const cfg = (profiles: unknown): ChitConfig =>
+		parseConfig({ routines: { r: { file: "r.json" } }, profiles }, "t.json");
 
 	test("binds each routine agent's profile id to its config entry", () => {
-		const r = resolveRoutine(cfg({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } }), "r", "/x", () => MANIFEST);
+		const r = resolveRoutine(
+			cfg({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } }),
+			"r",
+			"/x",
+			() => MANIFEST,
+		);
 		expect(r.agents).toEqual({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude" } });
 	});
 
 	test("a routine agent referencing an undefined profile fails at resolve, not mid-run", () => {
-		expect(() => resolveRoutine(cfg({ builder: { adapter: "claude" } }), "r", "/x", () => MANIFEST)).toThrow(/uses profile "critic", which is not defined/);
+		expect(() => resolveRoutine(cfg({ builder: { adapter: "claude" } }), "r", "/x", () => MANIFEST)).toThrow(
+			/uses profile "critic", which is not defined/,
+		);
 	});
 
 	test("different routine agents drive different configured adapters end to end", async () => {
-		const routine = resolveRoutine(cfg({ builder: { adapter: "codex" }, critic: { adapter: "claude" } }), "r", "/x", () => MANIFEST);
+		const routine = resolveRoutine(
+			cfg({ builder: { adapter: "codex" }, critic: { adapter: "claude" } }),
+			"r",
+			"/x",
+			() => MANIFEST,
+		);
 		const claude = fakeAdapter(() => "reviewed");
 		const codex = fakeAdapter(() => "built");
 		const adapter = dispatchingAdapter(routine.agents ?? {}, { claude, codex });
 		let t = 0;
-		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
+		const r = await runConverge(
+			routine,
+			{ task: "x" },
+			{ adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" },
+		);
 		expect(r.status).toBe("converged");
 		expect(codex.calls.map((c) => c.agent)).toEqual(["builder"]); // builder -> codex
 		expect(claude.calls.map((c) => c.agent)).toEqual(["critic"]); // critic -> claude
@@ -124,7 +141,12 @@ describe("agent binding at resolve time", () => {
 	});
 
 	test("a FAILED call step still records the agent + binding (audit consistency)", async () => {
-		const routine = resolveRoutine(cfg({ builder: { adapter: "codex" }, critic: { adapter: "claude" } }), "r", "/x", () => MANIFEST);
+		const routine = resolveRoutine(
+			cfg({ builder: { adapter: "codex" }, critic: { adapter: "claude" } }),
+			"r",
+			"/x",
+			() => MANIFEST,
+		);
 		const claude = fakeAdapter(() => "x");
 		const codex: Adapter = {
 			async call() {
@@ -133,20 +155,40 @@ describe("agent binding at resolve time", () => {
 		};
 		const adapter = dispatchingAdapter(routine.agents ?? {}, { claude, codex });
 		let t = 0;
-		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
+		const r = await runConverge(
+			routine,
+			{ task: "x" },
+			{ adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" },
+		);
 		expect(r.status).toBe("failed");
 		// the failed build step records which profile/adapter it ran on, not just the routine agent
-		expect(r.iterations[0]?.steps.find((s) => s.id === "build")).toMatchObject({ status: "failed", agent: "builder", adapter: "codex" });
+		expect(r.iterations[0]?.steps.find((s) => s.id === "build")).toMatchObject({
+			status: "failed",
+			agent: "builder",
+			adapter: "codex",
+		});
 	});
 
 	test("multi-model: two profiles on the SAME adapter select different models per step", async () => {
-		const routine = resolveRoutine(cfg({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude", model: "haiku" } }), "r", "/x", () => MANIFEST);
+		const routine = resolveRoutine(
+			cfg({ builder: { adapter: "claude", model: "sonnet" }, critic: { adapter: "claude", model: "haiku" } }),
+			"r",
+			"/x",
+			() => MANIFEST,
+		);
 		const claude = fakeAdapter(() => "ok");
 		const adapter = dispatchingAdapter(routine.agents ?? {}, { claude });
 		let t = 0;
-		const r = await runConverge(routine, { task: "x" }, { adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" });
+		const r = await runConverge(
+			routine,
+			{ task: "x" },
+			{ adapter, checkRunner: fakeCheckRunner(), cwd: "/x", now: () => ++t, newRunId: () => "run" },
+		);
 		// the adapter saw each routine agent's configured model
-		expect(Object.fromEntries(claude.calls.map((c) => [c.agent, c.model]))).toEqual({ builder: "sonnet", critic: "haiku" });
+		expect(Object.fromEntries(claude.calls.map((c) => [c.agent, c.model]))).toEqual({
+			builder: "sonnet",
+			critic: "haiku",
+		});
 		// and the receipt records the resolved model per call step
 		const steps = r.iterations[0]?.steps ?? [];
 		expect(steps.find((s) => s.id === "build")).toMatchObject({ adapter: "claude", model: "sonnet" });
@@ -164,9 +206,28 @@ describe("composition across differently configured agents", () => {
 			"t.json",
 		);
 		const manifests: Record<string, string> = {
-			"a.json": JSON.stringify({ id: "a", inputs: { x: { type: "string" } }, agents: { p: { profile: "alpha", instructions: "i", filesystem: "read-only" } }, steps: [{ id: "out", call: "p", prompt: "{{ inputs.x }}" }], output: "out" }),
-			"b.json": JSON.stringify({ id: "b", inputs: { y: { type: "string" } }, agents: { p: { profile: "beta", instructions: "i", filesystem: "read-only" } }, steps: [{ id: "out", call: "p", prompt: "{{ inputs.y }}" }], output: "out" }),
-			"flow.json": JSON.stringify({ id: "flow", inputs: { x: { type: "string" } }, steps: [{ id: "s1", routine: "a", inputs: { x: "{{ inputs.x }}" } }, { id: "s2", routine: "b", inputs: { y: "{{ steps.s1.output }}" } }] }),
+			"a.json": JSON.stringify({
+				id: "a",
+				inputs: { x: { type: "string" } },
+				agents: { p: { profile: "alpha", instructions: "i", filesystem: "read-only" } },
+				steps: [{ id: "out", call: "p", prompt: "{{ inputs.x }}" }],
+				output: "out",
+			}),
+			"b.json": JSON.stringify({
+				id: "b",
+				inputs: { y: { type: "string" } },
+				agents: { p: { profile: "beta", instructions: "i", filesystem: "read-only" } },
+				steps: [{ id: "out", call: "p", prompt: "{{ inputs.y }}" }],
+				output: "out",
+			}),
+			"flow.json": JSON.stringify({
+				id: "flow",
+				inputs: { x: { type: "string" } },
+				steps: [
+					{ id: "s1", routine: "a", inputs: { x: "{{ inputs.x }}" } },
+					{ id: "s2", routine: "b", inputs: { y: "{{ steps.s1.output }}" } },
+				],
+			}),
 		};
 		const read = (abs: string) => manifests[abs.split("/").pop() as string] as string;
 		const resolve = (id: string) => resolveRoutine(config, id, "/x", read);
@@ -175,7 +236,19 @@ describe("composition across differently configured agents", () => {
 		const ad2 = fakeAdapter((r) => `ad2(${r.prompt})`);
 		const adapter = dispatchingAdapter(config.agents, { ad1, ad2 });
 		let t = 0;
-		const res = await runFlow(flow, { x: "GO" }, { adapter, checkRunner: fakeCheckRunner(), sandboxFactory: fakeSandboxFactory(), cwd: "/x", now: () => ++t, newRunId: () => `r${t}`, apply: false });
+		const res = await runFlow(
+			flow,
+			{ x: "GO" },
+			{
+				adapter,
+				checkRunner: fakeCheckRunner(),
+				sandboxFactory: fakeSandboxFactory(),
+				cwd: "/x",
+				now: () => ++t,
+				newRunId: () => `r${t}`,
+				apply: false,
+			},
+		);
 		expect(res.receipt.status).toBe("completed");
 		expect(ad1.calls.map((c) => c.agent)).toEqual(["alpha"]); // s1 -> ad1
 		expect(ad2.calls[0]?.agent).toBe("beta"); // s2 -> ad2

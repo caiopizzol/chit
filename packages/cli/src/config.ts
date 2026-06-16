@@ -4,7 +4,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BUILT_IN_ADAPTER_IDS, CLAUDE_EFFORTS, CODEX_EFFORTS, isBuiltInAdapter, isStructurallyValidModel } from "./builtin-adapters.ts";
+import {
+	BUILT_IN_ADAPTER_IDS,
+	CLAUDE_EFFORTS,
+	CODEX_EFFORTS,
+	isBuiltInAdapter,
+	isStructurallyValidModel,
+} from "./builtin-adapters.ts";
 import { type Manifest, parseManifest } from "./manifest.ts";
 
 export interface RoutineConfig {
@@ -171,7 +177,10 @@ function parseProfileEffort(adapter: string, raw: unknown, where: string): Agent
 		throw new ConfigError(`${where}.effort`, 'for adapter "claude" must be one of "low", "medium", "high", "max"');
 	}
 	if (adapter === "codex" && !(CODEX_EFFORTS as readonly string[]).includes(raw)) {
-		throw new ConfigError(`${where}.effort`, 'for adapter "codex" must be one of "minimal", "low", "medium", "high", "xhigh"');
+		throw new ConfigError(
+			`${where}.effort`,
+			'for adapter "codex" must be one of "minimal", "low", "medium", "high", "xhigh"',
+		);
 	}
 	if (isBuiltInAdapter(adapter) && adapter !== "claude" && adapter !== "codex") {
 		throw new ConfigError(`${where}.effort`, `adapter "${adapter}" does not support effort`);
@@ -196,7 +205,10 @@ function parseAgentConfig(entry: unknown, where: string): AgentConfig {
 		// rejects it -- so reject it here too, keeping the parser and schema in lockstep. Drop the
 		// colon ("codex") to get the default model.
 		if (rest.length > 0 && model === "") {
-			throw new ConfigError(where, `profile "${entry}" has a trailing ":" but no model; use "${adapter}" for the default model`);
+			throw new ConfigError(
+				where,
+				`profile "${entry}" has a trailing ":" but no model; use "${adapter}" for the default model`,
+			);
 		}
 		validateBuiltInModel(adapter, model || undefined, where);
 		return { adapter, ...(model ? { model } : {}) };

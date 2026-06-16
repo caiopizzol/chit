@@ -71,8 +71,23 @@ describe("listReceipts", () => {
 
 describe("formatRunList", () => {
 	const items: RunListItem[] = [
-		{ runId: "run-aaa", routineId: "plan", status: "completed", ageMs: 5 * 60_000, inputs: { idea: "add a hero section" }, patch: "none" },
-		{ runId: "run-bbb", routineId: "implement", status: "converged", scope: "SD-1", ageMs: 2 * 3_600_000, inputs: { task: "wire the billing API" }, patch: "pending" },
+		{
+			runId: "run-aaa",
+			routineId: "plan",
+			status: "completed",
+			ageMs: 5 * 60_000,
+			inputs: { idea: "add a hero section" },
+			patch: "none",
+		},
+		{
+			runId: "run-bbb",
+			routineId: "implement",
+			status: "converged",
+			scope: "SD-1",
+			ageMs: 2 * 3_600_000,
+			inputs: { task: "wire the billing API" },
+			patch: "pending",
+		},
 	];
 
 	test("renders newest-first with scope, age, input previews, and a patch tag", () => {

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import {
-	capDiffForPrompt,
 	type ConvergeDeps,
+	capDiffForPrompt,
 	effectiveMaxIterations,
 	MAX_DIFF_PROMPT_CHARS,
 	runConverge,
@@ -22,7 +22,8 @@ const CONVERGE = {
 		{
 			id: "build",
 			call: "builder",
-			prompt: "Task {{ inputs.task }} iter {{ iteration }} prevReview=[{{ steps.critique.output }}] fails=[{{ steps.verify.output }}]",
+			prompt:
+				"Task {{ inputs.task }} iter {{ iteration }} prevReview=[{{ steps.critique.output }}] fails=[{{ steps.verify.output }}]",
 		},
 		{ id: "critique", call: "critic", prompt: "Review {{ steps.build.output }}" },
 		{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
@@ -32,7 +33,13 @@ const CONVERGE = {
 
 function routineFrom(raw: unknown): ResolvedRoutine {
 	const manifest = parseManifest(raw, "m.json");
-	return { id: (raw as { id: string }).id, manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:test" };
+	return {
+		id: (raw as { id: string }).id,
+		manifestPath: "m.json",
+		manifestAbs: "/m.json",
+		manifest,
+		digest: "sha256:test",
+	};
 }
 
 function deps(over: Partial<ConvergeDeps>): ConvergeDeps {
@@ -92,7 +99,11 @@ describe("runConverge", () => {
 
 	test("does-not-converge when checks never pass, bounded by maxIterations", async () => {
 		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "still failing" }));
-		const r = await runConverge(routineFrom({ ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 2 } }), { task: "x" }, deps({ checkRunner }));
+		const r = await runConverge(
+			routineFrom({ ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 2 } }),
+			{ task: "x" },
+			deps({ checkRunner }),
+		);
 		expect(r.status).toBe("did-not-converge");
 		expect(r.iterations).toHaveLength(2);
 		expect(r.iterations.every((it) => !it.allChecksPassed)).toBe(true);
@@ -123,7 +134,11 @@ describe("runConverge", () => {
 		expect(def.calls[0]?.timeoutMs).toBe(30 * 60_000); // default per-call bound
 
 		const none = fakeCheckRunner();
-		await runConverge(routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none" } }), { task: "x" }, deps({ checkRunner: none }));
+		await runConverge(
+			routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none" } }),
+			{ task: "x" },
+			deps({ checkRunner: none }),
+		);
 		expect(none.calls[0]?.timeoutMs).toBeUndefined(); // "none" -> unbounded check
 	});
 
@@ -132,7 +147,11 @@ describe("runConverge", () => {
 		const checkRunner = fakeCheckRunner((_c, i) =>
 			i === 0 ? { ok: false, exitCode: 1, output: "x" } : { ok: true, exitCode: 0, output: "" },
 		);
-		await runConverge(routineFrom(CONVERGE), { task: "x" }, { ...deps({ checkRunner }), onProgress: (l) => lines.push(l) });
+		await runConverge(
+			routineFrom(CONVERGE),
+			{ task: "x" },
+			{ ...deps({ checkRunner }), onProgress: (l) => lines.push(l) },
+		);
 		expect(lines).toContain("iteration 1");
 		expect(lines).toContain("iteration 2");
 		expect(lines.some((l) => l.includes("call builder"))).toBe(true);
@@ -157,7 +176,11 @@ describe("runConverge", () => {
 				throw new Error("claude call cancelled");
 			},
 		};
-		const r = await runConverge(routineFrom(CONVERGE), { task: "x" }, { ...deps({ adapter }), signal: controller.signal });
+		const r = await runConverge(
+			routineFrom(CONVERGE),
+			{ task: "x" },
+			{ ...deps({ adapter }), signal: controller.signal },
+		);
 		expect(r.status).toBe("cancelled");
 		// the partial iteration is recorded so the timeline shows what was active
 		expect(r.iterations).toHaveLength(1);
@@ -173,7 +196,11 @@ describe("runConverge", () => {
 			},
 		};
 		const once = { ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 1 } };
-		const r = await runConverge(routineFrom(once), { task: "x" }, { ...deps({ checkRunner }), signal: controller.signal });
+		const r = await runConverge(
+			routineFrom(once),
+			{ task: "x" },
+			{ ...deps({ checkRunner }), signal: controller.signal },
+		);
 		expect(r.status).toBe("cancelled"); // not "did-not-converge"
 		// the partial iteration is recorded; the active check shows as cancelled
 		expect(r.iterations).toHaveLength(1);
@@ -185,11 +212,15 @@ describe("runConverge", () => {
 		// well before its 10-iteration cap, even though checks keep failing.
 		let t = 0;
 		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "still failing" }));
-		const r = await runConverge(routineFrom({ ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 10 } }), { task: "x" }, {
-			...deps({ checkRunner }),
-			now: () => (t += 1000),
-			maxWallMs: 1500,
-		});
+		const r = await runConverge(
+			routineFrom({ ...CONVERGE, repeat: { until: "checks-pass", maxIterations: 10 } }),
+			{ task: "x" },
+			{
+				...deps({ checkRunner }),
+				now: () => (t += 1000),
+				maxWallMs: 1500,
+			},
+		);
 		expect(r.status).toBe("failed");
 		expect(r.error).toMatch(/exceeded max wall-time/);
 		expect(r.iterations.length).toBeLessThan(10);
@@ -226,7 +257,10 @@ describe("diff prompt budget", () => {
 
 describe("effectiveMaxIterations", () => {
 	const m = (max?: number) =>
-		parseManifest({ ...CONVERGE, repeat: { until: "checks-pass", ...(max !== undefined && { maxIterations: max }) } }, "m") as Manifest;
+		parseManifest(
+			{ ...CONVERGE, repeat: { until: "checks-pass", ...(max !== undefined && { maxIterations: max }) } },
+			"m",
+		) as Manifest;
 
 	test("override beats manifest beats default, and clamps to the ceiling", () => {
 		expect(effectiveMaxIterations(m(3))).toBe(3);
@@ -248,7 +282,11 @@ describe("runConverge -- { step, equals } convergence (a user-authored /goal loo
 			judge: { profile: "judge", instructions: "Decide if the goal is met.", filesystem: "read-only" },
 		},
 		steps: [
-			{ id: "work", call: "worker", prompt: "Goal {{ inputs.goal }} iter {{ iteration }} prev=[{{ steps.done.output }}]" },
+			{
+				id: "work",
+				call: "worker",
+				prompt: "Goal {{ inputs.goal }} iter {{ iteration }} prev=[{{ steps.done.output }}]",
+			},
 			{ id: "done", call: "judge", prompt: "Met? {{ steps.work.output }}" },
 		],
 		repeat: { until: { step: "done", equals: "yes" }, maxIterations: 4 },
@@ -268,13 +306,16 @@ describe("runConverge -- { step, equals } convergence (a user-authored /goal loo
 	test("loops while the verdict is not the target, feeding it forward, then converges", async () => {
 		// judge says "no" on iteration 1, "yes" on iteration 2
 		let judged = 0;
-		const adapter = fakeAdapter((req) => (req.agent === "judge" ? (judged++ === 0 ? "no" : "yes") : `draft(${req.prompt})`));
+		const adapter = fakeAdapter((req) =>
+			req.agent === "judge" ? (judged++ === 0 ? "no" : "yes") : `draft(${req.prompt})`,
+		);
 		const r = await runConverge(routineFrom(GOAL), { goal: "ship" }, deps({ adapter }));
 		expect(r.status).toBe("converged");
 		expect(r.iterations).toHaveLength(2);
 		// iteration 2's worker prompt saw iteration 1's "no" verdict fed forward
 		expect(r.iterations[1]?.steps[0]?.id).toBe("work");
-		const iter2WorkPrompt = adapter.calls.find((c) => c.agent === "worker" && c.prompt.includes("iter 2"))?.prompt ?? "";
+		const iter2WorkPrompt =
+			adapter.calls.find((c) => c.agent === "worker" && c.prompt.includes("iter 2"))?.prompt ?? "";
 		expect(iter2WorkPrompt).toContain("prev=[no]");
 	});
 
@@ -355,7 +396,11 @@ describe("runConverge -- structured verdict (json + path condition)", () => {
 			judge: { profile: "claude", instructions: "Judge.", filesystem: "read-only" },
 		},
 		steps: [
-			{ id: "work", call: "worker", prompt: "do {{ inputs.task }} iter {{ iteration }} prev=[{{ steps.verdict.output }}]" },
+			{
+				id: "work",
+				call: "worker",
+				prompt: "do {{ inputs.task }} iter {{ iteration }} prev=[{{ steps.verdict.output }}]",
+			},
 			{
 				id: "verdict",
 				call: "judge",
@@ -367,7 +412,13 @@ describe("runConverge -- structured verdict (json + path condition)", () => {
 	};
 
 	test("converges when the JSON field flips to the target", async () => {
-		const adapter = fakeAdapter((req) => (req.prompt.startsWith("judge") ? (req.prompt.includes("iter 2") ? '{"passed":true}' : '{"passed":false}') : "work-output"));
+		const adapter = fakeAdapter((req) =>
+			req.prompt.startsWith("judge")
+				? req.prompt.includes("iter 2")
+					? '{"passed":true}'
+					: '{"passed":false}'
+				: "work-output",
+		);
 		const r = await runConverge(routineFrom(JSON_LOOP), { task: "x" }, deps({ adapter }));
 		expect(r.status).toBe("converged");
 		expect(r.iterations).toHaveLength(2);
@@ -410,7 +461,12 @@ describe("runConverge -- structured validation gates convergence", () => {
 		inputs: { task: { type: "string" } },
 		agents: { reviewer: { profile: "claude", instructions: "Review.", filesystem: "read-only" } },
 		steps: [
-			{ id: "judge", call: "reviewer", prompt: "judge iter {{ iteration }}", json: { schema: { type: "object", required: ["passed"], properties: { passed: { type: "boolean" } } } } },
+			{
+				id: "judge",
+				call: "reviewer",
+				prompt: "judge iter {{ iteration }}",
+				json: { schema: { type: "object", required: ["passed"], properties: { passed: { type: "boolean" } } } },
+			},
 			{ id: "verify", check: "bun test" },
 		],
 		repeat: { until: "checks-pass", maxIterations: 2 },

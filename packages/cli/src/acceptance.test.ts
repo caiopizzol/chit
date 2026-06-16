@@ -9,10 +9,10 @@
 // read-write participant, performs the edits the real model would, so a real diff
 // (and a real apply) actually happens inside the sandbox.
 
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
 import type { Adapter, AdapterRequest } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
@@ -21,7 +21,6 @@ import type { FlowReceipt } from "./flow.ts";
 import type { RunReceipt } from "./run.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 import { loadReceipt } from "./store.ts";
-import { formatTrace } from "./views.ts";
 
 function modelStub(onCall: (req: AdapterRequest, callIndex: number) => string): Adapter {
 	let i = 0;
@@ -96,10 +95,15 @@ const writeMade = modelStub((req) => {
 describe("acceptance matrix (real git sandbox, faked model)", () => {
 	test("text: runs read-only in the cwd and prints output, no sandbox", async () => {
 		const repo = newRepo({ griller: GRILLER }, { routines: { griller: { file: "griller.json" } } });
-		const { deps, out } = harness(repo, modelStub((req) => `GRILLED(${req.prompt})`));
+		const { deps, out } = harness(
+			repo,
+			modelStub((req) => `GRILLED(${req.prompt})`),
+		);
 		expect(await runCli(["run", "griller", "--input", "idea=dark mode"], deps)).toBe(0);
 		expect(out.join("\n")).toContain("GRILLED(grill dark mode)");
-		expect(Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString().includes("chit-sbx-")).toBe(false);
+		expect(Bun.spawnSync(["git", "worktree", "list"], { cwd: repo }).stdout.toString().includes("chit-sbx-")).toBe(
+			false,
+		);
 	});
 
 	test("single-pass sandboxed: dry-run shows the diff and leaves origin untouched", async () => {
@@ -164,7 +168,10 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 			repeat: { until: "checks-pass", maxIterations: 1 },
 		};
 		const repo = newRepo({ smoke }, { routines: { smoke: { file: "smoke.json" } } });
-		const { deps, out } = harness(repo, modelStub(() => "")); // this routine makes no calls
+		const { deps, out } = harness(
+			repo,
+			modelStub(() => ""),
+		); // this routine makes no calls
 		expect(await runCli(["run", "smoke"], deps)).toBe(0);
 		const text = out.join("\n");
 		expect(text).toMatch(/run converged/);
@@ -209,7 +216,10 @@ describe("acceptance matrix (real git sandbox, faked model)", () => {
 		// receipt-level: the flow links its sub-runs, which are persisted separately
 		const flowReceipt = loadReceipt(repo, "run-accept-0") as FlowReceipt;
 		expect(flowReceipt.policy).toBe("flow");
-		expect(flowReceipt.steps.map((s) => (s.kind === "ask" ? "-" : s.subRunId))).toEqual(["run-accept-1", "run-accept-2"]);
+		expect(flowReceipt.steps.map((s) => (s.kind === "ask" ? "-" : s.subRunId))).toEqual([
+			"run-accept-1",
+			"run-accept-2",
+		]);
 		expect(loadReceipt(repo, "run-accept-1").routineId).toBe("griller");
 		expect(loadReceipt(repo, "run-accept-2").routineId).toBe("impl");
 	});
@@ -374,7 +384,11 @@ describe("acceptance matrix -- failure cases", () => {
 		};
 		const repo = newRepo({ slow }, { routines: { slow: { file: "slow.json" } } });
 		const controller = new AbortController();
-		const { deps, err } = harness(repo, modelStub(() => ""), { signal: controller.signal });
+		const { deps, err } = harness(
+			repo,
+			modelStub(() => ""),
+			{ signal: controller.signal },
+		);
 		// abort asynchronously, after the run has started and the sleep check is in flight
 		const timer = setTimeout(() => controller.abort(), 300);
 		const code = await runCli(["run", "slow"], deps);

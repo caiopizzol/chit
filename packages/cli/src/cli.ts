@@ -8,19 +8,27 @@
 
 import { type AdapterRegistry, dispatchingAdapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
+import { loadConfig } from "./config.ts";
 import { runConverge } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
-import { loadConfig } from "./config.ts";
 import { type DoctorProbes, formatDoctor, makeRealAdapterProbe, realDoctorProbes, runDoctor } from "./doctor.ts";
 import { resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
-import { scaffoldRoutine, type Template, TEMPLATES } from "./scaffold.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
+import { scaffoldRoutine, TEMPLATES, type Template } from "./scaffold.ts";
 import { listReceipts, loadPatch, loadReceipt, patchStatus, savePatch, saveReceipt } from "./store.ts";
-import { formatInspect, formatReceiptBodies, formatRoutineList, formatRunList, formatTrace, type RoutineListItem, type RunListItem } from "./views.ts";
+import {
+	formatInspect,
+	formatReceiptBodies,
+	formatRoutineList,
+	formatRunList,
+	formatTrace,
+	type RoutineListItem,
+	type RunListItem,
+} from "./views.ts";
 
 export interface CliDeps {
 	cwd: string;
@@ -143,7 +151,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			deps.out("next:");
 			deps.out(`  chit inspect ${args.name}`);
 			const runHint = `  chit run ${args.name}${result.inputHint ? ` ${result.inputHint}` : ""}`;
-			deps.out(args.template === "text" ? runHint : `${runHint}            # dry run by default; review, then: chit apply <run-id>`);
+			deps.out(
+				args.template === "text"
+					? runHint
+					: `${runHint}            # dry run by default; review, then: chit apply <run-id>`,
+			);
 			deps.out(`\nedit ${result.routineRef} to make it yours (prompts, agents, checks).`);
 			return 0;
 		}
@@ -156,7 +168,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					return { id, kind: kindLabel(r.manifest), description: r.description };
 				} catch {
 					// A broken manifest should not hide the rest of the menu.
-					return { id, kind: "?", description: entry.description ?? "(manifest error -- run `chit inspect` for detail)" };
+					return {
+						id,
+						kind: "?",
+						description: entry.description ?? "(manifest error -- run `chit inspect` for detail)",
+					};
 				}
 			});
 			deps.out(formatRoutineList(items));
@@ -185,7 +201,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						...(r.scope !== undefined && { scope: r.scope }),
 						ageMs: now - r.startedAt,
 						inputs: r.inputs,
-						patch: await patchStatus(deps.cwd, r.runId, "baseCommit" in r ? r.baseCommit : undefined, "appliedAt" in r ? r.appliedAt : undefined),
+						patch: await patchStatus(
+							deps.cwd,
+							r.runId,
+							"baseCommit" in r ? r.baseCommit : undefined,
+							"appliedAt" in r ? r.appliedAt : undefined,
+						),
 					})),
 			);
 			deps.out(formatRunList(items, scope));
@@ -261,7 +282,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				if (result.applied === true) result.receipt.appliedAt = deps.now();
 				saveReceipt(deps.cwd, result.receipt);
 				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
-				if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "" && result.receipt.status === "completed") savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
+				if (
+					result.terminalPatch !== undefined &&
+					result.terminalPatch.trim() !== "" &&
+					result.receipt.status === "completed"
+				)
+					savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
 				const r = result.receipt;
 				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
 				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.kind === "ask" ? "ask" : s.routine}: ${s.status}`);
@@ -276,7 +302,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				if (result.terminalDiff !== undefined) {
 					deps.out(result.terminalDiff.trim() ? `\n${result.terminalDiff}` : "\n(no changes produced)");
 					if (result.applyError !== undefined) {
-						deps.err(`\nrun ${r.runId} completed, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`);
+						deps.err(
+							`\nrun ${r.runId} completed, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`,
+						);
 						return 1;
 					}
 					deps.out(
@@ -321,13 +349,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				if (result.applied === true) result.receipt.appliedAt = deps.now();
 				saveReceipt(deps.cwd, result.receipt);
 				// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
-				if (result.receipt.status === "converged" && result.patch.trim() !== "") savePatch(deps.cwd, result.receipt.runId, result.patch);
+				if (result.receipt.status === "converged" && result.patch.trim() !== "")
+					savePatch(deps.cwd, result.receipt.runId, result.patch);
 				const r = result.receipt;
 				deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
 				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
 				if (r.status === "converged") {
 					if (result.applyError !== undefined) {
-						deps.err(`\nrun ${r.runId} converged, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`);
+						deps.err(
+							`\nrun ${r.runId} converged, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`,
+						);
 						return 1;
 					}
 					deps.out(
@@ -371,7 +402,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return loop.status === "cancelled" ? 130 : 1;
 			}
 
-			const receipt = await runOneShot(routine, validation.values, { ...deps, adapter }, args.scope !== undefined ? { scope: args.scope } : {});
+			const receipt = await runOneShot(
+				routine,
+				validation.values,
+				{ ...deps, adapter },
+				args.scope !== undefined ? { scope: args.scope } : {},
+			);
 			saveReceipt(deps.cwd, receipt);
 
 			if (receipt.status === "cancelled") {
@@ -410,10 +446,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			if (id === undefined) return fail(deps, "apply needs a run id");
 			const receipt = loadReceipt(deps.cwd, id); // throws a clear error if the run is unknown
 			const base = "baseCommit" in receipt ? receipt.baseCommit : undefined;
-			if (base === undefined) return fail(deps, `run ${JSON.stringify(id)} is not a sandboxed run, so there is nothing to apply`);
+			if (base === undefined)
+				return fail(deps, `run ${JSON.stringify(id)} is not a sandboxed run, so there is nothing to apply`);
 			const patch = loadPatch(deps.cwd, id);
 			if (patch === undefined || patch.trim() === "") {
-				return fail(deps, `run ${JSON.stringify(id)} has no stored patch to apply (it produced no changes, or did not converge)`);
+				return fail(
+					deps,
+					`run ${JSON.stringify(id)} has no stored patch to apply (it produced no changes, or did not converge)`,
+				);
 			}
 			try {
 				await deps.sandboxFactory.applyPatch(deps.cwd, patch, base);

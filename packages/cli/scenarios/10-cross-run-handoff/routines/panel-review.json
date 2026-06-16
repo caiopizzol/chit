@@ -17,7 +17,11 @@
 	},
 	"steps": [
 		{ "id": "first", "call": "explorer", "prompt": "{{ inputs.question }}" },
-		{ "id": "final", "call": "judge", "prompt": "Question:\n{{ inputs.question }}\n\nCandidate answer:\n{{ steps.first.output }}\n\nReturn the recommendation to hand into the next run." }
+		{
+			"id": "final",
+			"call": "judge",
+			"prompt": "Question:\n{{ inputs.question }}\n\nCandidate answer:\n{{ steps.first.output }}\n\nReturn the recommendation to hand into the next run."
+		}
 	],
 	"output": "final"
 }

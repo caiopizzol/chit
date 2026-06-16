@@ -58,7 +58,10 @@ function profileKey(profile: AgentConfig): string {
 }
 
 function profileLabel(profile: AgentConfig): string {
-	const base = profile.model !== undefined && profile.model !== "default" ? `${profile.adapter}:${profile.model}` : profile.adapter;
+	const base =
+		profile.model !== undefined && profile.model !== "default"
+			? `${profile.adapter}:${profile.model}`
+			: profile.adapter;
 	const options = [...(profile.effort !== undefined ? [`effort=${profile.effort}`] : [])];
 	return [base, ...options].join(" ");
 }
@@ -105,7 +108,11 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 	if (routineIds.length === 0) {
 		checks.push({ status: "warn", title: "routines", detail: "no routines declared in chit.config.json" });
 	} else if (routineFails === 0) {
-		checks.push({ status: "pass", title: "routines", detail: `${routineIds.length} routine${routineIds.length === 1 ? "" : "s"} resolve` });
+		checks.push({
+			status: "pass",
+			title: "routines",
+			detail: `${routineIds.length} routine${routineIds.length === 1 ? "" : "s"} resolve`,
+		});
 	}
 
 	// 3. Each built-in adapter a profile binds must have its CLI installed. A custom adapter
@@ -121,7 +128,11 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 			presentAdapters.push(adapter);
 			checks.push({ status: "pass", title: `adapter ${adapter}`, detail: "CLI found on PATH" });
 		} else {
-			checks.push({ status: "fail", title: `adapter ${adapter}`, detail: `"${adapter}" CLI not found on PATH; a routine that calls it will fail` });
+			checks.push({
+				status: "fail",
+				title: `adapter ${adapter}`,
+				detail: `"${adapter}" CLI not found on PATH; a routine that calls it will fail`,
+			});
 		}
 	}
 
@@ -161,9 +172,17 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 	if (resolved.some((r) => isSandboxed(r.manifest))) {
 		const g = await probes.gitState(cwd);
 		if (!g.isRepo) {
-			checks.push({ status: "fail", title: "git", detail: "a sandboxed routine runs in a git worktree, but this is not a git repo" });
+			checks.push({
+				status: "fail",
+				title: "git",
+				detail: "a sandboxed routine runs in a git worktree, but this is not a git repo",
+			});
 		} else if (!g.clean) {
-			checks.push({ status: "warn", title: "git", detail: "working tree is dirty; a sandboxed run starts from a clean HEAD, so commit or stash first" });
+			checks.push({
+				status: "warn",
+				title: "git",
+				detail: "working tree is dirty; a sandboxed run starts from a clean HEAD, so commit or stash first",
+			});
 		} else {
 			checks.push({ status: "pass", title: "git", detail: "clean git repo; sandboxing can work" });
 		}
@@ -193,9 +212,17 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 				const r = await adapterProbe.reach(profile);
 				if (r.ok) {
 					anyReachable = true;
-					checks.push({ status: "pass", title: `real ${label}`, detail: `reachable, model accepted${r.detail ? ` (${r.detail})` : ""}` });
+					checks.push({
+						status: "pass",
+						title: `real ${label}`,
+						detail: `reachable, model accepted${r.detail ? ` (${r.detail})` : ""}`,
+					});
 				} else {
-					checks.push({ status: "fail", title: `real ${label}`, detail: `not reachable / model rejected: ${r.detail}` });
+					checks.push({
+						status: "fail",
+						title: `real ${label}`,
+						detail: `not reachable / model rejected: ${r.detail}`,
+					});
 				}
 			}
 			// The permission mapping is adapter-level, so probe it once per adapter (first model),
@@ -210,7 +237,11 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 				checks.push(
 					p.readWriteWorked
 						? { status: "pass", title: `real ${adapter} read-write`, detail: "wrote inside a temp sandbox" }
-						: { status: "warn", title: `real ${adapter} read-write`, detail: "no file written (the model may have declined)" },
+						: {
+								status: "warn",
+								title: `real ${adapter} read-write`,
+								detail: "no file written (the model may have declined)",
+							},
 				);
 			}
 		}
@@ -232,7 +263,9 @@ export function formatDoctor(report: DoctorReport): string {
 	const fails = report.checks.filter((c) => c.status === "fail").length;
 	const warns = report.checks.filter((c) => c.status === "warn").length;
 	if (fails > 0) {
-		out.push(`${fails} fail${fails === 1 ? "" : "s"}${warns > 0 ? `, ${warns} warning${warns === 1 ? "" : "s"}` : ""}. fix the fails before a real run.`);
+		out.push(
+			`${fails} fail${fails === 1 ? "" : "s"}${warns > 0 ? `, ${warns} warning${warns === 1 ? "" : "s"}` : ""}. fix the fails before a real run.`,
+		);
 	} else if (warns > 0) {
 		out.push(`ready, with ${warns} warning${warns === 1 ? "" : "s"} to review.`);
 	} else {

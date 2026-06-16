@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parseConfig } from "./config.ts";
 import { resolveFlow } from "./flow.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
-import { resolveRoutine, type ResolvedRoutine } from "./routine.ts";
+import { type ResolvedRoutine, resolveRoutine } from "./routine.ts";
 
 const scenariosDir = join(process.cwd(), "scenarios");
 

@@ -4,7 +4,16 @@
 // confirm. Like the adapter and check-runner, it is a seam: a fake for tests, a
 // real git-worktree implementation for the bin.
 
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -91,11 +100,19 @@ export function fakeSandbox(opts: { workDir?: string; diff?: string } = {}): Fak
 }
 
 export function fakeSandboxFactory(
-	opts: { workDir?: string; diff?: string; dirty?: boolean; baseCommit?: string; applyError?: string; onApplyPatch?: (patch: string, base: string) => void } = {},
+	opts: {
+		workDir?: string;
+		diff?: string;
+		dirty?: boolean;
+		baseCommit?: string;
+		applyError?: string;
+		onApplyPatch?: (patch: string, base: string) => void;
+	} = {},
 ): SandboxFactory {
 	return {
 		async preflight() {
-			if (opts.dirty) throw new DirtyWorktreeError("Sandboxed runs start from HEAD. Commit or stash your changes first.");
+			if (opts.dirty)
+				throw new DirtyWorktreeError("Sandboxed runs start from HEAD. Commit or stash your changes first.");
 			return { baseCommit: opts.baseCommit ?? "base0000" };
 		},
 		async create() {
@@ -227,7 +244,9 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		// operator reviewed no longer describes a change onto THIS tree.
 		const head = (await gitOrThrow(["rev-parse", "HEAD"], repoRoot)).trim();
 		if (head !== expectedBase) {
-			throw new ApplyError(`this patch was made against ${expectedBase.slice(0, 12)} but HEAD is now ${head.slice(0, 12)}. Re-run the routine on the current tree.`);
+			throw new ApplyError(
+				`this patch was made against ${expectedBase.slice(0, 12)} but HEAD is now ${head.slice(0, 12)}. Re-run the routine on the current tree.`,
+			);
 		}
 		// Clean tree: don't blend the reviewed patch with unrelated uncommitted edits (chit's
 		// own .chit/ bookkeeping is excluded, so it never blocks an apply).

@@ -36,13 +36,19 @@ function isObject(v: unknown): v is Record<string, unknown> {
 // Validate that a user-declared schema uses only the supported subset, returning the normalized
 // JsonSchema. `fail(where, detail)` throws (the caller maps it to its own error type, e.g.
 // ManifestError) so this module stays a leaf with no import cycle back into the manifest.
-export function parseJsonSchema(raw: unknown, where: string, fail: (where: string, detail: string) => never): JsonSchema {
+export function parseJsonSchema(
+	raw: unknown,
+	where: string,
+	fail: (where: string, detail: string) => never,
+): JsonSchema {
 	if (!isObject(raw)) fail(where, "a schema must be an object");
 	for (const k of Object.keys(raw)) {
-		if (!SCHEMA_KEYWORDS.has(k)) fail(where, `unsupported schema keyword "${k}" (supported: ${[...SCHEMA_KEYWORDS].join(", ")})`);
+		if (!SCHEMA_KEYWORDS.has(k))
+			fail(where, `unsupported schema keyword "${k}" (supported: ${[...SCHEMA_KEYWORDS].join(", ")})`);
 	}
 	const type = raw.type;
-	if (typeof type !== "string" || !TYPES.has(type as JsonType)) fail(where, `\`type\` must be one of: ${[...TYPES].join(", ")}`);
+	if (typeof type !== "string" || !TYPES.has(type as JsonType))
+		fail(where, `\`type\` must be one of: ${[...TYPES].join(", ")}`);
 	const t = type as JsonType;
 	const schema: JsonSchema = { type: t };
 
@@ -50,7 +56,8 @@ export function parseJsonSchema(raw: unknown, where: string, fail: (where: strin
 		if (!SCALAR_TYPES.has(t)) fail(where, "`enum` is only supported on a string/number/integer/boolean schema");
 		if (!Array.isArray(raw.enum) || raw.enum.length === 0) fail(`${where}.enum`, "must be a non-empty array");
 		for (const [i, v] of raw.enum.entries()) {
-			if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") fail(`${where}.enum[${i}]`, "must be a string, number, or boolean");
+			if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean")
+				fail(`${where}.enum[${i}]`, "must be a string, number, or boolean");
 		}
 		schema.enum = raw.enum as (string | number | boolean)[];
 	}
@@ -59,11 +66,13 @@ export function parseJsonSchema(raw: unknown, where: string, fail: (where: strin
 		if (raw.properties !== undefined) {
 			if (!isObject(raw.properties)) fail(`${where}.properties`, "must be an object");
 			const props: Record<string, JsonSchema> = {};
-			for (const [k, v] of Object.entries(raw.properties)) props[k] = parseJsonSchema(v, `${where}.properties.${k}`, fail);
+			for (const [k, v] of Object.entries(raw.properties))
+				props[k] = parseJsonSchema(v, `${where}.properties.${k}`, fail);
 			schema.properties = props;
 		}
 		if (raw.required !== undefined) {
-			if (!Array.isArray(raw.required) || raw.required.some((r) => typeof r !== "string")) fail(`${where}.required`, "must be an array of property names");
+			if (!Array.isArray(raw.required) || raw.required.some((r) => typeof r !== "string"))
+				fail(`${where}.required`, "must be an array of property names");
 			if (schema.properties !== undefined) {
 				for (const r of raw.required as string[]) {
 					if (!(r in schema.properties)) fail(`${where}.required`, `"${r}" is not declared in \`properties\``);
@@ -114,7 +123,9 @@ export function validateJson(value: unknown, schema: JsonSchema, path = "$"): st
 
 	const errors: string[] = [];
 	if (schema.enum !== undefined && !schema.enum.some((e) => e === value)) {
-		errors.push(`${path}: ${JSON.stringify(value)} is not one of: ${schema.enum.map((e) => JSON.stringify(e)).join(", ")}`);
+		errors.push(
+			`${path}: ${JSON.stringify(value)} is not one of: ${schema.enum.map((e) => JSON.stringify(e)).join(", ")}`,
+		);
 	}
 	if (schema.type === "object") {
 		const obj = value as Record<string, unknown>;
@@ -134,7 +145,9 @@ export function validateJson(value: unknown, schema: JsonSchema, path = "$"): st
 	}
 	if (schema.type === "array" && schema.items !== undefined) {
 		const items = schema.items;
-		(value as unknown[]).forEach((el, i) => errors.push(...validateJson(el, items, `${path}[${i}]`)));
+		for (const [i, el] of (value as unknown[]).entries()) {
+			errors.push(...validateJson(el, items, `${path}[${i}]`));
+		}
 	}
 	return errors;
 }
@@ -158,7 +171,8 @@ export function evaluateStructured(rawOutput: string, schema: JsonSchema): Struc
 		return { ok: false, error: `output is not valid JSON: ${(e as Error).message}` };
 	}
 	const errors = validateJson(parsed, schema);
-	if (errors.length > 0) return { ok: false, error: `output did not match the declared schema:\n${errors.map((e) => `- ${e}`).join("\n")}` };
+	if (errors.length > 0)
+		return { ok: false, error: `output did not match the declared schema:\n${errors.map((e) => `- ${e}`).join("\n")}` };
 	return { ok: true, value: parsed, normalized: JSON.stringify(parsed, null, 2) };
 }
 

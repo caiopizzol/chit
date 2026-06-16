@@ -22,7 +22,7 @@ import { type ConvergeReceipt, runConverge } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { validateInputs } from "./inputs.ts";
 import { effectiveRunTimeoutMs, isComposition, isSandboxed, type Manifest } from "./manifest.ts";
-import { type ResolvedRoutine, resolveRoutine, RoutineError } from "./routine.ts";
+import { type ResolvedRoutine, RoutineError } from "./routine.ts";
 import { type RunReceipt, runOneShot } from "./run.ts";
 import type { SandboxFactory } from "./sandbox.ts";
 import { renderTemplate } from "./template.ts";
@@ -57,10 +57,7 @@ function inputRefs(template: string): string[] {
 }
 
 // Validate the graph and resolve every sub-routine. Config-aware on purpose.
-export function resolveFlow(
-	flowRoutine: ResolvedRoutine,
-	resolve: (id: string) => ResolvedRoutine,
-): ResolvedFlow {
+export function resolveFlow(flowRoutine: ResolvedRoutine, resolve: (id: string) => ResolvedRoutine): ResolvedFlow {
 	if (!isComposition(flowRoutine.manifest)) {
 		throw new Error("resolveFlow called with a non-composition routine");
 	}
@@ -75,12 +72,16 @@ export function resolveFlow(
 	const checkRefs = (template: string, stepId: string): void => {
 		for (const ref of stepRefs(template)) {
 			if (!priorIds.has(ref)) {
-				throw new RoutineError(`composition step ${JSON.stringify(stepId)}: references step ${JSON.stringify(ref)}, which is not an earlier step`);
+				throw new RoutineError(
+					`composition step ${JSON.stringify(stepId)}: references step ${JSON.stringify(ref)}, which is not an earlier step`,
+				);
 			}
 		}
 		for (const ref of inputRefs(template)) {
 			if (!(ref in manifest.inputs)) {
-				throw new RoutineError(`composition step ${JSON.stringify(stepId)}: references {{ inputs.${ref} }}, which is not a declared input`);
+				throw new RoutineError(
+					`composition step ${JSON.stringify(stepId)}: references {{ inputs.${ref} }}, which is not a declared input`,
+				);
 			}
 		}
 	};
@@ -100,17 +101,23 @@ export function resolveFlow(
 		try {
 			sub = resolve(step.routine);
 		} catch (e) {
-			throw new RoutineError(`composition ${JSON.stringify(flowRoutine.id)} step ${JSON.stringify(step.id)}: ${(e as Error).message}`);
+			throw new RoutineError(
+				`composition ${JSON.stringify(flowRoutine.id)} step ${JSON.stringify(step.id)}: ${(e as Error).message}`,
+			);
 		}
 		if (isComposition(sub.manifest)) {
-			throw new RoutineError(`composition step ${JSON.stringify(step.id)}: ${JSON.stringify(step.routine)} is itself a composition -- nested composition is not supported (call execution routines only)`);
+			throw new RoutineError(
+				`composition step ${JSON.stringify(step.id)}: ${JSON.stringify(step.routine)} is itself a composition -- nested composition is not supported (call execution routines only)`,
+			);
 		}
 		for (const template of Object.values(step.inputs)) checkRefs(template, step.id);
 		// A sandboxed sub-routine (writes or runs checks) must be the LAST step, and a
 		// composition has at most one (a non-last sandboxed step is caught here). Earlier
 		// steps must be pure read-only/text, so the composition adds no write surface.
 		if (isSandboxed(sub.manifest) && !isLast) {
-			throw new RoutineError(`composition ${JSON.stringify(flowRoutine.id)}: step ${JSON.stringify(step.id)} (${JSON.stringify(sub.id)}) writes or runs checks, so it must be the LAST step; earlier steps must be read-only/text.`);
+			throw new RoutineError(
+				`composition ${JSON.stringify(flowRoutine.id)}: step ${JSON.stringify(step.id)} (${JSON.stringify(sub.id)}) writes or runs checks, so it must be the LAST step; earlier steps must be read-only/text.`,
+			);
 		}
 		steps.push({ id: step.id, kind: "routine", inputs: step.inputs, routine: sub });
 		priorIds.add(step.id);
@@ -241,7 +248,13 @@ export async function runFlow(
 			// no receipt body -- only status + timing land in the flow receipt.
 			if (deps.askUser === undefined) {
 				failed = `step ${step.id}: an ask gate needs an input handler, but none is wired`;
-				stepReceipts.push({ id: step.id, kind: "ask", status: "failed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				stepReceipts.push({
+					id: step.id,
+					kind: "ask",
+					status: "failed",
+					startedAt: stepStart,
+					elapsedMs: deps.now() - stepStart,
+				});
 				break;
 			}
 			deps.onProgress?.(`step ${step.id} (ask)`);
@@ -252,15 +265,33 @@ export async function runFlow(
 				// Ctrl-C during the prompt aborts the signal and rejects the ask -> a cancel.
 				if (deps.signal?.aborted) {
 					cancelled = true;
-					stepReceipts.push({ id: step.id, kind: "ask", status: "cancelled", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+					stepReceipts.push({
+						id: step.id,
+						kind: "ask",
+						status: "cancelled",
+						startedAt: stepStart,
+						elapsedMs: deps.now() - stepStart,
+					});
 					break;
 				}
 				failed = `step ${step.id} (ask): ${(e as Error).message}`;
-				stepReceipts.push({ id: step.id, kind: "ask", status: "failed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				stepReceipts.push({
+					id: step.id,
+					kind: "ask",
+					status: "failed",
+					startedAt: stepStart,
+					elapsedMs: deps.now() - stepStart,
+				});
 				break;
 			}
 			ctx.steps[step.id] = { output: answer };
-			stepReceipts.push({ id: step.id, kind: "ask", status: "completed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({
+				id: step.id,
+				kind: "ask",
+				status: "completed",
+				startedAt: stepStart,
+				elapsedMs: deps.now() - stepStart,
+			});
 			continue;
 		}
 
@@ -277,7 +308,15 @@ export async function runFlow(
 		const validation = validateInputs(step.routine.manifest, mapped);
 		if (!validation.ok) {
 			failed = `step ${step.id} (${step.routine.id}): ${validation.errors.join("; ")}`;
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: "", status: "failed", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({
+				id: step.id,
+				routine: step.routine.id,
+				policy,
+				subRunId: "",
+				status: "failed",
+				startedAt: stepStart,
+				elapsedMs: deps.now() - stepStart,
+			});
 			break;
 		}
 
@@ -294,7 +333,9 @@ export async function runFlow(
 					newRunId: deps.newRunId,
 					// Honor the sub-routine's config-level converge default, exactly as a
 					// standalone `chit run` of it would -- so it behaves the same in a flow.
-					...(step.routine.defaults?.maxIterations !== undefined && { maxIterations: step.routine.defaults.maxIterations }),
+					...(step.routine.defaults?.maxIterations !== undefined && {
+						maxIterations: step.routine.defaults.maxIterations,
+					}),
 					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 					...(deps.signal !== undefined && { signal: deps.signal }),
@@ -309,7 +350,15 @@ export async function runFlow(
 			applied = r.applied;
 			if (r.applyError !== undefined) applyError = r.applyError;
 			ctx.steps[step.id] = { output: r.diff };
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.receipt.runId, status: r.receipt.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({
+				id: step.id,
+				routine: step.routine.id,
+				policy,
+				subRunId: r.receipt.runId,
+				status: r.receipt.status,
+				startedAt: stepStart,
+				elapsedMs: deps.now() - stepStart,
+			});
 			if (r.receipt.status === "cancelled") {
 				cancelled = true;
 				break;
@@ -330,7 +379,9 @@ export async function runFlow(
 					cwd: deps.cwd,
 					now: deps.now,
 					newRunId: deps.newRunId,
-					...(step.routine.defaults?.maxIterations !== undefined && { maxIterations: step.routine.defaults.maxIterations }),
+					...(step.routine.defaults?.maxIterations !== undefined && {
+						maxIterations: step.routine.defaults.maxIterations,
+					}),
 					...(deps.maxWallMs !== undefined && { maxWallMs: deps.maxWallMs }),
 					...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
 					...(deps.signal !== undefined && { signal: deps.signal }),
@@ -339,7 +390,15 @@ export async function runFlow(
 			);
 			subReceipts.push(r);
 			ctx.steps[step.id] = { output: r.output ?? "" };
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({
+				id: step.id,
+				routine: step.routine.id,
+				policy,
+				subRunId: r.runId,
+				status: r.status,
+				startedAt: stepStart,
+				elapsedMs: deps.now() - stepStart,
+			});
 			if (r.status === "cancelled") {
 				cancelled = true;
 				break;
@@ -367,7 +426,15 @@ export async function runFlow(
 			);
 			subReceipts.push(r);
 			ctx.steps[step.id] = { output: r.output ?? "" };
-			stepReceipts.push({ id: step.id, routine: step.routine.id, policy, subRunId: r.runId, status: r.status, startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+			stepReceipts.push({
+				id: step.id,
+				routine: step.routine.id,
+				policy,
+				subRunId: r.runId,
+				status: r.status,
+				startedAt: stepStart,
+				elapsedMs: deps.now() - stepStart,
+			});
 			if (r.status === "cancelled") {
 				cancelled = true;
 				break;

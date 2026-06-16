@@ -1,7 +1,6 @@
 {
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"module": "ESNext",
 		"allowImportingTsExtensions": true,
 		"types": ["bun"],
 		"noUncheckedIndexedAccess": true,

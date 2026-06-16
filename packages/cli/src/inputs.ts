@@ -5,9 +5,7 @@
 
 import type { Manifest } from "./manifest.ts";
 
-export type InputValidation =
-	| { ok: true; values: Record<string, string> }
-	| { ok: false; errors: string[] };
+export type InputValidation = { ok: true; values: Record<string, string> } | { ok: false; errors: string[] };
 
 export function validateInputs(manifest: Manifest, provided: Record<string, string>): InputValidation {
 	const errors: string[] = [];

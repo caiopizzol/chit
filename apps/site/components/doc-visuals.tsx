@@ -9,15 +9,7 @@ function VisualShell({ title, children }: { title: string; children: ReactNode }
 	);
 }
 
-function Node({
-	label,
-	detail,
-	tone,
-}: {
-	label: string;
-	detail?: string;
-	tone?: "dark" | "muted";
-}) {
+function Node({ label, detail, tone }: { label: string; detail?: string; tone?: "dark" | "muted" }) {
 	return (
 		<div className={`doc-visual-node${tone ? ` doc-visual-node-${tone}` : ""}`}>
 			<strong>{label}</strong>

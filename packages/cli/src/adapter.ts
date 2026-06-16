@@ -117,7 +117,19 @@ export function codexCliArgs(req: Pick<AdapterRequest, "model" | "filesystem" | 
 	const sandbox = req.filesystem === "read-write" ? "workspace-write" : "read-only";
 	const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
 	const effortConfig = req.effort !== undefined ? ["-c", `model_reasoning_effort="${req.effort}"`] : [];
-	return ["codex", "exec", "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral", ...model, ...effortConfig, "-o", outFile, "-"];
+	return [
+		"codex",
+		"exec",
+		"--sandbox",
+		sandbox,
+		"--skip-git-repo-check",
+		"--ephemeral",
+		...model,
+		...effortConfig,
+		"-o",
+		outFile,
+		"-",
+	];
 }
 
 // A second real adapter: the gemini CLI. Verified empirically (the same checks claude
@@ -165,7 +177,9 @@ export const geminiCliAdapter: Adapter = {
 export const codexCliAdapter: Adapter = {
 	async call(req) {
 		if (req.filesystem === "none") {
-			throw new Error('codex has no no-tools mode, so a `filesystem: "none"` agent cannot use the codex adapter (use read-only, or bind it to another adapter)');
+			throw new Error(
+				'codex has no no-tools mode, so a `filesystem: "none"` agent cannot use the codex adapter (use read-only, or bind it to another adapter)',
+			);
 		}
 		const composed = `${req.instructions}\n\n---\n\n${req.prompt}`;
 		// One ephemeral temp dir per call for the final-message file; removed in `finally`.

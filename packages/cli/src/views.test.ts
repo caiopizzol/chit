@@ -122,11 +122,13 @@ describe("formatInspect", () => {
 		expect(out).toContain("claude -> claude:sonnet effort=max");
 	});
 
-	test("surfaces effective limits, including explicit overrides and a \"none\" opt-out", () => {
+	test('surfaces effective limits, including explicit overrides and a "none" opt-out', () => {
 		const tight = formatInspect(routineFrom({ ...ONE_SHOT, limits: { callTimeoutMinutes: 45 } }));
 		expect(tight).toContain("limits: per call 45m");
 
-		const none = formatInspect(routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none", runTimeoutMinutes: "none" } }));
+		const none = formatInspect(
+			routineFrom({ ...CONVERGE, limits: { callTimeoutMinutes: "none", runTimeoutMinutes: "none" } }),
+		);
 		expect(none).toContain("per call none");
 		expect(none).toContain("whole run none");
 	});
@@ -191,8 +193,23 @@ describe("formatTrace converge", () => {
 				startedAt: 0,
 				allChecksPassed: false,
 				steps: [
-					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", startedAt: 0, elapsedMs: 10 },
-					{ id: "verify", kind: "check", status: "failed", startedAt: 10, elapsedMs: 5, checks: [{ command: "bun test", ok: false, startedAt: 10, elapsedMs: 5 }] },
+					{
+						id: "build",
+						kind: "call",
+						participant: "builder",
+						agent: "codex",
+						status: "ok",
+						startedAt: 0,
+						elapsedMs: 10,
+					},
+					{
+						id: "verify",
+						kind: "check",
+						status: "failed",
+						startedAt: 10,
+						elapsedMs: 5,
+						checks: [{ command: "bun test", ok: false, startedAt: 10, elapsedMs: 5 }],
+					},
 				],
 			},
 			{
@@ -200,8 +217,23 @@ describe("formatTrace converge", () => {
 				startedAt: 15,
 				allChecksPassed: true,
 				steps: [
-					{ id: "build", kind: "call", participant: "builder", agent: "codex", status: "ok", startedAt: 15, elapsedMs: 8 },
-					{ id: "verify", kind: "check", status: "ok", startedAt: 23, elapsedMs: 4, checks: [{ command: "bun test", ok: true, startedAt: 23, elapsedMs: 4 }] },
+					{
+						id: "build",
+						kind: "call",
+						participant: "builder",
+						agent: "codex",
+						status: "ok",
+						startedAt: 15,
+						elapsedMs: 8,
+					},
+					{
+						id: "verify",
+						kind: "check",
+						status: "ok",
+						startedAt: 23,
+						elapsedMs: 4,
+						checks: [{ command: "bun test", ok: true, startedAt: 23, elapsedMs: 4 }],
+					},
 				],
 			},
 		],
@@ -243,7 +275,13 @@ describe("formatTrace converge", () => {
 					allChecksPassed: true,
 					steps: [
 						{ id: "build", kind: "call", participant: "b", status: "ok", elapsedMs: 80 },
-						{ id: "verify", kind: "check", status: "ok", elapsedMs: 20, checks: [{ command: "grep x", ok: true, elapsedMs: 20 }] },
+						{
+							id: "verify",
+							kind: "check",
+							status: "ok",
+							elapsedMs: 20,
+							checks: [{ command: "grep x", ok: true, elapsedMs: 20 }],
+						},
 					],
 				},
 			],
@@ -268,8 +306,18 @@ describe("formatTrace converge", () => {
 			elapsedMs: 16,
 			status: "converged",
 			iterations: [
-				{ n: 1, startedAt: 0, allChecksPassed: false, steps: [{ id: "done", kind: "call", participant: "judge", status: "ok", startedAt: 5, elapsedMs: 3 }] },
-				{ n: 2, startedAt: 8, allChecksPassed: true, steps: [{ id: "done", kind: "call", participant: "judge", status: "ok", startedAt: 13, elapsedMs: 3 }] },
+				{
+					n: 1,
+					startedAt: 0,
+					allChecksPassed: false,
+					steps: [{ id: "done", kind: "call", participant: "judge", status: "ok", startedAt: 5, elapsedMs: 3 }],
+				},
+				{
+					n: 2,
+					startedAt: 8,
+					allChecksPassed: true,
+					steps: [{ id: "done", kind: "call", participant: "judge", status: "ok", startedAt: 13, elapsedMs: 3 }],
+				},
 			],
 			output: "the final draft text",
 		};
@@ -296,8 +344,36 @@ describe("formatTrace converge", () => {
 			elapsedMs: 20,
 			status: "converged",
 			iterations: [
-				{ n: 1, startedAt: 0, allChecksPassed: false, steps: [{ id: "verify", kind: "check", status: "ok", startedAt: 0, elapsedMs: 1, checks: [{ command: "bun test", ok: true, startedAt: 0, elapsedMs: 1 }] }] },
-				{ n: 2, startedAt: 10, allChecksPassed: true, steps: [{ id: "verify", kind: "check", status: "ok", startedAt: 10, elapsedMs: 1, checks: [{ command: "bun test", ok: true, startedAt: 10, elapsedMs: 1 }] }] },
+				{
+					n: 1,
+					startedAt: 0,
+					allChecksPassed: false,
+					steps: [
+						{
+							id: "verify",
+							kind: "check",
+							status: "ok",
+							startedAt: 0,
+							elapsedMs: 1,
+							checks: [{ command: "bun test", ok: true, startedAt: 0, elapsedMs: 1 }],
+						},
+					],
+				},
+				{
+					n: 2,
+					startedAt: 10,
+					allChecksPassed: true,
+					steps: [
+						{
+							id: "verify",
+							kind: "check",
+							status: "ok",
+							startedAt: 10,
+							elapsedMs: 1,
+							checks: [{ command: "bun test", ok: true, startedAt: 10, elapsedMs: 1 }],
+						},
+					],
+				},
 			],
 		};
 		const out = formatTrace(compound);
@@ -320,8 +396,38 @@ describe("formatTrace converge", () => {
 			elapsedMs: 16,
 			status: "converged",
 			iterations: [
-				{ n: 1, startedAt: 0, allChecksPassed: false, steps: [{ id: "verdict", kind: "call", participant: "judge", status: "ok", startedAt: 1, elapsedMs: 2, json: { passed: false } }] },
-				{ n: 2, startedAt: 8, allChecksPassed: true, steps: [{ id: "verdict", kind: "call", participant: "judge", status: "ok", startedAt: 9, elapsedMs: 2, json: { passed: true } }] },
+				{
+					n: 1,
+					startedAt: 0,
+					allChecksPassed: false,
+					steps: [
+						{
+							id: "verdict",
+							kind: "call",
+							participant: "judge",
+							status: "ok",
+							startedAt: 1,
+							elapsedMs: 2,
+							json: { passed: false },
+						},
+					],
+				},
+				{
+					n: 2,
+					startedAt: 8,
+					allChecksPassed: true,
+					steps: [
+						{
+							id: "verdict",
+							kind: "call",
+							participant: "judge",
+							status: "ok",
+							startedAt: 9,
+							elapsedMs: 2,
+							json: { passed: true },
+						},
+					],
+				},
 			],
 			output: "the goal",
 		};
@@ -345,7 +451,15 @@ describe("formatTrace", () => {
 		elapsedMs: 900,
 		status: "completed",
 		steps: [
-			{ id: "grill", kind: "call", participant: "griller", agent: "claude", status: "ok", startedAt: 0, elapsedMs: 880 },
+			{
+				id: "grill",
+				kind: "call",
+				participant: "griller",
+				agent: "claude",
+				status: "ok",
+				startedAt: 0,
+				elapsedMs: 880,
+			},
 			{ id: "out", kind: "format", status: "ok", startedAt: 880, elapsedMs: 2 },
 		],
 		output: "SECRET REPORT BODY",
@@ -393,7 +507,15 @@ describe("formatTrace", () => {
 		const withAsk: RunReceipt = {
 			...base,
 			steps: [
-				{ id: "grill", kind: "call", participant: "griller", agent: "claude", status: "ok", startedAt: 0, elapsedMs: 5 },
+				{
+					id: "grill",
+					kind: "call",
+					participant: "griller",
+					agent: "claude",
+					status: "ok",
+					startedAt: 0,
+					elapsedMs: 5,
+				},
 				{ id: "decide", kind: "ask", status: "ok", startedAt: 5, elapsedMs: 1 },
 				{ id: "out", kind: "format", status: "ok", startedAt: 6, elapsedMs: 1 },
 			],
@@ -415,9 +537,27 @@ describe("formatTrace flow", () => {
 		elapsedMs: 30,
 		status: "completed",
 		steps: [
-			{ id: "grill", kind: "routine", routine: "feature-griller", policy: "one-shot", subRunId: "run-g", status: "completed", startedAt: 0, elapsedMs: 10 },
+			{
+				id: "grill",
+				kind: "routine",
+				routine: "feature-griller",
+				policy: "one-shot",
+				subRunId: "run-g",
+				status: "completed",
+				startedAt: 0,
+				elapsedMs: 10,
+			},
 			{ id: "approve", kind: "ask", status: "completed", startedAt: 10, elapsedMs: 2 },
-			{ id: "impl", kind: "routine", routine: "impl-review", policy: "converge", subRunId: "run-i", status: "converged", startedAt: 12, elapsedMs: 18 },
+			{
+				id: "impl",
+				kind: "routine",
+				routine: "impl-review",
+				policy: "converge",
+				subRunId: "run-i",
+				status: "converged",
+				startedAt: 12,
+				elapsedMs: 18,
+			},
 		],
 	};
 
@@ -437,7 +577,17 @@ describe("formatTrace flow", () => {
 		// a flow receipt written before ask existed: steps have no `kind` field
 		const legacy = {
 			...flow,
-			steps: [{ id: "grill", routine: "feature-griller", policy: "one-shot", subRunId: "run-g", status: "completed", startedAt: 0, elapsedMs: 10 }],
+			steps: [
+				{
+					id: "grill",
+					routine: "feature-griller",
+					policy: "one-shot",
+					subRunId: "run-g",
+					status: "completed",
+					startedAt: 0,
+					elapsedMs: 10,
+				},
+			],
 		} as FlowReceipt;
 		const out = formatTrace(legacy);
 		expect(out).toContain("feature-griller");

@@ -7,9 +7,9 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawnCapture } from "./proc.ts";
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
+import { spawnCapture } from "./proc.ts";
 import type { RunReceipt } from "./run.ts";
 
 // A stored receipt is one of three shapes (text run / sandboxed loop / composition).
@@ -92,11 +92,19 @@ export function loadPatch(cwd: string, runId: string): string | undefined {
 export type PatchStatus = "none" | "applied" | "blocked" | "pending" | "conflicts";
 
 async function gitApplyCleans(cwd: string, patch: string, reverse: boolean): Promise<boolean> {
-	const r = await spawnCapture(["git", "apply", "--check", ...(reverse ? ["--reverse"] : []), "-"], { cwd, stdin: patch });
+	const r = await spawnCapture(["git", "apply", "--check", ...(reverse ? ["--reverse"] : []), "-"], {
+		cwd,
+		stdin: patch,
+	});
 	return r.exitCode === 0;
 }
 
-export async function patchStatus(cwd: string, runId: string, baseCommit?: string, appliedAt?: number): Promise<PatchStatus> {
+export async function patchStatus(
+	cwd: string,
+	runId: string,
+	baseCommit?: string,
+	appliedAt?: number,
+): Promise<PatchStatus> {
 	const patch = loadPatch(cwd, runId);
 	if (patch === undefined || patch.trim() === "") return "none";
 	// A durable record that Chit applied this patch wins over the live git derivation: the work

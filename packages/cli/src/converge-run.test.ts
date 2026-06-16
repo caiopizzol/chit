@@ -23,7 +23,13 @@ const CONVERGE = {
 
 function routineFrom(raw: unknown): ResolvedRoutine {
 	const manifest = parseManifest(raw, "m.json");
-	return { id: (raw as { id: string }).id, manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:test" };
+	return {
+		id: (raw as { id: string }).id,
+		manifestPath: "m.json",
+		manifestAbs: "/m.json",
+		manifest,
+		digest: "sha256:test",
+	};
 }
 
 function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {}) {
@@ -106,7 +112,15 @@ describe("runConvergeInSandbox", () => {
 		};
 		let t = 0;
 		const deps: ConvergeRunDeps = {
-			sandboxFactory: { async preflight() { return { baseCommit: "base0000" }; }, async create() { return sb; }, async applyPatch() {} },
+			sandboxFactory: {
+				async preflight() {
+					return { baseCommit: "base0000" };
+				},
+				async create() {
+					return sb;
+				},
+				async applyPatch() {},
+			},
 			adapter: fakeAdapter((req) => `${req.agent}|${req.prompt}`),
 			checkRunner: fakeCheckRunner(),
 			cwd: "/origin",

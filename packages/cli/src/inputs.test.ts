@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Manifest } from "./manifest.ts";
 import { validateInputs } from "./inputs.ts";
+import type { Manifest } from "./manifest.ts";
 
 const manifest = {
 	id: "griller",

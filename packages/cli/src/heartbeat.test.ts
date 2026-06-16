@@ -4,7 +4,12 @@ import { withHeartbeat } from "./heartbeat.ts";
 describe("withHeartbeat", () => {
 	test("returns the work's result and emits no heartbeat for fast work", async () => {
 		const lines: string[] = [];
-		const r = await withHeartbeat(async () => 42, { label: "call x", now: () => 0, onProgress: (l) => lines.push(l), intervalMs: 10 });
+		const r = await withHeartbeat(async () => 42, {
+			label: "call x",
+			now: () => 0,
+			onProgress: (l) => lines.push(l),
+			intervalMs: 10,
+		});
 		expect(r).toBe(42);
 		expect(lines).toEqual([]); // resolved well before the first tick
 	});

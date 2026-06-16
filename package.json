@@ -2,10 +2,19 @@
 	"name": "chit-workspace",
 	"version": "0.0.0",
 	"private": true,
-	"workspaces": ["apps/*", "packages/*"],
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
 	"scripts": {
 		"chit": "bun packages/cli/src/index.ts",
 		"cli": "bun packages/cli/src/index.ts",
+		"format": "biome check --write .",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"prepare": "lefthook install",
+		"release": "semantic-release",
+		"release:dry": "semantic-release --dry-run --no-ci",
 		"test": "bun --filter '*' test",
 		"typecheck": "bun --filter '*' typecheck",
 		"site:dev": "bun --filter @chit-run/site dev",
@@ -18,5 +27,23 @@
 		"docs:preview": "bun run site:preview",
 		"docs:typecheck": "bun run site:typecheck",
 		"docs:deploy": "bun run site:deploy"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.0",
+		"@semantic-release/commit-analyzer": "^13.0.1",
+		"@semantic-release/github": "^12.0.8",
+		"@semantic-release/release-notes-generator": "^14.1.1",
+		"lefthook": "^2.1.9",
+		"semantic-release": "^25.0.5"
+	},
+	"release": {
+		"branches": [
+			"main"
+		],
+		"plugins": [
+			"@semantic-release/commit-analyzer",
+			"@semantic-release/release-notes-generator",
+			"@semantic-release/github"
+		]
 	}
 }

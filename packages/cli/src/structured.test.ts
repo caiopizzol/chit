@@ -40,17 +40,25 @@ describe("parseJsonSchema", () => {
 	});
 
 	test("rejects enum on a non-scalar, object keys on a non-object, items on a non-array", () => {
-		expect(() => parse({ type: "object", enum: [1] })).toThrow(/`enum` is only supported on a string\/number\/integer\/boolean/);
+		expect(() => parse({ type: "object", enum: [1] })).toThrow(
+			/`enum` is only supported on a string\/number\/integer\/boolean/,
+		);
 		expect(() => parse({ type: "string", properties: {} })).toThrow(/only valid on an `object` schema/);
-		expect(() => parse({ type: "string", items: { type: "string" } })).toThrow(/`items` is only valid on an `array` schema/);
+		expect(() => parse({ type: "string", items: { type: "string" } })).toThrow(
+			/`items` is only valid on an `array` schema/,
+		);
 	});
 
 	test("rejects a required name that is not declared in properties (catches typos)", () => {
-		expect(() => parse({ type: "object", properties: { a: { type: "string" } }, required: ["b"] })).toThrow(/"b" is not declared in `properties`/);
+		expect(() => parse({ type: "object", properties: { a: { type: "string" } }, required: ["b"] })).toThrow(
+			/"b" is not declared in `properties`/,
+		);
 	});
 
 	test("reports the nested path on a bad sub-schema", () => {
-		expect(() => parse({ type: "object", properties: { a: { type: "nope" } } })).toThrow(/schema\.properties\.a: `type` must be one of/);
+		expect(() => parse({ type: "object", properties: { a: { type: "nope" } } })).toThrow(
+			/schema\.properties\.a: `type` must be one of/,
+		);
 	});
 });
 
@@ -65,15 +73,21 @@ describe("validateJson", () => {
 	});
 
 	test("reports a type mismatch with the path", () => {
-		expect(validateJson({ passed: "yes", missing: [], next: "go" }, VERDICT)).toEqual(["$.passed: expected boolean, got string"]);
+		expect(validateJson({ passed: "yes", missing: [], next: "go" }, VERDICT)).toEqual([
+			"$.passed: expected boolean, got string",
+		]);
 	});
 
 	test("reports an unexpected property under additionalProperties:false", () => {
-		expect(validateJson({ passed: true, missing: [], next: "go", extra: 1 }, VERDICT)).toEqual(['$: unexpected property "extra"']);
+		expect(validateJson({ passed: true, missing: [], next: "go", extra: 1 }, VERDICT)).toEqual([
+			'$: unexpected property "extra"',
+		]);
 	});
 
 	test("validates array items", () => {
-		expect(validateJson({ passed: true, missing: ["ok", 2], next: "go" }, VERDICT)).toEqual(["$.missing[1]: expected string, got number"]);
+		expect(validateJson({ passed: true, missing: ["ok", 2], next: "go" }, VERDICT)).toEqual([
+			"$.missing[1]: expected string, got number",
+		]);
 	});
 
 	test("enum membership", () => {

@@ -36,7 +36,8 @@ export function renderTemplate(template: string, ctx: RenderContext): string {
 			return String(ctx.iteration);
 		}
 		if (expr === "diff") {
-			if (ctx.diff === undefined) throw new TemplateError("{{ diff }} is only valid inside a converge loop with a diff provider");
+			if (ctx.diff === undefined)
+				throw new TemplateError("{{ diff }} is only valid inside a converge loop with a diff provider");
 			return ctx.diff;
 		}
 		const parts = expr.split(".");

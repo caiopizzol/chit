@@ -4,10 +4,10 @@
 // adapter-registry wiring, and the no-config / unknown-command paths an operator hits.
 // The deterministic cases need no model; one guarded case runs a real routine.
 
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
 
 const BIN = join(import.meta.dir, "index.ts");
 const REPO = join(import.meta.dir, ".."); // repo root: has chit.config.json + examples/
@@ -77,7 +77,10 @@ describe("CLI process: the real binary (no model)", () => {
 	// routine keeps this deterministic -- no model needed.
 	test("an ask step reads the operator's answer from stdin and feeds it forward", () => {
 		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { echo: { file: "echo.json" } }, profiles: {} }));
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { echo: { file: "echo.json" } }, profiles: {} }),
+		);
 		writeFileSync(
 			join(cwd, "echo.json"),
 			JSON.stringify({
@@ -100,7 +103,10 @@ describe("CLI process: the real binary (no model)", () => {
 	// convergence, exit codes, and text output at the process boundary.
 	test("a { step, equals } loop runs in the cwd, converges, and prints its result (no model, no sandbox)", () => {
 		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { settle: { file: "settle.json" } }, profiles: {} }));
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { settle: { file: "settle.json" } }, profiles: {} }),
+		);
 		writeFileSync(
 			join(cwd, "settle.json"),
 			JSON.stringify({
@@ -131,7 +137,10 @@ describe("CLI process: the real binary (no model)", () => {
 		const cwd = tmp();
 		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
 		sh("git init -q && git config user.email t@t.co && git config user.name t");
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }));
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }),
+		);
 		writeFileSync(
 			join(cwd, "writer.json"),
 			JSON.stringify({
@@ -163,7 +172,10 @@ describe("CLI process: the real binary (no model)", () => {
 		const cwd = tmp();
 		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
 		sh("git init -q && git config user.email t@t.co && git config user.name t");
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }));
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }),
+		);
 		writeFileSync(
 			join(cwd, "writer.json"),
 			JSON.stringify({
@@ -184,7 +196,9 @@ describe("CLI process: the real binary (no model)", () => {
 
 (process.env.CHIT_REAL_SMOKE === "1" ? describe : describe.skip)("CLI process: a real run through the binary", () => {
 	test("`bun src/index.ts run feature-griller` returns output and exits 0", () => {
-		const r = Bun.spawnSync(["bun", BIN, "run", "feature-griller", "--input", "idea=add a status command"], { cwd: REPO });
+		const r = Bun.spawnSync(["bun", BIN, "run", "feature-griller", "--input", "idea=add a status command"], {
+			cwd: REPO,
+		});
 		expect(r.exitCode).toBe(0);
 		expect(r.stdout.toString().length).toBeGreaterThan(50);
 	}, 600_000);

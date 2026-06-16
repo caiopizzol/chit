@@ -18,7 +18,13 @@ import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { formatElapsed } from "./elapsed.ts";
 import { withHeartbeat } from "./heartbeat.ts";
-import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
+import {
+	effectiveCallTimeoutMs,
+	effectiveRunTimeoutMs,
+	type Manifest,
+	type RepeatCondition,
+	type RepeatUntil,
+} from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import { evaluateStructured, readPath } from "./structured.ts";
 import { renderTemplate } from "./template.ts";
@@ -146,7 +152,9 @@ export async function runConverge(
 	const manifest: Manifest = routine.manifest;
 	// A call step's agent id and the adapter/model it resolves to, recorded on every call
 	// receipt (ok, failed, AND cancelled) so trace proves what ran.
-	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string; effort?: string } => {
+	const callBinding = (
+		participantId: string,
+	): { agent?: string; adapter?: string; model?: string; effort?: string } => {
 		const agentId = manifest.participants[participantId]?.agent;
 		if (agentId === undefined) return {};
 		const b = routine.agents?.[agentId];
@@ -172,7 +180,12 @@ export async function runConverge(
 
 	// Persistent across iterations: every step id pre-seeded to "" so a
 	// cross-iteration reference renders empty on iteration 1 (a typo'd id still throws).
-	const ctx: { inputs: Record<string, string>; steps: Record<string, { output: string; json?: unknown }>; iteration: number; diff?: string } = {
+	const ctx: {
+		inputs: Record<string, string>;
+		steps: Record<string, { output: string; json?: unknown }>;
+		iteration: number;
+		diff?: string;
+	} = {
 		inputs: values,
 		steps: Object.fromEntries(manifest.steps.map((s) => [s.id, { output: "" }])),
 		iteration: 0,
@@ -214,15 +227,23 @@ export async function runConverge(
 					const participant = manifest.participants[step.call];
 					if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
 					deps.onProgress?.(`  call ${step.call} (${participant.agent})`);
-						const result = await withHeartbeat(() => deps.adapter.call({
-						agent: participant.agent,
-						instructions: participant.instructions,
-						prompt: renderTemplate(step.prompt, ctx),
-						filesystem: participant.filesystem,
-						cwd: deps.cwd,
-						...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
-						...(deps.signal !== undefined && { signal: deps.signal }),
-					}), { label: `call ${step.call}`, now: deps.now, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) });
+					const result = await withHeartbeat(
+						() =>
+							deps.adapter.call({
+								agent: participant.agent,
+								instructions: participant.instructions,
+								prompt: renderTemplate(step.prompt, ctx),
+								filesystem: participant.filesystem,
+								cwd: deps.cwd,
+								...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
+								...(deps.signal !== undefined && { signal: deps.signal }),
+							}),
+						{
+							label: `call ${step.call}`,
+							now: deps.now,
+							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+						},
+					);
 					deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(deps.now() - stepStart)}`);
 					// Structured output: parse + validate the model's text against the declared schema.
 					// A soft failure (call succeeded, output did not match) is NOT a runError -- store the
@@ -258,7 +279,13 @@ export async function runConverge(
 					});
 				} else if (step.kind === "format") {
 					ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
-					stepReceipts.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+					stepReceipts.push({
+						id: step.id,
+						kind: "format",
+						status: "ok",
+						startedAt: stepStart,
+						elapsedMs: deps.now() - stepStart,
+					});
 				} else if (step.kind === "check") {
 					const checks: CheckReceipt[] = [];
 					const failures: string[] = [];
@@ -266,7 +293,11 @@ export async function runConverge(
 					for (const cmd of step.checks) {
 						const checkStart = deps.now();
 						const label = [cmd.command, ...cmd.args].join(" ");
-						const res = await withHeartbeat(() => deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal), { label: `check ${label}`, now: deps.now, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) });
+						const res = await withHeartbeat(() => deps.checkRunner.run(cmd, deps.cwd, callTimeoutMs, deps.signal), {
+							label: `check ${label}`,
+							now: deps.now,
+							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+						});
 						const checkElapsed = deps.now() - checkStart;
 						deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"} in ${formatElapsed(checkElapsed)}`);
 						checks.push({ command: label, ok: res.ok, startedAt: checkStart, elapsedMs: checkElapsed });
@@ -285,7 +316,7 @@ export async function runConverge(
 						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
 						checks,
-						});
+					});
 				} else {
 					// An execution routine has no `routine` steps (those are a composition).
 					throw new Error(`runConverge cannot run a ${step.kind} step (${step.id})`);
@@ -328,7 +359,8 @@ export async function runConverge(
 		if (cancelled) {
 			// Record the partial iteration (so the timeline shows how far it got and what
 			// was active), but only if it actually began running steps.
-			if (stepReceipts.length > 0) iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: false });
+			if (stepReceipts.length > 0)
+				iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: false });
 			break;
 		}
 		// Did this iteration meet the exit condition? checks-pass = every check passed;
@@ -358,10 +390,15 @@ export async function runConverge(
 	// The { step, equals } evaluator steps (single OR every one inside `all`) are signals, not
 	// the work, so they are skipped when picking the implicit output -- like check steps.
 	const signalSteps = new Set<string>(
-		typeof until === "object" ? ("all" in until ? until.all.flatMap((c) => (typeof c === "object" ? [c.step] : [])) : [until.step]) : [],
+		typeof until === "object"
+			? "all" in until
+				? until.all.flatMap((c) => (typeof c === "object" ? [c.step] : []))
+				: [until.step]
+			: [],
 	);
 	const outputId =
-		manifest.output ?? [...manifest.steps].reverse().find((s) => (s.kind === "call" || s.kind === "format") && !signalSteps.has(s.id))?.id;
+		manifest.output ??
+		[...manifest.steps].reverse().find((s) => (s.kind === "call" || s.kind === "format") && !signalSteps.has(s.id))?.id;
 	const output = outputId !== undefined ? ctx.steps[outputId]?.output : undefined;
 	return {
 		runId,

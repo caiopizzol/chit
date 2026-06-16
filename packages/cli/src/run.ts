@@ -85,7 +85,9 @@ export async function runOneShot(
 	// A call step's agent id and the adapter/model it resolves to, recorded on every call
 	// receipt (ok, failed, AND cancelled) so trace proves what ran. adapter/model are
 	// omitted when the routine has no bindings (hand-built test routines bypass resolve).
-	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string; effort?: string } => {
+	const callBinding = (
+		participantId: string,
+	): { agent?: string; adapter?: string; model?: string; effort?: string } => {
 		const agentId = manifest.participants[participantId]?.agent;
 		if (agentId === undefined) return {};
 		const b = routine.agents?.[agentId];
@@ -119,15 +121,23 @@ export async function runOneShot(
 				const participant = manifest.participants[step.call];
 				if (participant === undefined) throw new Error(`participant ${step.call} vanished`);
 				deps.onProgress?.(`  call ${step.call} (${participant.agent}) …`);
-				const result = await withHeartbeat(() => deps.adapter.call({
-					agent: participant.agent,
-					instructions: participant.instructions,
-					prompt: renderTemplate(step.prompt, ctx),
-					filesystem: participant.filesystem,
-					cwd: deps.cwd,
-					...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
-					...(deps.signal !== undefined && { signal: deps.signal }),
-				}), { label: `call ${step.call}`, now: deps.now, ...(deps.onProgress !== undefined && { onProgress: deps.onProgress }) });
+				const result = await withHeartbeat(
+					() =>
+						deps.adapter.call({
+							agent: participant.agent,
+							instructions: participant.instructions,
+							prompt: renderTemplate(step.prompt, ctx),
+							filesystem: participant.filesystem,
+							cwd: deps.cwd,
+							...(callTimeoutMs !== undefined && { timeoutMs: callTimeoutMs }),
+							...(deps.signal !== undefined && { signal: deps.signal }),
+						}),
+					{
+						label: `call ${step.call}`,
+						now: deps.now,
+						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+					},
+				);
 				const callElapsed = deps.now() - stepStart;
 				deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(callElapsed)}`);
 				// Structured output: validate against the schema. A one-shot has no retry loop, so
@@ -139,10 +149,24 @@ export async function runOneShot(
 				} else {
 					ctx.steps[step.id] = { output: result.output };
 				}
-				steps.push({ id: step.id, kind: "call", participant: step.call, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: callElapsed });
+				steps.push({
+					id: step.id,
+					kind: "call",
+					participant: step.call,
+					...callBinding(step.call),
+					status: "ok",
+					startedAt: stepStart,
+					elapsedMs: callElapsed,
+				});
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
-				steps.push({ id: step.id, kind: "format", status: "ok", startedAt: stepStart, elapsedMs: deps.now() - stepStart });
+				steps.push({
+					id: step.id,
+					kind: "format",
+					status: "ok",
+					startedAt: stepStart,
+					elapsedMs: deps.now() - stepStart,
+				});
 			} else if (step.kind === "ask") {
 				if (deps.askUser === undefined) throw new Error(`step ${step.id} is an \`ask\` but no input handler is wired`);
 				deps.onProgress?.(`  ask ${step.id} …`);

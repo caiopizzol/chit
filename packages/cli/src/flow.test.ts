@@ -8,7 +8,13 @@ import { fakeSandboxFactory } from "./sandbox.ts";
 
 function routine(raw: { id: string; [key: string]: unknown }): ResolvedRoutine {
 	const manifest = parseManifest(raw, `${raw.id}.json`);
-	return { id: raw.id, manifestPath: `${raw.id}.json`, manifestAbs: `/${raw.id}.json`, manifest, digest: `sha256:${raw.id}` };
+	return {
+		id: raw.id,
+		manifestPath: `${raw.id}.json`,
+		manifestAbs: `/${raw.id}.json`,
+		manifest,
+		digest: `sha256:${raw.id}`,
+	};
 }
 
 // Text sub-routines (read-only, no checks -> run in cwd).
@@ -72,7 +78,14 @@ const FLOW = routine({
 	],
 });
 
-const REGISTRY: Record<string, ResolvedRoutine> = { grill: GRILL, plan: PLAN, impl: IMPL, writey: WRITEY, refine: REFINE, "feature-flow": FLOW };
+const REGISTRY: Record<string, ResolvedRoutine> = {
+	grill: GRILL,
+	plan: PLAN,
+	impl: IMPL,
+	writey: WRITEY,
+	refine: REFINE,
+	"feature-flow": FLOW,
+};
 function resolver(over: Record<string, ResolvedRoutine> = {}) {
 	const reg = { ...REGISTRY, ...over };
 	return (id: string): ResolvedRoutine => {
@@ -93,7 +106,11 @@ describe("resolveFlow (graph rules)", () => {
 	});
 
 	test("allows a single sandboxed sub-routine when it is last", () => {
-		const f = routine({ id: "f", inputs: { task: { type: "string" } }, steps: [{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.task }}" } }] });
+		const f = routine({
+			id: "f",
+			inputs: { task: { type: "string" } },
+			steps: [{ id: "impl", routine: "impl", inputs: { task: "{{ inputs.task }}" } }],
+		});
 		expect(() => resolveFlow(f, resolver())).not.toThrow();
 	});
 
@@ -281,7 +298,11 @@ describe("runFlow (execution)", () => {
 				throw new Error("claude call cancelled");
 			},
 		};
-		const res = await runFlow(resolveFlow(FLOW, resolver()), { idea: "x" }, { ...deps({ adapter }), signal: controller.signal });
+		const res = await runFlow(
+			resolveFlow(FLOW, resolver()),
+			{ idea: "x" },
+			{ ...deps({ adapter }), signal: controller.signal },
+		);
 		expect(res.receipt.status).toBe("cancelled");
 		expect(res.receipt.steps.at(-1)).toMatchObject({ id: "grill", status: "cancelled" });
 	});
@@ -339,7 +360,11 @@ describe("runFlow -- ask gates", () => {
 	});
 
 	test("the ask step receipt carries no answer body, and launches no sub-run", async () => {
-		const res = await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, { ...deps(), askUser: async () => "SENSITIVE" });
+		const res = await runFlow(
+			resolveFlow(GATED, resolver()),
+			{ idea: "x" },
+			{ ...deps(), askUser: async () => "SENSITIVE" },
+		);
 		const ask = res.receipt.steps.find((s) => s.id === "approve");
 		expect(Object.keys(ask ?? {}).sort()).toEqual(["elapsedMs", "id", "kind", "startedAt", "status"]);
 		// only grill and plan produced sub-receipts; the gate did not
@@ -362,14 +387,22 @@ describe("runFlow -- ask gates", () => {
 			controller.abort(); // mimic the bin rejecting the pending prompt on SIGINT
 			throw new Error("cancelled");
 		};
-		const res = await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, { ...deps(), signal: controller.signal, askUser });
+		const res = await runFlow(
+			resolveFlow(GATED, resolver()),
+			{ idea: "x" },
+			{ ...deps(), signal: controller.signal, askUser },
+		);
 		expect(res.receipt.status).toBe("cancelled");
 		expect(res.receipt.steps.at(-1)).toMatchObject({ id: "approve", kind: "ask", status: "cancelled" });
 	});
 
 	test("emits a live-progress line for the gate", async () => {
 		const lines: string[] = [];
-		await runFlow(resolveFlow(GATED, resolver()), { idea: "x" }, { ...deps(), askUser: async () => "ok", onProgress: (l) => lines.push(l) });
+		await runFlow(
+			resolveFlow(GATED, resolver()),
+			{ idea: "x" },
+			{ ...deps(), askUser: async () => "ok", onProgress: (l) => lines.push(l) },
+		);
 		expect(lines).toContain("step approve (ask)");
 	});
 
@@ -384,7 +417,11 @@ describe("runFlow -- ask gates", () => {
 				{ id: "impl", routine: "impl", inputs: { task: "{{ steps.approve.output }}" } },
 			],
 		});
-		const res = await runFlow(resolveFlow(gatedImpl, resolver()), { idea: "x" }, { ...deps({ adapter }), askUser: async () => "keep it tiny" });
+		const res = await runFlow(
+			resolveFlow(gatedImpl, resolver()),
+			{ idea: "x" },
+			{ ...deps({ adapter }), askUser: async () => "keep it tiny" },
+		);
 		expect(res.receipt.status).toBe("completed");
 		expect(res.receipt.steps.map((s) => [s.id, s.status])).toEqual([
 			["grill", "completed"],
@@ -419,7 +456,11 @@ describe("runFlow -- ask gates", () => {
 			output: "out",
 		});
 		const f = routine({ id: "calls-clarify", inputs: {}, steps: [{ id: "c", routine: "clarify-sub", inputs: {} }] });
-		const res = await runFlow(resolveFlow(f, resolver({ "clarify-sub": clarifySub })), {}, { ...deps(), askUser: async () => "Zoe" });
+		const res = await runFlow(
+			resolveFlow(f, resolver({ "clarify-sub": clarifySub })),
+			{},
+			{ ...deps(), askUser: async () => "Zoe" },
+		);
 		expect(res.receipt.status).toBe("completed");
 		// the injected answer reached the sub-routine's output
 		const sub = res.subReceipts[0];

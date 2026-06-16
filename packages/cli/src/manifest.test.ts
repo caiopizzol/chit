@@ -140,7 +140,9 @@ describe("parseManifest -- rules", () => {
 			{ id: "a", call: "griller", prompt: "p" },
 			{ id: "b", routine: "other", inputs: {} },
 		];
-		expect(() => parse({ ...TEXT, steps, output: "a" })).toThrow(/either all `routine` steps .* or call\/format\/check/);
+		expect(() => parse({ ...TEXT, steps, output: "a" })).toThrow(
+			/either all `routine` steps .* or call\/format\/check/,
+		);
 	});
 
 	test("rule 2: repeat with checks-pass requires a check step", () => {
@@ -149,7 +151,9 @@ describe("parseManifest -- rules", () => {
 	});
 
 	test("rule 2: repeat is not valid on a composition", () => {
-		expect(() => parse({ ...COMP, repeat: { until: "checks-pass" } })).toThrow(/`repeat` is not valid on a composition/);
+		expect(() => parse({ ...COMP, repeat: { until: "checks-pass" } })).toThrow(
+			/`repeat` is not valid on a composition/,
+		);
 	});
 
 	test("rule 3: output cannot name a check step", () => {
@@ -175,7 +179,9 @@ describe("parseManifest -- rules", () => {
 
 	test("rejects a step that is more than one kind", () => {
 		const steps = [{ id: "x", call: "griller", prompt: "p", format: "f" }];
-		expect(() => parse({ ...TEXT, steps, output: "x" })).toThrow(/exactly one of `call`, `format`, `check`, `routine`, or `ask`/);
+		expect(() => parse({ ...TEXT, steps, output: "x" })).toThrow(
+			/exactly one of `call`, `format`, `check`, `routine`, or `ask`/,
+		);
 	});
 
 	test("rejects an unknown filesystem permission", () => {
@@ -264,7 +270,9 @@ describe("parseManifest -- ask (human input) steps", () => {
 			{ id: "q", ask: "looks right?" },
 			{ id: "verify", check: [{ command: "bun", args: ["test"] }] },
 		];
-		expect(() => parse({ ...ASK_TEXT, steps, output: undefined })).toThrow(/`ask` step is not supported in a sandboxed or looping routine/);
+		expect(() => parse({ ...ASK_TEXT, steps, output: undefined })).toThrow(
+			/`ask` step is not supported in a sandboxed or looping routine/,
+		);
 	});
 
 	test("rejects an ask step when a participant is read-write (sandboxed)", () => {
@@ -322,7 +330,9 @@ describe("parseManifest -- limits", () => {
 	});
 
 	test('rejects a string timeout that is not "none"', () => {
-		expect(() => parse({ ...TEXT, limits: { runTimeoutMinutes: "lots" } })).toThrow(/positive number of minutes or "none"/);
+		expect(() => parse({ ...TEXT, limits: { runTimeoutMinutes: "lots" } })).toThrow(
+			/positive number of minutes or "none"/,
+		);
 	});
 
 	test("rejects callTimeoutMinutes on a composition (it makes no direct calls)", () => {
@@ -368,7 +378,11 @@ describe("parseManifest -- generic repeat.until", () => {
 		},
 		steps: [
 			{ id: "work", call: "worker", prompt: "Goal: {{ inputs.goal }}\nPrior verdict: {{ steps.done.output }}" },
-			{ id: "done", call: "evaluator", prompt: "Goal: {{ inputs.goal }}\nResult: {{ steps.work.output }}\nReturn exactly yes or no." },
+			{
+				id: "done",
+				call: "evaluator",
+				prompt: "Goal: {{ inputs.goal }}\nResult: {{ steps.work.output }}\nReturn exactly yes or no.",
+			},
 		],
 		repeat: { until: { step: "done", equals: "yes" }, maxIterations: 8 },
 	};
@@ -395,19 +409,27 @@ describe("parseManifest -- generic repeat.until", () => {
 	});
 
 	test("requires an explicit maxIterations for the { step, equals } form", () => {
-		expect(() => parse({ ...GOAL, repeat: { until: { step: "done", equals: "yes" } } })).toThrow(/requires an explicit `maxIterations`/);
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "done", equals: "yes" } } })).toThrow(
+			/requires an explicit `maxIterations`/,
+		);
 	});
 
 	test("rejects a { step, equals } that names a non-existent step", () => {
-		expect(() => parse({ ...GOAL, repeat: { until: { step: "ghost", equals: "yes" }, maxIterations: 3 } })).toThrow(/references step "ghost", which is not a step/);
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "ghost", equals: "yes" }, maxIterations: 3 } })).toThrow(
+			/references step "ghost", which is not a step/,
+		);
 	});
 
 	test("rejects a non-string equals", () => {
-		expect(() => parse({ ...GOAL, repeat: { until: { step: "done", equals: 1 }, maxIterations: 3 } })).toThrow(/`equals` must be a string/);
+		expect(() => parse({ ...GOAL, repeat: { until: { step: "done", equals: 1 }, maxIterations: 3 } })).toThrow(
+			/`equals` must be a string/,
+		);
 	});
 
 	test("rejects an unknown until form", () => {
-		expect(() => parse({ ...GOAL, repeat: { until: "goal-met", maxIterations: 3 } })).toThrow(/must be "checks-pass", \{ step, equals \}, or \{ step, path, equals \}/);
+		expect(() => parse({ ...GOAL, repeat: { until: "goal-met", maxIterations: 3 } })).toThrow(
+			/must be "checks-pass", \{ step, equals \}, or \{ step, path, equals \}/,
+		);
 	});
 
 	test("rejects an ask step in a non-sandboxed repeat loop (ask still excluded from loops)", () => {
@@ -437,29 +459,42 @@ describe("parseManifest -- compound repeat.until { all }", () => {
 	};
 
 	test("parses { all: [checks-pass, { step, equals }] }", () => {
-		const m = parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 3 } });
+		const m = parse({
+			...base,
+			repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 3 },
+		});
 		expect(m.repeat?.until).toEqual({ all: ["checks-pass", { step: "critique", equals: "pass" }] });
 	});
 
 	test("a compound containing checks-pass still requires a check step", () => {
 		const noCheck = { ...base, steps: [base.steps[0], base.steps[1]] }; // drop the check
-		expect(() => parse({ ...noCheck, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 2 } })).toThrow(
-			/requires at least one `check` step/,
-		);
+		expect(() =>
+			parse({
+				...noCheck,
+				repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] }, maxIterations: 2 },
+			}),
+		).toThrow(/requires at least one `check` step/);
 	});
 
 	test("a compound containing a { step, equals } requires an explicit maxIterations", () => {
-		expect(() => parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] } } })).toThrow(/requires an explicit `maxIterations`/);
+		expect(() =>
+			parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "critique", equals: "pass" }] } } }),
+		).toThrow(/requires an explicit `maxIterations`/);
 	});
 
 	test("validates a step reference inside all", () => {
-		expect(() => parse({ ...base, repeat: { until: { all: ["checks-pass", { step: "ghost", equals: "pass" }] }, maxIterations: 2 } })).toThrow(
-			/references step "ghost"/,
-		);
+		expect(() =>
+			parse({
+				...base,
+				repeat: { until: { all: ["checks-pass", { step: "ghost", equals: "pass" }] }, maxIterations: 2 },
+			}),
+		).toThrow(/references step "ghost"/);
 	});
 
 	test("rejects an empty all", () => {
-		expect(() => parse({ ...base, repeat: { until: { all: [] }, maxIterations: 2 } })).toThrow(/`all` must be a non-empty array/);
+		expect(() => parse({ ...base, repeat: { until: { all: [] }, maxIterations: 2 } })).toThrow(
+			/`all` must be a non-empty array/,
+		);
 	});
 });
 
@@ -473,7 +508,14 @@ describe("parseManifest -- structured call output (json + path condition)", () =
 		id: "review",
 		call: "critic",
 		prompt: "Review {{ inputs.task }}",
-		json: { schema: { type: "object", required: ["passed"], additionalProperties: false, properties: { passed: { type: "boolean" } } } },
+		json: {
+			schema: {
+				type: "object",
+				required: ["passed"],
+				additionalProperties: false,
+				properties: { passed: { type: "boolean" } },
+			},
+		},
 	};
 
 	test("parses a call step's json schema", () => {
@@ -484,37 +526,59 @@ describe("parseManifest -- structured call output (json + path condition)", () =
 	});
 
 	test("parses a { step, path, equals } condition with a boolean target", () => {
-		const m = parse({ ...base, steps: [reviewStep], repeat: { until: { step: "review", path: "passed", equals: true }, maxIterations: 3 } });
+		const m = parse({
+			...base,
+			steps: [reviewStep],
+			repeat: { until: { step: "review", path: "passed", equals: true }, maxIterations: 3 },
+		});
 		expect(m.repeat?.until).toEqual({ step: "review", path: "passed", equals: true });
 	});
 
 	test("accepts a path condition inside `all` alongside checks-pass", () => {
 		const steps = [reviewStep, { id: "verify", check: "bun test" }];
-		const m = parse({ ...base, steps, repeat: { until: { all: ["checks-pass", { step: "review", path: "passed", equals: true }] }, maxIterations: 3 } });
+		const m = parse({
+			...base,
+			steps,
+			repeat: { until: { all: ["checks-pass", { step: "review", path: "passed", equals: true }] }, maxIterations: 3 },
+		});
 		expect(m.repeat?.until).toEqual({ all: ["checks-pass", { step: "review", path: "passed", equals: true }] });
 	});
 
 	test("rejects a path condition on a step without a json schema", () => {
 		const plain = { id: "review", call: "critic", prompt: "x" };
-		expect(() => parse({ ...base, steps: [plain], repeat: { until: { step: "review", path: "passed", equals: true }, maxIterations: 3 } })).toThrow(
-			/requires step "review" to be a `call` step with a `json` schema/,
-		);
+		expect(() =>
+			parse({
+				...base,
+				steps: [plain],
+				repeat: { until: { step: "review", path: "passed", equals: true }, maxIterations: 3 },
+			}),
+		).toThrow(/requires step "review" to be a `call` step with a `json` schema/);
 	});
 
 	test("rejects a path condition referencing a missing step", () => {
-		expect(() => parse({ ...base, steps: [reviewStep], repeat: { until: { step: "ghost", path: "passed", equals: true }, maxIterations: 3 } })).toThrow(
-			/references step "ghost", which is not a step/,
-		);
+		expect(() =>
+			parse({
+				...base,
+				steps: [reviewStep],
+				repeat: { until: { step: "ghost", path: "passed", equals: true }, maxIterations: 3 },
+			}),
+		).toThrow(/references step "ghost", which is not a step/);
 	});
 
 	test("rejects a malformed dot-path", () => {
-		expect(() => parse({ ...base, steps: [reviewStep], repeat: { until: { step: "review", path: "a..b", equals: true }, maxIterations: 3 } })).toThrow(
-			/`path` "a\.\.b" must be dot-separated identifiers/,
-		);
+		expect(() =>
+			parse({
+				...base,
+				steps: [reviewStep],
+				repeat: { until: { step: "review", path: "a..b", equals: true }, maxIterations: 3 },
+			}),
+		).toThrow(/`path` "a\.\.b" must be dot-separated identifiers/);
 	});
 
 	test("requires maxIterations for a path condition", () => {
-		expect(() => parse({ ...base, steps: [reviewStep], repeat: { until: { step: "review", path: "passed", equals: true } } })).toThrow(/requires an explicit `maxIterations`/);
+		expect(() =>
+			parse({ ...base, steps: [reviewStep], repeat: { until: { step: "review", path: "passed", equals: true } } }),
+		).toThrow(/requires an explicit `maxIterations`/);
 	});
 
 	test("surfaces an unsupported schema keyword as a manifest error with its path", () => {

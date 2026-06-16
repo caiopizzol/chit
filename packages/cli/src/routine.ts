@@ -59,14 +59,14 @@ export function resolveRoutine(
 		text = entry.manifestText ?? `${JSON.stringify(entry.manifest, null, "\t")}\n`;
 		manifestAbs = resolve(cwd, "chit.config.json");
 	} else {
-		manifestAbs = isAbsolute(entry.manifestPath)
-			? entry.manifestPath
-			: resolve(cwd, entry.manifestPath);
+		manifestAbs = isAbsolute(entry.manifestPath) ? entry.manifestPath : resolve(cwd, entry.manifestPath);
 
 		try {
 			text = readFile(manifestAbs);
 		} catch (e) {
-			throw new RoutineError(`could not read manifest for ${JSON.stringify(id)} at ${entry.manifestPath}: ${(e as Error).message}`);
+			throw new RoutineError(
+				`could not read manifest for ${JSON.stringify(id)} at ${entry.manifestPath}: ${(e as Error).message}`,
+			);
 		}
 
 		let raw: unknown;

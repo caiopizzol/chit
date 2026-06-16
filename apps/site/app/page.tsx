@@ -26,9 +26,8 @@ export default function Home() {
 					between your agents.
 				</h1>
 				<p className="subhead">
-					One agent proposes. Another reviews. A check gates the result. A routine captures that
-					in a file the runtime reads. Codex, Claude, Gemini, your shell. You step in when judgment
-					matters.
+					One agent proposes. Another reviews. A check gates the result. A routine captures that in a file the runtime
+					reads. Codex, Claude, Gemini, your shell. You step in when judgment matters.
 				</p>
 				<a href="#install" className="cta">
 					$ chit run implement
@@ -44,9 +43,9 @@ export default function Home() {
 				<section id="install">
 					<h2>Start in an existing project</h2>
 					<p className="lede">
-						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you
-						already have installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No
-						API keys, no HTTP. Link the <code>chit</code> bin once, then run it in any project.
+						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you already have
+						installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No API keys, no HTTP. Link the{" "}
+						<code>chit</code> bin once, then run it in any project.
 					</p>
 					<pre className="terminal">
 						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
@@ -64,16 +63,18 @@ export default function Home() {
 						<span className="cmd">$ bunx chit init implement --template loop</span>
 					</pre>
 					<p className="lede" style={{ marginTop: 16 }}>
-						Full walkthrough in <a className="inline-link" href="/docs">the docs</a>: the install-to-first-run
-						path, then the config reference.
+						Full walkthrough in{" "}
+						<a className="inline-link" href="/docs">
+							the docs
+						</a>
+						: the install-to-first-run path, then the config reference.
 					</p>
 				</section>
 
 				<h2>The chit is the routine.</h2>
 				<p className="lede">
-					A routine declares who runs, what context flows forward, and when a loop stops. There is
-					no policy to pick: how it runs is derived from the shape. A check or a writing agent runs
-					it sandboxed; a repeat makes it a loop.
+					A routine declares who runs, what context flows forward, and when a loop stops. There is no policy to pick:
+					how it runs is derived from the shape. A check or a writing agent runs it sandboxed; a repeat makes it a loop.
 				</p>
 				<pre>{`{
   "profiles": {
@@ -99,8 +100,8 @@ export default function Home() {
 
 				<h2>The run says what ran.</h2>
 				<p className="lede">
-					A writing run starts from HEAD in a throwaway git worktree, loops until the checks pass,
-					and stops at a patch. Nothing touches your tree until you apply it. No chat log.
+					A writing run starts from HEAD in a throwaway git worktree, loops until the checks pass, and stops at a patch.
+					Nothing touches your tree until you apply it. No chat log.
 				</p>
 				<pre className="terminal">
 					<span className="cmd">{`$ chit run implement --input task="add a --version flag"`}</span>
@@ -118,9 +119,8 @@ export default function Home() {
 
 				<h2>Read it before it runs.</h2>
 				<p className="lede">
-					<code>chit inspect</code> resolves the routine, binds each agent to a real adapter and
-					model, and shows the steps and limits before anything runs. If the config is invalid, the
-					run never starts.
+					<code>chit inspect</code> resolves the routine, binds each agent to a real adapter and model, and shows the
+					steps and limits before anything runs. If the config is invalid, the run never starts.
 				</p>
 				<pre>{`$ chit inspect implement
 implement  (loop)
@@ -144,8 +144,8 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 
 				<h2>Validated before it runs.</h2>
 				<p className="lede">
-					The config is checked against a schema and the parser before any model is called. An
-					impossible binding fails at parse, not three steps in.
+					The config is checked against a schema and the parser before any model is called. An impossible binding fails
+					at parse, not three steps in.
 				</p>
 				<div className="receipt-block">
 					<div className="receipt-line pass">
@@ -173,22 +173,20 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 					<div className="mode-line">
 						<div className="label">Dry run</div>
 						<div className="body">
-							The run executes in a git worktree and saves the exact patch. Your working tree is
-							untouched.
+							The run executes in a git worktree and saves the exact patch. Your working tree is untouched.
 						</div>
 					</div>
 					<div className="mode-line">
 						<div className="label">Review</div>
 						<div className="body">
-							<code>chit trace &lt;run-id&gt;</code> shows what each step and iteration did, with the
-							resolved bindings.
+							<code>chit trace &lt;run-id&gt;</code> shows what each step and iteration did, with the resolved bindings.
 						</div>
 					</div>
 					<div className="mode-line">
 						<div className="label">Apply</div>
 						<div className="body">
-							<code>chit apply &lt;run-id&gt;</code> replays that exact patch through a gate: same HEAD,
-							clean tree, <code>git apply --check</code>.
+							<code>chit apply &lt;run-id&gt;</code> replays that exact patch through a gate: same HEAD, clean tree,{" "}
+							<code>git apply --check</code>.
 						</div>
 					</div>
 				</div>
@@ -200,12 +198,10 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 					<cite>field note</cite>
 				</blockquote>
 
-
 				<h3>Honest about being early</h3>
 				<p className="lede">
-					Still intentionally small: no scheduler, hosted service, dynamic routing, durable resume,
-					or visual config editor. Adapters are in: claude, codex, and gemini, picked per agent in
-					config.
+					Still intentionally small: no scheduler, hosted service, dynamic routing, durable resume, or visual config
+					editor. Adapters are in: claude, codex, and gemini, picked per agent in config.
 				</p>
 			</div>
 

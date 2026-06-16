@@ -18,7 +18,9 @@ let interrupts = 0;
 process.on("SIGINT", () => {
 	interrupts += 1;
 	if (interrupts === 1) {
-		process.stderr.write("\n^C  cancelling -- stopping the active step, discarding any sandbox (Ctrl-C again to force-exit)…\n");
+		process.stderr.write(
+			"\n^C  cancelling -- stopping the active step, discarding any sandbox (Ctrl-C again to force-exit)…\n",
+		);
 		controller.abort();
 	} else {
 		process.stderr.write("\nforced exit.\n");

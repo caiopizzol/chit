@@ -1,7 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
 import { fakeAdapter } from "./adapter.ts";
 import { loadConfig } from "./config.ts";
 import { kindLabel } from "./manifest.ts";
@@ -35,7 +35,11 @@ describe("scaffoldRoutine", () => {
 		expect(kindLabel(routine.manifest)).toBe("text");
 
 		// and it actually runs end to end (the whole point of a scaffold)
-		const r = await runOneShot(routine, { topic: "dark mode" }, { adapter: fakeAdapter((req) => `ANSWER(${req.prompt})`), cwd, now: () => 0, newRunId: () => "r" });
+		const r = await runOneShot(
+			routine,
+			{ topic: "dark mode" },
+			{ adapter: fakeAdapter((req) => `ANSWER(${req.prompt})`), cwd, now: () => 0, newRunId: () => "r" },
+		);
 		expect(r.status).toBe("completed");
 		expect(r.output).toContain("ANSWER(");
 		expect(r.output).toContain("dark mode"); // the input was templated into the prompt
@@ -58,7 +62,9 @@ describe("scaffoldRoutine", () => {
 		const review = routine.manifest.steps.find((step) => step.id === "review");
 		expect(review?.kind).toBe("call");
 		if (review?.kind === "call") expect(review.json?.schema.properties?.passed?.type).toBe("boolean");
-		expect(routine.manifest.repeat?.until).toEqual({ all: ["checks-pass", { step: "review", path: "passed", equals: true }] });
+		expect(routine.manifest.repeat?.until).toEqual({
+			all: ["checks-pass", { step: "review", path: "passed", equals: true }],
+		});
 	});
 
 	test("check template: resolves to a check-only sandboxed routine", () => {
@@ -98,7 +104,10 @@ describe("scaffoldRoutine", () => {
 
 	test("adds inline routines to an existing profiles registry", () => {
 		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ profiles: { claude: { adapter: "claude", model: "default" } }, routines: {} }));
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ profiles: { claude: { adapter: "claude", model: "default" } }, routines: {} }),
+		);
 		scaffoldRoutine(cwd, "review", "text");
 		const raw = JSON.parse(readFileSync(join(cwd, "chit.config.json"), "utf-8")) as {
 			profiles?: Record<string, unknown>;

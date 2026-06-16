@@ -6,7 +6,13 @@ import { type RunDeps, runOneShot } from "./run.ts";
 
 function routineFrom(raw: unknown): ResolvedRoutine {
 	const manifest = parseManifest(raw, "m.json");
-	return { id: (raw as { id: string }).id, manifestPath: "m.json", manifestAbs: "/m.json", manifest, digest: "sha256:test" };
+	return {
+		id: (raw as { id: string }).id,
+		manifestPath: "m.json",
+		manifestAbs: "/m.json",
+		manifest,
+		digest: "sha256:test",
+	};
 }
 
 const GRILLER = {
@@ -75,7 +81,11 @@ describe("runOneShot", () => {
 
 		// "none" means no bound: the adapter is called without a timeout
 		const unbounded = fakeAdapter();
-		await runOneShot(routineFrom({ ...GRILLER, limits: { callTimeoutMinutes: "none" } }), { idea: "x" }, deps(unbounded));
+		await runOneShot(
+			routineFrom({ ...GRILLER, limits: { callTimeoutMinutes: "none" } }),
+			{ idea: "x" },
+			deps(unbounded),
+		);
 		expect(unbounded.calls[0]?.timeoutMs).toBeUndefined();
 	});
 
@@ -99,7 +109,11 @@ describe("runOneShot", () => {
 		// clock advances 20s per read; by the 2nd step the 1-minute budget is blown
 		let i = 0;
 		const clock = () => (i += 20_000);
-		const r = await runOneShot(limited, { idea: "x" }, { adapter: fakeAdapter(), cwd: "/work", now: clock, newRunId: () => "run-1" });
+		const r = await runOneShot(
+			limited,
+			{ idea: "x" },
+			{ adapter: fakeAdapter(), cwd: "/work", now: clock, newRunId: () => "run-1" },
+		);
 		expect(r.status).toBe("failed");
 		expect(r.error).toMatch(/wall-time/);
 		expect(r.steps.map((s) => s.id)).toEqual(["grill"]); // the format step never ran
@@ -183,7 +197,11 @@ describe("runOneShot -- ask steps", () => {
 	});
 
 	test("the ask STEP receipt carries no answer body -- only status + timing", async () => {
-		const r = await runOneShot(routineFrom(ASK), { idea: "x" }, { ...deps(fakeAdapter()), askUser: async () => "SENSITIVE-ANSWER" });
+		const r = await runOneShot(
+			routineFrom(ASK),
+			{ idea: "x" },
+			{ ...deps(fakeAdapter()), askUser: async () => "SENSITIVE-ANSWER" },
+		);
 		const ask = r.steps.find((s) => s.id === "decide");
 		// the receipt records exactly id/kind/status/startedAt/elapsedMs -- no answer field
 		expect(Object.keys(ask ?? {}).sort()).toEqual(["elapsedMs", "id", "kind", "startedAt", "status"]);
@@ -211,7 +229,11 @@ describe("runOneShot -- ask steps", () => {
 				{ id: "decide", ask: "any notes?" },
 			],
 		};
-		const r = await runOneShot(routineFrom(trailing), { idea: "x" }, { ...deps(fakeAdapter((req) => `G(${req.prompt})`)), askUser: async () => "PRIVATE" });
+		const r = await runOneShot(
+			routineFrom(trailing),
+			{ idea: "x" },
+			{ ...deps(fakeAdapter((req) => `G(${req.prompt})`)), askUser: async () => "PRIVATE" },
+		);
 		expect(r.status).toBe("completed");
 		expect(r.output).toBe("G(Idea: x)"); // grill, not the answer
 		expect(JSON.stringify(r)).not.toContain("PRIVATE");
@@ -223,7 +245,11 @@ describe("runOneShot -- ask steps", () => {
 			controller.abort(); // mimic the bin rejecting the pending prompt on SIGINT
 			throw new Error("cancelled");
 		};
-		const r = await runOneShot(routineFrom(ASK), { idea: "x" }, { ...deps(fakeAdapter((req) => `G(${req.prompt})`)), signal: controller.signal, askUser });
+		const r = await runOneShot(
+			routineFrom(ASK),
+			{ idea: "x" },
+			{ ...deps(fakeAdapter((req) => `G(${req.prompt})`)), signal: controller.signal, askUser },
+		);
 		expect(r.status).toBe("cancelled");
 		expect(r.error).toBe("cancelled by operator");
 		expect(r.steps.at(-1)).toMatchObject({ id: "decide", kind: "ask", status: "cancelled" });

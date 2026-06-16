@@ -1,7 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
 import { fakeSandbox, gitWorktreeSandboxFactory, reapStaleSandboxes } from "./sandbox.ts";
 
 describe("fakeSandbox", () => {
