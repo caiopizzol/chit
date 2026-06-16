@@ -57,27 +57,28 @@ const ANNOTATIONS: { field: string; note: string }[] = [
 	{ field: "filesystem: read-write", note: "May edit, so the run is sandboxed in a worktree." },
 	{ field: "steps", note: "Ordered. The non-id field picks the kind." },
 	{ field: "check", note: "Any check forces a sandbox and gates the loop." },
+	{ field: "json", note: "A call can require structured output. One field can gate the loop." },
 	{ field: "repeat.until", note: "The loop's exit condition. Yours to declare." },
 ];
 
 const ANNOTATED_CONFIG = `{
   "profiles": {
-    "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-    "critic": { "adapter": "codex", "model": "gpt-5.5" }
+    "claude": "claude",
+    "codex": "codex"
   },
   "routines": {
     "implement": {
       "input": "task",
       "agents": {
-        "builder": { "profile": "builder", "instructions": "Implement it.", "filesystem": "read-write" },
-        "critic":  { "profile": "critic",  "instructions": "Review the diff.", "filesystem": "read-only" }
+        "builder":  { "profile": "claude", "instructions": "Implement the smallest correct change.", "filesystem": "read-write" },
+        "reviewer": { "profile": "codex",  "instructions": "Review the diff. Return JSON only.",       "filesystem": "read-only" }
       },
       "steps": [
-        { "id": "build",  "call": "builder", "prompt": "{{ inputs.task }}" },
-        { "id": "review", "call": "critic",  "prompt": "{{ diff }}" },
+        { "id": "build",  "call": "builder",  "prompt": "{{ inputs.task }}" },
+        { "id": "review", "call": "reviewer", "prompt": "{{ diff }}", "json": { "schema": { "type": "object", "required": ["passed", "issues"] } } },
         { "id": "verify", "check": "bun test" }
       ],
-      "repeat": { "until": "checks-pass", "maxIterations": 3 }
+      "repeat": { "until": { "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }] }, "maxIterations": 3 }
     }
   }
 }`;

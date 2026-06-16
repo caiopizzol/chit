@@ -4,6 +4,25 @@ Chit is a thin local runtime for multi-model agent workflows.
 
 You declare a routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt. There are no built-in roles like implementer, reviewer, planner, griller, or goal. Those are names and prompts you define.
 
+## Get started
+
+Chit shells out to the agent CLIs you already use, so install at least one (`claude`, `codex`, or `gemini`). Then link Chit once and run it in your project:
+
+```sh
+git clone https://github.com/caiopizzol/chit
+cd chit && bun install && cd packages/cli && bun link
+
+cd /path/to/your-project
+bun link @chit-run/cli
+bunx chit init implement --template loop   # writes chit.config.json
+bunx chit doctor                           # check config + agent CLIs
+bunx chit inspect implement                # see what will run
+bunx chit run implement --input task="add a --version flag"   # dry run -> patch
+bunx chit apply <run-id>                   # apply the reviewed patch
+```
+
+The generated routine ships a placeholder check; swap it for your real command (e.g. `bun test`). Full walkthrough: [chit.run/docs](https://chit.run/docs).
+
 ## The Config Model
 
 `chit.config.json` has two main sections:
@@ -14,30 +33,22 @@ You declare a routine. Chit resolves the models, runs each step, passes context 
 ```json
 {
 	"profiles": {
-		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-		"critic": { "adapter": "codex", "model": "gpt-5.5" }
+		"claude": "claude",
+		"codex": "codex"
 	},
 	"routines": {
 		"implement": {
 			"input": "task",
 			"agents": {
-				"builder": {
-					"profile": "builder",
-					"instructions": "Implement the smallest correct change.",
-					"filesystem": "read-write"
-				},
-				"critic": {
-					"profile": "critic",
-					"instructions": "Review the diff. Return JSON only.",
-					"filesystem": "read-only"
-				}
+				"builder": { "profile": "claude", "instructions": "Implement the smallest correct change.", "filesystem": "read-write" },
+				"reviewer": { "profile": "codex", "instructions": "Review the diff. Return JSON only.", "filesystem": "read-only" }
 			},
 			"steps": [
 				{ "id": "build", "call": "builder", "prompt": "{{ inputs.task }}" },
 				{
 					"id": "review",
-					"call": "critic",
-					"prompt": "Review this diff:\n{{ diff }}\nReturn { \"passed\": boolean, \"issues\": string[] }.",
+					"call": "reviewer",
+					"prompt": "{{ diff }}",
 					"json": {
 						"schema": {
 							"type": "object",
@@ -102,28 +113,16 @@ chit runs --scope WEB-123
 chit trace --full run-a1b5efea
 ```
 
-## Local Development
+## Develop Chit
+
+To work on Chit itself, run the CLI from source and the test suite:
 
 ```sh
 bun install
-
 cd packages/cli
-bun run src/index.ts doctor
 bun run src/index.ts routines
-bun run src/index.ts inspect feature-griller
 bun run src/index.ts run feature-griller --input idea="add dark mode"
 bun test
-```
-
-To try Chit from another project while developing locally:
-
-```sh
-cd packages/cli
-bun link
-
-cd /path/to/your-project
-bun link @chit-run/cli
-bunx chit doctor
 ```
 
 ## Boundaries

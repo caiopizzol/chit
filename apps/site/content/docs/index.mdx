@@ -1,65 +1,107 @@
 ---
-title: Overview
-description: Chit is a small declared runtime for multi-model agent workflows.
+title: Get started
+description: Add Chit to a project and run your first routine.
 ---
 
-Chit turns the agent workflow you already run by hand into config.
+Chit turns the agent workflow you run by hand into config. You declare a routine; Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt. Roles like implementer, reviewer, and planner are not built in. They are names and prompts you define.
 
-You declare the routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt.
+This page takes you from zero to your first run. For every field, see the [Config reference](/docs/config).
 
-There is no built-in implementer, reviewer, planner, griller, or goal mode. Those are routine names, agent ids, and prompts you define.
+## Before you start
 
-<Cards>
-	<Card href="/docs/config" title="Read the config model">
-		Profiles bind adapters and models. Routines declare the workflow.
-	</Card>
-	<Card href="/docs/config#validation" title="See what gets validated">
-		The schema gives editor hints. The parser is the runtime authority.
-	</Card>
-</Cards>
+Chit shells out to the agent CLIs you already use, so install and sign in to at least one:
 
-## Why Chit Exists
+- `claude`
+- `codex`
+- `gemini`
 
-<RoutinePipelineVisual />
+Chit itself runs under [Bun](https://bun.sh). Step 4 (`chit doctor`) checks all of this for you.
 
-Modern coding work is moving from one prompt to repeatable loops: ask, plan, build, review, verify, revise. Good results often come from different models playing different parts.
+## 1. Link Chit once
 
-Chit keeps that orchestration explicit:
+Chit is early and source-first, so you link the CLI from a clone instead of installing from npm:
 
-- `profiles` choose which adapter and model back each local role.
-- `routines` describe what happens, in order.
-- `steps` move context from one model, command, or human gate to the next.
-- `repeat` declares when a loop stops.
-- receipts show what ran, which model ran it, what checks passed, and what changed.
-
-## Config Shape
-
-```json
-{
-	"profiles": {
-		"planner": "claude:sonnet",
-		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-		"critic": { "adapter": "codex", "model": "gpt-5.5" }
-	},
-	"routines": {
-		"feature-flow": {
-			"input": "idea",
-			"steps": [
-				{ "id": "grill", "routine": "grill", "inputs": { "idea": "{{ inputs.idea }}" } },
-				{ "id": "plan", "routine": "plan", "inputs": { "brief": "{{ steps.grill.output }}" } },
-				{ "id": "approve", "ask": "Adjust the plan?\n{{ steps.plan.output }}" },
-				{ "id": "impl", "routine": "implement", "inputs": { "task": "{{ steps.plan.output }}\n{{ steps.approve.output }}" } }
-			]
-		}
-	}
-}
+```sh
+git clone https://github.com/caiopizzol/chit
+cd chit && bun install
+cd packages/cli && bun link
 ```
 
-This is a routine, not a hardcoded product mode. You can use the same primitives for grilling sessions, planning, implementation, code review, process verification, deployment checks, and `/goal`-style loops.
+## 2. Add it to your project
 
-## How Execution Is Derived
+```sh
+cd /path/to/your-project
+bun link @chit-run/cli
+```
 
-You do not choose a separate policy. Chit reads the routine shape.
+`bunx chit` now runs Chit inside your project.
+
+## 3. Create your first routine
+
+```sh
+bunx chit init implement --template loop
+```
+
+This writes `chit.config.json` with:
+
+- **starter profiles** `claude` and `codex`, the local adapter bindings a routine calls.
+- an **`implement` routine**: a `builder` (Claude, read-write) makes the change, a `reviewer` (Codex, read-only) returns a structured `{ passed, issues }` verdict, and a `verify` check runs your command. It loops until the check passes and the review passes.
+
+Edit two things before you run:
+
+- the **check** is a placeholder (`true # replace ...`). Swap it for your real command, such as `bun test`.
+- the **profiles** use each adapter's default model. Point them at the models you want, for example `"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" }`.
+
+The [Config reference](/docs/config) documents every field.
+
+## 4. Check readiness
+
+```sh
+bunx chit doctor
+```
+
+Confirms the config parses, the routines resolve, and your agent CLIs are on PATH. Add `--real` to probe that each adapter can actually reach its model.
+
+## 5. Inspect before spending model calls
+
+```sh
+bunx chit inspect implement
+```
+
+Resolves the routine, binds each agent to a real adapter and model, and prints the steps and limits. An invalid config fails here, before any model runs.
+
+## 6. Run it
+
+```sh
+bunx chit run implement --input task="add a --version flag"
+```
+
+A routine with a check or a read-write agent runs in a disposable git worktree. It is a dry run: it produces a patch and stops. Your working tree is untouched.
+
+## 7. Review, then apply
+
+```sh
+bunx chit trace --full <run-id>
+bunx chit apply <run-id>
+```
+
+`trace` shows what each step and iteration did, with the resolved bindings and the saved patch. `apply` replays that exact patch through a gate: same HEAD, clean tree, `git apply --check`.
+
+## Which command do I run?
+
+| Goal | Command |
+|---|---|
+| Check setup | `bunx chit doctor` |
+| List routines | `bunx chit routines` |
+| Understand a routine | `bunx chit inspect implement` |
+| Run safely (dry run) | `bunx chit run implement --input task="..."` |
+| List past runs | `bunx chit runs [--scope <id>]` |
+| Review a result | `bunx chit trace --full <run-id>` |
+| Apply a patch | `bunx chit apply <run-id>` |
+
+## How a run is derived
+
+You do not choose an execution mode. Chit reads the routine shape.
 
 | If the routine has | Chit runs |
 |---|---|
@@ -68,16 +110,10 @@ You do not choose a separate policy. Chit reads the routine shape.
 | `repeat` | a loop until the stop condition is met |
 | checks or read-write agents | a sandboxed run in a disposable git worktree |
 
-## The Developer Loop
+A sandboxed run is dry-run by default: a patch you inspect, then `chit apply` writes the exact reviewed result.
 
-```sh
-chit init implement --template loop
-chit inspect implement
-chit run implement --input task="add a version command"
-chit apply run-a1b5efea
-chit trace run-a1b5efea
-```
-
-Sandboxed runs are dry-run by default. They produce a patch you can inspect, then `chit apply` applies the exact reviewed result.
-
-Start with [Config](/docs/config).
+<Cards>
+	<Card href="/docs/config" title="Config reference">
+		Every field: profiles, routines, agents, steps, repeat, structured output, and validation.
+	</Card>
+</Cards>

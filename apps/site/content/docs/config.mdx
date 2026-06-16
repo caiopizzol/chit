@@ -5,6 +5,10 @@ description: The compact reference for chit.config.json.
 
 Chit has one public config surface: `chit.config.json`.
 
+<Callout title="New to Chit?">
+	Start with the [Get started](/docs) guide for the install-to-first-run path. This page is the field reference.
+</Callout>
+
 The config answers two questions:
 
 1. Which local models can routines use?
@@ -23,26 +27,45 @@ The config answers two questions:
 {
 	"$schema": "https://chit.run/schemas/chit.schema.json",
 	"profiles": {
-		"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-		"critic": { "adapter": "codex", "model": "gpt-5.5" }
+		"claude": "claude",
+		"codex": "codex"
 	},
 	"routines": {
 		"implement": {
 			"input": "task",
 			"agents": {
-				"builder": { "profile": "builder", "instructions": "Implement.", "filesystem": "read-write" },
-				"critic": { "profile": "critic", "instructions": "Review.", "filesystem": "read-only" }
+				"builder": { "profile": "claude", "instructions": "Implement the smallest correct change.", "filesystem": "read-write" },
+				"reviewer": { "profile": "codex", "instructions": "Review the diff. Return JSON only.", "filesystem": "read-only" }
 			},
 			"steps": [
 				{ "id": "build", "call": "builder", "prompt": "{{ inputs.task }}" },
-				{ "id": "review", "call": "critic", "prompt": "{{ diff }}" },
+				{
+					"id": "review",
+					"call": "reviewer",
+					"prompt": "{{ diff }}",
+					"json": {
+						"schema": {
+							"type": "object",
+							"required": ["passed", "issues"],
+							"properties": {
+								"passed": { "type": "boolean" },
+								"issues": { "type": "array", "items": { "type": "string" } }
+							}
+						}
+					}
+				},
 				{ "id": "verify", "check": "bun test" }
 			],
-			"repeat": { "until": "checks-pass", "maxIterations": 3 }
+			"repeat": {
+				"until": { "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }] },
+				"maxIterations": 3
+			}
 		}
 	}
 }
 ```
+
+This is what `chit init implement --template loop` generates. The starter ships the check as a placeholder; swap it for your real command, such as `bun test`.
 
 ## Root Fields
 
@@ -58,8 +81,8 @@ Profiles are local. They let one routine run with different adapters or models w
 
 | Shape | Example | Meaning |
 |---|---|---|
-| adapter | `"critic": "codex"` | Use the adapter default model. |
-| adapter:model | `"critic": "codex:gpt-5.5"` | Use one explicit model. |
+| adapter | `"reviewer": "codex"` | Use the adapter default model. |
+| adapter:model | `"reviewer": "codex:gpt-5.5"` | Use one explicit model. |
 | object | `"builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" }` | Explicit binding with adapter options. |
 
 Built-in adapters are `claude`, `codex`, and `gemini`. Custom adapters must use object form.
@@ -89,7 +112,7 @@ A routine is an ordered workflow. Chit derives whether it is a text run, flow, l
 | `limits` | object | no | Per-call and whole-run time bounds. |
 | `file` | string | no | In `routines.<id>`, points to a routine JSON file instead of declaring it there. |
 
-Names like `builder`, `critic`, `planner`, and `judge` are not built in. They are ids you choose.
+Names like `builder`, `reviewer`, `planner`, and `judge` are not built in. They are ids you choose.
 
 ## Agents
 
@@ -140,7 +163,7 @@ A `call` step can require JSON. Chit parses the model output, validates it again
 ```json
 {
 	"id": "review",
-	"call": "critic",
+	"call": "reviewer",
 	"prompt": "Review the diff. Return JSON only: { \"passed\": boolean, \"issues\": string[] }.",
 	"json": {
 		"schema": {

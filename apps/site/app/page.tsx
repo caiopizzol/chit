@@ -41,6 +41,34 @@ export default function Home() {
 					<p>Chat is one agent at a time with you in the middle. A chit takes the middle out.</p>
 				</div>
 
+				<section id="install">
+					<h2>Start in an existing project</h2>
+					<p className="lede">
+						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you
+						already have installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No
+						API keys, no HTTP. Link the <code>chit</code> bin once, then run it in any project.
+					</p>
+					<pre className="terminal">
+						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
+						{"\n"}
+						<span className="cmd">$ cd chit && bun install</span>
+						{"\n"}
+						<span className="cmd">$ cd packages/cli && bun link</span>
+						{"\n\n"}
+						<span className="meta"># then, in your own project:</span>
+						{"\n"}
+						<span className="cmd">$ bun link @chit-run/cli</span>
+						{"\n"}
+						<span className="cmd">$ bunx chit doctor</span>
+						{"\n"}
+						<span className="cmd">$ bunx chit init implement --template loop</span>
+					</pre>
+					<p className="lede" style={{ marginTop: 16 }}>
+						Full walkthrough in <a className="inline-link" href="/docs">the docs</a>: the install-to-first-run
+						path, then the config reference.
+					</p>
+				</section>
+
 				<h2>The chit is the routine.</h2>
 				<p className="lede">
 					A routine declares who runs, what context flows forward, and when a loop stops. There is
@@ -49,19 +77,19 @@ export default function Home() {
 				</p>
 				<pre>{`{
   "profiles": {
-    "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-    "critic": { "adapter": "codex", "model": "gpt-5.5" }
+    "claude": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
+    "codex": { "adapter": "codex", "model": "gpt-5.5" }
   },
   "routines": {
     "implement": {
       "input": "task",
       "agents": {
-        "builder": { "profile": "builder", "instructions": "Implement the smallest correct change.", "filesystem": "read-write" },
-        "critic":  { "profile": "critic",  "instructions": "Review the diff. Do not edit files.",     "filesystem": "read-only" }
+        "builder":  { "profile": "claude", "instructions": "Implement the smallest correct change.", "filesystem": "read-write" },
+        "reviewer": { "profile": "codex",  "instructions": "Review the diff. Do not edit files.",     "filesystem": "read-only" }
       },
       "steps": [
         { "id": "build",  "call": "builder", "prompt": "{{ inputs.task }}" },
-        { "id": "review", "call": "critic",  "prompt": "{{ diff }}" },
+        { "id": "review", "call": "reviewer", "prompt": "{{ diff }}" },
         { "id": "verify", "check": "bun test" }
       ],
       "repeat": { "until": "checks-pass", "maxIterations": 3 }
@@ -101,12 +129,12 @@ inputs:
   task  required
 
 agents:
-  builder  builder -> claude:claude-opus-4-8 effort=max      filesystem: read-write
-  critic   critic -> codex:gpt-5.5                            filesystem: read-only
+  builder   claude -> claude:claude-opus-4-8 effort=max     filesystem: read-write
+  reviewer  codex -> codex:gpt-5.5                           filesystem: read-only
 
 steps:
   1. build       call builder
-  2. review      call critic
+  2. review      call reviewer
   3. verify      check: sh -c bun test
 loop:   repeat the steps until all checks pass, max 3 iterations
 limits: per call 30m, whole run 120m
@@ -172,33 +200,6 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 					<cite>field note</cite>
 				</blockquote>
 
-				<section id="install">
-					<h2>Install</h2>
-					<p className="lede">
-						chit is early and source-first. It runs under Bun and shells out to the agent CLIs you
-						already have installed (<code>claude</code>, <code>codex</code>, <code>gemini</code>). No
-						API keys, no HTTP. Link the <code>chit</code> bin once, then run it in any project.
-					</p>
-					<pre className="terminal">
-						<span className="cmd">$ git clone https://github.com/caiopizzol/chit</span>
-						{"\n"}
-						<span className="cmd">$ cd chit && bun install</span>
-						{"\n"}
-						<span className="cmd">$ cd packages/cli && bun link</span>
-						{"\n\n"}
-						<span className="meta"># then, in your own project:</span>
-						{"\n"}
-						<span className="cmd">$ bun link @chit-run/cli</span>
-						{"\n"}
-						<span className="cmd">$ bunx chit doctor</span>
-						{"\n"}
-						<span className="cmd">$ bunx chit init implement --template loop</span>
-					</pre>
-					<p className="lede" style={{ marginTop: 16 }}>
-						Start with <a className="inline-link" href="/docs">the docs</a>: the routine model, the
-						config reference, and exactly what the validator checks.
-					</p>
-				</section>
 
 				<h3>Honest about being early</h3>
 				<p className="lede">
