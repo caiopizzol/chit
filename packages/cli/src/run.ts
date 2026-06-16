@@ -9,6 +9,7 @@ import type { Adapter } from "./adapter.ts";
 import { formatElapsed } from "./elapsed.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
+import { evaluateStructured } from "./structured.ts";
 import { renderTemplate } from "./template.ts";
 
 export interface StepReceipt {
@@ -97,7 +98,7 @@ export async function runOneShot(
 		};
 	};
 
-	const ctx = { inputs: values, steps: {} as Record<string, { output: string }> };
+	const ctx = { inputs: values, steps: {} as Record<string, { output: string; json?: unknown }> };
 	const steps: StepReceipt[] = [];
 	let failed: string | undefined;
 	let cancelled = false;
@@ -128,7 +129,15 @@ export async function runOneShot(
 				});
 				const callElapsed = deps.now() - stepStart;
 				deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(callElapsed)}`);
-				ctx.steps[step.id] = { output: result.output };
+				// Structured output: validate against the schema. A one-shot has no retry loop, so
+				// invalid JSON is a hard failure (thrown -> the catch records a failed step).
+				if (step.json !== undefined) {
+					const ev = evaluateStructured(result.output, step.json.schema);
+					if (!ev.ok) throw new Error(ev.error);
+					ctx.steps[step.id] = { output: ev.normalized, json: ev.value };
+				} else {
+					ctx.steps[step.id] = { output: result.output };
+				}
 				steps.push({ id: step.id, kind: "call", participant: step.call, ...callBinding(step.call), status: "ok", startedAt: stepStart, elapsedMs: callElapsed });
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };

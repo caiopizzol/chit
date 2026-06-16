@@ -12,6 +12,8 @@
 // need no config). Cross-routine rules (sub-routines exist, composition shape)
 // are config-aware and live in resolve.
 
+import { type JsonSchema, parseJsonSchema } from "./structured.ts";
+
 export type Filesystem = "read-only" | "read-write" | "none";
 
 const FILESYSTEMS = new Set<Filesystem>(["read-only", "read-write", "none"]);
@@ -39,6 +41,9 @@ export interface CallStep {
 	kind: "call";
 	call: string;
 	prompt: string;
+	// Optional structured-output contract: the model's text is parsed as JSON and validated
+	// against this schema (see structured.ts). Enables a `{ step, path, equals }` repeat condition.
+	json?: { schema: JsonSchema };
 }
 export interface FormatStep {
 	id: string;
@@ -71,9 +76,14 @@ export type Step = CallStep | FormatStep | CheckStep | RoutineStep | AskStep;
 // A loop's exit condition. The runtime owns the LOOP; the routine declares WHEN it ends,
 // so /goal, grilling, research-until-good, etc. are authored, not hardcoded:
 //   "checks-pass"            -- every check step passed (deterministic; the proven default)
-//   { step, equals }         -- a named step's output equals a string (e.g. an evaluator
+//   { step, equals }         -- a named step's TEXT output equals a string (e.g. an evaluator
 //                               call returns "yes"); model- or human-judged convergence
-export type RepeatCondition = "checks-pass" | { step: string; equals: string };
+//   { step, path, equals }   -- a field (dot-path) of a call step's validated JSON output equals
+//                               a scalar (e.g. review.passed === true); the robust verdict form
+export type RepeatCondition =
+	| "checks-pass"
+	| { step: string; equals: string }
+	| { step: string; path: string; equals: string | number | boolean };
 // The exit is one condition, OR `{ all: [...] }` requiring EVERY listed condition to hold.
 // That lets a manifest make a model review BLOCKING, not advisory: converge only when the
 // checks pass AND the critic step returns "pass". Still declared, still checkable.
@@ -276,12 +286,21 @@ function parseSteps(raw: unknown, source: string, participants: Record<string, P
 		}
 		const kind = kinds[0];
 		if (kind === "call") {
-			requireKeys(s, new Set(["id", "call", "prompt"]), where);
+			requireKeys(s, new Set(["id", "call", "prompt", "json"]), where);
 			if (typeof s.call !== "string" || !(s.call in participants)) {
 				throw new ManifestError(where, `\`call\` must name a participant (got ${JSON.stringify(s.call)})`);
 			}
 			if (typeof s.prompt !== "string" || !s.prompt) throw new ManifestError(where, "`prompt` must be a non-empty string");
-			out.push({ id: s.id, kind: "call", call: s.call, prompt: s.prompt });
+			let json: { schema: JsonSchema } | undefined;
+			if (s.json !== undefined) {
+				if (!isObject(s.json)) throw new ManifestError(`${where}.json`, "must be an object");
+				requireKeys(s.json, new Set(["schema"]), `${where}.json`);
+				const schema = parseJsonSchema(s.json.schema, `${where}.json.schema`, (w, d) => {
+					throw new ManifestError(w, d);
+				});
+				json = { schema };
+			}
+			out.push({ id: s.id, kind: "call", call: s.call, prompt: s.prompt, ...(json !== undefined && { json }) });
 		} else if (kind === "format") {
 			requireKeys(s, new Set(["id", "format"]), where);
 			if (typeof s.format !== "string" || !s.format) throw new ManifestError(where, "`format` must be a non-empty string");
@@ -374,15 +393,32 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		const parseCondition = (rawCond: unknown, where: string): RepeatCondition => {
 			if (rawCond === "checks-pass") return "checks-pass";
 			if (isObject(rawCond) && !("all" in rawCond)) {
-				requireKeys(rawCond, new Set(["step", "equals"]), where);
 				if (typeof rawCond.step !== "string" || !rawCond.step) throw new ManifestError(where, "`step` must be a non-empty step id");
-				if (typeof rawCond.equals !== "string") throw new ManifestError(where, "`equals` must be a string to compare the step's output against");
-				if (!steps.some((s) => s.id === rawCond.step)) {
+				const target = steps.find((s) => s.id === rawCond.step);
+				if (target === undefined) {
 					throw new ManifestError(source, `\`repeat.until\` references step ${JSON.stringify(rawCond.step)}, which is not a step in this routine`);
 				}
+				if ("path" in rawCond) {
+					// Structured-field condition: read a dot-path from the step's validated JSON output.
+					requireKeys(rawCond, new Set(["step", "path", "equals"]), where);
+					if (typeof rawCond.path !== "string" || !rawCond.path) throw new ManifestError(where, "`path` must be a non-empty dot-path into the step's JSON output");
+					if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(rawCond.path)) {
+						throw new ManifestError(where, `\`path\` ${JSON.stringify(rawCond.path)} must be dot-separated identifiers (e.g. "passed" or "decision.ready")`);
+					}
+					if (typeof rawCond.equals !== "string" && typeof rawCond.equals !== "number" && typeof rawCond.equals !== "boolean") {
+						throw new ManifestError(where, "`equals` must be a string, number, or boolean to compare the JSON field against");
+					}
+					if (target.kind !== "call" || target.json === undefined) {
+						throw new ManifestError(where, `a \`{ step, path }\` condition requires step ${JSON.stringify(rawCond.step)} to be a \`call\` step with a \`json\` schema`);
+					}
+					return { step: rawCond.step, path: rawCond.path, equals: rawCond.equals };
+				}
+				// Raw-string condition: the step's trimmed text output equals a string.
+				requireKeys(rawCond, new Set(["step", "equals"]), where);
+				if (typeof rawCond.equals !== "string") throw new ManifestError(where, "`equals` must be a string to compare the step's output against");
 				return { step: rawCond.step, equals: rawCond.equals };
 			}
-			throw new ManifestError(where, '`until` condition must be "checks-pass" or { step, equals }');
+			throw new ManifestError(where, '`until` condition must be "checks-pass", { step, equals }, or { step, path, equals }');
 		};
 
 		const rawUntil = raw.repeat.until;
@@ -405,7 +441,7 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 			throw new ManifestError(source, '`repeat.until: "checks-pass"` requires at least one `check` step (its convergence signal)');
 		}
 		if (conds.some((c) => typeof c === "object") && mi === undefined) {
-			throw new ManifestError(source, "a `{ step, equals }` exit condition requires an explicit `maxIterations` (a judged condition has no guaranteed termination)");
+			throw new ManifestError(source, "a `{ step, equals }` or `{ step, path, equals }` exit condition requires an explicit `maxIterations` (a judged condition has no guaranteed termination)");
 		}
 
 		repeat = { until, ...(typeof mi === "number" && { maxIterations: mi }) };

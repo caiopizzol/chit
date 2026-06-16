@@ -19,6 +19,7 @@ import type { CheckRunner } from "./check-runner.ts";
 import { formatElapsed } from "./elapsed.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest, type RepeatCondition, type RepeatUntil } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
+import { evaluateStructured, readPath } from "./structured.ts";
 import { renderTemplate } from "./template.ts";
 
 export interface CheckReceipt {
@@ -42,6 +43,8 @@ export interface ConvergeStepReceipt {
 	startedAt: number;
 	elapsedMs: number;
 	checks?: CheckReceipt[];
+	// The validated structured output of a json call step (the convergence signal), if any.
+	json?: unknown;
 	error?: string;
 }
 
@@ -164,7 +167,7 @@ export async function runConverge(
 
 	// Persistent across iterations: every step id pre-seeded to "" so a
 	// cross-iteration reference renders empty on iteration 1 (a typo'd id still throws).
-	const ctx: { inputs: Record<string, string>; steps: Record<string, { output: string }>; iteration: number; diff?: string } = {
+	const ctx: { inputs: Record<string, string>; steps: Record<string, { output: string; json?: unknown }>; iteration: number; diff?: string } = {
 		inputs: values,
 		steps: Object.fromEntries(manifest.steps.map((s) => [s.id, { output: "" }])),
 		iteration: 0,
@@ -212,15 +215,36 @@ export async function runConverge(
 						...(deps.signal !== undefined && { signal: deps.signal }),
 					});
 					deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(deps.now() - stepStart)}`);
-					ctx.steps[step.id] = { output: result.output };
+					// Structured output: parse + validate the model's text against the declared schema.
+					// A soft failure (call succeeded, output did not match) is NOT a runError -- store the
+					// error as this step's output so the next iteration can show the model what to fix.
+					let callStatus: "ok" | "failed" = "ok";
+					let callError: string | undefined;
+					let callJson: unknown;
+					if (step.json !== undefined) {
+						const ev = evaluateStructured(result.output, step.json.schema);
+						if (ev.ok) {
+							ctx.steps[step.id] = { output: ev.normalized, json: ev.value };
+							callJson = ev.value;
+						} else {
+							ctx.steps[step.id] = { output: ev.error };
+							callStatus = "failed";
+							callError = ev.error;
+							deps.onProgress?.(`  call ${step.call} output did not match its schema`);
+						}
+					} else {
+						ctx.steps[step.id] = { output: result.output };
+					}
 					stepReceipts.push({
 						id: step.id,
 						kind: "call",
 						participant: step.call,
 						...callBinding(step.call),
-						status: "ok",
+						status: callStatus,
 						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
+						...(callJson !== undefined && { json: callJson }),
+						...(callError !== undefined && { error: callError }),
 					});
 				} else if (step.kind === "format") {
 					ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
@@ -302,8 +326,12 @@ export async function runConverge(
 		// returned "yes"); { all: [...] } = EVERY listed condition holds (so a review can block).
 		// The `allChecksPassed` field carries this generic "converged this iteration" verdict
 		// (its legacy name; the view labels it by `until`).
-		const conditionMet = (cond: RepeatCondition): boolean =>
-			cond === "checks-pass" ? allChecksPassed : (ctx.steps[cond.step]?.output ?? "").trim() === cond.equals;
+		const conditionMet = (cond: RepeatCondition): boolean => {
+			if (cond === "checks-pass") return allChecksPassed;
+			// A structured-field condition reads the validated JSON; a raw condition compares text.
+			if ("path" in cond) return readPath(ctx.steps[cond.step]?.json, cond.path) === cond.equals;
+			return (ctx.steps[cond.step]?.output ?? "").trim() === cond.equals;
+		};
 		const meets =
 			runError === undefined && (typeof until === "object" && "all" in until ? until.all.every(conditionMet) : conditionMet(until));
 		iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: meets });

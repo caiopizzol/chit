@@ -229,3 +229,36 @@ describe("runOneShot -- ask steps", () => {
 		expect(r.steps.at(-1)).toMatchObject({ id: "decide", kind: "ask", status: "cancelled" });
 	});
 });
+
+describe("runOneShot -- structured call output", () => {
+	const EXTRACT = {
+		id: "extract",
+		inputs: { text: { type: "string" } },
+		participants: { reader: { agent: "claude", instructions: "Extract.", filesystem: "read-only" } },
+		steps: [
+			{
+				id: "fields",
+				call: "reader",
+				prompt: "Extract from {{ inputs.text }}",
+				json: { schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } } },
+			},
+		],
+		output: "fields",
+	};
+
+	test("normalizes valid JSON output", async () => {
+		const adapter = fakeAdapter(() => '{"title":"Hi"}');
+		const r = await runOneShot(routineFrom(EXTRACT), { text: "x" }, deps(adapter));
+		expect(r.status).toBe("completed");
+		expect(r.output).toBe('{\n  "title": "Hi"\n}');
+	});
+
+	test("fails the run when output does not match the schema (no retry loop)", async () => {
+		const adapter = fakeAdapter(() => "not json at all");
+		const r = await runOneShot(routineFrom(EXTRACT), { text: "x" }, deps(adapter));
+		expect(r.status).toBe("failed");
+		expect(r.error).toMatch(/not valid JSON/);
+		expect(r.steps[0]?.status).toBe("failed");
+		expect(r.output).toBeUndefined();
+	});
+});

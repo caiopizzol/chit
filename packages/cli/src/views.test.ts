@@ -305,6 +305,32 @@ describe("formatTrace converge", () => {
 		expect(out).toContain("not yet"); // iteration 1: checks green but the critic blocked
 		expect(out).toContain("all conditions met"); // iteration 2
 	});
+
+	test("a { step, path, equals } loop renders the path condition and the per-iteration verdict json", () => {
+		const structured: ConvergeReceipt = {
+			runId: "run-s",
+			routineId: "goal",
+			policy: "converge",
+			until: { step: "verdict", path: "passed", equals: true },
+			digest: `sha256:${"s".repeat(64)}`,
+			inputs: { idea: "x" },
+			maxIterations: 3,
+			startedAt: 0,
+			finishedAt: 16,
+			elapsedMs: 16,
+			status: "converged",
+			iterations: [
+				{ n: 1, startedAt: 0, allChecksPassed: false, steps: [{ id: "verdict", kind: "call", participant: "judge", status: "ok", startedAt: 1, elapsedMs: 2, json: { passed: false } }] },
+				{ n: 2, startedAt: 8, allChecksPassed: true, steps: [{ id: "verdict", kind: "call", participant: "judge", status: "ok", startedAt: 9, elapsedMs: 2, json: { passed: true } }] },
+			],
+			output: "the goal",
+		};
+		const out = formatTrace(structured);
+		expect(out).toContain("until: verdict.passed == true");
+		expect(out).toContain(`json: {"passed":false}`); // iteration 1 verdict is auditable
+		expect(out).toContain(`json: {"passed":true}`); // iteration 2
+		expect(out).toContain("condition met");
+	});
 });
 
 describe("formatTrace", () => {

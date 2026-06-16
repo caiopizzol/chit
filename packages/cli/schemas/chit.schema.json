@@ -378,6 +378,9 @@
 				"ask": {
 					"type": "string",
 					"minLength": 1
+				},
+				"json": {
+					"$ref": "#/$defs/jsonOutput"
 				}
 			}
 		},
@@ -448,6 +451,9 @@
 					"$ref": "#/$defs/stepEquals"
 				},
 				{
+					"$ref": "#/$defs/stepPathEquals"
+				},
+				{
 					"type": "object",
 					"additionalProperties": false,
 					"required": [
@@ -464,6 +470,9 @@
 									},
 									{
 										"$ref": "#/$defs/stepEquals"
+									},
+									{
+										"$ref": "#/$defs/stepPathEquals"
 									}
 								]
 							}
@@ -486,6 +495,51 @@
 				},
 				"equals": {
 					"type": "string"
+				}
+			}
+		},
+		"jsonOutput": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"schema"
+			],
+			"properties": {
+				"schema": {
+					"type": "object",
+					"description": "A JSON Schema subset (object/array/string/number/integer/boolean, with properties/required/additionalProperties/items/enum). The Chit parser enforces the supported subset and rejects unsupported keywords."
+				}
+			}
+		},
+		"stepPathEquals": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"step",
+				"path",
+				"equals"
+			],
+			"properties": {
+				"step": {
+					"type": "string",
+					"minLength": 1
+				},
+				"path": {
+					"type": "string",
+					"minLength": 1
+				},
+				"equals": {
+					"oneOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "number"
+						},
+						{
+							"type": "boolean"
+						}
+					]
 				}
 			}
 		},

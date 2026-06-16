@@ -121,3 +121,32 @@ describe("profile validation: built-in adapter/model pairs (schema)", () => {
 		expect(okSchema({ adapter: "gemini", effort: "xhigh" })).toBe(false);
 	});
 });
+
+describe("schemas/chit.schema.json -- structured output", () => {
+	const ajv = new Ajv2020({ allErrors: true });
+	const validate = ajv.compile(schema);
+
+	test("accepts a json call step and a { step, path, equals } condition (schema + parser)", () => {
+		const raw = {
+			$schema: "https://chit.run/schemas/chit.schema.json",
+			profiles: { critic: "gemini" },
+			routines: {
+				goal: {
+					input: "idea",
+					agents: { judge: { profile: "critic", instructions: "Judge.", filesystem: "read-only" } },
+					steps: [
+						{
+							id: "verdict",
+							call: "judge",
+							prompt: "{{ inputs.idea }}",
+							json: { schema: { type: "object", required: ["ready"], additionalProperties: false, properties: { ready: { type: "boolean" } } } },
+						},
+					],
+					repeat: { until: { step: "verdict", path: "ready", equals: true }, maxIterations: 3 },
+				},
+			},
+		};
+		expect(validate(raw), ajv.errorsText(validate.errors)).toBe(true);
+		expect(() => parseConfig(raw, "inline.json")).not.toThrow();
+	});
+});

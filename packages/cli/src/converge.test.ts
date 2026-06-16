@@ -345,3 +345,61 @@ describe("runConverge -- compound { all } convergence (a model review can BLOCK)
 		expect(r.output).toBe("the built artifact");
 	});
 });
+
+describe("runConverge -- structured verdict (json + path condition)", () => {
+	const JSON_LOOP = {
+		id: "json-loop",
+		inputs: { task: { type: "string" } },
+		participants: {
+			worker: { agent: "claude", instructions: "Work.", filesystem: "read-only" },
+			judge: { agent: "claude", instructions: "Judge.", filesystem: "read-only" },
+		},
+		steps: [
+			{ id: "work", call: "worker", prompt: "do {{ inputs.task }} iter {{ iteration }} prev=[{{ steps.verdict.output }}]" },
+			{
+				id: "verdict",
+				call: "judge",
+				prompt: "judge {{ steps.work.output }} iter {{ iteration }}",
+				json: { schema: { type: "object", required: ["passed"], properties: { passed: { type: "boolean" } } } },
+			},
+		],
+		repeat: { until: { step: "verdict", path: "passed", equals: true }, maxIterations: 4 },
+	};
+
+	test("converges when the JSON field flips to the target", async () => {
+		const adapter = fakeAdapter((req) => (req.prompt.startsWith("judge") ? (req.prompt.includes("iter 2") ? '{"passed":true}' : '{"passed":false}') : "work-output"));
+		const r = await runConverge(routineFrom(JSON_LOOP), { task: "x" }, deps({ adapter }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(2);
+		expect(r.iterations[1]?.steps.find((s) => s.id === "verdict")?.status).toBe("ok");
+	});
+
+	test("soft-fails invalid JSON, feeds the error forward, then converges", async () => {
+		let judged = 0;
+		const adapter = fakeAdapter((req) => {
+			if (req.prompt.startsWith("judge")) {
+				judged++;
+				return judged === 1 ? "looks good to me" : '{"passed":true}';
+			}
+			return "work-output";
+		});
+		const r = await runConverge(routineFrom(JSON_LOOP), { task: "x" }, deps({ adapter }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(2);
+		const v1 = r.iterations[0]?.steps.find((s) => s.id === "verdict");
+		expect(v1?.status).toBe("failed");
+		expect(v1?.error).toMatch(/not valid JSON/);
+		expect(r.error).toBeUndefined();
+		// the validation error became the step output, so iteration 2 saw it fed forward
+		const work2 = adapter.calls.find((c) => c.prompt.startsWith("do") && c.prompt.includes("iter 2"));
+		expect(work2?.prompt).toMatch(/not valid JSON/);
+	});
+
+	test("does-not-converge (not failed) when the field never reaches the target", async () => {
+		const adapter = fakeAdapter((req) => (req.prompt.startsWith("judge") ? '{"passed":false}' : "work-output"));
+		const r = await runConverge(routineFrom(JSON_LOOP), { task: "x" }, deps({ adapter }));
+		expect(r.status).toBe("did-not-converge");
+		expect(r.iterations).toHaveLength(4);
+		expect(r.error).toBeUndefined();
+	});
+});

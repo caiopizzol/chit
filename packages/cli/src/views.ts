@@ -28,7 +28,8 @@ function minutesLabel(ms: number | undefined): string {
 // checks-pass case to fit its sentence ("all checks pass" in inspect, "checks-pass" in trace);
 // an `{ all: [...] }` reads as the conditions joined by AND.
 function formatUntil(u: RepeatUntil, checksLabel: string): string {
-	const cond = (c: RepeatCondition): string => (c === "checks-pass" ? checksLabel : `${c.step} == ${JSON.stringify(c.equals)}`);
+	const cond = (c: RepeatCondition): string =>
+		c === "checks-pass" ? checksLabel : "path" in c ? `${c.step}.${c.path} == ${JSON.stringify(c.equals)}` : `${c.step} == ${JSON.stringify(c.equals)}`;
 	return typeof u === "object" && "all" in u ? u.all.map(cond).join(" AND ") : cond(u);
 }
 
@@ -281,6 +282,7 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 				let line = `    ${pad(s.id, w)}  ${pad(who, 16)}  ${pad(s.status, 9)}  ${startOffset(s.startedAt, r.startedAt)}${s.elapsedMs}ms`;
 				if (s.checks) line += `  [${s.checks.map((c) => `${c.command}:${c.ok ? "ok" : "fail"}`).join(", ")}]`;
 				out.push(line);
+				if (s.json !== undefined) out.push(`      json: ${JSON.stringify(s.json)}`);
 				if (s.error) out.push(`      error: ${s.error}`);
 			}
 		}
