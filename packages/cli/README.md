@@ -4,25 +4,19 @@
 
 Chit is a thin local runtime for multi-model agent workflows. You declare a routine in `chit.config.json` (which agents run, in what order, what context flows forward, when a loop stops); Chit runs it from your terminal, writes a receipt, and leaves a patch to review before anything touches your tree.
 
-## Install
+## Get started
 
 Chit runs under [Bun](https://bun.sh) and shells out to the agent CLIs you already have (`claude`, `codex`, `gemini`). Install at least one, then:
 
 ```sh
 bun add -g @chit-run/cli
-```
-
-## Quick start
-
-```sh
 cd your-project
 chit init implement --template loop   # writes chit.config.json
-chit doctor                           # check config + agent CLIs
 chit run implement --input task="add a --version flag"
 chit apply <run-id>                   # apply the reviewed patch
 ```
 
-A routine with a check or a writing agent runs in a disposable git sandbox, dry-run by default: it produces a patch and stops. You review the receipt, then `chit apply` writes the exact patch.
+Replace the placeholder check in `chit.config.json` with your real command, such as `bun test`. A routine with a check or a writing agent runs in a disposable git sandbox, dry-run by default: it produces a patch and stops. You review the receipt, then `chit apply` writes the exact patch.
 
 ## A routine
 
@@ -45,8 +39,11 @@ A routine with a check or a writing agent runs in a disposable git sandbox, dry-
           "json": {
             "schema": {
               "type": "object",
-              "required": ["passed"],
-              "properties": { "passed": { "type": "boolean" } }
+              "required": ["passed", "issues"],
+              "properties": {
+                "passed": { "type": "boolean" },
+                "issues": { "type": "array", "items": { "type": "string" } }
+              }
             }
           }
         },
@@ -67,7 +64,7 @@ How it runs is derived from the routine's shape: a `repeat` makes it a loop; a c
 
 ## Examples
 
-Starter examples: [plan](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/plan.json), [investigate](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/investigate.json), [implement](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/implement.json), [fix](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/fix.json), [review](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/review.json), and [goal](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/goal.json).
+Starter examples: [plan](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/plan.json), [investigate](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/investigate.json), [implement](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/implement.json), [fix](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/fix.json), [review](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/review.json), and [goal](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/goal.json). `chit init --template` uses built-in starter templates; these files are copyable references.
 
 ## Early
 

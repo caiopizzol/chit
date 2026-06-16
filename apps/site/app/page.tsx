@@ -87,12 +87,15 @@ export default function Home() {
         {
           "id": "review",
           "call": "reviewer",
-          "prompt": "{{ diff }}\nReturn JSON only with a boolean passed field.",
+          "prompt": "{{ diff }}\nReturn JSON only with passed and issues fields.",
           "json": {
             "schema": {
               "type": "object",
-              "required": ["passed"],
-              "properties": { "passed": { "type": "boolean" } }
+              "required": ["passed", "issues"],
+              "properties": {
+                "passed": { "type": "boolean" },
+                "issues": { "type": "array", "items": { "type": "string" } }
+              }
             }
           }
         },

@@ -4,7 +4,7 @@
 
 Chit is a thin local runtime for multi-model agent workflows.
 
-You declare a routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt. There are no built-in roles like implementer, reviewer, planner, griller, or goal. Those are names and prompts you define.
+You declare a routine. Chit resolves the models, runs each step, passes context forward, checks the result, and writes a receipt. There are no built-in roles like builder, reviewer, planner, or judge. Those are names and prompts you define.
 
 Website: https://chit.run
 <br/>
@@ -95,7 +95,7 @@ chit apply run-a1b5efea
 
 ## Examples
 
-The examples are normal routines, not built-in modes: [plan](packages/cli/examples/plan.json), [investigate](packages/cli/examples/investigate.json), [implement](packages/cli/examples/implement.json), [fix](packages/cli/examples/fix.json), [review](packages/cli/examples/review.json), and [goal](packages/cli/examples/goal.json).
+The examples are normal routines, not built-in modes: [plan](packages/cli/examples/plan.json), [investigate](packages/cli/examples/investigate.json), [implement](packages/cli/examples/implement.json), [fix](packages/cli/examples/fix.json), [review](packages/cli/examples/review.json), and [goal](packages/cli/examples/goal.json). `chit init --template` uses small built-in starter templates; these examples are copyable references.
 
 ## Commands
 
