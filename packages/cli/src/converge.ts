@@ -192,6 +192,10 @@ export async function runConverge(
 		const iterationStart = deps.now();
 		const stepReceipts: ConvergeStepReceipt[] = [];
 		let allChecksPassed = true;
+		// A step that fails this iteration without aborting the run (today: a structured-output
+		// step whose JSON fails validation) must block convergence even when the until condition
+		// does not read that step -- a declared schema is a contract, so a violation is not "done".
+		let iterationHadStepFailure = false;
 
 		for (const step of manifest.steps) {
 			if (deps.signal?.aborted) {
@@ -229,6 +233,7 @@ export async function runConverge(
 						} else {
 							ctx.steps[step.id] = { output: ev.error };
 							callStatus = "failed";
+							iterationHadStepFailure = true;
 							callError = ev.error;
 							deps.onProgress?.(`  call ${step.call} output did not match its schema`);
 						}
@@ -333,7 +338,9 @@ export async function runConverge(
 			return (ctx.steps[cond.step]?.output ?? "").trim() === cond.equals;
 		};
 		const meets =
-			runError === undefined && (typeof until === "object" && "all" in until ? until.all.every(conditionMet) : conditionMet(until));
+			runError === undefined &&
+			!iterationHadStepFailure &&
+			(typeof until === "object" && "all" in until ? until.all.every(conditionMet) : conditionMet(until));
 		iterations.push({ n, startedAt: iterationStart, steps: stepReceipts, allChecksPassed: meets });
 		if (meets) converged = true;
 	}

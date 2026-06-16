@@ -403,3 +403,33 @@ describe("runConverge -- structured verdict (json + path condition)", () => {
 		expect(r.error).toBeUndefined();
 	});
 });
+
+describe("runConverge -- structured validation gates convergence", () => {
+	const GATED = {
+		id: "gated",
+		inputs: { task: { type: "string" } },
+		participants: { reviewer: { agent: "claude", instructions: "Review.", filesystem: "read-only" } },
+		steps: [
+			{ id: "judge", call: "reviewer", prompt: "judge iter {{ iteration }}", json: { schema: { type: "object", required: ["passed"], properties: { passed: { type: "boolean" } } } } },
+			{ id: "verify", check: "bun test" },
+		],
+		repeat: { until: "checks-pass", maxIterations: 2 },
+	};
+
+	test("invalid structured output blocks convergence even when checks pass under until: checks-pass", async () => {
+		const adapter = fakeAdapter((req) => (req.prompt.startsWith("judge") ? "looks fine to me" : "ok"));
+		const r = await runConverge(routineFrom(GATED), { task: "x" }, deps({ adapter, checkRunner: fakeCheckRunner() }));
+		expect(r.status).toBe("did-not-converge");
+		expect(r.iterations).toHaveLength(2);
+		expect(r.iterations[0]?.steps.find((s) => s.id === "judge")?.status).toBe("failed");
+		expect(r.iterations[0]?.allChecksPassed).toBe(false); // checks passed, but the schema violation gates it
+		expect(r.error).toBeUndefined();
+	});
+
+	test("valid structured output does not over-block a checks-pass convergence", async () => {
+		const adapter = fakeAdapter((req) => (req.prompt.startsWith("judge") ? '{"passed":true}' : "ok"));
+		const r = await runConverge(routineFrom(GATED), { task: "x" }, deps({ adapter, checkRunner: fakeCheckRunner() }));
+		expect(r.status).toBe("converged");
+		expect(r.iterations).toHaveLength(1);
+	});
+});
