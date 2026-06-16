@@ -93,16 +93,9 @@ chit trace --full run-a1b5efea
 chit apply run-a1b5efea
 ```
 
-## Patterns To Copy
+## Examples
 
-These are normal routines, not built-in modes.
-
-| Pattern | Chit example | Related pattern |
-|---|---|---|
-| Grill before planning | `examples/feature-griller.json` | [Matt Pocock `grill-me`](https://github.com/mattpocock/skills/blob/main/skills/productivity/grill-me/SKILL.md) |
-| Goal loop | `examples/goal.json` | [Claude `/goal`](https://code.claude.com/docs/en/goal), [Claude `/loop`](https://code.claude.com/docs/en/scheduled-tasks), [Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex) |
-| Multi-model panel | `examples/panel-review.json` | [OpenRouter Fusion](https://openrouter.ai/docs/guides/features/server-tools/fusion) |
-| Build and review loop | `examples/implementation-review.json` | One model builds, another reviews, checks gate the result |
+The examples are normal routines, not built-in modes. `examples/feature-griller.json` is a grill-before-planning routine, `examples/goal.json` is a goal loop, `examples/panel-review.json` is a multi-model panel, and `examples/implementation-review.json` is the build-review-check loop scaffolded by `chit init`.
 
 ## Commands
 

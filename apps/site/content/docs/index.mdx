@@ -80,18 +80,6 @@ chit apply <run-id>
 
 `trace` shows what each step and iteration did, with the resolved bindings and the saved patch. `apply` replays that exact patch through a gate: same HEAD, clean tree, `git apply --check`.
 
-## Which command do I run?
-
-| Goal | Command |
-|---|---|
-| Check setup | `chit doctor` |
-| List routines | `chit routines` |
-| Understand a routine | `chit inspect implement` |
-| Run safely (dry run) | `chit run implement --input task="..."` |
-| List past runs | `chit runs` |
-| Review a result | `chit trace --full <run-id>` |
-| Apply a patch | `chit apply <run-id>` |
-
 ## How a run is derived
 
 You do not choose an execution mode. Chit reads the routine shape.
@@ -105,16 +93,9 @@ You do not choose an execution mode. Chit reads the routine shape.
 
 A sandboxed run is dry-run by default: a patch you inspect, then `chit apply` writes the exact reviewed result.
 
-## Patterns to copy
+## Examples
 
-These are examples, not built-in modes.
-
-| Pattern | Example | What it shows |
-|---|---|---|
-| Grill before planning | `examples/feature-griller.json` | Similar shape to [Matt Pocock `grill-me`](https://github.com/mattpocock/skills/blob/main/skills/productivity/grill-me/SKILL.md): question the plan before implementation. |
-| Goal loop | `examples/goal.json` | Similar shape to [Claude `/goal`](https://code.claude.com/docs/en/goal) and [Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex): draft, judge, continue until ready. |
-| Multi-model panel | `examples/panel-review.json` | Similar shape to [OpenRouter Fusion](https://openrouter.ai/docs/guides/features/server-tools/fusion): two models answer independently; a judge compares them. |
-| Build and review loop | `examples/implementation-review.json` | One model writes in a sandbox, another reviews, and checks gate convergence. |
+The package includes ordinary config examples for a grill-before-planning routine, a goal loop, a multi-model panel, and the build-review-check loop. They map to common patterns like `grill-me`, `/goal`, and Fusion-style panels, but Chit does not make them built-in modes.
 
 <Cards>
 	<Card href="/docs/config" title="Config reference">

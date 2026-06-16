@@ -237,29 +237,3 @@ You do not choose an execution mode. Chit derives it from the routine shape.
 A sandboxed run is a dry run. It produces a patch and stops. Review it, then `chit apply <run-id>` writes it back.
 
 <SandboxApplyVisual />
-
-## Validation
-
-Two layers check config.
-
-| Layer | What it does |
-|---|---|
-| JSON Schema | Editor hints and shape validation. |
-| Parser | Authoritative runtime validation before any model is called. |
-
-The parser rejects, among others:
-
-| Rejected | Example | Reason |
-|---|---|---|
-| Unknown top-level field | `{ "recipes": {} }` | Allowed: `$schema`, `profiles`, `routines`. |
-| Old root alias | `{ "agents": {} }` | Use `profiles`. |
-| Bare routine string | `{ "routines": { "x": "x.json" } }` | Use object form. |
-| Old file alias | `{ "manifestPath": "x.json" }` | Use `file`. |
-| Non-kebab routine id | `"Build_It"` | Ids match `^[a-z][a-z0-9-]*$`. |
-| Unknown adapter shorthand | `"x": "ollama:llama3"` | Custom adapters must use object form. |
-| Impossible built-in model | `"x": "codex:sonnet"` | `sonnet` is a Claude model, not a Codex model. |
-| Trailing colon | `"x": "codex:"` | Use `"codex"` for the default model. |
-| Unknown profile field | `{ "adapter": "claude", "temperature": 1 }` | Allowed: `adapter`, `model`, `effort`. |
-| Wrong effort value | `{ "adapter": "codex", "effort": "max" }` | Codex supports `minimal`, `low`, `medium`, `high`, `xhigh`. |
-| Escaping routine path | `{ "file": "../secret.json" }` | Routine files cannot escape the project. |
-| Judged loop with no cap | `{ "until": { "step": "review", "equals": "pass" } }` | Judged loops must set `maxIterations`. |

@@ -52,9 +52,9 @@ export default function Home() {
 						{"\n\n"}
 						<span className="meta"># then, in your project:</span>
 						{"\n"}
-						<span className="cmd">$ chit doctor</span>
-						{"\n"}
 						<span className="cmd">$ chit init implement --template loop</span>
+						{"\n"}
+						<span className="cmd">$ chit run implement --input task="add a --version flag"</span>
 					</pre>
 					<p className="lede" style={{ marginTop: 16 }}>
 						Full walkthrough in{" "}
@@ -83,11 +83,27 @@ export default function Home() {
         "reviewer": { "profile": "codex",  "instructions": "Review the diff. Do not edit files.",     "filesystem": "read-only" }
       },
       "steps": [
-        { "id": "build",  "call": "builder", "prompt": "{{ inputs.task }}" },
-        { "id": "review", "call": "reviewer", "prompt": "{{ diff }}" },
+        { "id": "build", "call": "builder", "prompt": "{{ inputs.task }}" },
+        {
+          "id": "review",
+          "call": "reviewer",
+          "prompt": "{{ diff }}\nReturn JSON only with a boolean passed field.",
+          "json": {
+            "schema": {
+              "type": "object",
+              "required": ["passed"],
+              "properties": { "passed": { "type": "boolean" } }
+            }
+          }
+        },
         { "id": "verify", "check": "bun test" }
       ],
-      "repeat": { "until": "checks-pass", "maxIterations": 3 }
+      "repeat": {
+        "until": {
+          "all": ["checks-pass", { "step": "review", "path": "passed", "equals": true }]
+        },
+        "maxIterations": 3
+      }
     }
   }
 }`}</pre>
@@ -130,7 +146,7 @@ steps:
   1. build       call builder
   2. review      call reviewer
   3. verify      check: sh -c bun test
-loop:   repeat the steps until all checks pass, max 3 iterations
+loop:   repeat the steps until all checks pass and review.passed == true, max 3 iterations
 limits: per call 30m, whole run 120m
 
 note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
