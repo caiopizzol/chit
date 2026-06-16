@@ -1,6 +1,6 @@
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
-import { AnnotatedConfig, DerivedBehavior, FilesystemScale } from "./config-visuals";
+import { DerivedBehavior, FilesystemScale } from "./config-visuals";
 import {
 	GoalLoopVisual,
 	MultiModelPanelVisual,
@@ -19,7 +19,6 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
 		SandboxApplyVisual,
 		TerminalDemoVisual,
 		// Config reference visuals.
-		AnnotatedConfig,
 		DerivedBehavior,
 		FilesystemScale,
 		...components,
