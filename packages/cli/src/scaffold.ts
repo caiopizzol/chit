@@ -24,7 +24,7 @@ const ROUTINE_ID_RE = /^[a-z][a-z0-9-]*$/;
 // runs `true` and treats the rest as a comment.
 const PLACEHOLDER_CHECK = { command: "sh", args: ["-c", "true # replace with your real check, e.g. bun test"] };
 
-function textManifest(): unknown {
+function textManifest(id: string): unknown {
 	return {
 		description: "Turn an input into text, grounded in the repo (read-only, runs in your cwd).",
 		input: "topic",
@@ -43,19 +43,19 @@ function textManifest(): unknown {
 	};
 }
 
-function loopManifest(): unknown {
+function loopManifest(id: string): unknown {
 	return {
-		description: "Implement a change, review it, and verify with a check until it passes (sandboxed).",
+		description: "Build a change, review it with a structured verdict, and verify with a check -- repeat until the check passes AND the reviewer approves (sandboxed).",
 		input: "task",
 		agents: {
 			builder: {
 				profile: "claude",
-				instructions: "You implement a small, well-scoped change and keep going until the check passes.",
+				instructions: "You implement a small, well-scoped change and keep going until the check passes and the reviewer approves.",
 				filesystem: "read-write",
 			},
-			critic: {
-				profile: "claude",
-				instructions: "You review the diff for correctness and scope. You do not edit files.",
+			reviewer: {
+				profile: "codex",
+				instructions: "You review the diff for correctness and scope and return a structured verdict. You do not edit files.",
 				filesystem: "read-only",
 			},
 		},
@@ -63,16 +63,31 @@ function loopManifest(): unknown {
 			{
 				id: "build",
 				call: "builder",
-				prompt: "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nFailing check output:\n{{ steps.verify.output }}\n\nMake the smallest change toward passing the check.",
+				prompt: "Task:\n{{ inputs.task }}\n\nIteration {{ iteration }}.\nReviewer verdict:\n{{ steps.review.output }}\nFailing check output:\n{{ steps.verify.output }}\n\nMake the smallest change toward passing the check and the review.",
 			},
-			{ id: "critique", call: "critic", prompt: "Review the diff:\n{{ diff }}\n\nCall out correctness and scope problems. Be brief. Do not edit files." },
+			{
+				id: "review",
+				call: "reviewer",
+				prompt: "Task:\n{{ inputs.task }}\n\nDiff:\n{{ diff }}\n\nReview the diff for correctness and scope. Do not edit files.\n\nReturn JSON only, no prose: a boolean `passed` (true only when the diff correctly and minimally accomplishes the task with no blocking issues) and a string array `issues` listing any blocking problems.",
+				json: {
+					schema: {
+						type: "object",
+						additionalProperties: false,
+						required: ["passed", "issues"],
+						properties: {
+							passed: { type: "boolean" },
+							issues: { type: "array", items: { type: "string" } },
+						},
+					},
+				},
+			},
 			{ id: "verify", check: [PLACEHOLDER_CHECK] },
 		],
-		repeat: { until: "checks-pass", maxIterations: 3 },
+		repeat: { until: { all: ["checks-pass", { step: "review", path: "passed", equals: true }] }, maxIterations: 3 },
 	};
 }
 
-function checkManifest(): unknown {
+function checkManifest(id: string): unknown {
 	return {
 		description: "Run a check command in a sandbox until it passes.",
 		inputs: {},
@@ -82,9 +97,9 @@ function checkManifest(): unknown {
 }
 
 function manifestFor(id: string, template: Template): unknown {
-	if (template === "loop") return loopManifest();
-	if (template === "check") return checkManifest();
-	return textManifest();
+	if (template === "loop") return loopManifest(id);
+	if (template === "check") return checkManifest(id);
+	return textManifest(id);
 }
 
 export interface ScaffoldResult {
@@ -136,11 +151,13 @@ export function scaffoldRoutine(cwd: string, name: string, template: Template): 
 
 	const manifest = manifestFor(name, template) as { description?: string };
 	routines[name] = manifest;
-	// The generated routine agents reference profile ids; make sure each is bound.
+	// The generated participants reference a profile by name; bind any unbound one to a same-named
+	// adapter shorthand (templates use "claude"/"codex"), so the scaffolded routine resolves and the
+	// loop template gets a different model as its reviewer out of the box.
 	const profileRegistry = config.profiles ?? (config.profiles = {});
 	const participants = (manifest as { agents?: Record<string, { profile: string }> }).agents ?? {};
 	for (const p of Object.values(participants)) {
-		if (profileRegistry[p.profile] === undefined) profileRegistry[p.profile] = "claude";
+		if (profileRegistry[p.profile] === undefined) profileRegistry[p.profile] = p.profile;
 	}
 	writeFileSync(configPath, `${JSON.stringify(config, null, "\t")}\n`);
 

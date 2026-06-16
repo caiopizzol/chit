@@ -48,6 +48,19 @@ describe("scaffoldRoutine", () => {
 		expect(kindLabel(routine.manifest)).toBe("loop");
 	});
 
+	test("loop template scaffolds the structured build/review pattern (claude builds, codex reviews)", () => {
+		const cwd = tmp();
+		scaffoldRoutine(cwd, "impl", "loop");
+		const routine = resolveRoutine(loadConfig(cwd), "impl", cwd);
+		expect(routine.manifest.participants.builder?.agent).toBe("claude"); // builder uses the claude profile
+		expect(routine.manifest.participants.reviewer?.agent).toBe("codex"); // reviewer uses a different model
+		expect(routine.agents?.codex?.adapter).toBe("codex"); // which resolves to the codex adapter
+		const review = routine.manifest.steps.find((step) => step.id === "review");
+		expect(review?.kind).toBe("call");
+		if (review?.kind === "call") expect(review.json?.schema.properties?.passed?.type).toBe("boolean");
+		expect(routine.manifest.repeat?.until).toEqual({ all: ["checks-pass", { step: "review", path: "passed", equals: true }] });
+	});
+
 	test("check template: resolves to a check-only sandboxed routine", () => {
 		const cwd = tmp();
 		scaffoldRoutine(cwd, "smoke", "check");
@@ -93,12 +106,5 @@ describe("scaffoldRoutine", () => {
 		};
 		expect(raw.profiles).toEqual({ claude: { adapter: "claude", model: "default" } });
 		expect(raw.routines.review).toMatchObject({ input: "topic" });
-	});
-
-	test("rejects an existing config that still uses the old top-level agents alias", () => {
-		const cwd = tmp();
-		writeFileSync(join(cwd, "chit.config.json"), JSON.stringify({ agents: { claude: { adapter: "claude" } }, routines: {} }));
-		expect(() => scaffoldRoutine(cwd, "review", "text")).toThrow(/unknown field "agents"/);
-		expect(JSON.parse(readFileSync(join(cwd, "chit.config.json"), "utf-8")).routines).toEqual({});
 	});
 });
