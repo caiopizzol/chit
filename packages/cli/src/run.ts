@@ -21,7 +21,6 @@ export interface StepReceipt {
 	adapter?: string;
 	model?: string;
 	effort?: string;
-	reasoningEffort?: string;
 	status: "ok" | "failed" | "cancelled";
 	// Absolute clock (deps.now()) when the step started. With the run's startedAt this
 	// gives a timeline (offset = startedAt - run.startedAt); elapsedMs is the duration.
@@ -84,7 +83,7 @@ export async function runOneShot(
 	// A call step's agent id and the adapter/model it resolves to, recorded on every call
 	// receipt (ok, failed, AND cancelled) so trace proves what ran. adapter/model are
 	// omitted when the routine has no bindings (hand-built test routines bypass resolve).
-	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string; effort?: string; reasoningEffort?: string } => {
+	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string; effort?: string } => {
 		const agentId = manifest.participants[participantId]?.agent;
 		if (agentId === undefined) return {};
 		const b = routine.agents?.[agentId];
@@ -94,7 +93,6 @@ export async function runOneShot(
 				adapter: b.adapter,
 				...(b.model !== undefined && { model: b.model }),
 				...(b.effort !== undefined && { effort: b.effort }),
-				...(b.reasoningEffort !== undefined && { reasoningEffort: b.reasoningEffort }),
 			}),
 		};
 	};

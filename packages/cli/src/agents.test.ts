@@ -19,7 +19,7 @@ describe("dispatchingAdapter", () => {
 		const codex = fakeAdapter((r) => `codex:${r.model ?? "-"}`);
 		const a = dispatchingAdapter(
 			{
-				builder: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+				builder: { adapter: "codex", model: "gpt-5.5", effort: "xhigh" },
 				critic: { adapter: "claude", effort: "max" },
 			},
 			{ claude, codex },
@@ -27,7 +27,7 @@ describe("dispatchingAdapter", () => {
 		expect((await a.call(baseReq("builder"))).output).toBe("codex:gpt-5.5");
 		expect((await a.call(baseReq("critic"))).output).toBe("claude:-");
 		expect(codex.calls[0]?.model).toBe("gpt-5.5"); // the resolved model reached the adapter
-		expect(codex.calls[0]?.reasoningEffort).toBe("xhigh");
+		expect(codex.calls[0]?.effort).toBe("xhigh");
 		expect(claude.calls[0]?.model).toBeUndefined();
 		expect(claude.calls[0]?.effort).toBe("max");
 	});
@@ -62,8 +62,8 @@ describe("real adapter argument builders", () => {
 		]);
 	});
 
-	test("passes codex reasoning effort as a config override", () => {
-		expect(codexCliArgs({ filesystem: "read-write", model: "gpt-5.5", reasoningEffort: "xhigh" }, "/tmp/last.txt")).toEqual([
+	test("passes codex effort as the Codex reasoning config override", () => {
+		expect(codexCliArgs({ filesystem: "read-write", model: "gpt-5.5", effort: "xhigh" }, "/tmp/last.txt")).toEqual([
 			"codex",
 			"exec",
 			"--sandbox",

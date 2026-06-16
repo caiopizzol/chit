@@ -112,7 +112,7 @@
 								}
 							]
 						},
-						"reasoningEffort": {
+						"effort": {
 							"enum": [
 								"minimal",
 								"low",
@@ -173,6 +173,10 @@
 						},
 						"model": {
 							"type": "string"
+						},
+						"effort": {
+							"type": "string",
+							"minLength": 1
 						}
 					}
 				}

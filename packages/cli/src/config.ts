@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BUILT_IN_ADAPTER_IDS, CLAUDE_EFFORTS, CODEX_REASONING_EFFORTS, isBuiltInAdapter, isStructurallyValidModel } from "./builtin-adapters.ts";
+import { BUILT_IN_ADAPTER_IDS, CLAUDE_EFFORTS, CODEX_EFFORTS, isBuiltInAdapter, isStructurallyValidModel } from "./builtin-adapters.ts";
 import { type Manifest, parseManifest } from "./manifest.ts";
 
 export interface RoutineConfig {
@@ -23,8 +23,7 @@ export interface AgentConfig {
 	model?: string;
 	// Adapter-specific execution depth. Kept on the profile because it is part of
 	// the local model binding, not the reusable routine.
-	effort?: "low" | "medium" | "high" | "max";
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	effort?: string;
 }
 
 export interface ChitConfig {
@@ -176,29 +175,21 @@ function validateBuiltInModel(adapter: string, model: string | undefined, where:
 	}
 }
 
-function parseProfileEffort(raw: unknown, where: string): AgentConfig["effort"] {
+function parseProfileEffort(adapter: string, raw: unknown, where: string): AgentConfig["effort"] {
 	if (raw === undefined) return undefined;
-	if (typeof raw !== "string" || !(CLAUDE_EFFORTS as readonly string[]).includes(raw)) {
-		throw new ConfigError(`${where}.effort`, 'must be one of "low", "medium", "high", "max"');
+	if (typeof raw !== "string" || raw.length === 0) {
+		throw new ConfigError(`${where}.effort`, "must be a non-empty string");
 	}
-	return raw as AgentConfig["effort"];
-}
-
-function parseProfileReasoningEffort(raw: unknown, where: string): AgentConfig["reasoningEffort"] {
-	if (raw === undefined) return undefined;
-	if (typeof raw !== "string" || !(CODEX_REASONING_EFFORTS as readonly string[]).includes(raw)) {
-		throw new ConfigError(`${where}.reasoningEffort`, 'must be one of "minimal", "low", "medium", "high", "xhigh"');
+	if (adapter === "claude" && !(CLAUDE_EFFORTS as readonly string[]).includes(raw)) {
+		throw new ConfigError(`${where}.effort`, 'for adapter "claude" must be one of "low", "medium", "high", "max"');
 	}
-	return raw as AgentConfig["reasoningEffort"];
-}
-
-function validateProfileOptions(adapter: string, effort: AgentConfig["effort"], reasoningEffort: AgentConfig["reasoningEffort"], where: string): void {
-	if (effort !== undefined && adapter !== "claude") {
-		throw new ConfigError(`${where}.effort`, '`effort` is only supported by the claude adapter');
+	if (adapter === "codex" && !(CODEX_EFFORTS as readonly string[]).includes(raw)) {
+		throw new ConfigError(`${where}.effort`, 'for adapter "codex" must be one of "minimal", "low", "medium", "high", "xhigh"');
 	}
-	if (reasoningEffort !== undefined && adapter !== "codex") {
-		throw new ConfigError(`${where}.reasoningEffort`, '`reasoningEffort` is only supported by the codex adapter');
+	if (isBuiltInAdapter(adapter) && adapter !== "claude" && adapter !== "codex") {
+		throw new ConfigError(`${where}.effort`, `adapter "${adapter}" does not support effort`);
 	}
+	return raw;
 }
 
 function parseAgentConfig(entry: unknown, where: string): AgentConfig {
@@ -225,7 +216,7 @@ function parseAgentConfig(entry: unknown, where: string): AgentConfig {
 	}
 	if (!isObject(entry)) throw new ConfigError(where, "must be an object or adapter string");
 	for (const k of Object.keys(entry)) {
-		if (k !== "adapter" && k !== "model" && k !== "effort" && k !== "reasoningEffort") throw new ConfigError(where, `unknown field "${k}"`);
+		if (k !== "adapter" && k !== "model" && k !== "effort") throw new ConfigError(where, `unknown field "${k}"`);
 	}
 	if (typeof entry.adapter !== "string" || !entry.adapter) {
 		throw new ConfigError(where, "`adapter` must be a non-empty string");
@@ -233,14 +224,11 @@ function parseAgentConfig(entry: unknown, where: string): AgentConfig {
 	if (entry.model !== undefined && typeof entry.model !== "string") {
 		throw new ConfigError(where, "`model` must be a string");
 	}
-	const effort = parseProfileEffort(entry.effort, where);
-	const reasoningEffort = parseProfileReasoningEffort(entry.reasoningEffort, where);
+	const effort = parseProfileEffort(entry.adapter, entry.effort, where);
 	validateBuiltInModel(entry.adapter, typeof entry.model === "string" ? entry.model : undefined, where);
-	validateProfileOptions(entry.adapter, effort, reasoningEffort, where);
 	return {
 		adapter: entry.adapter,
 		...(typeof entry.model === "string" && { model: entry.model }),
 		...(effort !== undefined && { effort }),
-		...(reasoningEffort !== undefined && { reasoningEffort }),
 	};
 }

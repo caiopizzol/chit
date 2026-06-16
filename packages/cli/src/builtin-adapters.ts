@@ -16,7 +16,7 @@ export interface BuiltInAdapterSpec {
 }
 
 export const CLAUDE_EFFORTS = ["low", "medium", "high", "max"] as const;
-export const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+export const CODEX_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 
 export const BUILT_IN_ADAPTERS: Record<string, BuiltInAdapterSpec> = {
 	claude: { models: ["default", "sonnet", "opus", "haiku", "fable"], modelPatterns: [/^claude-/] },
@@ -78,7 +78,7 @@ export function buildProfileSchema(): Record<string, unknown> {
 				adapter: { const: adapter },
 				model: { type: "string", anyOf: [{ enum: spec.models }, ...spec.modelPatterns.map((re) => ({ pattern: re.source }))] },
 				...(adapter === "claude" && { effort: { enum: [...CLAUDE_EFFORTS] } }),
-				...(adapter === "codex" && { reasoningEffort: { enum: [...CODEX_REASONING_EFFORTS] } }),
+				...(adapter === "codex" && { effort: { enum: [...CODEX_EFFORTS] } }),
 			},
 		});
 	}
@@ -90,6 +90,7 @@ export function buildProfileSchema(): Record<string, unknown> {
 		properties: {
 			adapter: { type: "string", minLength: 1, not: { enum: BUILT_IN_ADAPTER_IDS } },
 			model: { type: "string" },
+			effort: { type: "string", minLength: 1 },
 		},
 	});
 	return { description: "A model binding: a built-in adapter shorthand/object, or a custom adapter in object form.", oneOf: branches };

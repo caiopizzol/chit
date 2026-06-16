@@ -137,12 +137,12 @@ describe("parseConfig -- agents", () => {
 			...VALID,
 			agents: {
 				builder: { adapter: "claude", model: "sonnet", effort: "max" },
-				critic: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+				critic: { adapter: "codex", model: "gpt-5.5", effort: "xhigh" },
 			},
 		});
 		expect(c.agents).toEqual({
 			builder: { adapter: "claude", model: "sonnet", effort: "max" },
-			critic: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+			critic: { adapter: "codex", model: "gpt-5.5", effort: "xhigh" },
 		});
 	});
 
@@ -173,10 +173,13 @@ describe("parseConfig -- agents", () => {
 
 	test("rejects invalid or adapter-mismatched profile effort settings", () => {
 		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", effort: "xhigh" } } })).toThrow(/effort.*must be one/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", effort: "max" } } })).toThrow(/only supported by the claude adapter/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", reasoningEffort: "max" } } })).toThrow(/reasoningEffort.*must be one/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "claude", reasoningEffort: "xhigh" } } })).toThrow(/only supported by the codex adapter/);
-		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", reasoningEffort: "xhigh" } } })).toThrow(/only supported by the codex adapter/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "codex", effort: "max" } } })).toThrow(/adapter "codex".*must be one/);
+		expect(() => parse({ ...VALID, profiles: { x: { adapter: "gemini", effort: "xhigh" } } })).toThrow(/does not support effort/);
+		expect(parse({ ...VALID, profiles: { x: { adapter: "my-adapter", model: "m", effort: "whatever" } } }).agents.x).toEqual({
+			adapter: "my-adapter",
+			model: "m",
+			effort: "whatever",
+		});
 	});
 });
 

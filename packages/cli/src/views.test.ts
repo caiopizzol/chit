@@ -113,12 +113,12 @@ describe("formatInspect", () => {
 		const out = formatInspect(
 			routineFrom(CONVERGE, {
 				agents: {
-					codex: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" },
+					codex: { adapter: "codex", model: "gpt-5.5", effort: "xhigh" },
 					claude: { adapter: "claude", model: "sonnet", effort: "max" },
 				},
 			}),
 		);
-		expect(out).toContain("codex -> codex:gpt-5.5 reasoning=xhigh");
+		expect(out).toContain("codex -> codex:gpt-5.5 effort=xhigh");
 		expect(out).toContain("claude -> claude:sonnet effort=max");
 	});
 

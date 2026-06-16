@@ -32,7 +32,7 @@ const hasTitle = (r: DoctorReport, title: string) => r.checks.some((c) => c.titl
 
 // A sandboxed loop: read-write builder (codex) + read-only critic (gemini) + a check.
 const SANDBOXED = {
-	profiles: { builder: { adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" }, critic: "gemini" },
+	profiles: { builder: { adapter: "codex", model: "gpt-5.5", effort: "xhigh" }, critic: "gemini" },
 	routines: {
 		implement: {
 			input: "task",
@@ -215,18 +215,18 @@ describe("runDoctor --real (injected AdapterProbe)", () => {
 		const dir = project(SANDBOXED);
 		const probe = fakeAdapterProbe();
 		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), probe);
-		expect(statusOf(r, "real codex:gpt-5.5 reasoning=xhigh")).toBe("pass");
+		expect(statusOf(r, "real codex:gpt-5.5 effort=xhigh")).toBe("pass");
 		expect(statusOf(r, "real gemini")).toBe("pass");
 		expect(statusOf(r, "real codex read-only")).toBe("pass");
 		expect(statusOf(r, "real codex read-write")).toBe("pass");
-		expect(probe.reached).toContainEqual({ adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" });
+		expect(probe.reached).toContainEqual({ adapter: "codex", model: "gpt-5.5", effort: "xhigh" });
 		expect(r.ok).toBe(true);
 	});
 
 	test("an unreachable adapter / rejected model fails, and its permission probes are skipped", async () => {
 		const dir = project(SANDBOXED);
 		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), fakeAdapterProbe({ reachOk: false }));
-		expect(statusOf(r, "real codex:gpt-5.5 reasoning=xhigh")).toBe("fail");
+		expect(statusOf(r, "real codex:gpt-5.5 effort=xhigh")).toBe("fail");
 		expect(hasTitle(r, "real codex read-only")).toBe(false);
 		expect(r.ok).toBe(false);
 	});
@@ -262,8 +262,8 @@ describe("makeRealAdapterProbe (mechanics over fake adapters)", () => {
 			},
 		};
 		const probe = makeRealAdapterProbe({ codex: writing });
-		expect((await probe.reach({ adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" })).ok).toBe(true);
-		const p = await probe.permissions({ adapter: "codex", model: "gpt-5.5", reasoningEffort: "xhigh" });
+		expect((await probe.reach({ adapter: "codex", model: "gpt-5.5", effort: "xhigh" })).ok).toBe(true);
+		const p = await probe.permissions({ adapter: "codex", model: "gpt-5.5", effort: "xhigh" });
 		expect(p.readOnlyHeld).toBe(true);
 		expect(p.readWriteWorked).toBe(true);
 	});

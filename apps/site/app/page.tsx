@@ -50,7 +50,7 @@ export default function Home() {
 				<pre>{`{
   "profiles": {
     "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-    "critic": { "adapter": "codex", "model": "gpt-5.5", "reasoningEffort": "xhigh" }
+    "critic": { "adapter": "codex", "model": "gpt-5.5", "effort": "xhigh" }
   },
   "routines": {
     "implement": {
@@ -102,7 +102,7 @@ inputs:
 
 agents:
   builder  builder -> claude:claude-opus-4-8 effort=max      filesystem: read-write
-  critic   critic -> codex:gpt-5.5 reasoning=xhigh           filesystem: read-only
+  critic   critic -> codex:gpt-5.5 effort=xhigh              filesystem: read-only
 
 steps:
   1. build       call builder

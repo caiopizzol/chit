@@ -42,18 +42,17 @@ function startOffset(startedAt: number | undefined, runStart: number): string {
 // A call step's label, including the resolved binding it actually ran on (adapter, plus
 // model when not the default) so trace is an audit record. Legacy receipts without a
 // binding show just the call.
-function bindingLabel(s: { adapter: string; model?: string; effort?: string; reasoningEffort?: string }): string {
+function bindingLabel(s: { adapter: string; model?: string; effort?: string }): string {
 	const parts = [s.adapter];
 	if (s.model !== undefined && s.model !== "default") parts[0] = `${s.adapter}:${s.model}`;
 	if (s.effort !== undefined) parts.push(`effort=${s.effort}`);
-	if (s.reasoningEffort !== undefined) parts.push(`reasoning=${s.reasoningEffort}`);
 	return parts.join(" ");
 }
 
-function callLabel(s: { participant?: string; adapter?: string; model?: string; effort?: string; reasoningEffort?: string }): string {
+function callLabel(s: { participant?: string; adapter?: string; model?: string; effort?: string }): string {
 	const base = `call ${s.participant}`;
 	if (s.adapter === undefined) return base;
-	return `${base} (${bindingLabel({ adapter: s.adapter, ...(s.model !== undefined && { model: s.model }), ...(s.effort !== undefined && { effort: s.effort }), ...(s.reasoningEffort !== undefined && { reasoningEffort: s.reasoningEffort }) })})`;
+	return `${base} (${bindingLabel({ adapter: s.adapter, ...(s.model !== undefined && { model: s.model }), ...(s.effort !== undefined && { effort: s.effort }) })})`;
 }
 
 // A one-line preview of an `ask` question for inspect (questions are often multi-line,

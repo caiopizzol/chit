@@ -22,8 +22,7 @@ export interface AdapterRequest {
 	model?: string;
 	// Resolved profile options. They are adapter-specific and validated before the
 	// run starts; adapters that do not understand a field simply never receive it.
-	effort?: "low" | "medium" | "high" | "max";
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	effort?: string;
 	instructions: string;
 	prompt: string;
 	// Surfaced and passed through so the model is explicit, but NOT yet sandboxed
@@ -114,12 +113,11 @@ export const claudeCliAdapter: Adapter = {
 	},
 };
 
-export function codexCliArgs(req: Pick<AdapterRequest, "model" | "filesystem" | "reasoningEffort">, outFile: string): string[] {
+export function codexCliArgs(req: Pick<AdapterRequest, "model" | "filesystem" | "effort">, outFile: string): string[] {
 	const sandbox = req.filesystem === "read-write" ? "workspace-write" : "read-only";
 	const model = req.model !== undefined && req.model !== "default" ? ["--model", req.model] : [];
-	const reasoning =
-		req.reasoningEffort !== undefined ? ["-c", `model_reasoning_effort="${req.reasoningEffort}"`] : [];
-	return ["codex", "exec", "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral", ...model, ...reasoning, "-o", outFile, "-"];
+	const effortConfig = req.effort !== undefined ? ["-c", `model_reasoning_effort="${req.effort}"`] : [];
+	return ["codex", "exec", "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral", ...model, ...effortConfig, "-o", outFile, "-"];
 }
 
 // A second real adapter: the gemini CLI. Verified empirically (the same checks claude
@@ -230,7 +228,6 @@ export function dispatchingAdapter(agents: Record<string, AgentConfig>, registry
 				...req,
 				...(agentCfg.model !== undefined && { model: agentCfg.model }),
 				...(agentCfg.effort !== undefined && { effort: agentCfg.effort }),
-				...(agentCfg.reasoningEffort !== undefined && { reasoningEffort: agentCfg.reasoningEffort }),
 			});
 		},
 	};

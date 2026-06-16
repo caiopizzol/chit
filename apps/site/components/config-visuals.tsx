@@ -63,7 +63,7 @@ const ANNOTATIONS: { field: string; note: string }[] = [
 const ANNOTATED_CONFIG = `{
   "profiles": {
     "builder": { "adapter": "claude", "model": "claude-opus-4-8", "effort": "max" },
-    "critic": { "adapter": "codex", "model": "gpt-5.5", "reasoningEffort": "xhigh" }
+    "critic": { "adapter": "codex", "model": "gpt-5.5", "effort": "xhigh" }
   },
   "routines": {
     "implement": {

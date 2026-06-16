@@ -54,16 +54,12 @@ function profileKey(profile: AgentConfig): string {
 		adapter: profile.adapter,
 		model: profile.model,
 		effort: profile.effort,
-		reasoningEffort: profile.reasoningEffort,
 	});
 }
 
 function profileLabel(profile: AgentConfig): string {
 	const base = profile.model !== undefined && profile.model !== "default" ? `${profile.adapter}:${profile.model}` : profile.adapter;
-	const options = [
-		...(profile.effort !== undefined ? [`effort=${profile.effort}`] : []),
-		...(profile.reasoningEffort !== undefined ? [`reasoning=${profile.reasoningEffort}`] : []),
-	];
+	const options = [...(profile.effort !== undefined ? [`effort=${profile.effort}`] : [])];
 	return [base, ...options].join(" ");
 }
 
@@ -279,7 +275,6 @@ export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
 					agent: profile.adapter,
 					...(profile.model !== undefined && { model: profile.model }),
 					...(profile.effort !== undefined && { effort: profile.effort }),
-					...(profile.reasoningEffort !== undefined && { reasoningEffort: profile.reasoningEffort }),
 					instructions: "Connectivity check.",
 					prompt: 'Reply with the single word "ok".',
 					filesystem: "read-only",
@@ -305,7 +300,6 @@ export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
 						agent: profile.adapter,
 						...(profile.model !== undefined && { model: profile.model }),
 						...(profile.effort !== undefined && { effort: profile.effort }),
-						...(profile.reasoningEffort !== undefined && { reasoningEffort: profile.reasoningEffort }),
 						instructions: "Permission check.",
 						prompt: 'Create a file named ro.txt containing "x".',
 						filesystem: "read-only",
@@ -322,7 +316,6 @@ export function makeRealAdapterProbe(registry: AdapterRegistry): AdapterProbe {
 						agent: profile.adapter,
 						...(profile.model !== undefined && { model: profile.model }),
 						...(profile.effort !== undefined && { effort: profile.effort }),
-						...(profile.reasoningEffort !== undefined && { reasoningEffort: profile.reasoningEffort }),
 						instructions: "Permission check.",
 						prompt: 'Create a file named rw.txt containing "x".',
 						filesystem: "read-write",

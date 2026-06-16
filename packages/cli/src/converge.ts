@@ -37,7 +37,6 @@ export interface ConvergeStepReceipt {
 	adapter?: string;
 	model?: string;
 	effort?: string;
-	reasoningEffort?: string;
 	status: "ok" | "failed" | "cancelled";
 	// Absolute clock when the step started (see StepReceipt) -- the timeline source.
 	startedAt: number;
@@ -139,7 +138,7 @@ export async function runConverge(
 	const manifest: Manifest = routine.manifest;
 	// A call step's agent id and the adapter/model it resolves to, recorded on every call
 	// receipt (ok, failed, AND cancelled) so trace proves what ran.
-	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string; effort?: string; reasoningEffort?: string } => {
+	const callBinding = (participantId: string): { agent?: string; adapter?: string; model?: string; effort?: string } => {
 		const agentId = manifest.participants[participantId]?.agent;
 		if (agentId === undefined) return {};
 		const b = routine.agents?.[agentId];
@@ -149,7 +148,6 @@ export async function runConverge(
 				adapter: b.adapter,
 				...(b.model !== undefined && { model: b.model }),
 				...(b.effort !== undefined && { effort: b.effort }),
-				...(b.reasoningEffort !== undefined && { reasoningEffort: b.reasoningEffort }),
 			}),
 		};
 	};
