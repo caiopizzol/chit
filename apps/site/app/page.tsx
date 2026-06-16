@@ -111,24 +111,41 @@ export default function Home() {
   }
 }`}</pre>
 
-				<h2>The run says what ran.</h2>
+				<h2>Run it from chat.</h2>
 				<p className="lede">
-					A writing run starts from HEAD in a throwaway git worktree, loops until the checks pass, and stops at a patch.
-					Nothing touches your tree until you apply it. No chat log.
+					You can ask Claude or Codex to run Chit from the session you already have open. Chit still owns the loop, the
+					sandbox, the checks, the receipt, and the patch.
 				</p>
-				<pre className="terminal">
-					<span className="cmd">{`$ chit run implement --input task="add a --version flag"`}</span>
-					{"\n\n"}
-					<span className="pass-line">run converged (2 iterations)</span>
-					{"\n\n"}
-					<span className="meta">{` src/cli.ts          | 7 +++++++
- src/version.test.ts | 14 ++++++++++++++
- 2 files changed, 21 insertions(+)`}</span>
-					{"\n\n"}
-					{`dry run -- the diff above is saved. apply exactly it with:  `}
-					<span className="cmd">chit apply run-a1b5efea</span>
-					{"\n"}
-				</pre>
+				<div className="chat-panel">
+					<div className="chat-message user">
+						<div className="chat-label">You</div>
+						<div className="chat-body">
+							Run Chit for this task: add a <code>--version</code> flag. Use the implement routine and show me the patch
+							before applying it.
+						</div>
+					</div>
+					<div className="chat-message agent">
+						<div className="chat-label">Codex</div>
+						<pre className="terminal">{`$ chit run implement --input task="add a --version flag"
+
+iteration 1
+  call builder done in 1m18s
+  call reviewer done in 22s
+  check bun test -> ok in 640ms
+
+run converged
+
+src/cli.ts          | 7 +++++++
+src/version.test.ts | 14 ++++++++++++++
+2 files changed, 21 insertions(+)
+
+dry run -- review with:
+chit trace --full run-a1b5efea
+
+apply exactly it with:
+chit apply run-a1b5efea`}</pre>
+					</div>
+				</div>
 
 				<h2>Read it before it runs.</h2>
 				<p className="lede">
@@ -155,31 +172,6 @@ limits: per call 30m, whole run 120m
 note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
       discards it); review the diff, then chit apply <run-id> to apply it.`}</pre>
 
-				<h2>Validated before it runs.</h2>
-				<p className="lede">
-					The config is checked against a schema and the parser before any model is called. An impossible binding fails
-					at parse, not three steps in.
-				</p>
-				<div className="receipt-block">
-					<div className="receipt-line pass">
-						<div className="ind" />
-						<div className="label">PASS</div>
-						<div className="body">config valid · profiles bind, the routine resolves, every step is typed</div>
-					</div>
-					<div className="receipt-line fail">
-						<div className="ind" />
-						<div className="label">FAIL</div>
-						<div className="body">
-							impossible binding · <code>codex:sonnet</code> is rejected at parse, before a model runs
-						</div>
-					</div>
-					<div className="receipt-line fail">
-						<div className="ind" />
-						<div className="label">FAIL</div>
-						<div className="body">dirty worktree · a sandboxed run must start from a clean HEAD, or it refuses</div>
-					</div>
-				</div>
-
 				<h2>The dry run is the default.</h2>
 				<p className="lede">A sandboxed run produces a patch and stops. You decide what happens next.</p>
 				<div className="modes">
@@ -203,19 +195,6 @@ note: runs in a git-worktree sandbox -- dry run by default (shows the diff,
 						</div>
 					</div>
 				</div>
-
-				<blockquote>
-					The agents think.
-					<br />
-					chit moves the work.
-					<cite>field note</cite>
-				</blockquote>
-
-				<h3>Honest about being early</h3>
-				<p className="lede">
-					Still intentionally small: no scheduler, hosted service, dynamic routing, durable resume, or visual config
-					editor. Adapters are in: claude, codex, and gemini, picked per agent in config.
-				</p>
 			</div>
 
 			<footer>

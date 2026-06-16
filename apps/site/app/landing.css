@@ -199,6 +199,44 @@
 	color: var(--carbon);
 }
 
+.landing .chat-panel {
+	display: grid;
+	gap: 14px;
+	margin: 18px 0 0;
+}
+.landing .chat-message {
+	border: 1px solid var(--ink);
+	background: var(--sheet);
+	padding: 14px;
+}
+.landing .chat-message.user {
+	margin-left: 56px;
+}
+.landing .chat-message.agent {
+	background: var(--receipt);
+}
+.landing .chat-label {
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--faded);
+	margin: 0 0 8px;
+}
+.landing .chat-body {
+	color: var(--ink);
+	font-size: 14px;
+	line-height: 1.55;
+}
+.landing .chat-body code {
+	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
+	font-size: 0.92em;
+}
+.landing .chat-panel pre.terminal {
+	margin: 0;
+}
+
 .landing .keystone {
 	text-align: center;
 	margin: 96px 0;
@@ -227,53 +265,6 @@
 	margin: 24px auto 0;
 	max-width: 380px;
 	line-height: 1.5;
-}
-
-.landing .receipt-block {
-	border-top: 1px solid var(--ink);
-	margin: 16px 0 0;
-}
-.landing .receipt-line {
-	display: grid;
-	grid-template-columns: 24px 90px 1fr;
-	gap: 12px;
-	padding: 14px 0;
-	border-bottom: 1px dashed var(--ink);
-	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
-	font-size: 13px;
-	align-items: baseline;
-}
-.landing .receipt-line .ind {
-	width: 8px;
-	height: 8px;
-	margin-top: 6px;
-}
-.landing .receipt-line.pass .ind {
-	background: var(--ink);
-	border-radius: 50%;
-}
-.landing .receipt-line.warn .ind {
-	background: transparent;
-	border: 2px solid var(--ink);
-	width: 6px;
-	height: 6px;
-	margin-top: 6px;
-}
-.landing .receipt-line.fail .ind {
-	background: var(--ink);
-	transform: rotate(45deg);
-	margin-left: 1px;
-}
-.landing .receipt-line .label {
-	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.12em;
-	font-size: 11px;
-	color: var(--ink);
-}
-.landing .receipt-line .body {
-	color: var(--ink);
-	font-family: var(--font-chit-body), "Inter", sans-serif;
 }
 
 .landing .modes {
@@ -316,30 +307,6 @@
 }
 .landing .graph text {
 	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
-}
-
-.landing blockquote {
-	border-left: none;
-	margin: 64px 0 32px;
-	padding: 0;
-	font-family: var(--font-chit-display), "Bricolage Grotesque", serif;
-	font-size: 32px;
-	line-height: 1.2;
-	color: var(--ink);
-	font-weight: 700;
-	text-align: center;
-	letter-spacing: -0.025em;
-}
-.landing blockquote cite {
-	display: block;
-	font-family: var(--font-chit-mono), "JetBrains Mono", monospace;
-	font-size: 10px;
-	font-weight: 400;
-	font-style: normal;
-	color: var(--faded);
-	margin-top: 18px;
-	letter-spacing: 0.18em;
-	text-transform: uppercase;
 }
 
 .landing footer {
@@ -399,13 +366,12 @@
 		text-decoration-thickness: 3px;
 		text-underline-offset: 6px;
 	}
-	.landing blockquote {
-		font-size: 24px;
-		margin: 48px 0 24px;
-	}
 	.landing pre {
 		font-size: 11.5px;
 		padding: 14px 16px;
+	}
+	.landing .chat-message.user {
+		margin-left: 0;
 	}
 	.landing .signature {
 		font-size: 9px;
@@ -418,13 +384,6 @@
 	.landing nav .right a {
 		margin-left: 14px;
 		font-size: 11px;
-	}
-	.landing .receipt-line {
-		grid-template-columns: 20px 64px 1fr;
-		gap: 8px;
-	}
-	.landing .receipt-line .body {
-		font-size: 12px;
 	}
 	.landing footer {
 		padding: 20px 24px;
