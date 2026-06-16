@@ -1,11 +1,26 @@
 {
 	"name": "@chit-run/cli",
 	"version": "0.0.0",
-	"private": true,
+	"private": false,
 	"type": "module",
 	"description": "A thin local runtime for declared multi-model workflows.",
+	"license": "MIT",
+	"homepage": "https://chit.run",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/caiopizzol/chit.git",
+		"directory": "packages/cli"
+	},
 	"bin": {
 		"chit": "./src/index.ts"
+	},
+	"files": [
+		"src",
+		"schemas",
+		"!src/**/*.test.ts"
+	],
+	"publishConfig": {
+		"access": "public"
 	},
 	"scripts": {
 		"chit": "bun run src/index.ts",

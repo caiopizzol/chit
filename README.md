@@ -15,7 +15,7 @@ Docs: https://chit.run/docs
 Chit shells out to the agent CLIs you already use, so install at least one (`claude`, `codex`, or `gemini`). Then install Chit and run it in your project:
 
 ```sh
-bun add -g @chit-run/cli          # or: npm install -g @chit-run/cli
+bun add -g @chit-run/cli
 
 cd /path/to/your-project
 chit init implement --template loop   # writes chit.config.json
