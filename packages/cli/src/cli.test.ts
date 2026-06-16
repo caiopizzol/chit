@@ -264,6 +264,7 @@ describe("chit apply", () => {
 		expect(out.join("\n")).toContain("applied run run-test");
 		expect(appliedPatch).toBe("PATCH-BODY"); // exactly the reviewed diff, not a re-roll
 		expect(appliedBase).toBe("base0000"); // applied onto the recorded base
+		expect((loadReceipt(deps.cwd, "run-test") as ConvergeReceipt).appliedAt).toBeDefined(); // durable "applied" marker recorded
 	});
 
 	test("refuses an unknown run id", async () => {

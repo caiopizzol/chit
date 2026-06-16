@@ -228,4 +228,13 @@ describe("patchStatus (derived from git)", () => {
 		sh(dir, "git add -A && git commit -q -m move");
 		expect(await patchStatus(dir, "run-p", base)).toBe("blocked");
 	});
+
+	test("applied (durable) once appliedAt is recorded, even after HEAD moved and the patch no longer applies", async () => {
+		const { dir, base } = gitRepo();
+		savePatch(dir, "run-p", pendingPatch(dir));
+		writeFileSync(join(dir, "b.txt"), "other\n");
+		sh(dir, "git add -A && git commit -q -m move");
+		expect(await patchStatus(dir, "run-p", base)).toBe("blocked"); // derived: committed, but the patch no longer applies
+		expect(await patchStatus(dir, "run-p", base, 123)).toBe("applied"); // durable: Chit recorded applying it
+	});
 });

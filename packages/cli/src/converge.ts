@@ -84,6 +84,10 @@ export interface ConvergeReceipt {
 	// dirty origin or a conflict). The run still succeeded in the sandbox and still
 	// leaves this durable receipt; only the write-back failed.
 	applyError?: string;
+	// Set when `chit apply` (or --auto-apply) applied this run's patch to the operator's tree. A
+	// durable fact: `chit runs` keeps reading "applied" even after later commits move HEAD so the
+	// stored patch no longer re-applies cleanly (the other statuses are derived live from git).
+	appliedAt?: number;
 }
 
 export interface SandboxReceipt {

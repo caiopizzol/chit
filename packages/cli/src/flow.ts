@@ -163,6 +163,8 @@ export interface FlowReceipt {
 	// Set when the terminal sandboxed step converged but its write-back to origin failed.
 	// Persisted here so `chit trace <flowRunId>` shows it, not just the sub-run's receipt.
 	applyError?: string;
+	// Set when this flow's terminal patch was applied to the operator's tree (durable; see ConvergeReceipt).
+	appliedAt?: number;
 }
 
 export interface FlowRunResult {

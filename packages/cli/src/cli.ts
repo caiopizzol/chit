@@ -185,7 +185,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						...(r.scope !== undefined && { scope: r.scope }),
 						ageMs: now - r.startedAt,
 						inputs: r.inputs,
-						patch: await patchStatus(deps.cwd, r.runId, "baseCommit" in r ? r.baseCommit : undefined),
+						patch: await patchStatus(deps.cwd, r.runId, "baseCommit" in r ? r.baseCommit : undefined, "appliedAt" in r ? r.appliedAt : undefined),
 					})),
 			);
 			deps.out(formatRunList(items, scope));
@@ -258,6 +258,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
 				);
+				if (result.applied === true) result.receipt.appliedAt = deps.now();
 				saveReceipt(deps.cwd, result.receipt);
 				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
 				if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "" && result.receipt.status === "completed") savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
@@ -317,6 +318,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					},
 					args.scope !== undefined ? { scope: args.scope } : {},
 				);
+				if (result.applied === true) result.receipt.appliedAt = deps.now();
 				saveReceipt(deps.cwd, result.receipt);
 				// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
 				if (result.receipt.status === "converged" && result.patch.trim() !== "") savePatch(deps.cwd, result.receipt.runId, result.patch);
@@ -422,6 +424,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				}
 				throw e;
 			}
+			// Record that Chit applied this patch: a durable "applied" status that survives later commits.
+			(receipt as { appliedAt?: number }).appliedAt = deps.now();
+			saveReceipt(deps.cwd, receipt);
 			deps.out(`applied run ${id} to ${deps.cwd}.  (chit trace ${id})`);
 			return 0;
 		}
