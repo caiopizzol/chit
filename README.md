@@ -1,4 +1,4 @@
-# Chit
+# chit
 
 [![npm version](https://img.shields.io/npm/v/@chit-run/cli.svg)](https://www.npmjs.com/package/@chit-run/cli)
 
