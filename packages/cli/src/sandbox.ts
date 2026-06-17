@@ -7,7 +7,9 @@
 import {
 	existsSync,
 	lstatSync,
+	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	symlinkSync,
@@ -15,7 +17,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 export interface Sandbox {
 	// Where steps run (passed as the adapter/check cwd). Edits here never touch origin.
@@ -151,13 +153,17 @@ async function gitOrThrow(args: string[], cwd: string, stdin?: string): Promise<
 }
 
 // node_modules is gitignored, so a worktree from HEAD lacks it and checks that need
-// deps would fail. Symlink it from origin and keep it out of every diff/stage.
-const EXCLUDE_NM = ":(exclude)node_modules";
+// deps would fail. Symlink dependency dirs from origin and keep them out of every diff/stage.
+const EXCLUDE_NODE_MODULES = [
+	":(exclude)node_modules",
+	":(exclude,glob)**/node_modules",
+	":(exclude,glob)**/node_modules/**",
+];
 
 // chit writes its own receipts/patches under .chit/. That bookkeeping is not the operator's
 // uncommitted work, so it must never count as a "dirty" tree in the preflight / apply checks
 // (a fresh repo where .chit is not gitignored would otherwise always look dirty).
-const DIRTY_CHECK_PATHSPEC = ["--", ".", ":(exclude).chit", EXCLUDE_NM];
+const DIRTY_CHECK_PATHSPEC = ["--", ".", ":(exclude).chit", ...EXCLUDE_NODE_MODULES];
 
 // The liveness lock filename inside a sandbox's parent dir. Holds the owning run's
 // pid so `chit cleanup` can tell an interrupted-run leftover from a live sandbox.
@@ -188,32 +194,32 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		// `git worktree list` reports already carries one. cleanup keys off it.
 		writeFileSync(join(parent, OWNER_LOCK), String(process.pid));
 		await gitOrThrow(["worktree", "add", "--detach", workDir, baseCommit], repoRoot);
-		const nm = join(repoRoot, "node_modules");
-		if (existsSync(nm) && !existsSync(join(workDir, "node_modules"))) {
-			symlinkSync(nm, join(workDir, "node_modules"));
-		}
+		const dependencyLinks = mirrorDependencyDirs(repoRoot, workDir);
 
-		const stage = () => gitOrThrow(["add", "-A", "--", ".", EXCLUDE_NM], workDir);
+		const stage = () => gitOrThrow(["add", "-A", "--", ".", ...EXCLUDE_NODE_MODULES], workDir);
 		// The re-appliable patch: a staged binary diff. Used both to store (dry run) and to
 		// apply (--auto-apply), so what `chit apply` re-plays is byte-identical to what ran here.
 		const binaryPatch = async () => {
 			await stage();
-			return gitOrThrow(["diff", "--cached", "--binary", "--", ".", EXCLUDE_NM], workDir);
+			return gitOrThrow(["diff", "--cached", "--binary", "--", ".", ...EXCLUDE_NODE_MODULES], workDir);
 		};
 
 		return {
 			workDir,
 			async diff() {
 				await stage();
-				return gitOrThrow(["diff", "--cached", "--", ".", EXCLUDE_NM], workDir);
+				return gitOrThrow(["diff", "--cached", "--", ".", ...EXCLUDE_NODE_MODULES], workDir);
 			},
 			async diffStat() {
 				await stage();
-				return (await gitOrThrow(["diff", "--cached", "--stat", "--", ".", EXCLUDE_NM], workDir)).trim();
+				return (await gitOrThrow(["diff", "--cached", "--stat", "--", ".", ...EXCLUDE_NODE_MODULES], workDir)).trim();
 			},
 			async status() {
 				await stage();
-				const out = await gitOrThrow(["diff", "--cached", "--name-status", "--", ".", EXCLUDE_NM], workDir);
+				const out = await gitOrThrow(
+					["diff", "--cached", "--name-status", "--", ".", ...EXCLUDE_NODE_MODULES],
+					workDir,
+				);
 				return out.split("\n").filter(Boolean);
 			},
 			async patch() {
@@ -226,11 +232,12 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 				if (!r.ok) throw new Error(`could not apply sandbox changes to ${repoRoot}: ${r.err.trim()}`);
 			},
 			async discard() {
-				const link = join(workDir, "node_modules");
-				try {
-					if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
-				} catch {
-					// no symlink to clean
+				for (const link of dependencyLinks) {
+					try {
+						if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
+					} catch {
+						// no symlink to clean
+					}
 				}
 				await git(["worktree", "remove", "--force", workDir], repoRoot);
 				await git(["worktree", "prune"], repoRoot);
@@ -262,6 +269,40 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		if (!r.ok) throw new ApplyError(`could not apply: ${r.err.trim()}`);
 	},
 };
+
+const SKIP_DEPENDENCY_DISCOVERY_DIRS = new Set([".chit", ".git"]);
+
+function mirrorDependencyDirs(repoRoot: string, workDir: string): string[] {
+	const links: string[] = [];
+	for (const source of findDependencyDirs(repoRoot)) {
+		const target = join(workDir, relative(repoRoot, source));
+		if (existsSync(target)) continue;
+		mkdirSync(dirname(target), { recursive: true });
+		symlinkSync(source, target);
+		links.push(target);
+	}
+	return links;
+}
+
+function findDependencyDirs(repoRoot: string): string[] {
+	const found: string[] = [];
+	const stack = [repoRoot];
+	while (stack.length > 0) {
+		const dir = stack.pop();
+		if (dir === undefined) break;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+			if (SKIP_DEPENDENCY_DISCOVERY_DIRS.has(entry.name)) continue;
+			const path = join(dir, entry.name);
+			if (entry.name === "node_modules") {
+				found.push(path);
+				continue;
+			}
+			if (entry.isDirectory()) stack.push(path);
+		}
+	}
+	return found;
+}
 
 // Reap sandbox worktrees left behind by an INTERRUPTED run (a force-kill skips the
 // `finally { discard() }`). Considers only worktrees carrying the chit-sbx marker

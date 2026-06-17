@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fakeSandbox, gitWorktreeSandboxFactory, reapStaleSandboxes } from "./sandbox.ts";
@@ -92,6 +92,29 @@ describe("gitWorktreeSandbox (real git)", () => {
 		const sb = await gitWorktreeSandboxFactory.create(repo, "pinned", baseCommit);
 		expect(readFileSync(join(sb.workDir, "a.txt"), "utf-8")).toBe("hello\n");
 		await sb.discard();
+	});
+
+	test("mirrors package-local node_modules into the sandbox without staging them", async () => {
+		const repo = newRepo();
+		const sh = (cmd: string) => {
+			const r = Bun.spawnSync(["sh", "-c", cmd], { cwd: repo });
+			if (r.exitCode !== 0) throw new Error(`${cmd}: ${new TextDecoder().decode(r.stderr)}`);
+		};
+		mkdirSync(join(repo, "packages", "bench"), { recursive: true });
+		writeFileSync(join(repo, "packages", "bench", "package.json"), "{}\n");
+		sh("git add -A && git commit -q -m package");
+
+		mkdirSync(join(repo, "packages", "bench", "node_modules", ".bin"), { recursive: true });
+		writeFileSync(join(repo, "packages", "bench", "node_modules", ".bin", "tsx"), "#!/bin/sh\n");
+
+		const sb = await createSandbox(repo, "package-deps");
+		const packageNodeModules = join(sb.workDir, "packages", "bench", "node_modules");
+		expect(lstatSync(packageNodeModules).isSymbolicLink()).toBe(true);
+		expect(existsSync(join(packageNodeModules, ".bin", "tsx"))).toBe(true);
+		expect((await sb.status()).join("\n")).not.toContain("node_modules");
+		expect(await sb.diff()).not.toContain("node_modules");
+		await sb.discard();
+		expect(existsSync(sb.workDir)).toBe(false);
 	});
 
 	test("reapStaleSandboxes removes a leftover sandbox whose owner is gone (interrupted run)", async () => {
