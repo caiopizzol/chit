@@ -1215,6 +1215,67 @@ describe("chit trace", () => {
 	});
 });
 
+describe("chit result", () => {
+	test("emits the compact machine contract for a finished converge run", async () => {
+		// Run a real sandboxed loop (checks-pass) through the CLI so the receipt is genuine.
+		await runCli(["run", "impl-review", "--input", "task=x"], harness().deps);
+
+		const { deps, out } = harness();
+		expect(await runCli(["result", "run-test", "--json"], deps)).toBe(0);
+		expect(out.length).toBe(1); // stdout is exactly one JSON object
+		const result = JSON.parse(out.join("\n"));
+		expect(result).toMatchObject({
+			runId: "run-test",
+			routineId: "impl-review",
+			phase: "finished",
+			done: true,
+			status: "converged",
+			exitCode: 0,
+			until: "checks-pass",
+			signals: [{ kind: "checks-pass", passed: true }],
+			checks: [{ stepId: "verify", command: "bun test", ok: true }],
+			structuredSteps: {},
+		});
+		// A converged run stored a patch; the path is project-relative and apply readiness is a boolean.
+		expect(result.patchPath).toBe(".chit/runs/run-test.patch");
+		expect(typeof result.applyReady).toBe("boolean");
+		expect(result.debugPatchPath).toBeNull();
+	});
+
+	test("works without --json too (result is the machine contract)", async () => {
+		await runCli(["run", "impl-review", "--input", "task=x"], harness().deps);
+		const { deps, out } = harness();
+		expect(await runCli(["result", "run-test"], deps)).toBe(0);
+		expect(JSON.parse(out.join("\n"))).toMatchObject({ runId: "run-test", phase: "finished" });
+	});
+
+	test("errors for a run with no receipt yet and points at the live surfaces", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["result", "run-ghost", "--json"], deps)).toBe(1);
+		expect(err.join("\n")).toMatch(/no finished run "run-ghost" found .*chit status \/ chit wait/);
+	});
+
+	test("needs a run id", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["result"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("result needs a run id");
+	});
+
+	test("rejects an unknown option", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["result", "run-test", "--full"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("unknown option --full");
+	});
+
+	test("`chit result --help` prints focused help", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["result", "--help"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("chit result <run-id> [--json]");
+		expect(text).toContain("repeat.until");
+	});
+});
+
 describe("chit apply", () => {
 	test("a dry run stores a patch that `chit apply` re-plays exactly (same base)", async () => {
 		let appliedPatch: string | undefined;
