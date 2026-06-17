@@ -10,11 +10,12 @@ function readJson(path: string): unknown {
 	return JSON.parse(readFileSync(path, "utf-8"));
 }
 
-const schema = readJson(join(process.cwd(), "schemas/chit.schema.json")) as AnySchema;
+const PACKAGE_ROOT = join(import.meta.dir, "..");
+const schema = readJson(join(PACKAGE_ROOT, "schemas/chit.schema.json")) as AnySchema;
 
 function configPaths(): string[] {
-	const paths = [join(process.cwd(), "chit.config.json")];
-	const scenarios = join(process.cwd(), "test/scenarios");
+	const paths = [join(PACKAGE_ROOT, "examples/chit.config.json")];
+	const scenarios = join(PACKAGE_ROOT, "test/scenarios");
 	for (const dir of readdirSync(scenarios, { withFileTypes: true })) {
 		if (dir.isDirectory()) paths.push(join(scenarios, dir.name, "chit.config.json"));
 	}

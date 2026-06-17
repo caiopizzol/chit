@@ -7,8 +7,8 @@
 		"packages/*"
 	],
 	"scripts": {
-		"chit": "bun packages/cli/src/index.ts",
-		"cli": "bun packages/cli/src/index.ts",
+		"chit": "bun --no-env-file packages/cli/src/index.ts",
+		"cli": "bun --no-env-file packages/cli/src/index.ts",
 		"format": "biome check --write .",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",

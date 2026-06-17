@@ -6,7 +6,7 @@
 // and return 0 chars -- a real composed flow's planning step produced empty output that
 // way, which then failed the downstream step's required input.)
 //
-// Run from the repo root, where chit.config.json + examples/ live:
+// Run with:
 //   CHIT_REAL_SMOKE=1 bun test src/real-smoke.test.ts
 
 import { describe, expect, test } from "bun:test";
@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCliAdapter, codexCliAdapter, dispatchingAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
-import { loadConfig } from "./config.ts";
+import { parseConfig } from "./config.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
 import { parseManifest } from "./manifest.ts";
 import { type ResolvedRoutine, resolveRoutine } from "./routine.ts";
@@ -23,7 +23,11 @@ import { type RunDeps, runOneShot } from "./run.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 
 const REAL = process.env.CHIT_REAL_SMOKE === "1";
-const CWD = process.cwd();
+const CWD = join(import.meta.dir, "..");
+const EXAMPLE_CONFIG = parseConfig(
+	JSON.parse(readFileSync(join(CWD, "examples/chit.config.json"), "utf-8")),
+	"examples/chit.config.json",
+);
 
 function realDeps(): RunDeps {
 	return { adapter: claudeCliAdapter, cwd: CWD, now: () => Date.now(), newRunId: () => "smoke" };
@@ -31,14 +35,14 @@ function realDeps(): RunDeps {
 
 (REAL ? describe : describe.skip)("real-claude smoke: read-only routines return output", () => {
 	test("investigate returns non-empty output", async () => {
-		const routine = resolveRoutine(loadConfig(CWD), "investigate", CWD);
+		const routine = resolveRoutine(EXAMPLE_CONFIG, "investigate", CWD);
 		const r = await runOneShot(routine, { bug: "dark mode toggle fails to persist" }, realDeps());
 		expect(r.status).toBe("completed");
 		expect((r.output ?? "").length).toBeGreaterThan(50);
 	}, 600_000);
 
 	test("plan returns non-empty output", async () => {
-		const routine = resolveRoutine(loadConfig(CWD), "plan", CWD);
+		const routine = resolveRoutine(EXAMPLE_CONFIG, "plan", CWD);
 		const r = await runOneShot(routine, { task: "add a dark mode toggle" }, realDeps());
 		expect(r.status).toBe("completed");
 		expect((r.output ?? "").length).toBeGreaterThan(50);

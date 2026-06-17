@@ -1,0 +1,20 @@
+{
+	"$schema": "https://chit.run/schemas/chit.schema.json",
+	"profiles": {
+		"planner": "claude",
+		"builder": "claude",
+		"reviewer": "codex",
+		"judge": "codex"
+	},
+	"routines": {
+		"plan": { "file": "examples/plan.json" },
+		"investigate": { "file": "examples/investigate.json" },
+		"implement": {
+			"file": "examples/implement.json",
+			"defaults": { "maxIterations": 3 }
+		},
+		"fix": { "file": "examples/fix.json" },
+		"review": { "file": "examples/review.json" },
+		"goal": { "file": "examples/goal.json" }
+	}
+}

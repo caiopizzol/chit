@@ -53,15 +53,19 @@ function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {})
 		now: () => ++t,
 		newRunId: () => "run-s",
 		apply: over.apply ?? false,
+		...(over.onProgress !== undefined && { onProgress: over.onProgress }),
 	};
 	return { deps, adapter: adapter as ReturnType<typeof fakeAdapter>, sandbox: () => sandbox };
 }
 
 describe("runConvergeInSandbox", () => {
 	test("runs the loop in the sandbox workDir, not the origin", async () => {
-		const h = harness();
+		const progress: string[] = [];
+		const h = harness({ onProgress: (line) => progress.push(line) });
 		await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
 		expect(h.adapter.calls.every((c) => c.cwd === "/sandbox")).toBe(true);
+		expect(progress[0]).toBe("run run-s");
+		expect(progress[1]).toBe("  creating sandbox (git worktree) ...");
 	});
 
 	test("dry-run by default: converges, shows the diff, does NOT apply, always discards", async () => {

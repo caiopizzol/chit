@@ -1,7 +1,9 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file
 // The bin: wire the real world (claude CLI adapter, wall clock, random ids,
 // stdout/stderr, cwd) into runCli and exit with its code.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { claudeCliAdapter, codexCliAdapter, geminiCliAdapter } from "./adapter.ts";
 import { argvCheckRunner } from "./check-runner.ts";
@@ -50,6 +52,15 @@ function askOnStdin(question: string): Promise<string> {
 	});
 }
 
+function packageVersion(): string {
+	try {
+		const raw = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf-8")) as { version?: unknown };
+		return typeof raw.version === "string" ? raw.version : "unknown";
+	} catch {
+		return "unknown";
+	}
+}
+
 const code = await runCli(process.argv.slice(2), {
 	cwd: process.cwd(),
 	// Adapter registry keyed by adapter type. Adding another backend is one more entry
@@ -66,6 +77,7 @@ const code = await runCli(process.argv.slice(2), {
 	signal: controller.signal,
 	askUser: askOnStdin,
 	doctorProbes: realDoctorProbes,
+	runtime: { version: packageVersion(), entrypoint: Bun.main },
 });
 
 process.exit(code);

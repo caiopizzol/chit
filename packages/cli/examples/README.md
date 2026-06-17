@@ -1,9 +1,10 @@
 # Chit examples
 
-These are copyable starter routines. They are ordinary config files, not built-in modes.
+These are copyable starter examples. The config points at the routine files in this folder.
 
 | Example | Use it for |
 | --- | --- |
+| `chit.config.json` | Start from the packaged routine examples. |
 | `plan.json` | Turn a backlog item or feature request into a small plan. |
 | `investigate.json` | Triage a bug read-only before changing code. |
 | `implement.json` | Implement a feature with review and checks. |

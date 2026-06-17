@@ -1,16 +1,16 @@
-// The tests elsewhere call runCli(...) directly; these spawn the ACTUAL binary
-// (`bun src/index.ts ...`) in a temp cwd and assert exit codes + output. That covers
+// The tests elsewhere call runCli(...) directly; these spawn the ACTUAL executable
+// (`src/index.ts ...`) in a temp cwd and assert exit codes + output. That covers
 // what only the process boundary can: argv parsing, process.exit codes, the bin's
-// adapter-registry wiring, and the no-config / unknown-command paths an operator hits.
+// shebang, adapter-registry wiring, and the no-config / unknown-command paths an operator hits.
 // The deterministic cases need no model; one guarded case runs a real routine.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const BIN = join(import.meta.dir, "index.ts");
-const REPO = join(import.meta.dir, ".."); // repo root: has chit.config.json + examples/
+const REPO = join(import.meta.dir, "..");
 
 const dirs: string[] = [];
 function tmp(): string {
@@ -23,8 +23,15 @@ afterEach(() => {
 });
 
 function run(args: string[], cwd: string): { code: number | null; out: string; err: string } {
-	const r = Bun.spawnSync(["bun", BIN, ...args], { cwd });
+	const r = Bun.spawnSync([BIN, ...args], { cwd });
 	return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+}
+
+function exampleProject(): string {
+	const cwd = tmp();
+	cpSync(join(REPO, "examples"), join(cwd, "examples"), { recursive: true });
+	cpSync(join(REPO, "examples/chit.config.json"), join(cwd, "chit.config.json"));
+	return cwd;
 }
 
 describe("CLI process: the real binary (no model)", () => {
@@ -93,7 +100,7 @@ describe("CLI process: the real binary (no model)", () => {
 				output: "out",
 			}),
 		);
-		const r = Bun.spawnSync(["bun", BIN, "run", "echo"], { cwd, stdin: Buffer.from("Ada\n") });
+		const r = Bun.spawnSync([BIN, "run", "echo"], { cwd, stdin: Buffer.from("Ada\n") });
 		expect(r.exitCode).toBe(0);
 		expect(r.stdout.toString()).toContain("hello Ada"); // the typed answer flowed into the format step
 	});
@@ -192,12 +199,37 @@ describe("CLI process: the real binary (no model)", () => {
 		expect(r.code).toBe(1);
 		expect(r.err).toMatch(/Commit or stash/);
 	});
+
+	test("does not load a project .env into Chit or spawned checks", () => {
+		const cwd = tmp();
+		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
+		sh("git init -q && git config user.email t@t.co && git config user.name t");
+		writeFileSync(join(cwd, ".env"), "CHIT_ENV_LEAK_TEST=leaked\n");
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { envcheck: { file: "envcheck.json" } }, profiles: {} }),
+		);
+		writeFileSync(
+			join(cwd, "envcheck.json"),
+			JSON.stringify({
+				id: "envcheck",
+				inputs: {},
+				steps: [{ id: "env", check: [{ command: "sh", args: ["-c", 'test -z "$CHIT_ENV_LEAK_TEST"'] }] }],
+				repeat: { until: "checks-pass", maxIterations: 1 },
+			}),
+		);
+		sh("git add -A && git commit -q -m init");
+
+		const r = run(["run", "envcheck"], cwd);
+		expect(r.code).toBe(0);
+		expect(r.out).toContain("run converged");
+	});
 });
 
 (process.env.CHIT_REAL_SMOKE === "1" ? describe : describe.skip)("CLI process: a real run through the binary", () => {
-	test("`bun src/index.ts run plan` returns output and exits 0", () => {
-		const r = Bun.spawnSync(["bun", BIN, "run", "plan", "--input", "task=add a status command"], {
-			cwd: REPO,
+	test("`src/index.ts run plan` returns output and exits 0", () => {
+		const r = Bun.spawnSync([BIN, "run", "plan", "--input", "task=add a status command"], {
+			cwd: exampleProject(),
 		});
 		expect(r.exitCode).toBe(0);
 		expect(r.stdout.toString().length).toBeGreaterThan(50);

@@ -22,6 +22,14 @@ chit run implement --input task="add a --version flag"
 chit apply <run-id>
 ```
 
+If your shell cannot find `chit` after install, add Bun's global bin directory to `PATH`:
+
+```sh
+export PATH="$(bun pm bin -g):$PATH"
+```
+
+Add the same line to your shell startup file to keep it in new terminals.
+
 `chit init` writes `chit.config.json`. Replace the placeholder check with your real command, such as `bun test`. Full walkthrough: [chit.run/docs](https://chit.run/docs).
 
 ## The Config Model
@@ -95,7 +103,7 @@ chit apply run-a1b5efea
 
 ## Examples
 
-The examples are normal routines, not built-in modes: [plan](packages/cli/examples/plan.json), [investigate](packages/cli/examples/investigate.json), [implement](packages/cli/examples/implement.json), [fix](packages/cli/examples/fix.json), [review](packages/cli/examples/review.json), and [goal](packages/cli/examples/goal.json). `chit init --template` uses small built-in starter templates; these examples are copyable references.
+The examples are copyable references, not built-in modes: [config](packages/cli/examples/chit.config.json), [plan](packages/cli/examples/plan.json), [investigate](packages/cli/examples/investigate.json), [implement](packages/cli/examples/implement.json), [fix](packages/cli/examples/fix.json), [review](packages/cli/examples/review.json), and [goal](packages/cli/examples/goal.json). `chit init --template` uses small built-in starter templates.
 
 ## Commands
 
@@ -119,10 +127,13 @@ To work on Chit itself, clone and run from source:
 git clone https://github.com/caiopizzol/chit
 cd chit && bun install
 cd packages/cli
-bun run src/index.ts routines
-bun run src/index.ts run plan --input task="add dark mode"
+cp examples/chit.config.json chit.config.json
+bun run chit routines
+bun run chit run plan --input task="add dark mode"
 bun test
 ```
+
+`packages/cli/chit.config.json` is ignored, so local model and routine choices stay out of commits.
 
 ## Boundaries
 

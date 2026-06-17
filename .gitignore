@@ -1,6 +1,14 @@
 node_modules/
-.chit/
 *.log
+
+# Local Chit dogfooding state.
+/chit.config.json
+/chit.local.json
+/routines/
+/packages/cli/chit.config.json
+/packages/cli/chit.local.json
+/packages/cli/routines/
+.chit/
 
 # site (Next.js + Fumadocs) build + generated output
 .next/

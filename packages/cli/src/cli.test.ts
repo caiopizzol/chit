@@ -90,6 +90,7 @@ function harness(
 		sandboxDiff?: string;
 		applyError?: string;
 		onApplyPatch?: (patch: string, base: string) => void;
+		runtime?: CliDeps["runtime"];
 	} = {},
 ) {
 	const out: string[] = [];
@@ -107,6 +108,7 @@ function harness(
 		newRunId: () => "run-test",
 		out: (l) => out.push(l),
 		err: (l) => err.push(l),
+		runtime: over.runtime ?? { version: "0.0.0-test", entrypoint: "/tmp/chit-test/src/index.ts" },
 	};
 	return { deps, out, err };
 }
@@ -513,6 +515,16 @@ describe("chit doctor", () => {
 		expect(await runCli(["doctor", "--reel"], deps)).toBe(1);
 		expect(err.join("\n")).toMatch(/unknown option --reel/);
 	});
+
+	test("shows the running Chit version and entrypoint", async () => {
+		const { deps, out } = harness();
+		deps.doctorProbes = {
+			commandExists: async () => true,
+			gitState: async () => ({ isRepo: true, clean: true }),
+		};
+		expect(await runCli(["doctor"], deps)).toBe(0);
+		expect(out.join("\n")).toContain("version 0.0.0-test, entrypoint /tmp/chit-test/src/index.ts");
+	});
 });
 
 describe("chit help", () => {
@@ -520,5 +532,17 @@ describe("chit help", () => {
 		const { deps, out } = harness();
 		expect(await runCli([], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/chit routines/);
+	});
+});
+
+describe("chit version", () => {
+	test("prints the version, with optional entrypoint detail", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["--version"], deps)).toBe(0);
+		expect(out).toEqual(["chit 0.0.0-test"]);
+
+		out.length = 0;
+		expect(await runCli(["--version", "--verbose"], deps)).toBe(0);
+		expect(out).toEqual(["chit 0.0.0-test", "entrypoint /tmp/chit-test/src/index.ts"]);
 	});
 });

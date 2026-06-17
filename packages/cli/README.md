@@ -16,6 +16,14 @@ chit run implement --input task="add a --version flag"
 chit apply <run-id>                   # apply the reviewed patch
 ```
 
+If your shell cannot find `chit` after install, add Bun's global bin directory to `PATH`:
+
+```sh
+export PATH="$(bun pm bin -g):$PATH"
+```
+
+Add the same line to your shell startup file to keep it in new terminals.
+
 Replace the placeholder check in `chit.config.json` with your real command, such as `bun test`. A routine with a check or a writing agent runs in a disposable git sandbox, dry-run by default: it produces a patch and stops. You review the receipt, then `chit apply` writes the exact patch.
 
 ## A routine
@@ -64,7 +72,7 @@ How it runs is derived from the routine's shape: a `repeat` makes it a loop; a c
 
 ## Examples
 
-Starter examples: [plan](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/plan.json), [investigate](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/investigate.json), [implement](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/implement.json), [fix](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/fix.json), [review](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/review.json), and [goal](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/goal.json). `chit init --template` uses built-in starter templates; these files are copyable references.
+Starter examples: [config](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/chit.config.json), [plan](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/plan.json), [investigate](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/investigate.json), [implement](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/implement.json), [fix](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/fix.json), [review](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/review.json), and [goal](https://github.com/caiopizzol/chit/blob/main/packages/cli/examples/goal.json). `chit init --template` uses built-in starter templates; these files are copyable references.
 
 ## Early
 
