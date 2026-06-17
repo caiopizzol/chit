@@ -36,6 +36,7 @@ import {
 	unregisterLiveRun,
 } from "./live.ts";
 import { isComposition, isSandboxed, kindLabel, type Manifest, type Step } from "./manifest.ts";
+import { buildRunResult } from "./result.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { finishedStateFromReceipt, liveRunState, type RunState, readRunState, receiptExitCode } from "./runstate.ts";
@@ -133,12 +134,14 @@ const USAGE = `chit -- run declared routines
       --auto-apply                    automation: apply immediately, skipping the dry-run review (prefer chit apply)
       --background                    start in another Chit process; use chit wait <run-id>
   chit trace <run-id> [--full]        show a past run's receipt (--full adds the stored inputs + output)
+  chit result <run-id> [--json]       compact machine-readable result (apply readiness, signals, next command)
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
   chit --version [--verbose]          print the installed version, plus entrypoint with --verbose
 
 Global: --project <path> (or CHIT_PROJECT) points any command at another project dir,
-so an agent can run from any cwd. ps, status, and wait take --json for machine-readable state.
+so an agent can run from any cwd. ps, status, and wait take --json for machine-readable lifecycle
+state; result is the compact machine-readable contract for a finished run.
 
 A routine is a declared workflow. How it runs is derived from the shape: routine
 steps compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.
@@ -210,6 +213,13 @@ the agent/model each call resolves to. Reads config and the manifest; runs nothi
 
 Show a past run's receipt: status, timeline, the model each step ran on, and checks. --full
 also prints the stored inputs, final output, and patch. Receipts never store model transcripts.`,
+	result: `chit result <run-id> [--json]
+
+Print one JSON object for a finished run: outcome, apply readiness, patch and debug-patch paths,
+the declared repeat.until with each condition evaluated as a signal, structured step outputs,
+checks, and a suggested next command. The signal model comes from the routine; verdict/review steps
+are ordinary conditions, not built-in concepts. Where \`chit trace\` is the human audit surface,
+\`result\` is the machine contract. Needs a written receipt; for a live run use chit status / chit wait.`,
 	apply: `chit apply <run-id>
 
 Apply the exact patch a prior sandboxed dry run produced (the one you reviewed) to your tree,
@@ -798,6 +808,27 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const receipt = loadReceipt(deps.cwd, id);
 			deps.out(formatTrace(receipt));
 			if (full) deps.out(formatReceiptBodies(receipt, loadPatch(deps.cwd, id), loadDebugPatch(deps.cwd, id)));
+			return 0;
+		}
+
+		if (command === "result") {
+			let id: string | undefined;
+			for (const a of rest) {
+				// `result` is the machine contract, so it always emits JSON. Accept --json as the
+				// documented explicit form rather than making scripts special-case this command.
+				if (a === "--json") continue;
+				if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit result accepts --json)`);
+				if (id === undefined) id = a;
+				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
+			}
+			if (id === undefined) return fail(deps, "result needs a run id");
+			// A result is the POST-run contract: it needs a written receipt. A still-live or unknown
+			// run has no result yet -- point the agent at the lifecycle surfaces that do cover it.
+			const receipt = tryLoadReceipt(deps.cwd, id);
+			if (receipt === undefined) {
+				return fail(deps, `no finished run ${JSON.stringify(id)} found (still running? use chit status / chit wait)`);
+			}
+			printJson(deps, await buildRunResult(deps.cwd, receipt));
 			return 0;
 		}
 
