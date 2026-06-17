@@ -148,6 +148,26 @@ export function formatRunList(items: RunListItem[], scopeFilter?: string): strin
 	return [header, ...lines].join("\n");
 }
 
+export interface LiveRunListItem {
+	runId: string;
+	routineId: string;
+	pid: number;
+	ageMs: number;
+	cwd: string;
+}
+
+export function formatLiveRunList(items: LiveRunListItem[]): string {
+	if (items.length === 0) return "No live runs.";
+	const rows = [...items].sort((a, b) => a.ageMs - b.ageMs);
+	const wId = Math.max(...rows.map((r) => r.runId.length));
+	const wRoutine = Math.max(...rows.map((r) => r.routineId.length));
+	const wPid = Math.max(3, ...rows.map((r) => String(r.pid).length));
+	const lines = rows.map((r) =>
+		`  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  pid ${pad(String(r.pid), wPid)}  ${pad(ageLabel(r.ageMs), 9)}  ${r.cwd}`.trimEnd(),
+	);
+	return [`live runs (${rows.length}):`, ...lines].join("\n");
+}
+
 export function formatInspect(routine: ResolvedRoutine): string {
 	const m = routine.manifest;
 	const out: string[] = [];

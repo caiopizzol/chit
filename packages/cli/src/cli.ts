@@ -14,6 +14,7 @@ import { runConvergeInSandbox } from "./converge-run.ts";
 import { type DoctorProbes, formatDoctor, makeRealAdapterProbe, realDoctorProbes, runDoctor } from "./doctor.ts";
 import { resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
+import { listLiveRuns, registerLiveRun, stopLiveRun, unregisterLiveRun } from "./live.ts";
 import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
@@ -31,10 +32,12 @@ import {
 } from "./store.ts";
 import {
 	formatInspect,
+	formatLiveRunList,
 	formatReceiptBodies,
 	formatRoutineList,
 	formatRunList,
 	formatTrace,
+	type LiveRunListItem,
 	type RoutineListItem,
 	type RunListItem,
 } from "./views.ts";
@@ -70,6 +73,8 @@ const USAGE = `chit -- run declared routines
   chit init [<name>] [--template text|loop|check]   scaffold a runnable routine
   chit routines                       list the routines declared in chit.config.json
   chit runs [--scope <name>]          list past runs (id, routine, status, scope, age)
+  chit ps                             list currently running runs for this repo
+  chit stop <run-id> [--force]        ask a live run to stop (--force sends SIGKILL)
   chit inspect <routine>              show what a routine needs and what it will run
   chit doctor [--real]                check the environment is ready (--real makes tiny model calls)
   chit run <routine> [opts]           run a routine; a sandboxed routine is a DRY RUN (review, then chit apply)
@@ -222,6 +227,36 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			return 0;
 		}
 
+		if (command === "ps") {
+			if (rest.length > 0) return fail(deps, `unexpected argument ${JSON.stringify(rest[0])}`);
+			const now = deps.now();
+			const items: LiveRunListItem[] = listLiveRuns(deps.cwd).map((r) => ({
+				runId: r.runId,
+				routineId: r.routineId,
+				pid: r.pid,
+				ageMs: now - r.startedAt,
+				cwd: r.cwd,
+			}));
+			deps.out(formatLiveRunList(items));
+			return 0;
+		}
+
+		if (command === "stop") {
+			let id: string | undefined;
+			let force = false;
+			for (const a of rest) {
+				if (a === "--force") force = true;
+				else if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit stop accepts --force)`);
+				else if (id === undefined) id = a;
+				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
+			}
+			if (id === undefined) return fail(deps, "stop needs a run id");
+			const result = stopLiveRun(deps.cwd, id, { force });
+			if (!result.ok) return fail(deps, result.message);
+			deps.out(`sent ${result.signal} to ${result.run.runId} (pid ${result.run.pid})`);
+			return 0;
+		}
+
 		if (command === "inspect") {
 			const id = rest[0];
 			if (id === undefined) return fail(deps, "inspect needs a routine id");
@@ -255,188 +290,195 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return 1;
 			}
 
-			if (isComposition(routine.manifest)) {
-				let resolvedFlow: ReturnType<typeof resolveFlow>;
-				try {
-					resolvedFlow = resolveFlow(routine, (id) => resolveRoutine(config, id, deps.cwd));
-				} catch (e) {
-					return fail(deps, (e as Error).message);
+			const live = liveRunContext(deps, routine.id);
+			try {
+				if (isComposition(routine.manifest)) {
+					let resolvedFlow: ReturnType<typeof resolveFlow>;
+					try {
+						resolvedFlow = resolveFlow(routine, (id) => resolveRoutine(config, id, deps.cwd));
+					} catch (e) {
+						return fail(deps, (e as Error).message);
+					}
+					// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now
+					// before grill/plan run, and capture the base commit for the receipt.
+					let flowBase: string | undefined;
+					if (resolvedFlow.steps.some((st) => st.kind === "routine" && isSandboxed(st.routine.manifest))) {
+						const pf = await preflightSandbox(deps);
+						if (!pf.ok) return 1;
+						flowBase = pf.baseCommit;
+					}
+					const result = await runFlow(
+						resolvedFlow,
+						validation.values,
+						{
+							adapter,
+							checkRunner: deps.checkRunner,
+							sandboxFactory: deps.sandboxFactory,
+							cwd: deps.cwd,
+							now: deps.now,
+							newRunId: live.newRunId,
+							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+							...(deps.signal !== undefined && { signal: deps.signal }),
+							...(deps.askUser !== undefined && { askUser: deps.askUser }),
+							...(flowBase !== undefined && { baseCommit: flowBase }),
+							apply: args.apply,
+						},
+						args.scope !== undefined ? { scope: args.scope } : {},
+					);
+					if (result.applied === true) result.receipt.appliedAt = deps.now();
+					saveReceipt(deps.cwd, result.receipt);
+					for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
+					if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "") {
+						if (result.receipt.status === "completed") {
+							savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
+						} else {
+							saveDebugPatch(deps.cwd, result.receipt.runId, result.terminalPatch);
+						}
+					}
+					const r = result.receipt;
+					deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
+					for (const s of r.steps) deps.out(`  ${s.id} -> ${s.kind === "ask" ? "ask" : s.routine}: ${s.status}`);
+					if (r.status === "cancelled") {
+						deps.err(`\nrun ${r.runId} cancelled.  (chit trace ${r.runId})`);
+						return 130;
+					}
+					if (r.status === "failed") {
+						deps.err(`\nrun ${r.runId} failed: ${r.error ?? "(unknown)"}`);
+						return 1;
+					}
+					if (result.terminalDiff !== undefined) {
+						deps.out(result.terminalDiff.trim() ? `\n${result.terminalDiff}` : "\n(no changes produced)");
+						if (result.applyError !== undefined) {
+							deps.err(
+								`\nrun ${r.runId} completed, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`,
+							);
+							return 1;
+						}
+						deps.out(
+							result.applied
+								? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
+								: `\ndry run -- the diff is saved.\n  review:  chit trace --full ${r.runId}\n  apply:   chit apply ${r.runId}`,
+						);
+						return 0;
+					}
+					const lastSub = result.subReceipts.at(-1);
+					if (lastSub !== undefined && "output" in lastSub && lastSub.output !== undefined) {
+						deps.out(`\n${lastSub.output}`);
+					}
+					deps.out(`\nrun ${r.runId}  (chit trace ${r.runId})`);
+					return 0;
 				}
-				// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now
-				// before grill/plan run, and capture the base commit for the receipt.
-				let flowBase: string | undefined;
-				if (resolvedFlow.steps.some((st) => st.kind === "routine" && isSandboxed(st.routine.manifest))) {
+
+				if (isSandboxed(routine.manifest)) {
+					// A routine that writes or runs checks executes inside a sandbox (a git
+					// worktree): edits land on the copy, not your tree. Dry run by default
+					// (show the diff, discard it); review then `chit apply`, or `--auto-apply` to skip review.
 					const pf = await preflightSandbox(deps);
 					if (!pf.ok) return 1;
-					flowBase = pf.baseCommit;
+					const result = await runConvergeInSandbox(
+						routine,
+						validation.values,
+						{
+							sandboxFactory: deps.sandboxFactory,
+							adapter,
+							checkRunner: deps.checkRunner,
+							cwd: deps.cwd,
+							now: deps.now,
+							newRunId: live.newRunId,
+							baseCommit: pf.baseCommit,
+							...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
+							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+							...(deps.signal !== undefined && { signal: deps.signal }),
+							apply: args.apply,
+						},
+						args.scope !== undefined ? { scope: args.scope } : {},
+					);
+					if (result.applied === true) result.receipt.appliedAt = deps.now();
+					saveReceipt(deps.cwd, result.receipt);
+					// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
+					// Non-converged/failed runs get a .debug.patch for inspection, not an applyable .patch.
+					if (result.patch.trim() !== "") {
+						if (result.debugPatch) {
+							saveDebugPatch(deps.cwd, result.receipt.runId, result.patch);
+						} else if (result.receipt.status === "converged") {
+							savePatch(deps.cwd, result.receipt.runId, result.patch);
+						}
+					}
+					const r = result.receipt;
+					deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
+					deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
+					if (r.status === "converged") {
+						if (result.applyError !== undefined) {
+							deps.err(
+								`\nrun ${r.runId} converged, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`,
+							);
+							return 1;
+						}
+						deps.out(
+							result.applied
+								? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
+								: `\ndry run -- the diff is saved.\n  review:  chit trace --full ${r.runId}\n  apply:   chit apply ${r.runId}`,
+						);
+						return 0;
+					}
+					deps.err(`\nrun ${r.runId} ${r.status}${r.error ? `: ${r.error}` : ""}`);
+					return r.status === "cancelled" ? 130 : 1;
 				}
-				const result = await runFlow(
-					resolvedFlow,
+
+				if (routine.manifest.repeat !== undefined) {
+					// A non-sandboxed loop: read-only, no checks, but a `repeat` whose exit is a
+					// { step, equals } condition (e.g. an evaluator returns "yes"). It writes nothing,
+					// so it loops in the cwd with no worktree; its result is text, printed like a one-shot.
+					const loop = await runConverge(
+						routine,
+						validation.values,
+						{
+							adapter,
+							checkRunner: deps.checkRunner,
+							cwd: deps.cwd,
+							now: deps.now,
+							newRunId: live.newRunId,
+							...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
+							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+							...(deps.signal !== undefined && { signal: deps.signal }),
+						},
+						args.scope !== undefined ? { scope: args.scope } : {},
+					);
+					saveReceipt(deps.cwd, loop);
+					deps.out(
+						`run ${loop.status} (${loop.iterations.length} iteration${loop.iterations.length === 1 ? "" : "s"})`,
+					);
+					if (loop.status === "converged") {
+						if (loop.output !== undefined) deps.out(`\n${loop.output}`);
+						deps.out(`\nrun ${loop.runId}  (chit trace ${loop.runId})`);
+						return 0;
+					}
+					deps.err(`\nrun ${loop.runId} ${loop.status}${loop.error ? `: ${loop.error}` : ""}`);
+					return loop.status === "cancelled" ? 130 : 1;
+				}
+
+				const receipt = await runOneShot(
+					routine,
 					validation.values,
-					{
-						adapter,
-						checkRunner: deps.checkRunner,
-						sandboxFactory: deps.sandboxFactory,
-						cwd: deps.cwd,
-						now: deps.now,
-						newRunId: deps.newRunId,
-						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
-						...(deps.signal !== undefined && { signal: deps.signal }),
-						...(deps.askUser !== undefined && { askUser: deps.askUser }),
-						...(flowBase !== undefined && { baseCommit: flowBase }),
-						apply: args.apply,
-					},
+					{ ...deps, adapter, newRunId: live.newRunId },
 					args.scope !== undefined ? { scope: args.scope } : {},
 				);
-				if (result.applied === true) result.receipt.appliedAt = deps.now();
-				saveReceipt(deps.cwd, result.receipt);
-				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
-				if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "") {
-					if (result.receipt.status === "completed") {
-						savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
-					} else {
-						saveDebugPatch(deps.cwd, result.receipt.runId, result.terminalPatch);
-					}
-				}
-				const r = result.receipt;
-				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
-				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.kind === "ask" ? "ask" : s.routine}: ${s.status}`);
-				if (r.status === "cancelled") {
-					deps.err(`\nrun ${r.runId} cancelled.  (chit trace ${r.runId})`);
+				saveReceipt(deps.cwd, receipt);
+
+				if (receipt.status === "cancelled") {
+					deps.err(`run ${receipt.runId} cancelled.  (chit trace ${receipt.runId})`);
 					return 130;
 				}
-				if (r.status === "failed") {
-					deps.err(`\nrun ${r.runId} failed: ${r.error ?? "(unknown)"}`);
+				if (receipt.status === "failed") {
+					deps.err(`run ${receipt.runId} failed: ${receipt.error ?? "(unknown)"}`);
 					return 1;
 				}
-				if (result.terminalDiff !== undefined) {
-					deps.out(result.terminalDiff.trim() ? `\n${result.terminalDiff}` : "\n(no changes produced)");
-					if (result.applyError !== undefined) {
-						deps.err(
-							`\nrun ${r.runId} completed, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`,
-						);
-						return 1;
-					}
-					deps.out(
-						result.applied
-							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- the diff is saved.\n  review:  chit trace --full ${r.runId}\n  apply:   chit apply ${r.runId}`,
-					);
-					return 0;
-				}
-				const lastSub = result.subReceipts.at(-1);
-				if (lastSub !== undefined && "output" in lastSub && lastSub.output !== undefined) {
-					deps.out(`\n${lastSub.output}`);
-				}
-				deps.out(`\nrun ${r.runId}  (chit trace ${r.runId})`);
+				if (receipt.output !== undefined) deps.out(receipt.output);
+				deps.out(`\nrun ${receipt.runId}  (chit trace ${receipt.runId})`);
 				return 0;
+			} finally {
+				live.unregister();
 			}
-
-			if (isSandboxed(routine.manifest)) {
-				// A routine that writes or runs checks executes inside a sandbox (a git
-				// worktree): edits land on the copy, not your tree. Dry run by default
-				// (show the diff, discard it); review then `chit apply`, or `--auto-apply` to skip review.
-				const pf = await preflightSandbox(deps);
-				if (!pf.ok) return 1;
-				const result = await runConvergeInSandbox(
-					routine,
-					validation.values,
-					{
-						sandboxFactory: deps.sandboxFactory,
-						adapter,
-						checkRunner: deps.checkRunner,
-						cwd: deps.cwd,
-						now: deps.now,
-						newRunId: deps.newRunId,
-						baseCommit: pf.baseCommit,
-						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
-						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
-						...(deps.signal !== undefined && { signal: deps.signal }),
-						apply: args.apply,
-					},
-					args.scope !== undefined ? { scope: args.scope } : {},
-				);
-				if (result.applied === true) result.receipt.appliedAt = deps.now();
-				saveReceipt(deps.cwd, result.receipt);
-				// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
-				// Non-converged/failed runs get a .debug.patch for inspection, not an applyable .patch.
-				if (result.patch.trim() !== "") {
-					if (result.debugPatch) {
-						saveDebugPatch(deps.cwd, result.receipt.runId, result.patch);
-					} else if (result.receipt.status === "converged") {
-						savePatch(deps.cwd, result.receipt.runId, result.patch);
-					}
-				}
-				const r = result.receipt;
-				deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
-				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
-				if (r.status === "converged") {
-					if (result.applyError !== undefined) {
-						deps.err(
-							`\nrun ${r.runId} converged, but could not apply to your tree: ${result.applyError}  (chit trace ${r.runId})`,
-						);
-						return 1;
-					}
-					deps.out(
-						result.applied
-							? `\napplied to ${deps.cwd}.  run ${r.runId}  (chit trace ${r.runId})`
-							: `\ndry run -- the diff is saved.\n  review:  chit trace --full ${r.runId}\n  apply:   chit apply ${r.runId}`,
-					);
-					return 0;
-				}
-				deps.err(`\nrun ${r.runId} ${r.status}${r.error ? `: ${r.error}` : ""}`);
-				return r.status === "cancelled" ? 130 : 1;
-			}
-
-			if (routine.manifest.repeat !== undefined) {
-				// A non-sandboxed loop: read-only, no checks, but a `repeat` whose exit is a
-				// { step, equals } condition (e.g. an evaluator returns "yes"). It writes nothing,
-				// so it loops in the cwd with no worktree; its result is text, printed like a one-shot.
-				const loop = await runConverge(
-					routine,
-					validation.values,
-					{
-						adapter,
-						checkRunner: deps.checkRunner,
-						cwd: deps.cwd,
-						now: deps.now,
-						newRunId: deps.newRunId,
-						...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
-						...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
-						...(deps.signal !== undefined && { signal: deps.signal }),
-					},
-					args.scope !== undefined ? { scope: args.scope } : {},
-				);
-				saveReceipt(deps.cwd, loop);
-				deps.out(`run ${loop.status} (${loop.iterations.length} iteration${loop.iterations.length === 1 ? "" : "s"})`);
-				if (loop.status === "converged") {
-					if (loop.output !== undefined) deps.out(`\n${loop.output}`);
-					deps.out(`\nrun ${loop.runId}  (chit trace ${loop.runId})`);
-					return 0;
-				}
-				deps.err(`\nrun ${loop.runId} ${loop.status}${loop.error ? `: ${loop.error}` : ""}`);
-				return loop.status === "cancelled" ? 130 : 1;
-			}
-
-			const receipt = await runOneShot(
-				routine,
-				validation.values,
-				{ ...deps, adapter },
-				args.scope !== undefined ? { scope: args.scope } : {},
-			);
-			saveReceipt(deps.cwd, receipt);
-
-			if (receipt.status === "cancelled") {
-				deps.err(`run ${receipt.runId} cancelled.  (chit trace ${receipt.runId})`);
-				return 130;
-			}
-			if (receipt.status === "failed") {
-				deps.err(`run ${receipt.runId} failed: ${receipt.error ?? "(unknown)"}`);
-				return 1;
-			}
-			if (receipt.output !== undefined) deps.out(receipt.output);
-			deps.out(`\nrun ${receipt.runId}  (chit trace ${receipt.runId})`);
-			return 0;
 		}
 
 		if (command === "trace") {
@@ -508,6 +550,29 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 function fail(deps: CliDeps, message: string): number {
 	deps.err(`error: ${message}`);
 	return 1;
+}
+
+function liveRunContext(deps: CliDeps, routineId: string): { newRunId: () => string; unregister: () => void } {
+	let topRunId: string | undefined;
+	return {
+		newRunId: () => {
+			const runId = deps.newRunId();
+			if (topRunId === undefined) {
+				topRunId = runId;
+				registerLiveRun(deps.cwd, {
+					runId,
+					routineId,
+					pid: process.pid,
+					startedAt: deps.now(),
+					cwd: deps.cwd,
+				});
+			}
+			return runId;
+		},
+		unregister: () => {
+			if (topRunId !== undefined) unregisterLiveRun(deps.cwd, topRunId);
+		},
+	};
 }
 
 // A sandboxed run starts from HEAD, so refuse upfront if the origin is dirty (and capture the

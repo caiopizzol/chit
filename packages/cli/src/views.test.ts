@@ -4,7 +4,7 @@ import type { FlowReceipt } from "./flow.ts";
 import { parseManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
-import { formatInspect, formatReceiptBodies, formatRoutineList, formatTrace } from "./views.ts";
+import { formatInspect, formatLiveRunList, formatReceiptBodies, formatRoutineList, formatTrace } from "./views.ts";
 
 function routineFrom(raw: unknown, extra: Partial<ResolvedRoutine> = {}): ResolvedRoutine {
 	const manifest = parseManifest(raw, "m.json");
@@ -72,6 +72,26 @@ describe("formatRoutineList", () => {
 
 	test("explains the empty case", () => {
 		expect(formatRoutineList([])).toMatch(/No routines configured/);
+	});
+});
+
+describe("formatLiveRunList", () => {
+	test("renders live runs with pid, age, and cwd", () => {
+		const out = formatLiveRunList([
+			{ runId: "run-a", routineId: "impl", pid: 42, ageMs: 65_000, cwd: "/repo" },
+			{ runId: "run-b", routineId: "review", pid: 314, ageMs: 500, cwd: "/repo" },
+		]);
+		expect(out).toContain("live runs (2):");
+		expect(out).toContain("run-b");
+		expect(out).toContain("pid 314");
+		expect(out).toContain("just now");
+		expect(out).toContain("run-a");
+		expect(out).toContain("1m ago");
+		expect(out).toContain("/repo");
+	});
+
+	test("explains the empty live-run case", () => {
+		expect(formatLiveRunList([])).toBe("No live runs.");
 	});
 });
 

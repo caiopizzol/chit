@@ -6,6 +6,7 @@ import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
 import type { ConvergeReceipt } from "./converge.ts";
+import { listLiveRuns, loadLiveRun, registerLiveRun, unregisterLiveRun } from "./live.ts";
 import { fakeSandboxFactory, gitWorktreeSandboxFactory } from "./sandbox.ts";
 import { loadReceipt } from "./store.ts";
 
@@ -212,6 +213,21 @@ describe("chit run", () => {
 });
 
 describe("chit run live progress", () => {
+	test("registers the top-level run while it is active and removes it when done", async () => {
+		let sawLiveRun = false;
+		const { deps } = harness({
+			adapter: fakeAdapter(() => {
+				sawLiveRun = listLiveRuns(dir).some((r) => r.runId === "run-test" && r.routineId === "feature-griller");
+				return "x";
+			}),
+		});
+
+		expect(await runCli(["run", "feature-griller", "--input", "idea=x"], deps)).toBe(0);
+
+		expect(sawLiveRun).toBe(true);
+		expect(loadLiveRun(dir, "run-test")).toBeUndefined();
+	});
+
 	test("reports elapsed as each call completes (one-shot)", async () => {
 		const { deps } = harness({ adapter: fakeAdapter(() => "x") });
 		let clock = 0;
@@ -231,6 +247,93 @@ describe("chit run live progress", () => {
 		await runCli(["run", "impl-review", "--input", "task=x"], deps);
 		expect(progress.some((l) => /call builder done in/.test(l))).toBe(true);
 		expect(progress.some((l) => /check bun test → ok in/.test(l))).toBe(true);
+	});
+});
+
+describe("chit ps", () => {
+	test("lists live runs for the current repo", async () => {
+		registerLiveRun(dir, {
+			runId: "run-live",
+			routineId: "impl-review",
+			pid: process.pid,
+			startedAt: -65_000,
+			cwd: dir,
+		});
+		try {
+			const { deps, out } = harness();
+			deps.now = () => 0;
+
+			expect(await runCli(["ps"], deps)).toBe(0);
+
+			const text = out.join("\n");
+			expect(text).toContain("live runs (1):");
+			expect(text).toContain("run-live");
+			expect(text).toContain("impl-review");
+			expect(text).toContain(`pid ${process.pid}`);
+			expect(text).toContain("1m ago");
+		} finally {
+			unregisterLiveRun(dir, "run-live");
+		}
+	});
+
+	test("rejects unexpected arguments", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["ps", "extra"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("unexpected argument");
+	});
+});
+
+describe("chit stop", () => {
+	test("sends SIGTERM to a live run pid", async () => {
+		const child = Bun.spawn(["sleep", "5"]);
+		registerLiveRun(dir, {
+			runId: "run-stop",
+			routineId: "impl-review",
+			pid: child.pid,
+			startedAt: 0,
+			cwd: dir,
+		});
+		try {
+			const { deps, out } = harness();
+
+			expect(await runCli(["stop", "run-stop"], deps)).toBe(0);
+			expect(out.join("\n")).toContain(`sent SIGTERM to run-stop (pid ${child.pid})`);
+			expect(await child.exited).not.toBe(0);
+		} finally {
+			try {
+				process.kill(child.pid, "SIGKILL");
+			} catch {}
+			unregisterLiveRun(dir, "run-stop");
+		}
+	});
+
+	test("reports a missing live run", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["stop", "missing"], deps)).toBe(1);
+		expect(err.join("\n")).toContain('no live run "missing" found');
+	});
+
+	test("supports --force", async () => {
+		const child = Bun.spawn(["sleep", "5"]);
+		registerLiveRun(dir, {
+			runId: "run-kill",
+			routineId: "impl-review",
+			pid: child.pid,
+			startedAt: 0,
+			cwd: dir,
+		});
+		try {
+			const { deps, out } = harness();
+
+			expect(await runCli(["stop", "run-kill", "--force"], deps)).toBe(0);
+			expect(out.join("\n")).toContain(`sent SIGKILL to run-kill (pid ${child.pid})`);
+			expect(await child.exited).not.toBe(0);
+		} finally {
+			try {
+				process.kill(child.pid, "SIGKILL");
+			} catch {}
+			unregisterLiveRun(dir, "run-kill");
+		}
 	});
 });
 

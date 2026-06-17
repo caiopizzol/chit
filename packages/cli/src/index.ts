@@ -15,18 +15,22 @@ import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 // second SIGINT force-exits in case something is wedged.
 const controller = new AbortController();
 let interrupts = 0;
-process.on("SIGINT", () => {
+function requestCancel(source: "SIGINT" | "SIGTERM"): void {
 	interrupts += 1;
 	if (interrupts === 1) {
 		process.stderr.write(
-			"\n^C  cancelling -- stopping the active step, discarding any sandbox (Ctrl-C again to force-exit)…\n",
+			source === "SIGINT"
+				? "\n^C  cancelling -- stopping the active step, discarding any sandbox (Ctrl-C again to force-exit)…\n"
+				: "\nSIGTERM  cancelling -- stopping the active step, discarding any sandbox…\n",
 		);
 		controller.abort();
 	} else {
 		process.stderr.write("\nforced exit.\n");
 		process.exit(130);
 	}
-});
+}
+process.on("SIGINT", () => requestCancel("SIGINT"));
+process.on("SIGTERM", () => requestCancel("SIGTERM"));
 
 // Human-input seam for `ask` steps. The question and the `> ` prompt go to stderr (stdout
 // is the result channel); the typed line is the answer. One shared readline for the run's
