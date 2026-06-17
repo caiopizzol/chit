@@ -769,6 +769,220 @@ describe("chit wait", () => {
 	});
 });
 
+describe("chit status", () => {
+	test("renders a finished run's state (human) and points at trace", async () => {
+		saveReceipt(dir, convergeReceipt("run-status-fin", { status: "did-not-converge" }));
+		const { deps, out } = harness();
+		expect(await runCli(["status", "run-status-fin"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("run-status-fin  impl-review  finished: did-not-converge");
+		expect(text).toContain("chit trace run-status-fin");
+	});
+
+	test("--json emits the canonical state object", async () => {
+		saveReceipt(dir, receipt("run-status-json", "completed"));
+		const { deps, out } = harness();
+		expect(await runCli(["status", "run-status-json", "--json"], deps)).toBe(0);
+		expect(out.length).toBe(1); // stdout is exactly one JSON object
+		expect(JSON.parse(out.join("\n"))).toMatchObject({
+			runId: "run-status-json",
+			routineId: "feature-griller",
+			phase: "finished",
+			done: true,
+			status: "completed",
+			exitCode: 0,
+		});
+	});
+
+	test("reports a live run as running once it has signalled ready", async () => {
+		registerLiveRun(dir, { runId: "run-status-live", routineId: "impl-review", pid: 4242, startedAt: 0, cwd: dir });
+		appendRunEvent(dir, "run-status-live", { at: 0, kind: "ready", baseCommit: "abc123def456" });
+		try {
+			const { deps, out } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+			deps.now = () => 5000;
+			expect(await runCli(["status", "run-status-live", "--json"], deps)).toBe(0);
+			const state = JSON.parse(out.join("\n"));
+			expect(state).toMatchObject({ phase: "running", done: false, pid: 4242 });
+			expect(state.status).toBeUndefined(); // no receipt yet -> no terminal status
+		} finally {
+			unregisterLiveRun(dir, "run-status-live");
+		}
+	});
+
+	test("exits 1 for an unknown run id", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["status", "run-nope"], deps)).toBe(1);
+		expect(err.join("\n")).toContain('no run "run-nope" found');
+	});
+
+	test("needs a run id", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["status"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("status needs a run id");
+	});
+});
+
+describe("chit ps --json", () => {
+	test("emits an array of live-run states from the shared read model", async () => {
+		registerLiveRun(dir, { runId: "run-ps-json", routineId: "impl-review", pid: process.pid, startedAt: 0, cwd: dir });
+		appendRunEvent(dir, "run-ps-json", { at: 0, kind: "ready" });
+		try {
+			const { deps, out } = harness();
+			deps.now = () => 0;
+			expect(await runCli(["ps", "--json"], deps)).toBe(0);
+			const states = JSON.parse(out.join("\n"));
+			expect(Array.isArray(states)).toBe(true);
+			expect(states.find((s: { runId: string }) => s.runId === "run-ps-json")).toMatchObject({
+				routineId: "impl-review",
+				phase: "running",
+				done: false,
+				pid: process.pid,
+			});
+		} finally {
+			unregisterLiveRun(dir, "run-ps-json");
+		}
+	});
+
+	test("uses finished receipt state when a live entry lingers", async () => {
+		saveReceipt(dir, receipt("run-ps-json-finished", "completed"));
+		registerLiveRun(dir, {
+			runId: "run-ps-json-finished",
+			routineId: "impl-review",
+			pid: process.pid,
+			startedAt: 0,
+			cwd: dir,
+		});
+		try {
+			const { deps, out } = harness();
+			expect(await runCli(["ps", "--json"], deps)).toBe(0);
+			const states = JSON.parse(out.join("\n"));
+			expect(states.find((s: { runId: string }) => s.runId === "run-ps-json-finished")).toMatchObject({
+				routineId: "feature-griller",
+				phase: "finished",
+				done: true,
+				status: "completed",
+				exitCode: 0,
+			});
+		} finally {
+			unregisterLiveRun(dir, "run-ps-json-finished");
+		}
+	});
+});
+
+describe("chit wait --json", () => {
+	test("prints one final state object and preserves the exit code", async () => {
+		saveReceipt(dir, convergeReceipt("run-wjson-ok", { status: "converged" }));
+		saveReceipt(dir, receipt("run-wjson-fail", "failed"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wjson-ok", "--json"], deps)).toBe(0);
+		expect(JSON.parse(out.join("\n"))).toMatchObject({
+			phase: "finished",
+			status: "converged",
+			exitCode: 0,
+			done: true,
+		});
+
+		out.length = 0;
+		expect(await runCli(["wait", "run-wjson-fail", "--json"], deps)).toBe(1);
+		expect(JSON.parse(out.join("\n"))).toMatchObject({ phase: "finished", status: "failed", exitCode: 1 });
+	});
+
+	test("emits an orphaned state object on stdout (exit 1) when a run ends with no receipt", async () => {
+		registerLiveRun(dir, { runId: "run-wjson-orphan", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		writeFileSync(prepareRunLog(dir, "run-wjson-orphan"), "boom\n", "utf-8");
+		const { deps, out, err } = harness({ liveProcess: { isAlive: () => false, kill: () => {} } });
+
+		expect(await runCli(["wait", "run-wjson-orphan", "--json"], deps)).toBe(1);
+
+		expect(out.length).toBe(1); // stdout is ONLY the JSON object
+		expect(JSON.parse(out.join("\n"))).toMatchObject({
+			runId: "run-wjson-orphan",
+			routineId: "impl-review",
+			phase: "orphaned",
+			done: true,
+			exitCode: 1,
+		});
+		expect(err.join("\n")).toContain("no longer running"); // diagnostics stay on stderr
+	});
+
+	test("streams progress to stderr only, keeping stdout pure JSON", async () => {
+		registerLiveRun(dir, { runId: "run-wjson-stream", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		const progress: string[] = [];
+		let step = 0;
+		const { deps, out } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+		deps.onProgress = (l) => progress.push(l);
+		deps.sleep = async () => {
+			step += 1;
+			if (step === 1) appendRunEvent(dir, "run-wjson-stream", { at: 0, kind: "progress", line: "iteration 1" });
+			else saveReceipt(dir, convergeReceipt("run-wjson-stream"));
+		};
+
+		expect(await runCli(["wait", "run-wjson-stream", "--json"], deps)).toBe(0);
+
+		expect(progress.join("\n")).toContain("iteration 1"); // progress went to stderr (onProgress)
+		expect(out.length).toBe(1); // stdout is exactly one JSON object
+		expect(() => JSON.parse(out.join("\n"))).not.toThrow();
+	});
+});
+
+describe("chit --project (project addressing)", () => {
+	const extra: string[] = [];
+	afterAll(() => {
+		for (const d of extra) rmSync(d, { recursive: true, force: true });
+	});
+	function freshDir(prefix: string): string {
+		const p = mkdtempSync(join(tmpdir(), prefix));
+		extra.push(p);
+		return p;
+	}
+
+	test("--project redirects a command to another project dir", async () => {
+		const proj = freshDir("chit-proj-");
+		saveReceipt(proj, receipt("run-elsewhere", "completed"));
+		const { deps, out } = harness();
+		deps.cwd = freshDir("chit-cwd-"); // a cwd with no such run
+
+		expect(await runCli(["status", "run-elsewhere"], deps)).toBe(1); // not in cwd
+		expect(await runCli(["status", "run-elsewhere", "--project", proj], deps)).toBe(0); // found via --project
+		expect(out.join("\n")).toContain("run-elsewhere");
+	});
+
+	test("CHIT_PROJECT is the fallback, and --project overrides it", async () => {
+		const projEnv = freshDir("chit-projenv-");
+		const projArg = freshDir("chit-projarg-");
+		saveReceipt(projEnv, receipt("run-env", "completed"));
+		saveReceipt(projArg, receipt("run-arg", "completed"));
+		const { deps } = harness();
+		deps.cwd = freshDir("chit-cwd-");
+		deps.projectEnv = projEnv;
+
+		expect(await runCli(["status", "run-env"], deps)).toBe(0); // falls back to CHIT_PROJECT
+		expect(await runCli(["status", "run-arg", "--project", projArg], deps)).toBe(0); // arg wins
+		expect(await runCli(["status", "run-env", "--project", projArg], deps)).toBe(1); // arg dir lacks run-env
+	});
+
+	test("the --project=<path> form is accepted", async () => {
+		const proj = freshDir("chit-projeq-");
+		saveReceipt(proj, receipt("run-eqform", "completed"));
+		const { deps } = harness();
+		deps.cwd = freshDir("chit-cwd-");
+		expect(await runCli([`--project=${proj}`, "status", "run-eqform"], deps)).toBe(0);
+	});
+
+	test("a missing project path fails clearly", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["status", "x", "--project", "/no/such/chit/dir"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("project path not found");
+	});
+
+	test("--project with no value is rejected", async () => {
+		const { deps, err } = harness();
+		expect(await runCli(["ps", "--project"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("--project expects a path");
+	});
+});
+
 describe("chit stop", () => {
 	test("sends SIGTERM to a live run pid", async () => {
 		const child = Bun.spawn(["sleep", "5"]);
@@ -1050,6 +1264,16 @@ describe("chit help", () => {
 		expect(out.join("\n")).toContain("chit run <routine>");
 		expect(err.join("\n")).toBe("");
 	});
+
+	test("help ignores a stale CHIT_PROJECT", async () => {
+		for (const argv of [["--help"], ["help", "run"], ["run", "--help"]]) {
+			const { deps, out, err } = harness();
+			deps.projectEnv = "/no/such/chit/project";
+			expect(await runCli(argv, deps)).toBe(0);
+			expect(out.join("\n")).toContain("chit");
+			expect(err.join("\n")).toBe("");
+		}
+	});
 });
 
 describe("chit version", () => {
@@ -1061,5 +1285,13 @@ describe("chit version", () => {
 		out.length = 0;
 		expect(await runCli(["--version", "--verbose"], deps)).toBe(0);
 		expect(out).toEqual(["chit 0.0.0-test", "entrypoint /tmp/chit-test/src/index.ts"]);
+	});
+
+	test("version ignores a stale CHIT_PROJECT", async () => {
+		const { deps, out, err } = harness();
+		deps.projectEnv = "/no/such/chit/project";
+		expect(await runCli(["--version"], deps)).toBe(0);
+		expect(out).toEqual(["chit 0.0.0-test"]);
+		expect(err.join("\n")).toBe("");
 	});
 });

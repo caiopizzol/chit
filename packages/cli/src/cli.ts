@@ -6,6 +6,8 @@
 // is testable end-to-end on real config/manifest files with a fake adapter -- no
 // real model calls in tests.
 
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { type AdapterRegistry, dispatchingAdapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { loadConfig } from "./config.ts";
@@ -25,6 +27,7 @@ import { type ResolvedFlow, resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
 import {
 	type LiveProcess,
+	type LiveRun,
 	listLiveRuns,
 	loadLiveRun,
 	realLiveProcess,
@@ -35,6 +38,7 @@ import {
 import { isComposition, isSandboxed, kindLabel, type Manifest, type Step } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
+import { finishedStateFromReceipt, liveRunState, type RunState, readRunState, receiptExitCode } from "./runstate.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { scaffoldRoutine, TEMPLATES, type Template } from "./scaffold.ts";
 import {
@@ -59,6 +63,7 @@ import {
 	formatReceiptBodies,
 	formatRoutineList,
 	formatRunList,
+	formatRunStatus,
 	formatTrace,
 	type LiveRunListItem,
 	type RoutineListItem,
@@ -75,6 +80,10 @@ export interface BackgroundSpawner {
 
 export interface CliDeps {
 	cwd: string;
+	// Value of the CHIT_PROJECT env var, if set (the bin wires it). A global `--project <path>`
+	// arg takes precedence; both resolve the project dir relative to `cwd` and override it, so an
+	// agent can run any command from any directory. Omitted means "use cwd".
+	projectEnv?: string;
 	// Real adapters keyed by adapter type (e.g. { claude: claudeCliAdapter }). The run
 	// command builds a dispatching adapter from this + the config's profile bindings, so a
 	// routine agent's profile id picks the adapter and model.
@@ -112,8 +121,9 @@ const USAGE = `chit -- run declared routines
   chit init [<name>] [--template text|loop|check]   scaffold a runnable routine
   chit routines                       list the routines declared in chit.config.json
   chit runs [--scope <name>]          list past runs (id, routine, status, scope, age)
-  chit ps                             list currently running runs for this repo
-  chit wait <run-id>                  wait until a live run writes its receipt
+  chit ps [--json]                    list currently running runs for this repo
+  chit status <run-id> [--json]       show one run's state, live or finished
+  chit wait <run-id> [--json]         wait until a live run writes its receipt
   chit stop <run-id> [--force]        ask a live run to stop (--force sends SIGKILL)
   chit inspect <routine>              show what a routine needs and what it will run
   chit doctor [--real]                check the environment is ready (--real makes tiny model calls)
@@ -126,6 +136,9 @@ const USAGE = `chit -- run declared routines
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
   chit --version [--verbose]          print the installed version, plus entrypoint with --verbose
+
+Global: --project <path> (or CHIT_PROJECT) points any command at another project dir,
+so an agent can run from any cwd. ps, status, and wait take --json for machine-readable state.
 
 A routine is a declared workflow. How it runs is derived from the shape: routine
 steps compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.
@@ -159,15 +172,23 @@ DRY RUN by default (it produces a patch and stops; review, then chit apply).
 
 A sandboxed run refuses a dirty tree (it starts from HEAD). --background cannot be combined
 with --auto-apply, and cannot run a routine that has an ask step.`,
-	wait: `chit wait <run-id>
+	wait: `chit wait <run-id> [--json]
 
 Wait for a live run (usually one started with chit run --background) to finish, streaming
 its phase and progress changes plus a heartbeat while it runs, then print its receipt. The
-exit code mirrors the run: 0 if it completed/converged, 1 if it failed, 130 if it cancelled.`,
-	ps: `chit ps
+exit code mirrors the run: 0 if it completed/converged, 1 if it failed, 130 if it cancelled.
+--json streams nothing to stdout and prints one final run-state object instead; the exit code
+is unchanged.`,
+	ps: `chit ps [--json]
 
 List the runs currently live for this repo (id, routine, pid, age, cwd). Stale entries whose
-process is gone are pruned as they are listed.`,
+process is gone are pruned as they are listed. --json prints an array of run-state objects.`,
+	status: `chit status <run-id> [--json]
+
+Show one run's state, whether it is still live or already finished, derived from the receipt,
+the live registry, and the lifecycle events. The phase is starting, running, finished, or
+orphaned; a finished run also carries its receipt status. --json prints the run-state object
+for an agent to read. Exits 1 only when the run id is unknown.`,
 	stop: `chit stop <run-id> [--force]
 
 Ask a live run to stop. By default sends SIGTERM, so the run cancels at its next step and
@@ -243,6 +264,29 @@ function parseRunArgs(rest: string[]): {
 	return { id, inputs, apply, background, ...(scope !== undefined && { scope }) };
 }
 
+// Pull the global `--project <path>` / `--project=<path>` option out of argv wherever it appears,
+// so every command accepts it without each per-command parser needing to know it. Everything else
+// passes through untouched in `rest`.
+function extractGlobalOpts(argv: string[]): { project?: string; rest: string[]; error?: string } {
+	const rest: string[] = [];
+	let project: string | undefined;
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === undefined) continue;
+		if (a === "--project") {
+			const value = argv[++i];
+			if (value === undefined) return { rest, error: "--project expects a path" };
+			project = value;
+		} else if (a.startsWith("--project=")) {
+			project = a.slice("--project=".length);
+			if (project === "") return { rest, error: "--project expects a path" };
+		} else {
+			rest.push(a);
+		}
+	}
+	return { ...(project !== undefined && { project }), rest };
+}
+
 function parseInitArgs(rest: string[]): { name: string; template: Template; error?: string } {
 	let name: string | undefined;
 	let template: Template = "text";
@@ -266,7 +310,9 @@ function parseInitArgs(rest: string[]): { name: string; template: Template; erro
 }
 
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
-	const [command, ...rest] = argv;
+	const globals = extractGlobalOpts(argv);
+	if (globals.error !== undefined) return fail(deps, globals.error);
+	const [command, ...rest] = globals.rest;
 
 	if (command === "--version" || command === "-v" || command === "version") {
 		const unknown = rest.find((a) => a !== "--verbose");
@@ -295,6 +341,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 	if (command === undefined || command === "help" || command === "--help" || command === "-h") {
 		deps.out(USAGE);
 		return 0;
+	}
+
+	// Project addressing applies only after project-independent commands have exited.
+	// A stale CHIT_PROJECT should not make `chit --help` or `chit --version` fail.
+	const projectArg = globals.project ?? deps.projectEnv;
+	if (projectArg !== undefined && projectArg !== "") {
+		const projectDir = resolve(deps.cwd, projectArg);
+		if (!existsSync(projectDir) || !statSync(projectDir).isDirectory()) {
+			return fail(deps, `project path not found: ${projectDir}`);
+		}
+		deps = { ...deps, cwd: projectDir };
 	}
 
 	try {
@@ -371,9 +428,31 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		}
 
 		if (command === "ps") {
-			if (rest.length > 0) return fail(deps, `unexpected argument ${JSON.stringify(rest[0])}`);
+			let json = false;
+			for (const a of rest) {
+				if (a === "--json") json = true;
+				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
+			}
 			const now = deps.now();
-			const items: LiveRunListItem[] = listLiveRuns(deps.cwd, deps.liveProcess).map((r) => ({
+			const runs = listLiveRuns(deps.cwd, deps.liveProcess);
+			if (json) {
+				// Each live run rendered through the shared read model, so the JSON is the same state
+				// contract status/wait expose -- not a ps-only shape.
+				const states = await Promise.all(
+					runs.map((r) =>
+						readRunState(deps.cwd, r.runId, {
+							now,
+							...(deps.liveProcess !== undefined && { process: deps.liveProcess }),
+						}),
+					),
+				);
+				printJson(
+					deps,
+					states.filter((s): s is RunState => s !== undefined),
+				);
+				return 0;
+			}
+			const items: LiveRunListItem[] = runs.map((r) => ({
 				runId: r.runId,
 				routineId: r.routineId,
 				pid: r.pid,
@@ -384,15 +463,37 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			return 0;
 		}
 
+		if (command === "status") {
+			let id: string | undefined;
+			let json = false;
+			for (const a of rest) {
+				if (a === "--json") json = true;
+				else if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit status accepts --json)`);
+				else if (id === undefined) id = a;
+				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
+			}
+			if (id === undefined) return fail(deps, "status needs a run id");
+			const state = await readRunState(deps.cwd, id, {
+				now: deps.now(),
+				...(deps.liveProcess !== undefined && { process: deps.liveProcess }),
+			});
+			if (state === undefined) return fail(deps, `no run ${JSON.stringify(id)} found`);
+			if (json) printJson(deps, state);
+			else deps.out(formatRunStatus(state));
+			return 0;
+		}
+
 		if (command === "wait") {
 			let id: string | undefined;
+			let json = false;
 			for (const a of rest) {
-				if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit wait accepts a run id)`);
-				if (id === undefined) id = a;
+				if (a === "--json") json = true;
+				else if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit wait accepts --json)`);
+				else if (id === undefined) id = a;
 				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
 			}
 			if (id === undefined) return fail(deps, "wait needs a run id");
-			return await waitForRun(deps, id);
+			return await waitForRun(deps, id, json);
 		}
 
 		if (command === "stop") {
@@ -749,18 +850,17 @@ function fail(deps: CliDeps, message: string): number {
 	return 1;
 }
 
+// The only thing a `--json` command writes to stdout: one JSON value, nothing else. Progress and
+// errors go to stderr, so an agent can parse stdout directly.
+function printJson(deps: CliDeps, value: unknown): void {
+	deps.out(JSON.stringify(value, null, 2));
+}
+
 const WAIT_POLL_MS = 500;
 const WAIT_HEARTBEAT_MS = 15_000;
 
 function defaultSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function receiptExitCode(receipt: AnyReceipt): number {
-	if (receipt.status === "cancelled") return 130;
-	if ("applyError" in receipt && receipt.applyError !== undefined) return 1;
-	if (receipt.policy === "converge") return receipt.status === "converged" ? 0 : 1;
-	return receipt.status === "completed" ? 0 : 1;
 }
 
 function logTail(text: string, limit = 4000): string {
@@ -779,11 +879,38 @@ function failWithRunLog(deps: CliDeps, runId: string, message: string): number {
 	return 1;
 }
 
-function finishWaitWithReceipt(deps: CliDeps, runId: string, receipt: AnyReceipt): number {
+async function finishWaitWithReceipt(
+	deps: CliDeps,
+	runId: string,
+	receipt: AnyReceipt,
+	json: boolean,
+): Promise<number> {
 	unregisterLiveRun(deps.cwd, runId);
 	removeRunArgv(deps.cwd, runId);
-	deps.out(formatTrace(receipt));
+	if (json) printJson(deps, await finishedStateFromReceipt(deps.cwd, receipt));
+	else deps.out(formatTrace(receipt));
 	return receiptExitCode(receipt);
+}
+
+// `wait --json` must still print one state object when a run ends without a receipt (it crashed or
+// was force-killed). The diagnostic message + log tail stay on stderr via failWithRunLog.
+function failWaitNoReceipt(deps: CliDeps, runId: string, message: string, json: boolean, live?: LiveRun): number {
+	if (json) {
+		const now = deps.now();
+		const state: RunState = {
+			runId,
+			...(live !== undefined && { routineId: live.routineId }),
+			phase: "orphaned",
+			done: true,
+			exitCode: 1,
+			startedAt: live?.startedAt ?? now,
+			elapsedMs: live !== undefined ? now - live.startedAt : 0,
+			...(live !== undefined && { pid: live.pid, cwd: live.cwd }),
+			error: message,
+		};
+		printJson(deps, state);
+	}
+	return failWithRunLog(deps, runId, message);
 }
 
 function waitEventLine(event: RunEvent): string | undefined {
@@ -793,12 +920,17 @@ function waitEventLine(event: RunEvent): string | undefined {
 	return `  startup failed: ${event.error}`;
 }
 
-async function waitForRun(deps: CliDeps, runId: string): Promise<number> {
+async function waitForRun(deps: CliDeps, runId: string, json: boolean): Promise<number> {
 	const sleep = deps.sleep ?? defaultSleep;
 	const proc = deps.liveProcess ?? realLiveProcess;
 	let cursor = 0;
 	let lastActivityAt: number | undefined;
+	// Held so a no-receipt failure can still name the run's routine in its JSON object, even after
+	// the live entry is unregistered.
+	let lastLive: LiveRun | undefined;
 	const streamEvents = () => {
+		// In --json mode stdout is reserved for the one final object, so the human progress lines
+		// (which go to stderr via onProgress) are the only stream while waiting.
 		const events = readRunEvents(deps.cwd, runId);
 		for (; cursor < events.length; cursor++) {
 			const line = waitEventLine(events[cursor] as RunEvent);
@@ -810,22 +942,32 @@ async function waitForRun(deps: CliDeps, runId: string): Promise<number> {
 		const receipt = tryLoadReceipt(deps.cwd, runId);
 		if (receipt !== undefined) {
 			streamEvents();
-			return finishWaitWithReceipt(deps, runId, receipt);
+			return await finishWaitWithReceipt(deps, runId, receipt, json);
 		}
 
 		const live = loadLiveRun(deps.cwd, runId);
+		if (live !== undefined) lastLive = live;
 		if (live === undefined) {
 			const finalReceipt = tryLoadReceipt(deps.cwd, runId);
-			if (finalReceipt !== undefined) return finishWaitWithReceipt(deps, runId, finalReceipt);
-			return failWithRunLog(deps, runId, `no live run ${JSON.stringify(runId)} found and no receipt exists`);
+			if (finalReceipt !== undefined) return await finishWaitWithReceipt(deps, runId, finalReceipt, json);
+			return failWaitNoReceipt(deps, runId, `no live run ${JSON.stringify(runId)} found and no receipt exists`, json);
 		}
 		if (!proc.isAlive(live.pid)) {
 			const finalReceipt = tryLoadReceipt(deps.cwd, runId);
-			if (finalReceipt !== undefined) return finishWaitWithReceipt(deps, runId, finalReceipt);
+			if (finalReceipt !== undefined) return await finishWaitWithReceipt(deps, runId, finalReceipt, json);
 			unregisterLiveRun(deps.cwd, runId);
-			return failWithRunLog(deps, runId, `run ${runId} is no longer running and no receipt was written`);
+			return failWaitNoReceipt(
+				deps,
+				runId,
+				`run ${runId} is no longer running and no receipt was written`,
+				json,
+				lastLive,
+			);
 		}
 		if (deps.signal?.aborted) {
+			// The wait was cancelled, not the run -- which is still live. Report the current snapshot
+			// so --json ends with one object; the run keeps going and exit 130 + stderr say why.
+			if (json) printJson(deps, liveRunState(live, readRunEvents(deps.cwd, runId), deps.now()));
 			deps.err(`wait for ${runId} cancelled`);
 			return 130;
 		}

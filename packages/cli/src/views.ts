@@ -5,6 +5,7 @@
 // happened" from here, the product model is working.
 
 import type { ConvergeReceipt } from "./converge.ts";
+import { formatElapsed } from "./elapsed.ts";
 import type { FlowReceipt } from "./flow.ts";
 import {
 	effectiveCallTimeoutMs,
@@ -17,6 +18,7 @@ import {
 } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
+import type { RunState } from "./runstate.ts";
 import type { PatchStatus } from "./store.ts";
 
 function pad(s: string, n: number): string {
@@ -166,6 +168,30 @@ export function formatLiveRunList(items: LiveRunListItem[]): string {
 		`  ${pad(r.runId, wId)}  ${pad(r.routineId, wRoutine)}  pid ${pad(String(r.pid), wPid)}  ${pad(ageLabel(r.ageMs), 9)}  ${r.cwd}`.trimEnd(),
 	);
 	return [`live runs (${rows.length}):`, ...lines].join("\n");
+}
+
+// A single run's state, read back for `chit status`. The header leads with the phase (and the
+// receipt status once finished); the detail lines fit the phase -- an active run shows where it
+// is and how to follow it, a finished run shows the receipt facts and points at `chit trace`.
+export function formatRunStatus(s: RunState): string {
+	const head = s.phase === "finished" && s.status !== undefined ? `${s.phase}: ${s.status}` : s.phase;
+	const out = [`${s.runId}  ${s.routineId ?? "-"}  ${head}`];
+	if (s.scope) out.push(`scope:    ${s.scope}`);
+	if (!s.done) {
+		if (s.pid !== undefined) out.push(`pid:      ${s.pid}`);
+		out.push(`elapsed:  ${formatElapsed(s.elapsedMs)}`);
+		if (s.cwd) out.push(`cwd:      ${s.cwd}`);
+		out.push(`follow:   chit wait ${s.runId}`);
+		return out.join("\n");
+	}
+	out.push(`elapsed:  ${s.elapsedMs}ms`);
+	if (s.baseCommit) out.push(`base:     ${s.baseCommit.slice(0, 12)}`);
+	if (s.patch !== undefined) out.push(`patch:    ${s.patch}`);
+	if (s.applied) out.push("applied:  yes");
+	if (s.applyError) out.push(`apply:    could not apply to your tree -- ${s.applyError}`);
+	if (s.error) out.push(`error:    ${s.error}`);
+	if (s.phase === "finished") out.push(`trace:    chit trace ${s.runId}`);
+	return out.join("\n");
 }
 
 export function formatInspect(routine: ResolvedRoutine): string {

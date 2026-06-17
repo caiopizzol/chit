@@ -28,6 +28,8 @@ Replace the placeholder check in `chit.config.json` with your real command, such
 
 For a long run, add `--background`. It returns once the run has accepted and pinned the base commit it will run from, so you can keep working in the tree; then stream its progress and block on the receipt with `chit wait <run-id>`. Use `chit ps` and `chit stop <run-id>` to inspect or cancel live runs. `chit help <command>` prints focused help for any command.
 
+For agents and scripts, `chit status <run-id>` reads one run's state, live or finished, from its receipt and live registry. `ps`, `status`, and `wait` take `--json` to print that state as machine-readable output, and stdout stays JSON only. A global `--project <path>` (or `CHIT_PROJECT`) points any command at another project dir, so a run can be driven from any cwd.
+
 ## A routine
 
 ```json

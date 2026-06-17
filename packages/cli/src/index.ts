@@ -110,6 +110,10 @@ delete process.env.CHIT_LOG_PATH;
 
 const code = await runCli(argv, {
 	cwd: process.cwd(),
+	// CHIT_PROJECT points commands at another project dir from any cwd; a global --project arg
+	// overrides it. Resolution + validation live in runCli so they are testable.
+	...(process.env.CHIT_PROJECT !== undefined &&
+		process.env.CHIT_PROJECT !== "" && { projectEnv: process.env.CHIT_PROJECT }),
 	// Adapter registry keyed by adapter type. Adding another backend is one more entry
 	// here; the agent config picks which one each agent uses.
 	adapters: { claude: claudeCliAdapter, gemini: geminiCliAdapter, codex: codexCliAdapter },
@@ -127,6 +131,10 @@ const code = await runCli(argv, {
 	runtime: { version: packageVersion(), entrypoint: Bun.main },
 	backgroundSpawner: {
 		spawn(args, opts) {
+			// The child runs in opts.cwd (already the resolved project dir), so it must not
+			// re-resolve a (possibly relative) CHIT_PROJECT against it -- strip it from the env.
+			const env = { ...currentEnv(), ...opts.env };
+			delete env.CHIT_PROJECT;
 			const child = Bun.spawn(
 				[
 					"sh",
@@ -140,7 +148,7 @@ const code = await runCli(argv, {
 				],
 				{
 					cwd: opts.cwd,
-					env: { ...currentEnv(), ...opts.env },
+					env,
 					stdin: "ignore",
 					stdout: "ignore",
 					stderr: "ignore",

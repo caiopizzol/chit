@@ -206,6 +206,21 @@ describe("CLI process: the real binary (no model)", () => {
 		expect(r.err).toBe("");
 	});
 
+	test("help and version ignore a stale CHIT_PROJECT through the real binary", () => {
+		const cwd = tmp();
+		const env = { ...process.env, CHIT_PROJECT: "/no/such/chit/project" };
+
+		let r = Bun.spawnSync([BIN, "--help"], { cwd, env });
+		expect(r.exitCode).toBe(0);
+		expect(r.stdout.toString()).toContain("chit routines");
+		expect(r.stderr.toString()).toBe("");
+
+		r = Bun.spawnSync([BIN, "--version"], { cwd, env });
+		expect(r.exitCode).toBe(0);
+		expect(r.stdout.toString()).toContain("chit ");
+		expect(r.stderr.toString()).toBe("");
+	});
+
 	// A non-sandboxed loop through the real binary, no model: a format-only loop whose
 	// { step, equals } exit is satisfied (or not) by an input. Proves the cwd-loop dispatch,
 	// convergence, exit codes, and text output at the process boundary.
@@ -299,6 +314,51 @@ describe("CLI process: the real binary (no model)", () => {
 		const r = run(["run", "writer"], cwd);
 		expect(r.code).toBe(1);
 		expect(r.err).toMatch(/Commit or stash/);
+	});
+
+	// Project addressing + JSON state through the real binary: a run's receipt in one dir is read
+	// back as machine state from an unrelated cwd via --project and CHIT_PROJECT, and stdout is
+	// pure JSON. This is the agent-from-any-cwd path the unit tests fake.
+	test("--project and CHIT_PROJECT address another project's run state as JSON", () => {
+		const proj = tmp();
+		writeFileSync(
+			join(proj, "chit.config.json"),
+			JSON.stringify({ routines: { echo: { file: "echo.json" } }, profiles: {} }),
+		);
+		writeFileSync(
+			join(proj, "echo.json"),
+			JSON.stringify({
+				id: "echo",
+				inputs: { name: { type: "string" } },
+				steps: [{ id: "out", format: "hello {{ inputs.name }}" }],
+				output: "out",
+			}),
+		);
+		// A foreground, model-less run writes a receipt in proj.
+		const ran = run(["run", "echo", "--input", "name=Ada"], proj);
+		expect(ran.code).toBe(0);
+		const runId = ran.out.match(/run (run-[a-f0-9]+)/)?.[1];
+		expect(runId).toBeDefined();
+
+		// From an unrelated cwd, --project points status at proj; stdout parses as one state object.
+		const other = tmp();
+		const viaArg = run(["status", runId as string, "--project", proj, "--json"], other);
+		expect(viaArg.code).toBe(0);
+		expect(JSON.parse(viaArg.out)).toMatchObject({
+			runId,
+			routineId: "echo",
+			phase: "finished",
+			status: "completed",
+			exitCode: 0,
+		});
+
+		// CHIT_PROJECT is the env fallback for the same addressing.
+		const viaEnv = Bun.spawnSync([BIN, "status", runId as string, "--json"], {
+			cwd: other,
+			env: { ...process.env, CHIT_PROJECT: proj },
+		});
+		expect(viaEnv.exitCode).toBe(0);
+		expect(JSON.parse(viaEnv.stdout.toString())).toMatchObject({ runId, phase: "finished" });
 	});
 
 	test("does not load a project .env into Chit or spawned checks", () => {
