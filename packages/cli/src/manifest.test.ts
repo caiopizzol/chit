@@ -9,6 +9,7 @@ import {
 	type Manifest,
 	ManifestError,
 	parseManifest,
+	validateChangedFiles,
 } from "./manifest.ts";
 
 // A text execution routine: call + format, read-only, no checks.
@@ -584,5 +585,140 @@ describe("parseManifest -- structured call output (json + path condition)", () =
 	test("surfaces an unsupported schema keyword as a manifest error with its path", () => {
 		const bad = { id: "review", call: "critic", prompt: "x", json: { schema: { type: "string", minLength: 3 } } };
 		expect(() => parse({ ...base, steps: [bad] })).toThrow(/json\.schema: unsupported schema keyword "minLength"/);
+	});
+});
+
+describe("parseManifest -- changePolicy", () => {
+	// A sandboxed routine (read-write agent) with a change policy.
+	const SANDBOXED = {
+		id: "scoped-edit",
+		agents: { w: { profile: "claude", instructions: "Edit.", filesystem: "read-write" } },
+		steps: [{ id: "go", call: "w", prompt: "do it" }],
+	};
+
+	test("parses allowedChangedPaths on a sandboxed routine", () => {
+		const m = parse({ ...SANDBOXED, changePolicy: { allowedChangedPaths: ["src/", "tests/"] } });
+		expect(m.changePolicy).toEqual({ allowedChangedPaths: ["src/", "tests/"] });
+	});
+
+	test("parses deniedChangedPaths on a sandboxed routine", () => {
+		const m = parse({ ...SANDBOXED, changePolicy: { deniedChangedPaths: [".env", "secrets/"] } });
+		expect(m.changePolicy).toEqual({ deniedChangedPaths: [".env", "secrets/"] });
+	});
+
+	test("parses both allowed and denied together", () => {
+		const m = parse({
+			...SANDBOXED,
+			changePolicy: { allowedChangedPaths: ["src/"], deniedChangedPaths: ["src/generated/"] },
+		});
+		expect(m.changePolicy).toEqual({ allowedChangedPaths: ["src/"], deniedChangedPaths: ["src/generated/"] });
+	});
+
+	test("rejects changePolicy on a non-sandboxed routine", () => {
+		expect(() => parse({ ...TEXT, changePolicy: { allowedChangedPaths: ["src/"] } })).toThrow(
+			/`changePolicy` is only valid on a sandboxed routine/,
+		);
+	});
+
+	test("rejects an empty changePolicy (no allowed or denied)", () => {
+		expect(() => parse({ ...SANDBOXED, changePolicy: {} })).toThrow(
+			/must specify at least `allowedChangedPaths` or `deniedChangedPaths`/,
+		);
+	});
+
+	test("rejects a non-object changePolicy", () => {
+		expect(() => parse({ ...SANDBOXED, changePolicy: "strict" })).toThrow(/must be an object/);
+	});
+
+	test("rejects an empty allowedChangedPaths array", () => {
+		expect(() => parse({ ...SANDBOXED, changePolicy: { allowedChangedPaths: [] } })).toThrow(
+			/must be a non-empty array/,
+		);
+	});
+
+	test("rejects a non-string entry in allowedChangedPaths", () => {
+		expect(() => parse({ ...SANDBOXED, changePolicy: { allowedChangedPaths: [123] } })).toThrow(
+			/must be a non-empty string/,
+		);
+	});
+
+	test("rejects unknown fields in changePolicy", () => {
+		expect(() => parse({ ...SANDBOXED, changePolicy: { allowedChangedPaths: ["src/"], strict: true } })).toThrow(
+			/unknown field "strict"/,
+		);
+	});
+});
+
+describe("validateChangedFiles", () => {
+	test("passes when all changed files match allowedChangedPaths", () => {
+		const result = validateChangedFiles({ allowedChangedPaths: ["src/", "tests/"] }, [
+			"M\tsrc/foo.ts",
+			"A\ttests/bar.ts",
+		]);
+		expect(result.ok).toBe(true);
+	});
+
+	test("fails when a changed file is outside allowedChangedPaths", () => {
+		const result = validateChangedFiles({ allowedChangedPaths: ["src/"] }, ["M\tsrc/foo.ts", "A\tconfig/db.json"]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.unexpectedFiles).toEqual(["config/db.json"]);
+	});
+
+	test("passes when no changed files match deniedChangedPaths", () => {
+		const result = validateChangedFiles({ deniedChangedPaths: [".env", "secrets/"] }, ["M\tsrc/foo.ts"]);
+		expect(result.ok).toBe(true);
+	});
+
+	test("fails when a changed file matches deniedChangedPaths", () => {
+		const result = validateChangedFiles({ deniedChangedPaths: [".env"] }, ["M\tsrc/foo.ts", "M\t.env"]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.unexpectedFiles).toEqual([".env"]);
+	});
+
+	test("allowed + denied: denied rejects within allowed scope", () => {
+		const result = validateChangedFiles({ allowedChangedPaths: ["src/"], deniedChangedPaths: ["src/generated/"] }, [
+			"M\tsrc/foo.ts",
+			"A\tsrc/generated/types.ts",
+		]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.unexpectedFiles).toEqual(["src/generated/types.ts"]);
+	});
+
+	test("allowedChangedPaths supports glob patterns", () => {
+		const result = validateChangedFiles(
+			{ allowedChangedPaths: ["packages/cli/src/**/*.ts", "packages/cli/schemas/*.json"] },
+			[
+				"M\tpackages/cli/src/manifest.ts",
+				"M\tpackages/cli/src/nested/file.ts",
+				"M\tpackages/cli/schemas/chit.schema.json",
+			],
+		);
+		expect(result.ok).toBe(true);
+	});
+
+	test("deniedChangedPaths supports generated-file glob patterns", () => {
+		const result = validateChangedFiles(
+			{ allowedChangedPaths: ["packages/cli/"], deniedChangedPaths: ["**/*.generated.*", "bun.lock"] },
+			["M\tpackages/cli/src/ok.ts", "A\tpackages/cli/src/types.generated.ts", "M\tbun.lock"],
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.unexpectedFiles).toEqual(["packages/cli/src/types.generated.ts", "bun.lock"]);
+	});
+
+	test("handles rename status lines (R\\told\\tnew) -- both paths are checked", () => {
+		// Both old and new paths must satisfy the policy.
+		const pass = validateChangedFiles({ allowedChangedPaths: ["src/"] }, ["R100\tsrc/old.ts\tsrc/new.ts"]);
+		expect(pass.ok).toBe(true);
+		// The old path is outside allowed, so the rename is rejected even though the new path is fine.
+		const fail = validateChangedFiles({ allowedChangedPaths: ["src/"] }, [
+			"R100\tconfig/secrets.json\tsrc/secrets.json",
+		]);
+		expect(fail.ok).toBe(false);
+		if (!fail.ok) expect(fail.unexpectedFiles).toEqual(["config/secrets.json"]);
+	});
+
+	test("skips empty lines", () => {
+		const result = validateChangedFiles({ allowedChangedPaths: ["src/"] }, ["M\tsrc/foo.ts", "", "  "]);
+		expect(result.ok).toBe(true);
 	});
 });

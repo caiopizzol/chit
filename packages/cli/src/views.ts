@@ -237,6 +237,17 @@ export function formatInspect(routine: ResolvedRoutine): string {
 		`limits: per call ${minutesLabel(effectiveCallTimeoutMs(m))}, whole run ${minutesLabel(effectiveRunTimeoutMs(m))}`,
 	);
 
+	if (m.changePolicy !== undefined) {
+		out.push("");
+		out.push("change policy:");
+		if (m.changePolicy.allowedChangedPaths !== undefined) {
+			out.push(`  allowed: ${m.changePolicy.allowedChangedPaths.join(", ")}`);
+		}
+		if (m.changePolicy.deniedChangedPaths !== undefined) {
+			out.push(`  denied:  ${m.changePolicy.deniedChangedPaths.join(", ")}`);
+		}
+	}
+
 	if (isSandboxed(m)) {
 		out.push("");
 		out.push("note: runs in a git-worktree sandbox -- dry run by default (shows the diff,");
@@ -312,6 +323,13 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 			// just like a one-shot's output -- the body was printed at run time.
 			out.push(`output:   ${r.output.length} chars (printed at run time; not shown here)`);
 		}
+		if (r.changePolicyViolation) {
+			out.push("change policy violation:");
+			if (r.failureKind) out.push(`  kind: ${r.failureKind}`);
+			if (r.changePolicyViolation.allowed) out.push(`  allowed: ${r.changePolicyViolation.allowed.join(", ")}`);
+			if (r.changePolicyViolation.denied) out.push(`  denied:  ${r.changePolicyViolation.denied.join(", ")}`);
+			out.push(`  unexpected: ${r.changePolicyViolation.unexpectedFiles.join(", ")}`);
+		}
 		if (r.applyError) out.push(`apply:    could not apply to your tree -- ${r.applyError}`);
 		if (r.status === "failed" || r.status === "cancelled") out.push(`error:    ${r.error ?? "(unknown)"}`);
 		return out.join("\n");
@@ -339,7 +357,11 @@ export function formatTrace(r: RunReceipt | ConvergeReceipt | FlowReceipt): stri
 // output, and the stored patch when there is one. All of this already sits on disk in plaintext;
 // --full only DISPLAYS it (it reveals nothing the compact view collected differently). Kept
 // separate so the compact `formatTrace` audit stays the default.
-export function formatReceiptBodies(r: RunReceipt | ConvergeReceipt | FlowReceipt, patch?: string): string {
+export function formatReceiptBodies(
+	r: RunReceipt | ConvergeReceipt | FlowReceipt,
+	patch?: string,
+	debugPatch?: string,
+): string {
 	const indentBlock = (s: string): string =>
 		s
 			.split("\n")
@@ -355,9 +377,36 @@ export function formatReceiptBodies(r: RunReceipt | ConvergeReceipt | FlowReceip
 		out.push("output:");
 		out.push(indentBlock(r.output));
 	}
+	const stepOutputs: Array<{ label: string; body: string }> = [];
+	if (r.policy === "one-shot") {
+		for (const s of r.steps) {
+			if (s.output) stepOutputs.push({ label: s.id, body: s.output });
+		}
+	} else if (r.policy === "converge") {
+		for (const it of r.iterations) {
+			for (const s of it.steps) {
+				if (s.output) stepOutputs.push({ label: `iteration ${it.n} / ${s.id}`, body: s.output });
+				for (const check of s.checks ?? []) {
+					if (check.output)
+						stepOutputs.push({ label: `iteration ${it.n} / ${s.id} / ${check.command}`, body: check.output });
+				}
+			}
+		}
+	}
+	if (stepOutputs.length > 0) {
+		out.push("step outputs:");
+		for (const entry of stepOutputs) {
+			out.push(`  ${entry.label}:`);
+			out.push(indentBlock(entry.body));
+		}
+	}
 	if (patch !== undefined && patch.trim() !== "") {
 		out.push("patch:");
 		out.push(indentBlock(patch));
+	}
+	if (debugPatch !== undefined && debugPatch.trim() !== "") {
+		out.push("debug patch (not applyable):");
+		out.push(indentBlock(debugPatch));
 	}
 	return out.join("\n");
 }

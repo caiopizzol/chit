@@ -4,7 +4,7 @@ import type { FlowReceipt } from "./flow.ts";
 import { parseManifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { RunReceipt } from "./run.ts";
-import { formatInspect, formatRoutineList, formatTrace } from "./views.ts";
+import { formatInspect, formatReceiptBodies, formatRoutineList, formatTrace } from "./views.ts";
 
 function routineFrom(raw: unknown, extra: Partial<ResolvedRoutine> = {}): ResolvedRoutine {
 	const manifest = parseManifest(raw, "m.json");
@@ -102,6 +102,18 @@ describe("formatInspect", () => {
 		expect(out).toContain("limits: per call 30m, whole run 120m"); // sandboxed -> both bounds shown
 		expect(out).toMatch(/git-worktree sandbox/);
 		expect(out).not.toContain("implementer=");
+	});
+
+	test("loop: shows change policy path guards when present", () => {
+		const out = formatInspect(
+			routineFrom({
+				...CONVERGE,
+				changePolicy: { allowedChangedPaths: ["packages/cli/src/"], deniedChangedPaths: ["**/*.generated.*"] },
+			}),
+		);
+		expect(out).toContain("change policy:");
+		expect(out).toContain("allowed: packages/cli/src/");
+		expect(out).toContain("denied:  **/*.generated.*");
 	});
 
 	test("converge: a config default overrides max iterations in the view", () => {
@@ -437,6 +449,39 @@ describe("formatTrace converge", () => {
 		expect(out).toContain(`json: {"passed":true}`); // iteration 2
 		expect(out).toContain("condition met");
 	});
+
+	test("a change policy violation is visible in trace", () => {
+		const violated: ConvergeReceipt = {
+			...receipt,
+			status: "failed",
+			error: "change policy violation: unexpected changed files: config/secrets.json",
+			failureKind: "unexpected_changed_files",
+			changePolicyViolation: {
+				unexpectedFiles: ["config/secrets.json"],
+				allowed: ["src/"],
+			},
+		};
+		const out = formatTrace(violated);
+		expect(out).toContain("change policy violation:");
+		expect(out).toContain("kind: unexpected_changed_files");
+		expect(out).toContain("allowed: src/");
+		expect(out).toContain("unexpected: config/secrets.json");
+		expect(out).toContain("failed");
+	});
+
+	test("a change policy violation with denied paths shows the deny list", () => {
+		const violated: ConvergeReceipt = {
+			...receipt,
+			status: "failed",
+			changePolicyViolation: {
+				unexpectedFiles: [".env"],
+				denied: [".env", "secrets/"],
+			},
+		};
+		const out = formatTrace(violated);
+		expect(out).toContain("denied:  .env, secrets/");
+		expect(out).toContain("unexpected: .env");
+	});
 });
 
 describe("formatTrace", () => {
@@ -592,5 +637,89 @@ describe("formatTrace flow", () => {
 		const out = formatTrace(legacy);
 		expect(out).toContain("feature-griller");
 		expect(out).toContain("run-g");
+	});
+});
+
+describe("formatReceiptBodies -- debug patch", () => {
+	const receipt: RunReceipt = {
+		runId: "run-d",
+		routineId: "test",
+		policy: "one-shot",
+		digest: "sha256:d",
+		inputs: { x: "val" },
+		startedAt: 0,
+		finishedAt: 10,
+		elapsedMs: 10,
+		status: "completed",
+		steps: [],
+		output: "out",
+	};
+
+	test("shows one-shot step output evidence when present", () => {
+		const out = formatReceiptBodies({
+			...receipt,
+			steps: [
+				{ id: "model", kind: "call", status: "ok", startedAt: 0, elapsedMs: 1, output: "raw model output" },
+				{ id: "out", kind: "format", status: "ok", startedAt: 1, elapsedMs: 1, output: "formatted output" },
+			],
+		});
+		expect(out).toContain("step outputs:");
+		expect(out).toContain("model:");
+		expect(out).toContain("raw model output");
+		expect(out).toContain("out:");
+		expect(out).toContain("formatted output");
+	});
+
+	test("shows converge step and check output evidence when present", () => {
+		const out = formatReceiptBodies({
+			runId: "run-c",
+			routineId: "impl",
+			policy: "converge",
+			digest: "sha256:c",
+			inputs: {},
+			maxIterations: 1,
+			until: "checks-pass",
+			startedAt: 0,
+			finishedAt: 10,
+			elapsedMs: 10,
+			status: "did-not-converge",
+			iterations: [
+				{
+					n: 1,
+					startedAt: 0,
+					allChecksPassed: false,
+					steps: [
+						{
+							id: "verify",
+							kind: "check",
+							status: "failed",
+							startedAt: 0,
+							elapsedMs: 1,
+							output: "combined check output",
+							checks: [{ command: "bun test", ok: false, startedAt: 0, elapsedMs: 1, output: "single check output" }],
+						},
+					],
+				},
+			],
+		});
+		expect(out).toContain("iteration 1 / verify:");
+		expect(out).toContain("combined check output");
+		expect(out).toContain("iteration 1 / verify / bun test:");
+		expect(out).toContain("single check output");
+	});
+
+	test("shows a debug patch labeled as not applyable", () => {
+		const out = formatReceiptBodies(receipt, undefined, "debug diff content");
+		expect(out).toContain("debug patch (not applyable):");
+		expect(out).toContain("debug diff content");
+		expect(out).not.toContain("patch:");
+	});
+
+	test("shows both a regular patch and a debug patch when both are present", () => {
+		const out = formatReceiptBodies(receipt, "regular patch", "debug patch");
+		expect(out).toContain("patch:");
+		expect(out).toContain("regular patch");
+		expect(out).toContain("debug patch (not applyable):");
+		expect(out).toContain("debug patch");
 	});
 });

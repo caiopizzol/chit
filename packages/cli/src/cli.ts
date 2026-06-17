@@ -19,7 +19,16 @@ import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { scaffoldRoutine, TEMPLATES, type Template } from "./scaffold.ts";
-import { listReceipts, loadPatch, loadReceipt, patchStatus, savePatch, saveReceipt } from "./store.ts";
+import {
+	listReceipts,
+	loadDebugPatch,
+	loadPatch,
+	loadReceipt,
+	patchStatus,
+	saveDebugPatch,
+	savePatch,
+	saveReceipt,
+} from "./store.ts";
 import {
 	formatInspect,
 	formatReceiptBodies,
@@ -282,12 +291,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				if (result.applied === true) result.receipt.appliedAt = deps.now();
 				saveReceipt(deps.cwd, result.receipt);
 				for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
-				if (
-					result.terminalPatch !== undefined &&
-					result.terminalPatch.trim() !== "" &&
-					result.receipt.status === "completed"
-				)
-					savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
+				if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "") {
+					if (result.receipt.status === "completed") {
+						savePatch(deps.cwd, result.receipt.runId, result.terminalPatch);
+					} else {
+						saveDebugPatch(deps.cwd, result.receipt.runId, result.terminalPatch);
+					}
+				}
 				const r = result.receipt;
 				deps.out(`flow: ${r.status} (${r.steps.length} step${r.steps.length === 1 ? "" : "s"})`);
 				for (const s of r.steps) deps.out(`  ${s.id} -> ${s.kind === "ask" ? "ask" : s.routine}: ${s.status}`);
@@ -349,8 +359,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				if (result.applied === true) result.receipt.appliedAt = deps.now();
 				saveReceipt(deps.cwd, result.receipt);
 				// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
-				if (result.receipt.status === "converged" && result.patch.trim() !== "")
-					savePatch(deps.cwd, result.receipt.runId, result.patch);
+				// Non-converged/failed runs get a .debug.patch for inspection, not an applyable .patch.
+				if (result.patch.trim() !== "") {
+					if (result.debugPatch) {
+						saveDebugPatch(deps.cwd, result.receipt.runId, result.patch);
+					} else if (result.receipt.status === "converged") {
+						savePatch(deps.cwd, result.receipt.runId, result.patch);
+					}
+				}
 				const r = result.receipt;
 				deps.out(`run ${r.status} (${r.iterations.length} iteration${r.iterations.length === 1 ? "" : "s"})`);
 				deps.out(result.diff.trim() ? `\n${result.diff}` : "\n(no changes produced)");
@@ -435,7 +451,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			if (id === undefined) return fail(deps, "trace needs a run id");
 			const receipt = loadReceipt(deps.cwd, id);
 			deps.out(formatTrace(receipt));
-			if (full) deps.out(formatReceiptBodies(receipt, loadPatch(deps.cwd, id)));
+			if (full) deps.out(formatReceiptBodies(receipt, loadPatch(deps.cwd, id), loadDebugPatch(deps.cwd, id)));
 			return 0;
 		}
 

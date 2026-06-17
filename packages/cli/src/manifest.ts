@@ -102,6 +102,17 @@ export interface Limits {
 	runTimeoutMinutes?: number | "none";
 }
 
+// Change policy: which file paths a sandboxed run is allowed to touch. Checked
+// against the sandbox's git name-status AFTER the loop finishes. A violation is
+// a structured deterministic failure that prevents apply.
+//   allowedChangedPaths  only these paths/patterns may appear in the diff
+//   deniedChangedPaths   these paths/patterns must NOT appear in the diff
+// Both may coexist: allowed narrows the scope, denied rejects within it.
+export interface ChangePolicy {
+	allowedChangedPaths?: string[];
+	deniedChangedPaths?: string[];
+}
+
 export interface Manifest {
 	id: string;
 	description?: string;
@@ -111,6 +122,7 @@ export interface Manifest {
 	repeat?: Repeat;
 	output?: string;
 	limits?: Limits;
+	changePolicy?: ChangePolicy;
 }
 
 const DEFAULT_CALL_TIMEOUT_MIN = 30;
@@ -339,7 +351,7 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 	}
 	requireKeys(
 		raw,
-		new Set(["id", "description", "input", "inputs", "agents", "steps", "repeat", "output", "limits"]),
+		new Set(["id", "description", "input", "inputs", "agents", "steps", "repeat", "output", "limits", "changePolicy"]),
 		source,
 	);
 
@@ -533,6 +545,46 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		};
 	}
 
+	let changePolicy: ChangePolicy | undefined;
+	if (raw.changePolicy !== undefined) {
+		if (!isObject(raw.changePolicy)) throw new ManifestError(`${source}.changePolicy`, "must be an object");
+		requireKeys(raw.changePolicy, new Set(["allowedChangedPaths", "deniedChangedPaths"]), `${source}.changePolicy`);
+		const parsePathList = (v: unknown, field: string): string[] | undefined => {
+			if (v === undefined) return undefined;
+			if (!Array.isArray(v) || v.length === 0) {
+				throw new ManifestError(
+					`${source}.changePolicy`,
+					`\`${field}\` must be a non-empty array of paths or glob patterns`,
+				);
+			}
+			for (const [i, p] of v.entries()) {
+				if (typeof p !== "string" || !p)
+					throw new ManifestError(`${source}.changePolicy.${field}[${i}]`, "must be a non-empty string");
+			}
+			return v as string[];
+		};
+		const allowed = parsePathList(raw.changePolicy.allowedChangedPaths, "allowedChangedPaths");
+		const denied = parsePathList(raw.changePolicy.deniedChangedPaths, "deniedChangedPaths");
+		if (allowed === undefined && denied === undefined) {
+			throw new ManifestError(
+				`${source}.changePolicy`,
+				"must specify at least `allowedChangedPaths` or `deniedChangedPaths`",
+			);
+		}
+		// A change policy only makes sense for a sandboxed routine (one that edits files).
+		// A read-only routine never changes anything, so the policy would be vacuous.
+		if (!sandboxed) {
+			throw new ManifestError(
+				source,
+				"`changePolicy` is only valid on a sandboxed routine (one with a check step or a read-write agent)",
+			);
+		}
+		changePolicy = {
+			...(allowed !== undefined && { allowedChangedPaths: allowed }),
+			...(denied !== undefined && { deniedChangedPaths: denied }),
+		};
+	}
+
 	return {
 		id: raw.id,
 		...(typeof raw.description === "string" && { description: raw.description }),
@@ -542,5 +594,82 @@ export function parseManifest(raw: unknown, source: string): Manifest {
 		...(repeat !== undefined && { repeat }),
 		...(output !== undefined && { output }),
 		...(limits !== undefined && { limits }),
+		...(changePolicy !== undefined && { changePolicy }),
 	};
+}
+
+// Extract ALL file paths from a git name-status line. A rename/copy line
+// ("R100\told.ts\tnew.ts") touches BOTH the old and new paths, so both must
+// be validated against the change policy.
+function filesFromStatusLine(line: string): string[] {
+	// git name-status: <status>\t<path>  or  <status>\t<old>\t<new> (renames/copies)
+	const parts = line.split("\t");
+	const paths = parts.slice(1).filter((path) => path.length > 0);
+	return paths.length > 0 ? paths : [line];
+}
+
+// Check changed files (from sandbox git name-status) against the manifest's change policy.
+// Returns the list of unexpected files, or an empty array if the policy is satisfied.
+export function validateChangedFiles(
+	policy: ChangePolicy,
+	statusLines: string[],
+): { ok: true } | { ok: false; unexpectedFiles: string[] } {
+	const unexpected: string[] = [];
+	for (const line of statusLines) {
+		if (!line.trim()) continue;
+		for (const file of filesFromStatusLine(line)) {
+			let allowed = true;
+			if (policy.allowedChangedPaths !== undefined) {
+				allowed = policy.allowedChangedPaths.some((pattern) => pathMatchesPattern(file, pattern));
+			}
+			if (allowed && policy.deniedChangedPaths !== undefined) {
+				if (policy.deniedChangedPaths.some((pattern) => pathMatchesPattern(file, pattern))) {
+					allowed = false;
+				}
+			}
+			if (!allowed) unexpected.push(file);
+		}
+	}
+	return unexpected.length === 0 ? { ok: true } : { ok: false, unexpectedFiles: unexpected };
+}
+
+function normalizePolicyPath(path: string): string {
+	return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
+
+function globToRegex(pattern: string): RegExp {
+	const normalized = normalizePolicyPath(pattern);
+	let out = "^";
+	for (let i = 0; i < normalized.length; i++) {
+		const ch = normalized[i];
+		const next = normalized[i + 1];
+		if (ch === "*" && next === "*") {
+			if (normalized[i + 2] === "/") {
+				out += "(?:.*/)?";
+				i += 2;
+			} else {
+				out += ".*";
+				i += 1;
+			}
+		} else if (ch === "*") {
+			out += "[^/]*";
+		} else if (ch === "?") {
+			out += "[^/]";
+		} else {
+			out += escapeRegex(ch ?? "");
+		}
+	}
+	return new RegExp(`${out}$`);
+}
+
+function pathMatchesPattern(filePath: string, pattern: string): boolean {
+	const file = normalizePolicyPath(filePath);
+	const normalized = normalizePolicyPath(pattern);
+	if (normalized.includes("*") || normalized.includes("?")) return globToRegex(normalized).test(file);
+	if (normalized.endsWith("/")) return file.startsWith(normalized);
+	return file === normalized || file.startsWith(`${normalized}/`);
 }

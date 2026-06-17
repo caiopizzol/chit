@@ -67,6 +67,25 @@ export function patchPath(cwd: string, runId: string): string {
 	return join(runsDir(cwd), `${runId}.patch`);
 }
 
+// A debug patch from a failed, non-converged, or change-policy-violated run. Stored for
+// post-mortem inspection but NOT applyable by `chit apply` (only .patch files are).
+export function debugPatchPath(cwd: string, runId: string): string {
+	return join(runsDir(cwd), `${runId}.debug.patch`);
+}
+
+export function saveDebugPatch(cwd: string, runId: string, patch: string): string {
+	const dir = runsDir(cwd);
+	mkdirSync(dir, { recursive: true });
+	const path = debugPatchPath(cwd, runId);
+	writeFileSync(path, patch, "utf-8");
+	return path;
+}
+
+export function loadDebugPatch(cwd: string, runId: string): string | undefined {
+	const path = debugPatchPath(cwd, runId);
+	return existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+}
+
 export function savePatch(cwd: string, runId: string, patch: string): string {
 	const dir = runsDir(cwd);
 	mkdirSync(dir, { recursive: true });

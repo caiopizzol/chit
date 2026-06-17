@@ -10,6 +10,7 @@
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { type ConvergeReceipt, runConverge } from "./converge.ts";
+import { validateChangedFiles } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
 import type { SandboxFactory } from "./sandbox.ts";
 
@@ -44,6 +45,9 @@ export interface ConvergeRunResult {
 	// Set when the run converged but the write-back (sandbox.apply) failed. The receipt
 	// carries the same message, so an apply failure still leaves durable evidence.
 	applyError?: string;
+	// When true, the patch is a debug artifact from a failed/non-converged/violated run.
+	// Not applyable by `chit apply`; stored separately as .debug.patch for inspection.
+	debugPatch?: boolean;
 }
 
 export async function runConvergeInSandbox(
@@ -82,8 +86,26 @@ export async function runConvergeInSandbox(
 		// The exact patch, captured BEFORE the sandbox is discarded, for `chit apply`.
 		const patch = await sandbox.patch();
 
+		// Change policy enforcement: check AFTER the loop, BEFORE apply. A violation is
+		// a structured deterministic failure -- the run may have converged, but the result
+		// is rejected and the patch becomes a debug artifact, not an applyable one.
+		const policy = routine.manifest.changePolicy;
+		let changePolicyViolation: ConvergeReceipt["changePolicyViolation"];
+		if (policy !== undefined && status.length > 0) {
+			const validation = validateChangedFiles(policy, status);
+			if (!validation.ok) {
+				changePolicyViolation = {
+					unexpectedFiles: validation.unexpectedFiles,
+					...(policy.allowedChangedPaths !== undefined && { allowed: policy.allowedChangedPaths }),
+					...(policy.deniedChangedPaths !== undefined && { denied: policy.deniedChangedPaths }),
+				};
+				deps.onProgress?.(`  change policy violation: ${validation.unexpectedFiles.length} unexpected file(s)`);
+			}
+		}
+
 		let applyError: string | undefined;
-		if (receipt.status === "converged" && deps.apply) {
+		// Only apply when: the loop converged, no change policy violation, and the caller asked to.
+		if (receipt.status === "converged" && changePolicyViolation === undefined && deps.apply) {
 			deps.onProgress?.("  applying changes to your tree …");
 			try {
 				await sandbox.apply();
@@ -95,17 +117,31 @@ export async function runConvergeInSandbox(
 			}
 		}
 
+		// A change policy violation is a deterministic failure regardless of convergence.
+		// The loop may have converged or not, but the overall run is rejected either way.
+		const finalStatus = changePolicyViolation !== undefined ? "failed" : receipt.status;
+		const finalError =
+			changePolicyViolation !== undefined
+				? `change policy violation: unexpected changed files: ${changePolicyViolation.unexpectedFiles.join(", ")}`
+				: receipt.error;
+		const isDebugPatch = finalStatus !== "converged" && patch.trim() !== "";
+
 		return {
 			receipt: {
 				...receipt,
+				status: finalStatus,
 				sandbox: { workDir: sandbox.workDir, status, ...(diffStat ? { diffStat } : {}) },
 				...(deps.baseCommit !== undefined && { baseCommit: deps.baseCommit }),
 				...(applyError !== undefined && { applyError }),
+				...(changePolicyViolation !== undefined && { changePolicyViolation }),
+				...(changePolicyViolation !== undefined && { failureKind: "unexpected_changed_files" as const }),
+				...(finalError !== undefined && { error: finalError }),
 			},
 			diff,
 			patch,
 			applied,
 			...(applyError !== undefined && { applyError }),
+			...(isDebugPatch && { debugPatch: true }),
 		};
 	} finally {
 		await sandbox.discard();

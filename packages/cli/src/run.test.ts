@@ -45,6 +45,8 @@ describe("runOneShot", () => {
 			["out", "format", "ok"],
 		]);
 		expect(r.steps[0]).toMatchObject({ participant: "griller", agent: "claude" });
+		expect(r.steps[0]?.output).toBe("GRILLED(Idea: dark mode)");
+		expect(r.steps[1]?.output).toBe("REPORT:\nGRILLED(Idea: dark mode)");
 		expect(r.finishedAt).toBeGreaterThan(r.startedAt);
 		// timeline: each step carries an absolute startedAt within the run's window, in order
 		expect(r.steps[0]?.startedAt).toBeGreaterThanOrEqual(r.startedAt);
@@ -285,6 +287,7 @@ describe("runOneShot -- structured call output", () => {
 		expect(r.status).toBe("failed");
 		expect(r.error).toMatch(/not valid JSON/);
 		expect(r.steps[0]?.status).toBe("failed");
+		expect(r.steps[0]?.output).toBe("not json at all");
 		expect(r.output).toBeUndefined();
 	});
 });

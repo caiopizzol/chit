@@ -17,6 +17,7 @@
 import type { Adapter } from "./adapter.ts";
 import type { CheckRunner } from "./check-runner.ts";
 import { formatElapsed } from "./elapsed.ts";
+import { capStepOutput } from "./evidence.ts";
 import { withHeartbeat } from "./heartbeat.ts";
 import {
 	effectiveCallTimeoutMs,
@@ -34,6 +35,8 @@ export interface CheckReceipt {
 	ok: boolean;
 	startedAt: number;
 	elapsedMs: number;
+	// Bounded snippet of the check's stdout/stderr for post-mortem inspection.
+	output?: string;
 }
 
 export interface ConvergeStepReceipt {
@@ -53,6 +56,9 @@ export interface ConvergeStepReceipt {
 	// The validated structured output of a json call step (the convergence signal), if any.
 	json?: unknown;
 	error?: string;
+	// Bounded snippet of the step's output text for post-mortem inspection of failed or
+	// non-converged runs. Bounded by capStepOutput.
+	output?: string;
 }
 
 export interface IterationReceipt {
@@ -95,6 +101,16 @@ export interface ConvergeReceipt {
 	// durable fact: `chit runs` keeps reading "applied" even after later commits move HEAD so the
 	// stored patch no longer re-applies cleanly (the other statuses are derived live from git).
 	appliedAt?: number;
+	// Set when the run touched files outside the manifest's changePolicy. A structured
+	// deterministic failure: the loop may have converged, but the result is rejected.
+	changePolicyViolation?: {
+		unexpectedFiles: string[];
+		allowed?: string[];
+		denied?: string[];
+	};
+	// Machine-readable failure category for deterministic failures that are not model/check
+	// crashes. Today this is set for change-policy violations.
+	failureKind?: "unexpected_changed_files";
 }
 
 export interface SandboxReceipt {
@@ -251,6 +267,10 @@ export async function runConverge(
 					let callStatus: "ok" | "failed" = "ok";
 					let callError: string | undefined;
 					let callJson: unknown;
+					// On schema validation failure, the raw model text is retained for the receipt
+					// (post-mortem evidence) while the context output carries the error (feedback
+					// for the next iteration).
+					let callRawOutput: string | undefined;
 					if (step.json !== undefined) {
 						const ev = evaluateStructured(result.output, step.json.schema);
 						if (ev.ok) {
@@ -261,11 +281,13 @@ export async function runConverge(
 							callStatus = "failed";
 							iterationHadStepFailure = true;
 							callError = ev.error;
+							callRawOutput = result.output;
 							deps.onProgress?.(`  call ${step.call} output did not match its schema`);
 						}
 					} else {
 						ctx.steps[step.id] = { output: result.output };
 					}
+					const callOutput = capStepOutput(callRawOutput ?? ctx.steps[step.id]?.output ?? "");
 					stepReceipts.push({
 						id: step.id,
 						kind: "call",
@@ -276,15 +298,18 @@ export async function runConverge(
 						elapsedMs: deps.now() - stepStart,
 						...(callJson !== undefined && { json: callJson }),
 						...(callError !== undefined && { error: callError }),
+						...(callOutput !== undefined && { output: callOutput }),
 					});
 				} else if (step.kind === "format") {
 					ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
+					const fmtOutput = capStepOutput(ctx.steps[step.id]?.output ?? "");
 					stepReceipts.push({
 						id: step.id,
 						kind: "format",
 						status: "ok",
 						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
+						...(fmtOutput !== undefined && { output: fmtOutput }),
 					});
 				} else if (step.kind === "check") {
 					const checks: CheckReceipt[] = [];
@@ -300,14 +325,22 @@ export async function runConverge(
 						});
 						const checkElapsed = deps.now() - checkStart;
 						deps.onProgress?.(`  check ${label} → ${res.ok ? "ok" : "fail"} in ${formatElapsed(checkElapsed)}`);
-						checks.push({ command: label, ok: res.ok, startedAt: checkStart, elapsedMs: checkElapsed });
+						const checkOutput = capStepOutput(res.output);
+						checks.push({
+							command: label,
+							ok: res.ok,
+							startedAt: checkStart,
+							elapsedMs: checkElapsed,
+							...(checkOutput !== undefined && { output: checkOutput }),
+						});
 						if (!res.ok) {
 							stepPassed = false;
 							failures.push(`$ ${label}\n${res.output}`.trim());
 						}
 					}
 					// Feed the failing output forward: next iteration's call steps read it.
-					ctx.steps[step.id] = { output: failures.join("\n\n") };
+					const checkStepOutput = failures.join("\n\n");
+					ctx.steps[step.id] = { output: checkStepOutput };
 					if (!stepPassed) allChecksPassed = false;
 					stepReceipts.push({
 						id: step.id,
@@ -316,6 +349,7 @@ export async function runConverge(
 						startedAt: stepStart,
 						elapsedMs: deps.now() - stepStart,
 						checks,
+						...(checkStepOutput && { output: capStepOutput(checkStepOutput) }),
 					});
 				} else {
 					// An execution routine has no `routine` steps (those are a composition).

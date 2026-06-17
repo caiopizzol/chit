@@ -7,6 +7,7 @@
 
 import type { Adapter } from "./adapter.ts";
 import { formatElapsed } from "./elapsed.ts";
+import { capStepOutput } from "./evidence.ts";
 import { withHeartbeat } from "./heartbeat.ts";
 import { effectiveCallTimeoutMs, effectiveRunTimeoutMs, type Manifest } from "./manifest.ts";
 import type { ResolvedRoutine } from "./routine.ts";
@@ -29,6 +30,9 @@ export interface StepReceipt {
 	startedAt: number;
 	elapsedMs: number;
 	error?: string;
+	// Bounded step output evidence for post-mortem inspection. Ask answers are not
+	// stored here; call/format outputs are recorded because they are model/runtime output.
+	output?: string;
 }
 
 export interface RunReceipt {
@@ -141,31 +145,46 @@ export async function runOneShot(
 				const callElapsed = deps.now() - stepStart;
 				deps.onProgress?.(`  call ${step.call} done in ${formatElapsed(callElapsed)}`);
 				// Structured output: validate against the schema. A one-shot has no retry loop, so
-				// invalid JSON is a hard failure (thrown -> the catch records a failed step).
+				// invalid JSON is a hard failure, but the raw model text is still recorded as
+				// output evidence on the failed step.
+				let callStatus: "ok" | "failed" = "ok";
+				let callError: string | undefined;
 				if (step.json !== undefined) {
 					const ev = evaluateStructured(result.output, step.json.schema);
-					if (!ev.ok) throw new Error(ev.error);
-					ctx.steps[step.id] = { output: ev.normalized, json: ev.value };
+					if (ev.ok) {
+						ctx.steps[step.id] = { output: ev.normalized, json: ev.value };
+					} else {
+						failed = ev.error;
+						callStatus = "failed";
+						callError = ev.error;
+						ctx.steps[step.id] = { output: result.output };
+					}
 				} else {
 					ctx.steps[step.id] = { output: result.output };
 				}
+				const stepOutput = capStepOutput(ctx.steps[step.id]?.output ?? "");
 				steps.push({
 					id: step.id,
 					kind: "call",
 					participant: step.call,
 					...callBinding(step.call),
-					status: "ok",
+					status: callStatus,
 					startedAt: stepStart,
 					elapsedMs: callElapsed,
+					...(callError !== undefined && { error: callError }),
+					...(stepOutput !== undefined && { output: stepOutput }),
 				});
+				if (callStatus === "failed") break;
 			} else if (step.kind === "format") {
 				ctx.steps[step.id] = { output: renderTemplate(step.format, ctx) };
+				const stepOutput = capStepOutput(ctx.steps[step.id]?.output ?? "");
 				steps.push({
 					id: step.id,
 					kind: "format",
 					status: "ok",
 					startedAt: stepStart,
 					elapsedMs: deps.now() - stepStart,
+					...(stepOutput !== undefined && { output: stepOutput }),
 				});
 			} else if (step.kind === "ask") {
 				if (deps.askUser === undefined) throw new Error(`step ${step.id} is an \`ask\` but no input handler is wired`);

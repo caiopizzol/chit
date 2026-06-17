@@ -150,3 +150,178 @@ describe("runConvergeInSandbox", () => {
 		expect(h.sandbox()?.applied).toBe(false);
 	});
 });
+
+// A sandboxed routine with a change policy.
+const POLICY_CONVERGE = {
+	...CONVERGE,
+	id: "policy-edit",
+	changePolicy: { allowedChangedPaths: ["src/"] },
+};
+
+describe("runConvergeInSandbox -- change policy enforcement", () => {
+	function policyHarness(opts: { statusLines?: string[]; diff?: string } = {}) {
+		const status = opts.statusLines ?? ["M\tsrc/foo.ts"];
+		let sandbox: FakeSandbox | undefined;
+		let t = 0;
+		const deps: ConvergeRunDeps = {
+			sandboxFactory: {
+				async preflight() {
+					return { baseCommit: "base0000" };
+				},
+				async create() {
+					const sb = fakeSandbox({ workDir: "/sandbox", diff: opts.diff ?? "diff body" });
+					// Override status to return the controlled list.
+					sb.status = async () => status;
+					sandbox = sb;
+					return sb;
+				},
+				async applyPatch() {},
+			},
+			adapter: fakeAdapter((req) => `${req.agent}|${req.prompt}`),
+			checkRunner: fakeCheckRunner(),
+			cwd: "/origin",
+			now: () => ++t,
+			newRunId: () => "run-p",
+			apply: true,
+		};
+		return { deps, sandbox: () => sandbox };
+	}
+
+	test("converged run with all files within allowed paths applies normally", async () => {
+		const h = policyHarness({ statusLines: ["M\tsrc/foo.ts", "A\tsrc/bar.ts"] });
+		const res = await runConvergeInSandbox(routineFrom(POLICY_CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("converged");
+		expect(res.applied).toBe(true);
+		expect(res.receipt.changePolicyViolation).toBeUndefined();
+		expect(res.debugPatch).toBeUndefined();
+	});
+
+	test("converged run with unexpected files fails with changePolicyViolation", async () => {
+		const h = policyHarness({ statusLines: ["M\tsrc/foo.ts", "A\tconfig/secrets.json"] });
+		const res = await runConvergeInSandbox(routineFrom(POLICY_CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("failed");
+		expect(res.applied).toBe(false);
+		expect(res.receipt.changePolicyViolation).toEqual({
+			unexpectedFiles: ["config/secrets.json"],
+			allowed: ["src/"],
+		});
+		expect(res.receipt.error).toMatch(/change policy violation/);
+		expect(res.receipt.error).toMatch(/config\/secrets\.json/);
+		expect(res.debugPatch).toBe(true);
+		expect(h.sandbox()?.applied).toBe(false);
+		expect(h.sandbox()?.discarded).toBe(true);
+	});
+
+	test("change policy violation prevents apply even with apply=true", async () => {
+		const h = policyHarness({ statusLines: ["A\toutside.txt"] });
+		const res = await runConvergeInSandbox(routineFrom(POLICY_CONVERGE), { task: "x" }, h.deps);
+		expect(res.applied).toBe(false);
+		expect(h.sandbox()?.applied).toBe(false);
+	});
+
+	test("deniedChangedPaths rejects files matching the deny list", async () => {
+		const routine = routineFrom({
+			...CONVERGE,
+			id: "deny-edit",
+			changePolicy: { deniedChangedPaths: [".env", "node_modules/"] },
+		});
+		const h = policyHarness({ statusLines: ["M\tsrc/ok.ts", "M\t.env"] });
+		const res = await runConvergeInSandbox(routine, { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("failed");
+		expect(res.receipt.changePolicyViolation?.unexpectedFiles).toEqual([".env"]);
+		expect(res.receipt.changePolicyViolation?.denied).toEqual([".env", "node_modules/"]);
+	});
+
+	test("violation is visible in receipt sandbox status", async () => {
+		const h = policyHarness({ statusLines: ["A\tbad.txt"] });
+		const res = await runConvergeInSandbox(routineFrom(POLICY_CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.sandbox?.status).toContain("A\tbad.txt");
+	});
+
+	test("non-converged run with change policy violation is 'failed', not 'did-not-converge'", async () => {
+		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "fail" }));
+		const status = ["M\tsrc/foo.ts", "A\toutside.txt"];
+		let t = 0;
+		const deps: ConvergeRunDeps = {
+			sandboxFactory: {
+				async preflight() {
+					return { baseCommit: "base0000" };
+				},
+				async create() {
+					const sb = fakeSandbox({ workDir: "/sandbox", diff: "diff body" });
+					sb.status = async () => status;
+					return sb;
+				},
+				async applyPatch() {},
+			},
+			adapter: fakeAdapter((req) => `${req.agent}|${req.prompt}`),
+			checkRunner,
+			cwd: "/origin",
+			now: () => ++t,
+			newRunId: () => "run-p",
+			apply: true,
+		};
+		const res = await runConvergeInSandbox(routineFrom(POLICY_CONVERGE), { task: "x" }, deps);
+		expect(res.receipt.status).toBe("failed");
+		expect(res.receipt.changePolicyViolation?.unexpectedFiles).toEqual(["outside.txt"]);
+		expect(res.applied).toBe(false);
+		expect(res.debugPatch).toBe(true);
+	});
+
+	test("no policy on manifest skips validation (existing behavior)", async () => {
+		const h = policyHarness({ statusLines: ["M\tanything.txt"] });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("converged");
+		expect(res.receipt.changePolicyViolation).toBeUndefined();
+	});
+});
+
+describe("runConvergeInSandbox -- debug patch for failed/non-converged runs", () => {
+	test("a non-converged run marks the patch as debugPatch", async () => {
+		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "fail" }));
+		const h = harness({ checkRunner, sandboxDiff: "some diff" });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("did-not-converge");
+		expect(res.debugPatch).toBe(true);
+		expect(res.patch).toBe("some diff");
+	});
+
+	test("a converged run does NOT mark the patch as debugPatch", async () => {
+		const h = harness({ sandboxDiff: "converged diff" });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("converged");
+		expect(res.debugPatch).toBeUndefined();
+	});
+
+	test("an empty patch on a failed run does not set debugPatch", async () => {
+		const adapter: Adapter = {
+			async call() {
+				throw new Error("boom");
+			},
+		};
+		const h = harness({ adapter, sandboxDiff: "" });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(res.receipt.status).toBe("failed");
+		expect(res.debugPatch).toBeUndefined();
+	});
+});
+
+describe("runConvergeInSandbox -- per-step output evidence", () => {
+	test("call step receipts include bounded output", async () => {
+		const h = harness();
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "hello" }, h.deps);
+		const callStep = res.receipt.iterations[0]?.steps.find((s) => s.kind === "call");
+		expect(callStep?.output).toBeDefined();
+		expect(typeof callStep?.output).toBe("string");
+	});
+
+	test("check step receipts include output evidence on failure", async () => {
+		const checkRunner = fakeCheckRunner(() => ({ ok: false, exitCode: 1, output: "test output: 3 failed" }));
+		const h = harness({ checkRunner });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		const checkStep = res.receipt.iterations[0]?.steps.find((s) => s.kind === "check");
+		expect(checkStep?.output).toMatch(/test output/);
+		// Individual check receipts also carry output
+		expect(checkStep?.checks?.[0]?.output).toMatch(/test output/);
+	});
+});

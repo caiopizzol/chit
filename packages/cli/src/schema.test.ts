@@ -122,6 +122,57 @@ describe("profile validation: built-in adapter/model pairs (schema)", () => {
 	});
 });
 
+describe("schemas/chit.schema.json -- changePolicy", () => {
+	const ajv = new Ajv2020({ allErrors: true });
+	const validate = ajv.compile(schema);
+
+	const sandboxedRoutine = (changePolicy: unknown) => ({
+		profiles: { builder: "claude" },
+		routines: {
+			impl: {
+				input: "task",
+				agents: {
+					builder: { profile: "builder", instructions: "Build.", filesystem: "read-write" },
+				},
+				steps: [
+					{ id: "build", call: "builder", prompt: "{{ inputs.task }}" },
+					{ id: "verify", check: ["bun test"] },
+				],
+				repeat: { until: "checks-pass", maxIterations: 2 },
+				changePolicy,
+			},
+		},
+	});
+
+	test("accepts allowedChangedPaths", () => {
+		expect(validate(sandboxedRoutine({ allowedChangedPaths: ["src/"] }))).toBe(true);
+	});
+
+	test("accepts deniedChangedPaths", () => {
+		expect(validate(sandboxedRoutine({ deniedChangedPaths: [".env"] }))).toBe(true);
+	});
+
+	test("accepts both allowed and denied together", () => {
+		expect(validate(sandboxedRoutine({ allowedChangedPaths: ["src/"], deniedChangedPaths: [".env"] }))).toBe(true);
+	});
+
+	test("rejects an empty changePolicy object", () => {
+		expect(validate(sandboxedRoutine({}))).toBe(false);
+	});
+
+	test("rejects unknown fields in changePolicy", () => {
+		expect(validate(sandboxedRoutine({ allowedChangedPaths: ["src/"], extra: true }))).toBe(false);
+	});
+
+	test("rejects an empty allowedChangedPaths array", () => {
+		expect(validate(sandboxedRoutine({ allowedChangedPaths: [] }))).toBe(false);
+	});
+
+	test("rejects a non-string entry in allowedChangedPaths", () => {
+		expect(validate(sandboxedRoutine({ allowedChangedPaths: [123] }))).toBe(false);
+	});
+});
+
 describe("schemas/chit.schema.json -- structured output", () => {
 	const ajv = new Ajv2020({ allErrors: true });
 	const validate = ajv.compile(schema);
