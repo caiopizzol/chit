@@ -101,6 +101,13 @@ chit trace --full run-a1b5efea
 chit apply run-a1b5efea
 ```
 
+For a long run, detach it and wait on the receipt:
+
+```sh
+chit run implement --input task="add a version command" --background
+chit wait <run-id>
+```
+
 ## Examples
 
 The examples are copyable references, not built-in modes: [config](packages/cli/examples/chit.config.json), [plan](packages/cli/examples/plan.json), [investigate](packages/cli/examples/investigate.json), [implement](packages/cli/examples/implement.json), [fix](packages/cli/examples/fix.json), [review](packages/cli/examples/review.json), and [goal](packages/cli/examples/goal.json). `chit init --template` uses small built-in starter templates.
@@ -112,7 +119,10 @@ chit init [name]                  # create a starter routine
 chit doctor [--real]              # validate config and local tools
 chit routines                     # list routines and derived kinds
 chit inspect <routine>            # show what will run
-chit run <routine> --input k=v    # run a routine
+chit run <routine> --input k=v    # run a routine, add --background to detach
+chit ps                           # list live runs
+chit wait <run-id>                # block until a live run writes its receipt
+chit stop <run-id>                # ask a live run to stop
 chit runs                         # list past runs
 chit trace <run-id> [--full]      # inspect a receipt
 chit apply <run-id>               # apply a stored dry-run patch

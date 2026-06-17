@@ -8,7 +8,7 @@ import { type CliDeps, runCli } from "./cli.ts";
 import type { ConvergeReceipt } from "./converge.ts";
 import type { RunReceipt } from "./run.ts";
 import { fakeSandboxFactory } from "./sandbox.ts";
-import { listReceipts, patchStatus, savePatch, saveReceipt } from "./store.ts";
+import { listReceipts, patchStatus, runArgvPath, savePatch, saveReceipt, saveRunArgv } from "./store.ts";
 import { formatRunList, type RunListItem } from "./views.ts";
 
 const dirs: string[] = [];
@@ -51,17 +51,20 @@ const RUN_B: ConvergeReceipt = {
 };
 
 describe("listReceipts", () => {
-	test("reads every receipt, skipping .patch siblings and corrupt files", () => {
+	test("reads every receipt, skipping sidecars, corrupt files, and wrong-shaped JSON", () => {
 		const dir = tmp();
 		saveReceipt(dir, RUN_A);
 		saveReceipt(dir, RUN_B);
 		writeFileSync(join(dir, ".chit", "runs", "run-aaa.patch"), "diff --git a/x b/x");
 		writeFileSync(join(dir, ".chit", "runs", "broken.json"), "{ not json");
+		writeFileSync(join(dir, ".chit", "runs", "run-old-argv.argv.json"), JSON.stringify(["run", "plan"]));
+		saveRunArgv(dir, "run-new-argv", ["run", "plan"]);
 		expect(
 			listReceipts(dir)
 				.map((r) => r.runId)
 				.sort(),
 		).toEqual(["run-aaa", "run-bbb"]);
+		expect(runArgvPath(dir, "run-new-argv").endsWith(".json")).toBe(false);
 	});
 
 	test("returns [] when there are no runs", () => {
@@ -164,6 +167,17 @@ describe("chit runs (command)", () => {
 		const { deps, out } = mkDeps(tmp());
 		expect(await runCli(["runs"], deps)).toBe(0);
 		expect(out.join("\n")).toContain("No runs yet");
+	});
+
+	test("ignores wrong-shaped JSON files when listing runs", async () => {
+		const dir = tmp();
+		saveReceipt(dir, RUN_A);
+		writeFileSync(join(dir, ".chit", "runs", "run-old-argv.argv.json"), JSON.stringify(["run", "plan"]));
+		const { deps, out } = mkDeps(dir);
+		expect(await runCli(["runs"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("run-aaa");
+		expect(text).not.toContain("run-old-argv");
 	});
 });
 

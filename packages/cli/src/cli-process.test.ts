@@ -105,6 +105,62 @@ describe("CLI process: the real binary (no model)", () => {
 		expect(r.stdout.toString()).toContain("hello Ada"); // the typed answer flowed into the format step
 	});
 
+	test("a background run can be waited on through the real binary", () => {
+		const cwd = tmp();
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { echo: { file: "echo.json" } }, profiles: {} }),
+		);
+		writeFileSync(
+			join(cwd, "echo.json"),
+			JSON.stringify({
+				id: "echo",
+				inputs: { name: { type: "string" } },
+				steps: [{ id: "out", format: "hello {{ inputs.name }}" }],
+				output: "out",
+			}),
+		);
+
+		const bg = run(["run", "echo", "--input", "name=Ada", "--background"], cwd);
+		expect(bg.code).toBe(0);
+		const runId = bg.out.match(/started (run-[a-f0-9]+) in background/)?.[1];
+		expect(runId).toBeDefined();
+
+		const waited = run(["wait", runId as string], cwd);
+		expect(waited.code).toBe(0);
+		expect(waited.out).toContain(`${runId}  echo  completed`);
+		expect(existsSync(join(cwd, ".chit", "runs", `${runId}.argv`))).toBe(false);
+	});
+
+	test("a background child clears Chit handoff env before spawned checks", () => {
+		const cwd = tmp();
+		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
+		sh("git init -q && git config user.email t@t.co && git config user.name t");
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { nested: { file: "nested.json" } }, profiles: {} }),
+		);
+		writeFileSync(
+			join(cwd, "nested.json"),
+			JSON.stringify({
+				id: "nested",
+				inputs: {},
+				steps: [{ id: "nested-chit", check: [{ command: BIN, args: ["--version"] }] }],
+				repeat: { until: "checks-pass", maxIterations: 1 },
+			}),
+		);
+		sh("git add -A && git commit -q -m init");
+
+		const bg = run(["run", "nested", "--background"], cwd);
+		expect(bg.code).toBe(0);
+		const runId = bg.out.match(/started (run-[a-f0-9]+) in background/)?.[1];
+		expect(runId).toBeDefined();
+
+		const waited = run(["wait", runId as string], cwd);
+		expect(waited.code).toBe(0);
+		expect(waited.out).toContain(`${runId}  nested  converged`);
+	});
+
 	// A non-sandboxed loop through the real binary, no model: a format-only loop whose
 	// { step, equals } exit is satisfied (or not) by an input. Proves the cwd-loop dispatch,
 	// convergence, exit codes, and text output at the process boundary.

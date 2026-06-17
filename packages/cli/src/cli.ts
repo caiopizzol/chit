@@ -1,6 +1,6 @@
-// The whole public surface: routines | inspect | run | trace. One concept
-// (routine), four verbs. Everything below is wiring the read/run/trace flows to
-// the modules; the CLI itself holds no model logic.
+// CLI command wiring around one core concept: routines. Everything below routes
+// config, run, receipt, live-process, and sandbox operations to the modules; the
+// CLI itself holds no model logic.
 //
 // `runCli` takes its world as deps (cwd, adapter, clock, id, output sinks) so it
 // is testable end-to-end on real config/manifest files with a fake adapter -- no
@@ -19,23 +19,37 @@ import {
 	realDoctorProbes,
 	runDoctor,
 } from "./doctor.ts";
-import { resolveFlow, runFlow } from "./flow.ts";
+import { type ResolvedFlow, resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
-import { listLiveRuns, registerLiveRun, stopLiveRun, unregisterLiveRun } from "./live.ts";
-import { isComposition, isSandboxed, kindLabel } from "./manifest.ts";
+import {
+	type LiveProcess,
+	listLiveRuns,
+	loadLiveRun,
+	realLiveProcess,
+	registerLiveRun,
+	stopLiveRun,
+	unregisterLiveRun,
+} from "./live.ts";
+import { isComposition, isSandboxed, kindLabel, type Manifest, type Step } from "./manifest.ts";
 import { resolveRoutine } from "./routine.ts";
 import { runOneShot } from "./run.ts";
 import { ApplyError, DirtyWorktreeError, reapStaleSandboxes, type SandboxFactory } from "./sandbox.ts";
 import { scaffoldRoutine, TEMPLATES, type Template } from "./scaffold.ts";
 import {
+	type AnyReceipt,
 	listReceipts,
 	loadDebugPatch,
 	loadPatch,
 	loadReceipt,
+	loadRunLog,
 	patchStatus,
+	prepareRunLog,
+	removeRunArgv,
 	saveDebugPatch,
 	savePatch,
 	saveReceipt,
+	saveRunArgv,
+	tryLoadReceipt,
 } from "./store.ts";
 import {
 	formatInspect,
@@ -48,6 +62,14 @@ import {
 	type RoutineListItem,
 	type RunListItem,
 } from "./views.ts";
+
+export interface BackgroundProcess {
+	pid: number;
+}
+
+export interface BackgroundSpawner {
+	spawn(args: string[], opts: { cwd: string; env: Record<string, string> }): BackgroundProcess;
+}
 
 export interface CliDeps {
 	cwd: string;
@@ -75,6 +97,12 @@ export interface CliDeps {
 	doctorProbes?: DoctorProbes;
 	// Runtime identity for diagnostics. The bin wires the real package version and entrypoint.
 	runtime?: DoctorRuntime;
+	// Live-process seam for ps/stop/wait. The bin uses real processes; tests inject fakes.
+	liveProcess?: LiveProcess;
+	// Sleep seam for `chit wait`.
+	sleep?: (ms: number) => Promise<void>;
+	// Background-process seam for `chit run --background`.
+	backgroundSpawner?: BackgroundSpawner;
 }
 
 const USAGE = `chit -- run declared routines
@@ -83,6 +111,7 @@ const USAGE = `chit -- run declared routines
   chit routines                       list the routines declared in chit.config.json
   chit runs [--scope <name>]          list past runs (id, routine, status, scope, age)
   chit ps                             list currently running runs for this repo
+  chit wait <run-id>                  wait until a live run writes its receipt
   chit stop <run-id> [--force]        ask a live run to stop (--force sends SIGKILL)
   chit inspect <routine>              show what a routine needs and what it will run
   chit doctor [--real]                check the environment is ready (--real makes tiny model calls)
@@ -90,6 +119,7 @@ const USAGE = `chit -- run declared routines
       --input <name>=<value>          supply an input (repeatable)
       --scope <name>                  tag the run (e.g. a Linear/Jira id); read it back with chit runs --scope
       --auto-apply                    automation: apply immediately, skipping the dry-run review (prefer chit apply)
+      --background                    start in another Chit process; use chit wait <run-id>
   chit trace <run-id> [--full]        show a past run's receipt (--full adds the stored inputs + output)
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
@@ -103,35 +133,39 @@ function parseRunArgs(rest: string[]): {
 	inputs: Record<string, string>;
 	scope?: string;
 	apply: boolean;
+	background: boolean;
 	error?: string;
 } {
 	const inputs: Record<string, string> = {};
 	let id: string | undefined;
 	let scope: string | undefined;
 	let apply = false;
+	let background = false;
 	for (let i = 0; i < rest.length; i++) {
 		const a = rest[i];
 		if (a === "--input") {
 			const pair = rest[++i];
 			if (pair === undefined || !pair.includes("=")) {
-				return { id, inputs, apply, error: "--input expects <name>=<value>" };
+				return { id, inputs, apply, background, error: "--input expects <name>=<value>" };
 			}
 			const eq = pair.indexOf("=");
 			inputs[pair.slice(0, eq)] = pair.slice(eq + 1);
 		} else if (a === "--scope") {
 			scope = rest[++i];
-			if (scope === undefined) return { id, inputs, apply, error: "--scope expects a value" };
+			if (scope === undefined) return { id, inputs, apply, background, error: "--scope expects a value" };
 		} else if (a === "--auto-apply") {
 			apply = true;
+		} else if (a === "--background") {
+			background = true;
 		} else if (a?.startsWith("--")) {
-			return { id, inputs, apply, error: `unknown option ${a}` };
+			return { id, inputs, apply, background, error: `unknown option ${a}` };
 		} else if (id === undefined) {
 			id = a;
 		} else {
-			return { id, inputs, apply, error: `unexpected argument ${JSON.stringify(a)}` };
+			return { id, inputs, apply, background, error: `unexpected argument ${JSON.stringify(a)}` };
 		}
 	}
-	return { id, inputs, apply, ...(scope !== undefined && { scope }) };
+	return { id, inputs, apply, background, ...(scope !== undefined && { scope }) };
 }
 
 function parseInitArgs(rest: string[]): { name: string; template: Template; error?: string } {
@@ -250,7 +284,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		if (command === "ps") {
 			if (rest.length > 0) return fail(deps, `unexpected argument ${JSON.stringify(rest[0])}`);
 			const now = deps.now();
-			const items: LiveRunListItem[] = listLiveRuns(deps.cwd).map((r) => ({
+			const items: LiveRunListItem[] = listLiveRuns(deps.cwd, deps.liveProcess).map((r) => ({
 				runId: r.runId,
 				routineId: r.routineId,
 				pid: r.pid,
@@ -259,6 +293,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			}));
 			deps.out(formatLiveRunList(items));
 			return 0;
+		}
+
+		if (command === "wait") {
+			let id: string | undefined;
+			for (const a of rest) {
+				if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit wait accepts a run id)`);
+				if (id === undefined) id = a;
+				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
+			}
+			if (id === undefined) return fail(deps, "wait needs a run id");
+			return await waitForRun(deps, id);
 		}
 
 		if (command === "stop") {
@@ -271,7 +316,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
 			}
 			if (id === undefined) return fail(deps, "stop needs a run id");
-			const result = stopLiveRun(deps.cwd, id, { force });
+			const result = stopLiveRun(deps.cwd, id, { force, process: deps.liveProcess });
 			if (!result.ok) return fail(deps, result.message);
 			deps.out(`sent ${result.signal} to ${result.run.runId} (pid ${result.run.pid})`);
 			return 0;
@@ -314,19 +359,41 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				return 1;
 			}
 
+			let resolvedFlow: ResolvedFlow | undefined;
+			if (isComposition(routine.manifest)) {
+				try {
+					resolvedFlow = resolveFlow(routine, (id) => resolveRoutine(config, id, deps.cwd));
+				} catch (e) {
+					return fail(deps, (e as Error).message);
+				}
+			}
+
+			if (args.background) {
+				if (deps.backgroundSpawner === undefined) {
+					return fail(deps, "this Chit entrypoint cannot start background runs");
+				}
+				if (args.apply) {
+					return fail(deps, "--background cannot be combined with --auto-apply; use chit wait, then chit apply");
+				}
+				const askReason = backgroundAskReason(routine.id, routine.manifest.steps, resolvedFlow);
+				if (askReason !== undefined)
+					return fail(deps, `--background cannot run routines with ask steps (${askReason})`);
+				if (needsSandboxPreflight(routine.manifest, resolvedFlow)) {
+					const pf = await preflightSandbox(deps);
+					if (!pf.ok) return 1;
+				}
+				return startBackgroundRun(deps, routine.id, backgroundRunArgv(routine.id, args));
+			}
+
 			const live = liveRunContext(deps, routine.id);
 			try {
 				if (isComposition(routine.manifest)) {
-					let resolvedFlow: ReturnType<typeof resolveFlow>;
-					try {
-						resolvedFlow = resolveFlow(routine, (id) => resolveRoutine(config, id, deps.cwd));
-					} catch (e) {
-						return fail(deps, (e as Error).message);
-					}
+					if (resolvedFlow === undefined)
+						return fail(deps, `could not resolve composition ${JSON.stringify(routine.id)}`);
 					// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now
 					// before grill/plan run, and capture the base commit for the receipt.
 					let flowBase: string | undefined;
-					if (resolvedFlow.steps.some((st) => st.kind === "routine" && isSandboxed(st.routine.manifest))) {
+					if (needsSandboxPreflight(routine.manifest, resolvedFlow)) {
 						const pf = await preflightSandbox(deps);
 						if (!pf.ok) return 1;
 						flowBase = pf.baseCommit;
@@ -574,6 +641,133 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 function fail(deps: CliDeps, message: string): number {
 	deps.err(`error: ${message}`);
 	return 1;
+}
+
+const WAIT_POLL_MS = 500;
+
+function defaultSleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function receiptExitCode(receipt: AnyReceipt): number {
+	if (receipt.status === "cancelled") return 130;
+	if ("applyError" in receipt && receipt.applyError !== undefined) return 1;
+	if (receipt.policy === "converge") return receipt.status === "converged" ? 0 : 1;
+	return receipt.status === "completed" ? 0 : 1;
+}
+
+function logTail(text: string, limit = 4000): string {
+	const trimmed = text.trimEnd();
+	if (trimmed.length <= limit) return trimmed;
+	return `[truncated]\n${trimmed.slice(trimmed.length - limit)}`;
+}
+
+function failWithRunLog(deps: CliDeps, runId: string, message: string): number {
+	removeRunArgv(deps.cwd, runId);
+	deps.err(`error: ${message}`);
+	const log = loadRunLog(deps.cwd, runId);
+	if (log !== undefined && log.trim() !== "") {
+		deps.err(`\nlast output from ${runId}:\n${logTail(log)}`);
+	}
+	return 1;
+}
+
+function finishWaitWithReceipt(deps: CliDeps, runId: string, receipt: AnyReceipt): number {
+	unregisterLiveRun(deps.cwd, runId);
+	removeRunArgv(deps.cwd, runId);
+	deps.out(formatTrace(receipt));
+	return receiptExitCode(receipt);
+}
+
+async function waitForRun(deps: CliDeps, runId: string): Promise<number> {
+	const sleep = deps.sleep ?? defaultSleep;
+	const proc = deps.liveProcess ?? realLiveProcess;
+	for (;;) {
+		const receipt = tryLoadReceipt(deps.cwd, runId);
+		if (receipt !== undefined) {
+			return finishWaitWithReceipt(deps, runId, receipt);
+		}
+
+		const live = loadLiveRun(deps.cwd, runId);
+		if (live === undefined) {
+			const finalReceipt = tryLoadReceipt(deps.cwd, runId);
+			if (finalReceipt !== undefined) return finishWaitWithReceipt(deps, runId, finalReceipt);
+			return failWithRunLog(deps, runId, `no live run ${JSON.stringify(runId)} found and no receipt exists`);
+		}
+		if (!proc.isAlive(live.pid)) {
+			const finalReceipt = tryLoadReceipt(deps.cwd, runId);
+			if (finalReceipt !== undefined) return finishWaitWithReceipt(deps, runId, finalReceipt);
+			unregisterLiveRun(deps.cwd, runId);
+			return failWithRunLog(deps, runId, `run ${runId} is no longer running and no receipt was written`);
+		}
+		if (deps.signal?.aborted) {
+			deps.err(`wait for ${runId} cancelled`);
+			return 130;
+		}
+		await sleep(WAIT_POLL_MS);
+	}
+}
+
+function hasAskStep(steps: Step[]): Step | undefined {
+	return steps.find((s) => s.kind === "ask");
+}
+
+function backgroundAskReason(routineId: string, steps: Step[], flow?: ResolvedFlow): string | undefined {
+	const direct = hasAskStep(steps);
+	if (direct !== undefined) return `${JSON.stringify(routineId)} step ${JSON.stringify(direct.id)}`;
+	if (flow === undefined) return undefined;
+	for (const step of flow.steps) {
+		if (step.kind === "ask") return `${JSON.stringify(routineId)} composition step ${JSON.stringify(step.id)}`;
+		const subAsk = hasAskStep(step.routine.manifest.steps);
+		if (subAsk !== undefined) {
+			return `${JSON.stringify(routineId)} step ${JSON.stringify(step.id)} calls ${JSON.stringify(step.routine.id)} step ${JSON.stringify(subAsk.id)}`;
+		}
+	}
+	return undefined;
+}
+
+function needsSandboxPreflight(manifest: Manifest, flow?: ResolvedFlow): boolean {
+	if (flow !== undefined) return flow.steps.some((st) => st.kind === "routine" && isSandboxed(st.routine.manifest));
+	return isSandboxed(manifest);
+}
+
+function backgroundRunArgv(routineId: string, args: ReturnType<typeof parseRunArgs>): string[] {
+	const argv = ["run", routineId];
+	for (const [name, value] of Object.entries(args.inputs)) argv.push("--input", `${name}=${value}`);
+	if (args.scope !== undefined) argv.push("--scope", args.scope);
+	return argv;
+}
+
+function startBackgroundRun(deps: CliDeps, routineId: string, argv: string[]): number {
+	if (deps.backgroundSpawner === undefined) {
+		return fail(deps, "this Chit entrypoint cannot start background runs");
+	}
+	const runId = deps.newRunId();
+	const logPath = prepareRunLog(deps.cwd, runId);
+	const argvPath = saveRunArgv(deps.cwd, runId, argv);
+	let child: BackgroundProcess;
+	try {
+		child = deps.backgroundSpawner.spawn([], {
+			cwd: deps.cwd,
+			env: { CHIT_RUN_ID: runId, CHIT_LOG_PATH: logPath, CHIT_ARGV_PATH: argvPath },
+		});
+	} catch (e) {
+		removeRunArgv(deps.cwd, runId);
+		throw e;
+	}
+	registerLiveRun(deps.cwd, {
+		runId,
+		routineId,
+		pid: child.pid,
+		startedAt: deps.now(),
+		cwd: deps.cwd,
+	});
+	if (tryLoadReceipt(deps.cwd, runId) !== undefined) unregisterLiveRun(deps.cwd, runId);
+	deps.out(`started ${runId} in background (pid ${child.pid})`);
+	deps.out(`  wait:  chit wait ${runId}`);
+	deps.out("  ps:    chit ps");
+	deps.out(`  trace: chit trace ${runId}`);
+	return 0;
 }
 
 function liveRunContext(deps: CliDeps, routineId: string): { newRunId: () => string; unregister: () => void } {

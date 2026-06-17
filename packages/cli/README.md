@@ -26,6 +26,8 @@ Add the same line to your shell startup file to keep it in new terminals.
 
 Replace the placeholder check in `chit.config.json` with your real command, such as `bun test`. A routine with a check or a writing agent runs in a disposable git sandbox, dry-run by default: it produces a patch and stops. You review the receipt, then `chit apply` writes the exact patch.
 
+For a long run, add `--background`, then block on the receipt with `chit wait <run-id>`. Use `chit ps` and `chit stop <run-id>` to inspect or cancel live runs.
+
 ## A routine
 
 ```json

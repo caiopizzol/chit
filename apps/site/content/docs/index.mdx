@@ -65,6 +65,13 @@ chit run implement --input task="add a --version flag"
 
 A routine with a check or a read-write agent runs in a disposable git worktree. It is a dry run: it produces a patch and stops. Your working tree is untouched.
 
+For a long run, detach it and wait on the receipt:
+
+```sh
+chit run implement --input task="add a --version flag" --background
+chit wait <run-id>
+```
+
 ## 6. Review, then apply
 
 ```sh

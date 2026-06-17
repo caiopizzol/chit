@@ -15,6 +15,14 @@ export interface ProcResult {
 	aborted: boolean;
 }
 
+function currentEnv(): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (typeof value === "string") env[key] = value;
+	}
+	return env;
+}
+
 export async function spawnCapture(
 	cmd: string[],
 	opts: { cwd: string; stdin?: string; timeoutMs?: number; signal?: AbortSignal },
@@ -25,6 +33,7 @@ export async function spawnCapture(
 	}
 	const proc = Bun.spawn(cmd, {
 		cwd: opts.cwd,
+		env: currentEnv(),
 		...(opts.stdin !== undefined ? { stdin: new TextEncoder().encode(opts.stdin) } : {}),
 		stdout: "pipe",
 		stderr: "pipe",
