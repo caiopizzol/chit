@@ -161,6 +161,51 @@ describe("CLI process: the real binary (no model)", () => {
 		expect(waited.out).toContain(`${runId}  nested  converged`);
 	});
 
+	// The readiness barrier's reason for existing: a sandboxed background run captures its base
+	// commit BEFORE the parent reports it started, so dirtying the tree the instant the command
+	// returns cannot sink the run. Without the barrier this races (the child's preflight could see
+	// the dirty tree and refuse); with it, the parent only returns after the child pinned its base.
+	test("a background sandboxed run still succeeds when the tree is dirtied right after it returns", () => {
+		const cwd = tmp();
+		const sh = (c: string) => Bun.spawnSync(["sh", "-c", c], { cwd });
+		sh("git init -q && git config user.email t@t.co && git config user.name t");
+		writeFileSync(
+			join(cwd, "chit.config.json"),
+			JSON.stringify({ routines: { writer: { file: "writer.json" } }, profiles: {} }),
+		);
+		writeFileSync(
+			join(cwd, "writer.json"),
+			JSON.stringify({
+				id: "writer",
+				inputs: {},
+				steps: [{ id: "make", check: [{ command: "sh", args: ["-c", "echo hello-from-check > out.txt"] }] }],
+				repeat: { until: "checks-pass", maxIterations: 1 },
+			}),
+		);
+		sh("git add -A && git commit -q -m init");
+
+		const bg = run(["run", "writer", "--background"], cwd);
+		expect(bg.code).toBe(0);
+		const runId = bg.out.match(/started (run-[a-f0-9]+) in background/)?.[1];
+		expect(runId).toBeDefined();
+
+		// Dirty the origin the moment the background command returned. The barrier guarantees the
+		// child already captured its base, so this must not affect the in-flight run.
+		writeFileSync(join(cwd, "dirty.txt"), "uncommitted, written right after the run started\n");
+
+		const waited = run(["wait", runId as string], cwd);
+		expect(waited.code).toBe(0);
+		expect(waited.out).toContain(`${runId}  writer  converged`);
+		expect(existsSync(join(cwd, "out.txt"))).toBe(false); // dry run: the sandbox was discarded
+	});
+
+	test("`chit run --help` prints focused help through the real binary", () => {
+		const r = run(["run", "--help"], tmp());
+		expect(r.code).toBe(0);
+		expect(r.out).toContain("chit run <routine> [options]");
+		expect(r.err).toBe("");
+	});
+
 	// A non-sandboxed loop through the real binary, no model: a format-only loop whose
 	// { step, equals } exit is satisfied (or not) by an input. Proves the cwd-loop dispatch,
 	// convergence, exit codes, and text output at the process boundary.

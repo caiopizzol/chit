@@ -34,6 +34,7 @@ function routineFrom(raw: unknown): ResolvedRoutine {
 
 function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {}) {
 	let sandbox: FakeSandbox | undefined;
+	let createdBaseCommit: string | undefined;
 	const adapter = over.adapter ?? fakeAdapter((req) => `${req.agent}|${req.prompt}`);
 	let t = 0;
 	const deps: ConvergeRunDeps = {
@@ -41,7 +42,8 @@ function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {})
 			async preflight() {
 				return { baseCommit: "base0000" };
 			},
-			async create() {
+			async create(_cwd, _runId, baseCommit) {
+				createdBaseCommit = baseCommit;
 				sandbox = fakeSandbox({ workDir: "/sandbox", diff: over.sandboxDiff ?? "diff body" });
 				return sandbox;
 			},
@@ -53,9 +55,15 @@ function harness(over: Partial<ConvergeRunDeps> & { sandboxDiff?: string } = {})
 		now: () => ++t,
 		newRunId: () => "run-s",
 		apply: over.apply ?? false,
+		...(over.baseCommit !== undefined && { baseCommit: over.baseCommit }),
 		...(over.onProgress !== undefined && { onProgress: over.onProgress }),
 	};
-	return { deps, adapter: adapter as ReturnType<typeof fakeAdapter>, sandbox: () => sandbox };
+	return {
+		deps,
+		adapter: adapter as ReturnType<typeof fakeAdapter>,
+		sandbox: () => sandbox,
+		createdBaseCommit: () => createdBaseCommit,
+	};
 }
 
 describe("runConvergeInSandbox", () => {
@@ -66,6 +74,13 @@ describe("runConvergeInSandbox", () => {
 		expect(h.adapter.calls.every((c) => c.cwd === "/sandbox")).toBe(true);
 		expect(progress[0]).toBe("run run-s");
 		expect(progress[1]).toBe("  creating sandbox (git worktree) ...");
+	});
+
+	test("creates the sandbox from the accepted base commit", async () => {
+		const h = harness({ baseCommit: "accepted-base" });
+		const res = await runConvergeInSandbox(routineFrom(CONVERGE), { task: "x" }, h.deps);
+		expect(h.createdBaseCommit()).toBe("accepted-base");
+		expect(res.receipt.baseCommit).toBe("accepted-base");
 	});
 
 	test("dry-run by default: converges, shows the diff, does NOT apply, always discards", async () => {

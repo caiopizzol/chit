@@ -19,6 +19,8 @@ import {
 	realDoctorProbes,
 	runDoctor,
 } from "./doctor.ts";
+import { formatElapsed } from "./elapsed.ts";
+import { createRunEventSink, initRunEvents, type RunEvent, type RunEventSink, readRunEvents } from "./events.ts";
 import { type ResolvedFlow, resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
 import {
@@ -126,7 +128,80 @@ const USAGE = `chit -- run declared routines
   chit --version [--verbose]          print the installed version, plus entrypoint with --verbose
 
 A routine is a declared workflow. How it runs is derived from the shape: routine
-steps compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.`;
+steps compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.
+
+Run \`chit help <command>\` or \`chit <command> --help\` for detail on one command.`;
+
+// Focused help for the common commands, printed by `chit <command> --help|-h`
+// and `chit help <command>`.
+const COMMAND_HELP: Record<string, string> = {
+	init: `chit init [<name>] [--template text|loop|check]
+
+Scaffold a runnable routine and register it in chit.config.json (created if absent).
+
+  <name>                routine id (default: example)
+  --template text       a read-only one-shot (a model call, no sandbox)
+  --template loop       a converging loop (default check writes a file in a sandbox)
+  --template check      a single sandboxed pass gated on a check
+
+Then: chit inspect <name>, then chit run <name>.`,
+	run: `chit run <routine> [options]
+
+Run a routine. How it runs is derived from its shape: a read-only call/loop runs in your
+cwd; a routine that writes files or runs checks runs in a disposable git sandbox and is a
+DRY RUN by default (it produces a patch and stops; review, then chit apply).
+
+  --input <name>=<value>   supply an input (repeatable)
+  --scope <name>           tag the run (e.g. a Linear/Jira id); read back with chit runs --scope
+  --auto-apply             apply immediately, skipping the dry-run review (prefer chit apply)
+  --background             start in another Chit process and return once the run has accepted
+                           and pinned its base commit; follow it with chit wait <run-id>
+
+A sandboxed run refuses a dirty tree (it starts from HEAD). --background cannot be combined
+with --auto-apply, and cannot run a routine that has an ask step.`,
+	wait: `chit wait <run-id>
+
+Wait for a live run (usually one started with chit run --background) to finish, streaming
+its phase and progress changes plus a heartbeat while it runs, then print its receipt. The
+exit code mirrors the run: 0 if it completed/converged, 1 if it failed, 130 if it cancelled.`,
+	ps: `chit ps
+
+List the runs currently live for this repo (id, routine, pid, age, cwd). Stale entries whose
+process is gone are pruned as they are listed.`,
+	stop: `chit stop <run-id> [--force]
+
+Ask a live run to stop. By default sends SIGTERM, so the run cancels at its next step and
+still writes a receipt. --force sends SIGKILL (no receipt, may leave a sandbox for chit cleanup).`,
+	runs: `chit runs [--scope <name>]
+
+List past runs (id, routine, status, scope, age, patch state). --scope filters to runs tagged
+with that scope. Patch state reflects whether a sandboxed run's stored patch is still appliable.`,
+	routines: `chit routines
+
+List the routines declared in chit.config.json with their derived kind (text, loop, sandbox,
+flow). A routine whose manifest cannot be read still appears, marked with the error.`,
+	inspect: `chit inspect <routine>
+
+Show what a routine needs and what it will run: its inputs, steps, derived kind, limits, and
+the agent/model each call resolves to. Reads config and the manifest; runs nothing.`,
+	trace: `chit trace <run-id> [--full]
+
+Show a past run's receipt: status, timeline, the model each step ran on, and checks. --full
+also prints the stored inputs, final output, and patch. Receipts never store model transcripts.`,
+	apply: `chit apply <run-id>
+
+Apply the exact patch a prior sandboxed dry run produced (the one you reviewed) to your tree,
+without re-running the models. Refuses unless HEAD still equals the run's base and the tree is
+clean, so you apply precisely the reviewed diff.`,
+	doctor: `chit doctor [--real]
+
+Check the environment is ready: required agent CLIs on PATH, git state, and config validity.
+--real additionally makes a tiny call per configured adapter to prove credentials work.`,
+	cleanup: `chit cleanup
+
+Remove sandbox worktrees left behind by interrupted runs. Skips any sandbox whose owning run
+is still alive, so it is safe to run while other runs are in progress.`,
+};
 
 function parseRunArgs(rest: string[]): {
 	id?: string;
@@ -200,6 +275,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		if (rest.includes("--verbose") && deps.runtime?.entrypoint !== undefined) {
 			deps.out(`entrypoint ${deps.runtime.entrypoint}`);
 		}
+		return 0;
+	}
+
+	// Subcommand help must short-circuit before each parser validates required args.
+	if (command === "help" && rest[0] !== undefined && COMMAND_HELP[rest[0]] !== undefined) {
+		deps.out(COMMAND_HELP[rest[0]] as string);
+		return 0;
+	}
+	if (
+		command !== undefined &&
+		COMMAND_HELP[command] !== undefined &&
+		(rest.includes("--help") || rest.includes("-h"))
+	) {
+		deps.out(COMMAND_HELP[command] as string);
 		return 0;
 	}
 
@@ -382,22 +471,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					const pf = await preflightSandbox(deps);
 					if (!pf.ok) return 1;
 				}
-				return startBackgroundRun(deps, routine.id, backgroundRunArgv(routine.id, args));
+				return await startBackgroundRun(deps, routine.id, backgroundRunArgv(routine.id, args));
 			}
 
 			const live = liveRunContext(deps, routine.id);
 			try {
 				if (isComposition(routine.manifest)) {
-					if (resolvedFlow === undefined)
-						return fail(deps, `could not resolve composition ${JSON.stringify(routine.id)}`);
+					if (resolvedFlow === undefined) {
+						const msg = `could not resolve composition ${JSON.stringify(routine.id)}`;
+						live.events.failed(msg);
+						return fail(deps, msg);
+					}
 					// If the flow has a sandboxed (writing) terminal step, refuse a dirty origin now
 					// before grill/plan run, and capture the base commit for the receipt.
 					let flowBase: string | undefined;
 					if (needsSandboxPreflight(routine.manifest, resolvedFlow)) {
 						const pf = await preflightSandbox(deps);
-						if (!pf.ok) return 1;
+						if (!pf.ok) {
+							live.events.failed(pf.detail);
+							return 1;
+						}
 						flowBase = pf.baseCommit;
 					}
+					// The background parent can return once the origin is accepted.
+					live.events.ready(flowBase);
 					const result = await runFlow(
 						resolvedFlow,
 						validation.values,
@@ -408,7 +505,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 							cwd: deps.cwd,
 							now: deps.now,
 							newRunId: live.newRunId,
-							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+							onProgress: live.onProgress,
 							...(deps.signal !== undefined && { signal: deps.signal }),
 							...(deps.askUser !== undefined && { askUser: deps.askUser }),
 							...(flowBase !== undefined && { baseCommit: flowBase }),
@@ -465,7 +562,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					// worktree): edits land on the copy, not your tree. Dry run by default
 					// (show the diff, discard it); review then `chit apply`, or `--auto-apply` to skip review.
 					const pf = await preflightSandbox(deps);
-					if (!pf.ok) return 1;
+					if (!pf.ok) {
+						live.events.failed(pf.detail);
+						return 1;
+					}
+					// The sandbox will be cut from this commit, so later local edits cannot affect it.
+					live.events.ready(pf.baseCommit);
 					const result = await runConvergeInSandbox(
 						routine,
 						validation.values,
@@ -478,7 +580,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 							newRunId: live.newRunId,
 							baseCommit: pf.baseCommit,
 							...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
-							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+							onProgress: live.onProgress,
 							...(deps.signal !== undefined && { signal: deps.signal }),
 							apply: args.apply,
 						},
@@ -520,6 +622,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					// A non-sandboxed loop: read-only, no checks, but a `repeat` whose exit is a
 					// { step, equals } condition (e.g. an evaluator returns "yes"). It writes nothing,
 					// so it loops in the cwd with no worktree; its result is text, printed like a one-shot.
+					// No base commit to accept (read-only), so readiness just marks "running".
+					live.events.ready();
 					const loop = await runConverge(
 						routine,
 						validation.values,
@@ -530,7 +634,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 							now: deps.now,
 							newRunId: live.newRunId,
 							...(routine.defaults?.maxIterations !== undefined && { maxIterations: routine.defaults.maxIterations }),
-							...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+							onProgress: live.onProgress,
 							...(deps.signal !== undefined && { signal: deps.signal }),
 						},
 						args.scope !== undefined ? { scope: args.scope } : {},
@@ -548,10 +652,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					return loop.status === "cancelled" ? 130 : 1;
 				}
 
+				// A read-only text run touches nothing, so readiness just marks "running".
+				live.events.ready();
 				const receipt = await runOneShot(
 					routine,
 					validation.values,
-					{ ...deps, adapter, newRunId: live.newRunId },
+					{ ...deps, adapter, newRunId: live.newRunId, onProgress: live.onProgress },
 					args.scope !== undefined ? { scope: args.scope } : {},
 				);
 				saveReceipt(deps.cwd, receipt);
@@ -644,6 +750,7 @@ function fail(deps: CliDeps, message: string): number {
 }
 
 const WAIT_POLL_MS = 500;
+const WAIT_HEARTBEAT_MS = 15_000;
 
 function defaultSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -679,12 +786,30 @@ function finishWaitWithReceipt(deps: CliDeps, runId: string, receipt: AnyReceipt
 	return receiptExitCode(receipt);
 }
 
+function waitEventLine(event: RunEvent): string | undefined {
+	if (event.kind === "progress") return event.line;
+	if (event.kind === "ready")
+		return event.baseCommit !== undefined ? `  base ${event.baseCommit.slice(0, 12)} pinned` : undefined;
+	return `  startup failed: ${event.error}`;
+}
+
 async function waitForRun(deps: CliDeps, runId: string): Promise<number> {
 	const sleep = deps.sleep ?? defaultSleep;
 	const proc = deps.liveProcess ?? realLiveProcess;
+	let cursor = 0;
+	let lastActivityAt: number | undefined;
+	const streamEvents = () => {
+		const events = readRunEvents(deps.cwd, runId);
+		for (; cursor < events.length; cursor++) {
+			const line = waitEventLine(events[cursor] as RunEvent);
+			if (line !== undefined) deps.onProgress?.(line);
+			lastActivityAt = deps.now();
+		}
+	};
 	for (;;) {
 		const receipt = tryLoadReceipt(deps.cwd, runId);
 		if (receipt !== undefined) {
+			streamEvents();
 			return finishWaitWithReceipt(deps, runId, receipt);
 		}
 
@@ -703,6 +828,12 @@ async function waitForRun(deps: CliDeps, runId: string): Promise<number> {
 		if (deps.signal?.aborted) {
 			deps.err(`wait for ${runId} cancelled`);
 			return 130;
+		}
+		streamEvents();
+		if (lastActivityAt === undefined) lastActivityAt = deps.now();
+		else if (deps.now() - lastActivityAt >= WAIT_HEARTBEAT_MS) {
+			deps.onProgress?.(`  still waiting on ${runId}... ${formatElapsed(deps.now() - live.startedAt)}`);
+			lastActivityAt = deps.now();
 		}
 		await sleep(WAIT_POLL_MS);
 	}
@@ -738,7 +869,9 @@ function backgroundRunArgv(routineId: string, args: ReturnType<typeof parseRunAr
 	return argv;
 }
 
-function startBackgroundRun(deps: CliDeps, routineId: string, argv: string[]): number {
+const BACKGROUND_READY_POLL_MS = 50;
+
+async function startBackgroundRun(deps: CliDeps, routineId: string, argv: string[]): Promise<number> {
 	if (deps.backgroundSpawner === undefined) {
 		return fail(deps, "this Chit entrypoint cannot start background runs");
 	}
@@ -762,6 +895,18 @@ function startBackgroundRun(deps: CliDeps, routineId: string, argv: string[]): n
 		startedAt: deps.now(),
 		cwd: deps.cwd,
 	});
+	// Do not report the run as started until the child accepts its origin or fails startup.
+	const init = await awaitBackgroundInit(deps, runId, child.pid);
+	if (init.status === "failed") {
+		unregisterLiveRun(deps.cwd, runId);
+		return failWithRunLog(deps, runId, `background run ${runId} could not start: ${init.error}`);
+	}
+	if (init.status === "interrupted") {
+		// The child is detached and may still be initializing.
+		deps.err(`\ninterrupted while starting ${runId}; it may still be running.  (chit ps  /  chit wait ${runId})`);
+		return 130;
+	}
+	// A run that already wrote its receipt leaves no live work.
 	if (tryLoadReceipt(deps.cwd, runId) !== undefined) unregisterLiveRun(deps.cwd, runId);
 	deps.out(`started ${runId} in background (pid ${child.pid})`);
 	deps.out(`  wait:  chit wait ${runId}`);
@@ -770,25 +915,63 @@ function startBackgroundRun(deps: CliDeps, routineId: string, argv: string[]): n
 	return 0;
 }
 
-function liveRunContext(deps: CliDeps, routineId: string): { newRunId: () => string; unregister: () => void } {
-	let topRunId: string | undefined;
+type BackgroundInit = { status: "ready" } | { status: "failed"; error: string } | { status: "interrupted" };
+
+async function awaitBackgroundInit(deps: CliDeps, runId: string, pid: number): Promise<BackgroundInit> {
+	const sleep = deps.sleep ?? defaultSleep;
+	const proc = deps.liveProcess ?? realLiveProcess;
+	for (;;) {
+		const events = readRunEvents(deps.cwd, runId);
+		if (events.some((e) => e.kind === "ready")) return { status: "ready" };
+		const failed = firstFailedError(events);
+		if (failed !== undefined) return { status: "failed", error: failed };
+		// A receipt proves startup completed, even if the run already finished.
+		if (tryLoadReceipt(deps.cwd, runId) !== undefined) return { status: "ready" };
+		if (!proc.isAlive(pid)) {
+			// Re-read once in case a final event raced in just before process exit.
+			const late = firstFailedError(readRunEvents(deps.cwd, runId));
+			if (late !== undefined) return { status: "failed", error: late };
+			if (tryLoadReceipt(deps.cwd, runId) !== undefined) return { status: "ready" };
+			return { status: "failed", error: "the child exited during startup without signalling readiness" };
+		}
+		if (deps.signal?.aborted) return { status: "interrupted" };
+		await sleep(BACKGROUND_READY_POLL_MS);
+	}
+}
+
+function firstFailedError(events: RunEvent[]): string | undefined {
+	for (const e of events) if (e.kind === "failed") return e.error;
+	return undefined;
+}
+
+interface LiveRunContext {
+	events: RunEventSink;
+	onProgress: (line: string) => void;
+	newRunId: () => string;
+	unregister: () => void;
+}
+
+function liveRunContext(deps: CliDeps, routineId: string): LiveRunContext {
+	const runId = deps.newRunId();
+	initRunEvents(deps.cwd, runId);
+	const events = createRunEventSink(deps.cwd, runId, deps.now);
+	let registered = false;
+	let topAssigned = false;
 	return {
+		events,
+		onProgress: (line) => {
+			deps.onProgress?.(line);
+			events.progress(line);
+		},
 		newRunId: () => {
-			const runId = deps.newRunId();
-			if (topRunId === undefined) {
-				topRunId = runId;
-				registerLiveRun(deps.cwd, {
-					runId,
-					routineId,
-					pid: process.pid,
-					startedAt: deps.now(),
-					cwd: deps.cwd,
-				});
-			}
+			if (topAssigned) return deps.newRunId();
+			topAssigned = true;
+			registered = true;
+			registerLiveRun(deps.cwd, { runId, routineId, pid: process.pid, startedAt: deps.now(), cwd: deps.cwd });
 			return runId;
 		},
 		unregister: () => {
-			if (topRunId !== undefined) unregisterLiveRun(deps.cwd, topRunId);
+			if (registered) unregisterLiveRun(deps.cwd, runId);
 		},
 	};
 }
@@ -796,14 +979,16 @@ function liveRunContext(deps: CliDeps, routineId: string): { newRunId: () => str
 // A sandboxed run starts from HEAD, so refuse upfront if the origin is dirty (and capture the
 // base commit for the receipt). Called BEFORE any model call, so a flow with a dirty tree fails
 // fast rather than after grilling/planning. A clean refusal prints just the guidance, no "error:".
-async function preflightSandbox(deps: CliDeps): Promise<{ ok: true; baseCommit: string } | { ok: false }> {
+async function preflightSandbox(
+	deps: CliDeps,
+): Promise<{ ok: true; baseCommit: string } | { ok: false; detail: string }> {
 	try {
 		const { baseCommit } = await deps.sandboxFactory.preflight(deps.cwd);
 		return { ok: true, baseCommit };
 	} catch (e) {
 		if (e instanceof DirtyWorktreeError) {
 			deps.err(e.detail);
-			return { ok: false };
+			return { ok: false, detail: e.detail };
 		}
 		throw e;
 	}

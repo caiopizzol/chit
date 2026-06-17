@@ -60,7 +60,8 @@ export async function runConvergeInSandbox(
 	const runId = deps.newRunId();
 	deps.onProgress?.(`run ${runId}`);
 	deps.onProgress?.("  creating sandbox (git worktree) ...");
-	const sandbox = await deps.sandboxFactory.create(deps.cwd, runId);
+	const baseCommit = deps.baseCommit ?? (await deps.sandboxFactory.preflight(deps.cwd)).baseCommit;
+	const sandbox = await deps.sandboxFactory.create(deps.cwd, runId, baseCommit);
 	let applied = false;
 	try {
 		const receipt = await runConverge(
@@ -132,7 +133,7 @@ export async function runConvergeInSandbox(
 				...receipt,
 				status: finalStatus,
 				sandbox: { workDir: sandbox.workDir, status, ...(diffStat ? { diffStat } : {}) },
-				...(deps.baseCommit !== undefined && { baseCommit: deps.baseCommit }),
+				baseCommit,
 				...(applyError !== undefined && { applyError }),
 				...(changePolicyViolation !== undefined && { changePolicyViolation }),
 				...(changePolicyViolation !== undefined && { failureKind: "unexpected_changed_files" as const }),

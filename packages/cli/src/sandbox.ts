@@ -39,7 +39,9 @@ export interface SandboxFactory {
 	// result is applied back. Throws DirtyWorktreeError if dirty; otherwise returns the base
 	// commit the sandbox will start from (recorded on the receipt for a coherent apply later).
 	preflight(originCwd: string): Promise<{ baseCommit: string }>;
-	create(originCwd: string, runId: string): Promise<Sandbox>;
+	// Create the sandbox at the accepted base, not floating HEAD. This keeps a
+	// background run coherent after the operator keeps working in the origin tree.
+	create(originCwd: string, runId: string, baseCommit: string): Promise<Sandbox>;
 	// Apply a stored patch (from a prior dry run) back to the origin, the `chit apply` path.
 	// Refuses unless HEAD still equals expectedBase AND the tree is clean AND the patch applies
 	// cleanly -- so the operator applies EXACTLY the diff they reviewed, onto the same base.
@@ -176,7 +178,7 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		const base = (await gitOrThrow(["rev-parse", "HEAD"], repoRoot)).trim();
 		return { baseCommit: base };
 	},
-	async create(originCwd, runId) {
+	async create(originCwd, runId, baseCommit) {
 		const head = await git(["rev-parse", "--show-toplevel"], originCwd);
 		if (!head.ok) throw new Error(`converge needs a git repository to sandbox into (cwd: ${originCwd})`);
 		const repoRoot = head.out.trim();
@@ -185,7 +187,7 @@ export const gitWorktreeSandboxFactory: SandboxFactory = {
 		// Write the liveness lock before the worktree exists, so any worktree that
 		// `git worktree list` reports already carries one. cleanup keys off it.
 		writeFileSync(join(parent, OWNER_LOCK), String(process.pid));
-		await gitOrThrow(["worktree", "add", "--detach", workDir, "HEAD"], repoRoot);
+		await gitOrThrow(["worktree", "add", "--detach", workDir, baseCommit], repoRoot);
 		const nm = join(repoRoot, "node_modules");
 		if (existsSync(nm) && !existsSync(join(workDir, "node_modules"))) {
 			symlinkSync(nm, join(workDir, "node_modules"));
