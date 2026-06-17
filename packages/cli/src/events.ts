@@ -5,10 +5,24 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "node:path";
 import { runsDir } from "./store.ts";
 
+// The terminal outcome carried by a `done` event. Mirrors every receipt's status union
+// (see run.ts / converge.ts / flow.ts); the emit site passes `receipt.status`, so adding a
+// receipt status that is missing here is a compile error there rather than silent drift.
+const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "converged", "did-not-converge"] as const;
+export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
+
+function isTerminalStatus(value: unknown): value is TerminalStatus {
+	return typeof value === "string" && TERMINAL_STATUSES.includes(value as TerminalStatus);
+}
+
 export type RunEvent =
 	| { at: number; kind: "progress"; line: string }
 	| { at: number; kind: "ready"; baseCommit?: string }
-	| { at: number; kind: "failed"; error: string };
+	| { at: number; kind: "failed"; error: string }
+	// The run reached a terminal receipt. `failed` marks a startup failure that wrote NO receipt
+	// (an orphan); `done` marks a receipt written, so a follower of the stream sees the outcome and
+	// the exit code `chit wait` resolves to without scraping the receipt itself.
+	| { at: number; kind: "done"; status: TerminalStatus; exitCode: number };
 
 export function runEventsPath(cwd: string, runId: string): string {
 	return join(runsDir(cwd), `${runId}.events.jsonl`);
@@ -65,6 +79,10 @@ function parseEvent(line: string): RunEvent | undefined {
 	if (e.kind === "failed") {
 		return typeof e.error === "string" ? { at: e.at, kind: "failed", error: e.error } : undefined;
 	}
+	if (e.kind === "done") {
+		if (!isTerminalStatus(e.status) || typeof e.exitCode !== "number") return undefined;
+		return { at: e.at, kind: "done", status: e.status, exitCode: e.exitCode };
+	}
 	return undefined;
 }
 
@@ -72,6 +90,7 @@ export interface RunEventSink {
 	progress(line: string): void;
 	ready(baseCommit?: string): void;
 	failed(error: string): void;
+	done(status: TerminalStatus, exitCode: number): void;
 }
 
 export function createRunEventSink(cwd: string, runId: string, now: () => number): RunEventSink {
@@ -84,6 +103,9 @@ export function createRunEventSink(cwd: string, runId: string, now: () => number
 		},
 		failed(error) {
 			appendRunEvent(cwd, runId, { at: now(), kind: "failed", error });
+		},
+		done(status, exitCode) {
+			appendRunEvent(cwd, runId, { at: now(), kind: "done", status, exitCode });
 		},
 	};
 }

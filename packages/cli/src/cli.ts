@@ -123,7 +123,7 @@ const USAGE = `chit -- run declared routines
   chit runs [--scope <name>]          list past runs (id, routine, status, scope, age)
   chit ps [--json]                    list currently running runs for this repo
   chit status <run-id> [--json]       show one run's state, live or finished
-  chit wait <run-id> [--json]         wait until a live run writes its receipt
+  chit wait <run-id> [--json] [--follow]   wait until a live run writes its receipt
   chit stop <run-id> [--force]        ask a live run to stop (--force sends SIGKILL)
   chit inspect <routine>              show what a routine needs and what it will run
   chit doctor [--real]                check the environment is ready (--real makes tiny model calls)
@@ -172,13 +172,14 @@ DRY RUN by default (it produces a patch and stops; review, then chit apply).
 
 A sandboxed run refuses a dirty tree (it starts from HEAD). --background cannot be combined
 with --auto-apply, and cannot run a routine that has an ask step.`,
-	wait: `chit wait <run-id> [--json]
+	wait: `chit wait <run-id> [--json] [--follow]
 
 Wait for a live run (usually one started with chit run --background) to finish, streaming
 its phase and progress changes plus a heartbeat while it runs, then print its receipt. The
 exit code mirrors the run: 0 if it completed/converged, 1 if it failed, 130 if it cancelled.
 --json streams nothing to stdout and prints one final run-state object instead; the exit code
-is unchanged.`,
+is unchanged. --follow (requires --json) streams the run's lifecycle events as JSONL on stdout
+as they arrive, then the final run-state object as the last line.`,
 	ps: `chit ps [--json]
 
 List the runs currently live for this repo (id, routine, pid, age, cwd). Stale entries whose
@@ -486,14 +487,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		if (command === "wait") {
 			let id: string | undefined;
 			let json = false;
+			let follow = false;
 			for (const a of rest) {
 				if (a === "--json") json = true;
-				else if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit wait accepts --json)`);
+				else if (a === "--follow") follow = true;
+				else if (a.startsWith("--")) return fail(deps, `unknown option ${a} (chit wait accepts --json, --follow)`);
 				else if (id === undefined) id = a;
 				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
 			}
 			if (id === undefined) return fail(deps, "wait needs a run id");
-			return await waitForRun(deps, id, json);
+			// --follow is the structured stream, so it only makes sense alongside --json; there is no
+			// human follow format (plain wait already streams progress to stderr).
+			if (follow && !json) return fail(deps, "chit wait --follow requires --json");
+			return await waitForRun(deps, id, json, follow);
 		}
 
 		if (command === "stop") {
@@ -615,7 +621,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						args.scope !== undefined ? { scope: args.scope } : {},
 					);
 					if (result.applied === true) result.receipt.appliedAt = deps.now();
-					saveReceipt(deps.cwd, result.receipt);
+					recordRunFinished(deps, live, result.receipt);
 					for (const sub of result.subReceipts) saveReceipt(deps.cwd, sub);
 					if (result.terminalPatch !== undefined && result.terminalPatch.trim() !== "") {
 						if (result.receipt.status === "completed") {
@@ -688,7 +694,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						args.scope !== undefined ? { scope: args.scope } : {},
 					);
 					if (result.applied === true) result.receipt.appliedAt = deps.now();
-					saveReceipt(deps.cwd, result.receipt);
+					recordRunFinished(deps, live, result.receipt);
 					// Store the exact patch so `chit apply <run-id>` can re-play this reviewed diff.
 					// Non-converged/failed runs get a .debug.patch for inspection, not an applyable .patch.
 					if (result.patch.trim() !== "") {
@@ -740,7 +746,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 						},
 						args.scope !== undefined ? { scope: args.scope } : {},
 					);
-					saveReceipt(deps.cwd, loop);
+					recordRunFinished(deps, live, loop);
 					deps.out(
 						`run ${loop.status} (${loop.iterations.length} iteration${loop.iterations.length === 1 ? "" : "s"})`,
 					);
@@ -761,7 +767,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 					{ ...deps, adapter, newRunId: live.newRunId, onProgress: live.onProgress },
 					args.scope !== undefined ? { scope: args.scope } : {},
 				);
-				saveReceipt(deps.cwd, receipt);
+				recordRunFinished(deps, live, receipt);
 
 				if (receipt.status === "cancelled") {
 					deps.err(`run ${receipt.runId} cancelled.  (chit trace ${receipt.runId})`);
@@ -856,6 +862,20 @@ function printJson(deps: CliDeps, value: unknown): void {
 	deps.out(JSON.stringify(value, null, 2));
 }
 
+// One compact JSON value per line: the JSONL contract `wait --follow` streams on stdout (events as
+// they arrive, then one final run-state object). Diagnostics still go to stderr, so an agent reads
+// stdout line by line.
+function printJsonLine(deps: CliDeps, value: unknown): void {
+	deps.out(JSON.stringify(value));
+}
+
+// Emit a run-state object on the stdout channel a `wait` invocation reserves: a JSONL line when
+// following, otherwise the single pretty object plain `--json` prints. Only reached when --json is on.
+function emitFinalState(deps: CliDeps, state: RunState, follow: boolean): void {
+	if (follow) printJsonLine(deps, state);
+	else printJson(deps, state);
+}
+
 const WAIT_POLL_MS = 500;
 const WAIT_HEARTBEAT_MS = 15_000;
 
@@ -884,17 +904,25 @@ async function finishWaitWithReceipt(
 	runId: string,
 	receipt: AnyReceipt,
 	json: boolean,
+	follow: boolean,
 ): Promise<number> {
 	unregisterLiveRun(deps.cwd, runId);
 	removeRunArgv(deps.cwd, runId);
-	if (json) printJson(deps, await finishedStateFromReceipt(deps.cwd, receipt));
+	if (json) emitFinalState(deps, await finishedStateFromReceipt(deps.cwd, receipt), follow);
 	else deps.out(formatTrace(receipt));
 	return receiptExitCode(receipt);
 }
 
 // `wait --json` must still print one state object when a run ends without a receipt (it crashed or
 // was force-killed). The diagnostic message + log tail stay on stderr via failWithRunLog.
-function failWaitNoReceipt(deps: CliDeps, runId: string, message: string, json: boolean, live?: LiveRun): number {
+function failWaitNoReceipt(
+	deps: CliDeps,
+	runId: string,
+	message: string,
+	json: boolean,
+	follow: boolean,
+	live?: LiveRun,
+): number {
 	if (json) {
 		const now = deps.now();
 		const state: RunState = {
@@ -908,7 +936,7 @@ function failWaitNoReceipt(deps: CliDeps, runId: string, message: string, json: 
 			...(live !== undefined && { pid: live.pid, cwd: live.cwd }),
 			error: message,
 		};
-		printJson(deps, state);
+		emitFinalState(deps, state, follow);
 	}
 	return failWithRunLog(deps, runId, message);
 }
@@ -917,57 +945,106 @@ function waitEventLine(event: RunEvent): string | undefined {
 	if (event.kind === "progress") return event.line;
 	if (event.kind === "ready")
 		return event.baseCommit !== undefined ? `  base ${event.baseCommit.slice(0, 12)} pinned` : undefined;
-	return `  startup failed: ${event.error}`;
+	if (event.kind === "failed") return `  startup failed: ${event.error}`;
+	// `done` is the structured terminal marker; human wait prints the full receipt next, so it adds no line.
+	return undefined;
 }
 
-async function waitForRun(deps: CliDeps, runId: string, json: boolean): Promise<number> {
+function doneEventFromReceipt(deps: CliDeps, receipt: AnyReceipt): RunEvent {
+	return { at: deps.now(), kind: "done", status: receipt.status, exitCode: receiptExitCode(receipt) };
+}
+
+async function waitForRun(deps: CliDeps, runId: string, json: boolean, follow: boolean): Promise<number> {
 	const sleep = deps.sleep ?? defaultSleep;
 	const proc = deps.liveProcess ?? realLiveProcess;
 	let cursor = 0;
 	let lastActivityAt: number | undefined;
+	let doneStreamed = false;
 	// Held so a no-receipt failure can still name the run's routine in its JSON object, even after
 	// the live entry is unregistered.
 	let lastLive: LiveRun | undefined;
 	const streamEvents = () => {
-		// In --json mode stdout is reserved for the one final object, so the human progress lines
-		// (which go to stderr via onProgress) are the only stream while waiting.
 		const events = readRunEvents(deps.cwd, runId);
 		for (; cursor < events.length; cursor++) {
-			const line = waitEventLine(events[cursor] as RunEvent);
-			if (line !== undefined) deps.onProgress?.(line);
+			const event = events[cursor] as RunEvent;
+			if (event.kind === "done") doneStreamed = true;
+			if (follow) {
+				// --follow turns stdout into the run's JSONL event stream; the final run-state object
+				// is appended after the terminal `done` event, so an agent reads one stream end to end.
+				printJsonLine(deps, event);
+			} else {
+				// In --json (non-follow) and human mode stdout is reserved for the one final object, so
+				// the human progress lines go to stderr via onProgress.
+				const line = waitEventLine(event);
+				if (line !== undefined) deps.onProgress?.(line);
+			}
 			lastActivityAt = deps.now();
 		}
+	};
+	const finishReceiptIfFollowStreamIsTerminal = async (receipt: AnyReceipt): Promise<number | undefined> => {
+		streamEvents();
+		if (follow && !doneStreamed) {
+			const live = loadLiveRun(deps.cwd, runId);
+			if (live !== undefined && proc.isAlive(live.pid)) return undefined;
+			const done = doneEventFromReceipt(deps, receipt);
+			doneStreamed = true;
+			printJsonLine(deps, done);
+			lastActivityAt = deps.now();
+		}
+		return await finishWaitWithReceipt(deps, runId, receipt, json, follow);
 	};
 	for (;;) {
 		const receipt = tryLoadReceipt(deps.cwd, runId);
 		if (receipt !== undefined) {
-			streamEvents();
-			return await finishWaitWithReceipt(deps, runId, receipt, json);
+			const exit = await finishReceiptIfFollowStreamIsTerminal(receipt);
+			if (exit !== undefined) return exit;
+			await sleep(WAIT_POLL_MS);
+			continue;
 		}
 
 		const live = loadLiveRun(deps.cwd, runId);
 		if (live !== undefined) lastLive = live;
 		if (live === undefined) {
 			const finalReceipt = tryLoadReceipt(deps.cwd, runId);
-			if (finalReceipt !== undefined) return await finishWaitWithReceipt(deps, runId, finalReceipt, json);
-			return failWaitNoReceipt(deps, runId, `no live run ${JSON.stringify(runId)} found and no receipt exists`, json);
+			if (finalReceipt !== undefined) {
+				const exit = await finishReceiptIfFollowStreamIsTerminal(finalReceipt);
+				if (exit !== undefined) return exit;
+				await sleep(WAIT_POLL_MS);
+				continue;
+			}
+			streamEvents();
+			return failWaitNoReceipt(
+				deps,
+				runId,
+				`no live run ${JSON.stringify(runId)} found and no receipt exists`,
+				json,
+				follow,
+			);
 		}
 		if (!proc.isAlive(live.pid)) {
 			const finalReceipt = tryLoadReceipt(deps.cwd, runId);
-			if (finalReceipt !== undefined) return await finishWaitWithReceipt(deps, runId, finalReceipt, json);
+			if (finalReceipt !== undefined) {
+				const exit = await finishReceiptIfFollowStreamIsTerminal(finalReceipt);
+				if (exit !== undefined) return exit;
+				await sleep(WAIT_POLL_MS);
+				continue;
+			}
+			streamEvents();
 			unregisterLiveRun(deps.cwd, runId);
 			return failWaitNoReceipt(
 				deps,
 				runId,
 				`run ${runId} is no longer running and no receipt was written`,
 				json,
+				follow,
 				lastLive,
 			);
 		}
 		if (deps.signal?.aborted) {
 			// The wait was cancelled, not the run -- which is still live. Report the current snapshot
 			// so --json ends with one object; the run keeps going and exit 130 + stderr say why.
-			if (json) printJson(deps, liveRunState(live, readRunEvents(deps.cwd, runId), deps.now()));
+			streamEvents();
+			if (json) emitFinalState(deps, liveRunState(live, readRunEvents(deps.cwd, runId), deps.now()), follow);
 			deps.err(`wait for ${runId} cancelled`);
 			return 130;
 		}
@@ -1091,6 +1168,14 @@ interface LiveRunContext {
 	onProgress: (line: string) => void;
 	newRunId: () => string;
 	unregister: () => void;
+}
+
+// Persist a run's terminal receipt, then mark its event stream `done`. The receipt stays the
+// durable source of truth; `wait --follow` waits for this event while the writer is alive and
+// synthesizes it only for legacy/crashed-after-receipt streams.
+function recordRunFinished(deps: CliDeps, live: LiveRunContext, receipt: AnyReceipt): void {
+	saveReceipt(deps.cwd, receipt);
+	live.events.done(receipt.status, receiptExitCode(receipt));
 }
 
 function liveRunContext(deps: CliDeps, routineId: string): LiveRunContext {

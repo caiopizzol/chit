@@ -4,10 +4,12 @@
 //
 // State is derived only from durable evidence already on disk: the receipt (a
 // finished run), the live registry entry + process aliveness (an active run),
-// and the lifecycle events (ready/failed). The current events are progress
-// (human text), ready, and failed -- so the phase distinguishes "accepted its
-// origin and is working" (ready) from "still starting", but never guesses a
-// per-step position from the human progress lines.
+// and the lifecycle events (ready/failed). The events are progress (human text),
+// ready, failed, and done -- so the phase distinguishes "accepted its origin and
+// is working" (ready) from "still starting", but never guesses a per-step position
+// from the human progress lines. The terminal `done` event mirrors the receipt for a
+// follower of the event stream; this read model takes the receipt as authoritative, so
+// it does not read `done`.
 
 import { type RunEvent, readRunEvents } from "./events.ts";
 import { type LiveProcess, type LiveRun, loadLiveRun, realLiveProcess } from "./live.ts";

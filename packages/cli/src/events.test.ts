@@ -85,4 +85,33 @@ describe("run event stream", () => {
 		// The ready line carries no baseCommit key when none was given.
 		expect(readFileSync(runEventsPath(dir, "r1"), "utf-8")).not.toContain("baseCommit");
 	});
+
+	test("a done event round-trips its terminal status and exit code", () => {
+		const dir = tmp();
+		const events = createRunEventSink(dir, "r1", () => 7);
+		events.ready();
+		events.done("converged", 0);
+
+		expect(readRunEvents(dir, "r1")).toEqual([
+			{ at: 7, kind: "ready" },
+			{ at: 7, kind: "done", status: "converged", exitCode: 0 },
+		]);
+	});
+
+	test("a done event missing its status or exit code is dropped", () => {
+		const dir = tmp();
+		initRunEvents(dir, "r1");
+		writeFileSync(
+			runEventsPath(dir, "r1"),
+			[
+				JSON.stringify({ at: 1, kind: "done", status: "completed" }), // missing exitCode
+				JSON.stringify({ at: 2, kind: "done", exitCode: 0 }), // missing status
+				JSON.stringify({ at: 3, kind: "done", status: "mystery", exitCode: 0 }), // unknown status
+				JSON.stringify({ at: 4, kind: "done", status: "completed", exitCode: 0 }), // valid
+			].join("\n"),
+			"utf-8",
+		);
+
+		expect(readRunEvents(dir, "r1")).toEqual([{ at: 4, kind: "done", status: "completed", exitCode: 0 }]);
+	});
 });

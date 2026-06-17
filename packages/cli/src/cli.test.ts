@@ -6,7 +6,7 @@ import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
 import type { ConvergeReceipt } from "./converge.ts";
-import { appendRunEvent } from "./events.ts";
+import { appendRunEvent, readRunEvents } from "./events.ts";
 import type { FlowReceipt } from "./flow.ts";
 import { listLiveRuns, loadLiveRun, registerLiveRun, unregisterLiveRun } from "./live.ts";
 import type { RunReceipt } from "./run.ts";
@@ -543,6 +543,32 @@ describe("chit run live progress", () => {
 		expect(progress.some((l) => /call builder done in/.test(l))).toBe(true);
 		expect(progress.some((l) => /check bun test → ok in/.test(l))).toBe(true);
 	});
+
+	test("a finished one-shot records a terminal done event carrying its status and exit code", async () => {
+		const { deps } = harness({ adapter: fakeAdapter(() => "x") });
+		deps.newRunId = () => "run-done-ok";
+
+		expect(await runCli(["run", "feature-griller", "--input", "idea=x"], deps)).toBe(0);
+
+		// The stream is self-contained: a follower sees the run end, not silence after `ready`.
+		expect(readRunEvents(dir, "run-done-ok")).toContainEqual({ at: 0, kind: "done", status: "completed", exitCode: 0 });
+	});
+
+	test("a loop that never converges records done with its non-zero exit code", async () => {
+		const adapter = fakeAdapter((req) => (req.agent === "judge" ? "no" : "draft"));
+		const { deps } = harness({ adapter });
+		deps.newRunId = () => "run-done-dnc";
+
+		expect(await runCli(["run", "goal-loop", "--input", "goal=ship"], deps)).toBe(1);
+
+		// status and exit code come from the receipt, not a fixed value -- a non-success run proves it.
+		expect(readRunEvents(dir, "run-done-dnc")).toContainEqual({
+			at: 0,
+			kind: "done",
+			status: "did-not-converge",
+			exitCode: 1,
+		});
+	});
 });
 
 describe("chit ps", () => {
@@ -926,6 +952,138 @@ describe("chit wait --json", () => {
 	});
 });
 
+describe("chit wait --follow", () => {
+	test("streams lifecycle events as JSONL on stdout, then a final run-state object", async () => {
+		registerLiveRun(dir, { runId: "run-follow", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		let step = 0;
+		const { deps, out } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+		deps.sleep = async () => {
+			step += 1;
+			if (step === 1) {
+				appendRunEvent(dir, "run-follow", { at: 0, kind: "ready", baseCommit: "base0000" });
+				appendRunEvent(dir, "run-follow", { at: 0, kind: "progress", line: "iteration 1" });
+			} else {
+				// A real run writes its receipt, then its terminal done event.
+				saveReceipt(dir, convergeReceipt("run-follow"));
+				appendRunEvent(dir, "run-follow", { at: 0, kind: "done", status: "converged", exitCode: 0 });
+			}
+		};
+
+		try {
+			expect(await runCli(["wait", "run-follow", "--follow", "--json"], deps)).toBe(0);
+		} finally {
+			unregisterLiveRun(dir, "run-follow");
+		}
+
+		// Every stdout line is one JSON value: the run's events as they arrived, then the run-state last.
+		const lines = out.map((l) => JSON.parse(l));
+		expect(lines).toContainEqual({ at: 0, kind: "ready", baseCommit: "base0000" });
+		expect(lines).toContainEqual({ at: 0, kind: "progress", line: "iteration 1" });
+		expect(lines).toContainEqual({ at: 0, kind: "done", status: "converged", exitCode: 0 });
+		const last = lines.at(-1);
+		expect(last).toMatchObject({
+			runId: "run-follow",
+			phase: "finished",
+			status: "converged",
+			exitCode: 0,
+			done: true,
+		});
+		expect(last.kind).toBeUndefined(); // the final line is a run-state, not an event
+	});
+
+	test("does not emit the final state before done when a receipt appears first", async () => {
+		registerLiveRun(dir, {
+			runId: "run-follow-receipt-first",
+			routineId: "impl-review",
+			pid: 1234,
+			startedAt: 0,
+			cwd: dir,
+		});
+		let step = 0;
+		const { deps, out } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+		deps.sleep = async () => {
+			step += 1;
+			if (step === 1) {
+				saveReceipt(dir, convergeReceipt("run-follow-receipt-first"));
+			} else {
+				appendRunEvent(dir, "run-follow-receipt-first", {
+					at: 0,
+					kind: "done",
+					status: "converged",
+					exitCode: 0,
+				});
+			}
+		};
+
+		try {
+			expect(await runCli(["wait", "run-follow-receipt-first", "--follow", "--json"], deps)).toBe(0);
+		} finally {
+			unregisterLiveRun(dir, "run-follow-receipt-first");
+		}
+
+		expect(step).toBe(2);
+		const lines = out.map((l) => JSON.parse(l));
+		const doneIndex = lines.findIndex((line) => line.kind === "done");
+		const finalIndex = lines.findIndex(
+			(line) => line.runId === "run-follow-receipt-first" && line.phase === "finished",
+		);
+		expect(doneIndex).toBeGreaterThanOrEqual(0);
+		expect(finalIndex).toBeGreaterThan(doneIndex);
+	});
+
+	test("synthesizes done before the final state for legacy receipts with no done event", async () => {
+		saveReceipt(dir, convergeReceipt("run-follow-legacy"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-follow-legacy", "--follow", "--json"], deps)).toBe(0);
+
+		const lines = out.map((l) => JSON.parse(l));
+		expect(lines[0]).toMatchObject({ kind: "done", status: "converged", exitCode: 0 });
+		expect(lines[1]).toMatchObject({ runId: "run-follow-legacy", phase: "finished", done: true });
+	});
+
+	test("emits a final orphaned run-state line when a followed run dies with no receipt", async () => {
+		registerLiveRun(dir, { runId: "run-follow-orphan", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		writeFileSync(prepareRunLog(dir, "run-follow-orphan"), "boom\n", "utf-8");
+		const { deps, out, err } = harness({ liveProcess: { isAlive: () => false, kill: () => {} } });
+
+		expect(await runCli(["wait", "run-follow-orphan", "--follow", "--json"], deps)).toBe(1);
+
+		// stdout stays pure JSONL: the only line is the final orphaned run-state object.
+		const lines = out.map((l) => JSON.parse(l));
+		expect(lines.at(-1)).toMatchObject({ runId: "run-follow-orphan", phase: "orphaned", done: true, exitCode: 1 });
+		expect(err.join("\n")).toContain("no longer running"); // diagnostics stay on stderr
+	});
+
+	test("drains pending events before the final orphaned state", async () => {
+		registerLiveRun(dir, {
+			runId: "run-follow-orphan-drain",
+			routineId: "impl-review",
+			pid: 1234,
+			startedAt: 0,
+			cwd: dir,
+		});
+		appendRunEvent(dir, "run-follow-orphan-drain", { at: 0, kind: "progress", line: "iteration 1" });
+		appendRunEvent(dir, "run-follow-orphan-drain", { at: 0, kind: "failed", error: "child crashed" });
+		const { deps, out } = harness({ liveProcess: { isAlive: () => false, kill: () => {} } });
+
+		expect(await runCli(["wait", "run-follow-orphan-drain", "--follow", "--json"], deps)).toBe(1);
+
+		const lines = out.map((l) => JSON.parse(l));
+		expect(lines[0]).toEqual({ at: 0, kind: "progress", line: "iteration 1" });
+		expect(lines[1]).toEqual({ at: 0, kind: "failed", error: "child crashed" });
+		expect(lines[2]).toMatchObject({ runId: "run-follow-orphan-drain", phase: "orphaned", done: true });
+	});
+
+	test("rejects --follow without --json", async () => {
+		const { deps, err } = harness();
+
+		expect(await runCli(["wait", "run-x", "--follow"], deps)).toBe(1);
+
+		expect(err.join("\n")).toContain("requires --json");
+	});
+});
+
 describe("chit --project (project addressing)", () => {
 	const extra: string[] = [];
 	afterAll(() => {
@@ -1158,6 +1316,7 @@ describe("chit run cancellation", () => {
 		const t = harness();
 		expect(await runCli(["trace", "run-test"], t.deps)).toBe(0);
 		expect(t.out.join("\n")).toContain("run-test  feature-griller  cancelled");
+		expect(readRunEvents(dir, "run-test")).toContainEqual({ at: 0, kind: "done", status: "cancelled", exitCode: 130 });
 	});
 });
 
