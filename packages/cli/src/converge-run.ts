@@ -58,7 +58,8 @@ export async function runConvergeInSandbox(
 ): Promise<ConvergeRunResult> {
 	// One id shared by the sandbox and the receipt.
 	const runId = deps.newRunId();
-	deps.onProgress?.("  creating sandbox (git worktree) …");
+	deps.onProgress?.(`run ${runId}`);
+	deps.onProgress?.("  creating sandbox (git worktree) ...");
 	const sandbox = await deps.sandboxFactory.create(deps.cwd, runId);
 	let applied = false;
 	try {

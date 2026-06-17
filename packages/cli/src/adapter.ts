@@ -45,6 +45,21 @@ export interface Adapter {
 	call(req: AdapterRequest): Promise<AdapterResult>;
 }
 
+const CLI_ERROR_DETAIL_LIMIT = 1200;
+
+function capCliErrorDetail(text: string): string {
+	if (text.length <= CLI_ERROR_DETAIL_LIMIT) return text;
+	return `${text.slice(0, CLI_ERROR_DETAIL_LIMIT)}\n... [truncated: ${text.length} chars total]`;
+}
+
+export function cliFailureDetail(stderr: string, stdout: string): string {
+	const err = stderr.trim();
+	if (err) return capCliErrorDetail(err);
+	const out = stdout.trim();
+	if (out) return `stdout: ${capCliErrorDetail(out)}`;
+	return "(no stderr or stdout)";
+}
+
 // Records calls and returns a canned reply, for deterministic tests.
 export interface FakeAdapter extends Adapter {
 	calls: AdapterRequest[];
@@ -107,7 +122,7 @@ export const claudeCliAdapter: Adapter = {
 			throw new Error(`claude call timed out after ${req.timeoutMs}ms`);
 		}
 		if (r.exitCode !== 0) {
-			throw new Error(`claude exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);
+			throw new Error(`claude exited ${r.exitCode}: ${cliFailureDetail(r.stderr, r.stdout)}`);
 		}
 		return { output: r.stdout.trim() };
 	},
@@ -157,7 +172,7 @@ export const geminiCliAdapter: Adapter = {
 			throw new Error(`gemini call timed out after ${req.timeoutMs}ms`);
 		}
 		if (r.exitCode !== 0) {
-			throw new Error(`gemini exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);
+			throw new Error(`gemini exited ${r.exitCode}: ${cliFailureDetail(r.stderr, r.stdout)}`);
 		}
 		return { output: r.stdout.trim() };
 	},
@@ -200,7 +215,7 @@ export const codexCliAdapter: Adapter = {
 				throw new Error(`codex call timed out after ${req.timeoutMs}ms`);
 			}
 			if (r.exitCode !== 0) {
-				throw new Error(`codex exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`);
+				throw new Error(`codex exited ${r.exitCode}: ${cliFailureDetail(r.stderr, r.stdout)}`);
 			}
 			// The final message is in the -o file; fall back to stdout only if it is absent.
 			let output: string;

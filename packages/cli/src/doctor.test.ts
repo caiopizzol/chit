@@ -119,6 +119,21 @@ describe("runDoctor", () => {
 		expect(r.checks).toHaveLength(1);
 	});
 
+	test("includes runtime identity before config checks when provided", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "chit-doctor-empty-"));
+		dirs.push(dir);
+		const r = await runDoctor(dir, fakeProbes({}), {
+			runtime: { version: "1.2.3", entrypoint: "/opt/chit/src/index.ts" },
+		});
+		expect(r.checks[0]).toEqual({
+			status: "pass",
+			title: "chit",
+			detail: "version 1.2.3, entrypoint /opt/chit/src/index.ts",
+		});
+		expect(statusOf(r, "config")).toBe("fail");
+		expect(r.ok).toBe(false);
+	});
+
 	test("no config at all is a fail", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "chit-doctor-empty-"));
 		dirs.push(dir);
@@ -225,22 +240,28 @@ describe("runDoctor --real (injected AdapterProbe)", () => {
 	test("real checks pass for reachable adapters whose permissions hold", async () => {
 		const dir = project(SANDBOXED);
 		const probe = fakeAdapterProbe();
-		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), probe);
+		const progress: string[] = [];
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), {
+			adapterProbe: probe,
+			onProgress: (line) => progress.push(line),
+		});
 		expect(statusOf(r, "real codex:gpt-5.5 effort=xhigh")).toBe("pass");
 		expect(statusOf(r, "real gemini")).toBe("pass");
 		expect(statusOf(r, "real codex read-only")).toBe("pass");
 		expect(statusOf(r, "real codex read-write")).toBe("pass");
 		expect(probe.reached).toContainEqual({ adapter: "codex", model: "gpt-5.5", effort: "xhigh" });
+		expect(progress).toContain("  probing real codex:gpt-5.5 effort=xhigh...");
+		expect(progress).toContain("  probing real codex permissions...");
+		expect(progress).toContain("  probing real gemini...");
+		expect(progress).toContain("  probing real gemini permissions...");
 		expect(r.ok).toBe(true);
 	});
 
 	test("an unreachable adapter / rejected model fails, and its permission probes are skipped", async () => {
 		const dir = project(SANDBOXED);
-		const r = await runDoctor(
-			dir,
-			fakeProbes({ has: ["codex", "gemini", "true"] }),
-			fakeAdapterProbe({ reachOk: false }),
-		);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), {
+			adapterProbe: fakeAdapterProbe({ reachOk: false }),
+		});
 		expect(statusOf(r, "real codex:gpt-5.5 effort=xhigh")).toBe("fail");
 		expect(hasTitle(r, "real codex read-only")).toBe(false);
 		expect(r.ok).toBe(false);
@@ -248,22 +269,18 @@ describe("runDoctor --real (injected AdapterProbe)", () => {
 
 	test("a write leaking through a read-only call is a fail", async () => {
 		const dir = project(SANDBOXED);
-		const r = await runDoctor(
-			dir,
-			fakeProbes({ has: ["codex", "gemini", "true"] }),
-			fakeAdapterProbe({ readOnlyHeld: false }),
-		);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), {
+			adapterProbe: fakeAdapterProbe({ readOnlyHeld: false }),
+		});
 		expect(statusOf(r, "real codex read-only")).toBe("fail");
 		expect(r.ok).toBe(false);
 	});
 
 	test("read-write writing nothing is a warning, not a fail", async () => {
 		const dir = project(SANDBOXED);
-		const r = await runDoctor(
-			dir,
-			fakeProbes({ has: ["codex", "gemini", "true"] }),
-			fakeAdapterProbe({ readWriteWorked: false }),
-		);
+		const r = await runDoctor(dir, fakeProbes({ has: ["codex", "gemini", "true"] }), {
+			adapterProbe: fakeAdapterProbe({ readWriteWorked: false }),
+		});
 		expect(statusOf(r, "real codex read-write")).toBe("warn");
 		expect(r.ok).toBe(true);
 	});

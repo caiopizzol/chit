@@ -34,6 +34,19 @@ export interface DoctorReport {
 	ok: boolean;
 }
 
+export type DoctorProgress = (line: string) => void;
+
+export interface DoctorRuntime {
+	version: string;
+	entrypoint: string;
+}
+
+export interface DoctorOptions {
+	adapterProbe?: AdapterProbe;
+	onProgress?: DoctorProgress;
+	runtime?: DoctorRuntime;
+}
+
 // The live environment seam. Real impl below; tests inject a fake so a doctor run is
 // deterministic and never shells out.
 export interface DoctorProbes {
@@ -79,8 +92,17 @@ function checkBinary(c: Check): string {
 
 // Run the readiness pass over a project directory. Pure except for reading the config/manifest
 // files (real, deterministic) and the injected probes; returns a structured report.
-export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?: AdapterProbe): Promise<DoctorReport> {
+export async function runDoctor(cwd: string, probes: DoctorProbes, options: DoctorOptions = {}): Promise<DoctorReport> {
+	const { adapterProbe, onProgress, runtime } = options;
 	const checks: DoctorCheck[] = [];
+
+	if (runtime !== undefined) {
+		checks.push({
+			status: "pass",
+			title: "chit",
+			detail: `version ${runtime.version}, entrypoint ${runtime.entrypoint}`,
+		});
+	}
 
 	// 1. The config must parse and validate -- everything else reads from it.
 	let config: ChitConfig;
@@ -209,6 +231,7 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 			let anyReachable = false;
 			for (const profile of profiles) {
 				const label = profileLabel(profile);
+				onProgress?.(`  probing real ${label}...`);
 				const r = await adapterProbe.reach(profile);
 				if (r.ok) {
 					anyReachable = true;
@@ -228,6 +251,7 @@ export async function runDoctor(cwd: string, probes: DoctorProbes, adapterProbe?
 			// The permission mapping is adapter-level, so probe it once per adapter (first model),
 			// and only if something was reachable -- no point write-testing an unreachable CLI.
 			if (anyReachable) {
+				onProgress?.(`  probing real ${adapter} permissions...`);
 				const p = await adapterProbe.permissions(profiles[0] as AgentConfig);
 				checks.push(
 					p.readOnlyHeld

@@ -24,7 +24,7 @@
 		"access": "public"
 	},
 	"scripts": {
-		"chit": "bun run src/index.ts",
+		"chit": "bun --no-env-file src/index.ts",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit"
 	},

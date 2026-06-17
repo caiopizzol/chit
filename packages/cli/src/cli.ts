@@ -11,7 +11,14 @@ import type { CheckRunner } from "./check-runner.ts";
 import { loadConfig } from "./config.ts";
 import { runConverge } from "./converge.ts";
 import { runConvergeInSandbox } from "./converge-run.ts";
-import { type DoctorProbes, formatDoctor, makeRealAdapterProbe, realDoctorProbes, runDoctor } from "./doctor.ts";
+import {
+	type DoctorProbes,
+	type DoctorRuntime,
+	formatDoctor,
+	makeRealAdapterProbe,
+	realDoctorProbes,
+	runDoctor,
+} from "./doctor.ts";
 import { resolveFlow, runFlow } from "./flow.ts";
 import { validateInputs } from "./inputs.ts";
 import { listLiveRuns, registerLiveRun, stopLiveRun, unregisterLiveRun } from "./live.ts";
@@ -66,6 +73,8 @@ export interface CliDeps {
 	// Environment probes for `chit doctor` (CLI presence, git state). The bin wires the real
 	// ones; tests inject a fake. Falls back to the real probes when omitted.
 	doctorProbes?: DoctorProbes;
+	// Runtime identity for diagnostics. The bin wires the real package version and entrypoint.
+	runtime?: DoctorRuntime;
 }
 
 const USAGE = `chit -- run declared routines
@@ -84,6 +93,7 @@ const USAGE = `chit -- run declared routines
   chit trace <run-id> [--full]        show a past run's receipt (--full adds the stored inputs + output)
   chit apply <run-id>                 apply a past sandboxed run's reviewed patch to your tree
   chit cleanup                        remove sandbox worktrees left by interrupted runs
+  chit --version [--verbose]          print the installed version, plus entrypoint with --verbose
 
 A routine is a declared workflow. How it runs is derived from the shape: routine
 steps compose, a repeat loops, and a read-write agent or a check runs it in a sandbox.`;
@@ -148,6 +158,16 @@ function parseInitArgs(rest: string[]): { name: string; template: Template; erro
 
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 	const [command, ...rest] = argv;
+
+	if (command === "--version" || command === "-v" || command === "version") {
+		const unknown = rest.find((a) => a !== "--verbose");
+		if (unknown !== undefined) return fail(deps, `unknown option ${unknown} (chit --version accepts --verbose)`);
+		deps.out(`chit ${deps.runtime?.version ?? "unknown"}`);
+		if (rest.includes("--verbose") && deps.runtime?.entrypoint !== undefined) {
+			deps.out(`entrypoint ${deps.runtime.entrypoint}`);
+		}
+		return 0;
+	}
 
 	if (command === undefined || command === "help" || command === "--help" || command === "-h") {
 		deps.out(USAGE);
@@ -269,7 +289,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 			const unknown = rest.find((a) => a !== "--real");
 			if (unknown !== undefined) return fail(deps, `unknown option ${unknown} (chit doctor accepts --real)`);
 			const adapterProbe = rest.includes("--real") ? makeRealAdapterProbe(deps.adapters) : undefined;
-			const report = await runDoctor(deps.cwd, deps.doctorProbes ?? realDoctorProbes, adapterProbe);
+			const report = await runDoctor(deps.cwd, deps.doctorProbes ?? realDoctorProbes, {
+				...(adapterProbe !== undefined && { adapterProbe }),
+				...(deps.onProgress !== undefined && { onProgress: deps.onProgress }),
+				...(deps.runtime !== undefined && { runtime: deps.runtime }),
+			});
 			deps.out(formatDoctor(report));
 			return report.ok ? 0 : 1;
 		}

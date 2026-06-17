@@ -3,7 +3,14 @@
 // These are always-on (fake-backed) so they prove the binding model with no real calls.
 
 import { describe, expect, test } from "bun:test";
-import { type Adapter, claudeCliArgs, codexCliArgs, dispatchingAdapter, fakeAdapter } from "./adapter.ts";
+import {
+	type Adapter,
+	claudeCliArgs,
+	cliFailureDetail,
+	codexCliArgs,
+	dispatchingAdapter,
+	fakeAdapter,
+} from "./adapter.ts";
 import { fakeCheckRunner } from "./check-runner.ts";
 import { type ChitConfig, parseConfig } from "./config.ts";
 import { runConverge } from "./converge.ts";
@@ -78,6 +85,26 @@ describe("real adapter argument builders", () => {
 			"/tmp/last.txt",
 			"-",
 		]);
+	});
+});
+
+describe("real adapter failure detail", () => {
+	test("uses stderr first", () => {
+		expect(cliFailureDetail(" error on stderr \n", "useful stdout")).toBe("error on stderr");
+	});
+
+	test("falls back to stdout when a CLI writes errors there", () => {
+		expect(cliFailureDetail("", " API Error: bad model \n")).toBe("stdout: API Error: bad model");
+	});
+
+	test("says both streams are empty when neither has detail", () => {
+		expect(cliFailureDetail(" \n", "\t")).toBe("(no stderr or stdout)");
+	});
+
+	test("caps very long failure output", () => {
+		const detail = cliFailureDetail("", "x".repeat(1300));
+		expect(detail.length).toBeLessThan(1300);
+		expect(detail).toContain("[truncated: 1300 chars total]");
 	});
 });
 
