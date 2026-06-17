@@ -31,13 +31,17 @@ describe("gitWorktreeSandbox (real git)", () => {
 		sh("git add -A && git commit -q -m init");
 		return repo;
 	}
+	async function createSandbox(repo: string, runId: string) {
+		const { baseCommit } = await gitWorktreeSandboxFactory.preflight(repo);
+		return gitWorktreeSandboxFactory.create(repo, runId, baseCommit);
+	}
 	afterEach(() => {
 		for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
 	});
 
 	test("isolates edits, shows a diff, and applies back on confirm", async () => {
 		const repo = newRepo();
-		const sb = await gitWorktreeSandboxFactory.create(repo, "t1");
+		const sb = await createSandbox(repo, "t1");
 		expect(sb.workDir).not.toBe(repo);
 
 		// builder edits inside the sandbox: a new file and a change to an existing one
@@ -62,7 +66,7 @@ describe("gitWorktreeSandbox (real git)", () => {
 
 	test("discard leaves the origin untouched", async () => {
 		const repo = newRepo();
-		const sb = await gitWorktreeSandboxFactory.create(repo, "t2");
+		const sb = await createSandbox(repo, "t2");
 		writeFileSync(join(sb.workDir, "b.txt"), "scratch\n");
 		await sb.discard();
 		expect(existsSync(join(repo, "b.txt"))).toBe(false);
@@ -72,12 +76,27 @@ describe("gitWorktreeSandbox (real git)", () => {
 	test("refuses a non-git directory with a clear error", async () => {
 		const plain = mkdtempSync(join(tmpdir(), "chit-plain-"));
 		temps.push(plain);
-		await expect(gitWorktreeSandboxFactory.create(plain, "t3")).rejects.toThrow(/needs a git repository/);
+		await expect(gitWorktreeSandboxFactory.create(plain, "t3", "HEAD")).rejects.toThrow(/needs a git repository/);
+	});
+
+	test("creates the worktree from the accepted base commit, not floating HEAD", async () => {
+		const repo = newRepo();
+		const { baseCommit } = await gitWorktreeSandboxFactory.preflight(repo);
+		const sh = (cmd: string) => {
+			const r = Bun.spawnSync(["sh", "-c", cmd], { cwd: repo });
+			if (r.exitCode !== 0) throw new Error(`${cmd}: ${new TextDecoder().decode(r.stderr)}`);
+		};
+		writeFileSync(join(repo, "a.txt"), "moved head\n");
+		sh("git add -A && git commit -q -m move-head");
+
+		const sb = await gitWorktreeSandboxFactory.create(repo, "pinned", baseCommit);
+		expect(readFileSync(join(sb.workDir, "a.txt"), "utf-8")).toBe("hello\n");
+		await sb.discard();
 	});
 
 	test("reapStaleSandboxes removes a leftover sandbox whose owner is gone (interrupted run)", async () => {
 		const repo = newRepo();
-		const sb = await gitWorktreeSandboxFactory.create(repo, "leak");
+		const sb = await createSandbox(repo, "leak");
 		// simulate a force-killed run: the worktree exists, discard never ran, and the
 		// owning process has exited -- rewrite the lock to a pid that is no longer alive
 		const ghost = Bun.spawn(["sh", "-c", "exit 0"]);
@@ -95,7 +114,7 @@ describe("gitWorktreeSandbox (real git)", () => {
 		const repo = newRepo();
 		// create() stamps THIS process's pid as the owner, and this process is alive,
 		// so a concurrent `chit cleanup` must not pull the sandbox out from under it.
-		const sb = await gitWorktreeSandboxFactory.create(repo, "active");
+		const sb = await createSandbox(repo, "active");
 		const removed = await reapStaleSandboxes(repo);
 		expect(removed).toEqual([]);
 		expect(existsSync(sb.workDir)).toBe(true);

@@ -6,11 +6,28 @@ import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
 import type { ConvergeReceipt } from "./converge.ts";
+import { appendRunEvent } from "./events.ts";
 import type { FlowReceipt } from "./flow.ts";
 import { listLiveRuns, loadLiveRun, registerLiveRun, unregisterLiveRun } from "./live.ts";
 import type { RunReceipt } from "./run.ts";
 import { fakeSandboxFactory, gitWorktreeSandboxFactory } from "./sandbox.ts";
 import { loadReceipt, prepareRunLog, runArgvPath, runLogPath, saveReceipt } from "./store.ts";
+
+// A background fake child: stand in for the detached process by writing the structured event the
+// real child would (the start barrier waits for it). `ready` releases the barrier with success.
+function readyingSpawner(
+	over: { ready?: boolean } = {},
+): CliDeps["backgroundSpawner"] & { spawned: Array<{ args: string[]; cwd: string; env: Record<string, string> }> } {
+	const spawned: Array<{ args: string[]; cwd: string; env: Record<string, string> }> = [];
+	return {
+		spawned,
+		spawn(args, opts) {
+			spawned.push({ args, cwd: opts.cwd, env: opts.env });
+			if (over.ready !== false) appendRunEvent(opts.cwd, opts.env.CHIT_RUN_ID as string, { at: 0, kind: "ready" });
+			return { pid: process.pid };
+		},
+	};
+}
 
 let dir: string;
 
@@ -285,22 +302,15 @@ describe("chit run", () => {
 		expect(err.join("\n")).toMatch(/did-not-converge/);
 	});
 
-	test("starts a background child with a forced run id and returns immediately", async () => {
-		const spawned: Array<{ args: string[]; cwd: string; env: Record<string, string> }> = [];
-		const { deps, out } = harness({
-			backgroundSpawner: {
-				spawn(args, opts) {
-					spawned.push({ args, cwd: opts.cwd, env: opts.env });
-					return { pid: process.pid };
-				},
-			},
-		});
+	test("starts a background child once it signals readiness, then returns", async () => {
+		const spawner = readyingSpawner();
+		const { deps, out } = harness({ backgroundSpawner: spawner });
 		deps.newRunId = () => "run-bg";
 
 		try {
 			expect(await runCli(["run", "feature-griller", "--input", "idea=x", "--background"], deps)).toBe(0);
 
-			expect(spawned).toEqual([
+			expect(spawner.spawned).toEqual([
 				{
 					args: [],
 					cwd: dir,
@@ -333,13 +343,7 @@ describe("chit run", () => {
 	});
 
 	test("rebuilds background argv from parsed args instead of filtering tokens", async () => {
-		const { deps } = harness({
-			backgroundSpawner: {
-				spawn() {
-					return { pid: process.pid };
-				},
-			},
-		});
+		const { deps } = harness({ backgroundSpawner: readyingSpawner() });
 		deps.newRunId = () => "run-bg-scope";
 
 		try {
@@ -378,16 +382,9 @@ describe("chit run", () => {
 	});
 
 	test("preflights a sandboxed routine before starting it in the background", async () => {
-		let spawned = false;
 		let preflighted = false;
-		const { deps } = harness({
-			backgroundSpawner: {
-				spawn() {
-					spawned = true;
-					return { pid: process.pid };
-				},
-			},
-		});
+		const spawner = readyingSpawner();
+		const { deps } = harness({ backgroundSpawner: spawner });
 		deps.newRunId = () => "run-bg-sandbox";
 		const originalSandboxFactory = deps.sandboxFactory;
 		deps.sandboxFactory = {
@@ -402,7 +399,7 @@ describe("chit run", () => {
 			expect(await runCli(["run", "impl-review", "--input", "task=x", "--background"], deps)).toBe(0);
 
 			expect(preflighted).toBe(true);
-			expect(spawned).toBe(true);
+			expect(spawner.spawned.length).toBe(1);
 		} finally {
 			unregisterLiveRun(dir, "run-bg-sandbox");
 		}
@@ -441,6 +438,72 @@ describe("chit run", () => {
 
 		expect(preflighted).toBe(false);
 		expect(err.join("\n")).toContain("this Chit entrypoint cannot start background runs");
+	});
+
+	test("blocks until the child signals readiness before reporting the run as started", async () => {
+		// The fake child does not signal readiness on spawn; it does so on the first poll, the way a
+		// real child reaches readiness only after a beat. The parent must wait for that, not race past.
+		let sleeps = 0;
+		const { deps, out } = harness({
+			backgroundSpawner: readyingSpawner({ ready: false }),
+			sleep: async () => {
+				sleeps += 1;
+				appendRunEvent(dir, "run-bg-wait", { at: 0, kind: "ready", baseCommit: "base0000" });
+			},
+		});
+		deps.newRunId = () => "run-bg-wait";
+
+		try {
+			expect(await runCli(["run", "impl-review", "--input", "task=x", "--background"], deps)).toBe(0);
+			expect(sleeps).toBe(1);
+			expect(out.join("\n")).toContain("started run-bg-wait in background");
+		} finally {
+			unregisterLiveRun(dir, "run-bg-wait");
+		}
+	});
+
+	test("surfaces a child's terminal failure event and cleans up the registration", async () => {
+		const { deps, err } = harness({
+			backgroundSpawner: {
+				spawn(_args, opts) {
+					appendRunEvent(opts.cwd, opts.env.CHIT_RUN_ID as string, {
+						at: 0,
+						kind: "failed",
+						error: "Sandboxed runs start from HEAD. Commit or stash your changes first.",
+					});
+					return { pid: process.pid };
+				},
+			},
+		});
+		deps.newRunId = () => "run-bg-fail";
+
+		expect(await runCli(["run", "impl-review", "--input", "task=x", "--background"], deps)).toBe(1);
+
+		expect(err.join("\n")).toContain("background run run-bg-fail could not start");
+		expect(err.join("\n")).toContain("Commit or stash your changes first");
+		expect(loadLiveRun(dir, "run-bg-fail")).toBeUndefined(); // registration dropped
+		expect(existsSync(runArgvPath(dir, "run-bg-fail"))).toBe(false); // argv handoff cleaned up
+	});
+
+	test("fails when the child dies during startup without signalling readiness", async () => {
+		const { deps, err } = harness({
+			backgroundSpawner: {
+				spawn(_args, opts) {
+					// A child that crashes before any event, leaving only its log behind.
+					writeFileSync(prepareRunLog(opts.cwd, opts.env.CHIT_RUN_ID as string), "boom: could not load config\n");
+					return { pid: process.pid };
+				},
+			},
+			liveProcess: { isAlive: () => false, kill: () => {} },
+		});
+		deps.newRunId = () => "run-bg-dead";
+
+		expect(await runCli(["run", "impl-review", "--input", "task=x", "--background"], deps)).toBe(1);
+
+		const text = err.join("\n");
+		expect(text).toContain("background run run-bg-dead could not start");
+		expect(text).toContain("boom: could not load config"); // log tail fallback for a silent death
+		expect(loadLiveRun(dir, "run-bg-dead")).toBeUndefined();
 	});
 });
 
@@ -580,6 +643,40 @@ describe("chit wait", () => {
 			expect(out.join("\n")).toContain("run-wait-live  feature-griller  completed");
 		} finally {
 			unregisterLiveRun(dir, "run-wait-live");
+		}
+	});
+
+	test("streams the run's events and a heartbeat while it is live, then prints the receipt", async () => {
+		registerLiveRun(dir, { runId: "run-wait-progress", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		const progress: string[] = [];
+		let clock = 0;
+		let step = 0;
+		try {
+			const { deps, out } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+			deps.now = () => clock;
+			deps.onProgress = (l) => progress.push(l);
+			deps.sleep = async () => {
+				step += 1;
+				if (step === 1) {
+					// The child accepts its base and begins working.
+					appendRunEvent(dir, "run-wait-progress", { at: 0, kind: "ready", baseCommit: "base0000" });
+					appendRunEvent(dir, "run-wait-progress", { at: 0, kind: "progress", line: "iteration 1" });
+				} else if (step === 2) {
+					clock += 20_000; // 20s of quiet -> the next poll should heartbeat
+				} else {
+					saveReceipt(dir, convergeReceipt("run-wait-progress"));
+				}
+			};
+
+			expect(await runCli(["wait", "run-wait-progress"], deps)).toBe(0);
+
+			const streamed = progress.join("\n");
+			expect(streamed).toContain("base base0000 pinned"); // the readiness phase
+			expect(streamed).toContain("iteration 1"); // a progress change
+			expect(streamed).toContain("still waiting on run-wait-progress"); // the heartbeat
+			expect(out.join("\n")).toContain("run-wait-progress  impl-review  converged");
+		} finally {
+			unregisterLiveRun(dir, "run-wait-progress");
 		}
 	});
 
@@ -819,7 +916,8 @@ describe("chit cleanup", () => {
 		sh("git add -A && git commit -q -m init");
 
 		// leave an orphaned sandbox behind: created, then its owning process exits
-		const sb = await gitWorktreeSandboxFactory.create(repo, "leak");
+		const { baseCommit } = await gitWorktreeSandboxFactory.preflight(repo);
+		const sb = await gitWorktreeSandboxFactory.create(repo, "leak", baseCommit);
 		const ghost = Bun.spawn(["sh", "-c", "exit 0"]);
 		const deadPid = ghost.pid;
 		await ghost.exited;
@@ -919,6 +1017,38 @@ describe("chit help", () => {
 		const { deps, out } = harness();
 		expect(await runCli([], deps)).toBe(0);
 		expect(out.join("\n")).toMatch(/chit routines/);
+	});
+
+	test("`chit help <command>` prints focused help for that command", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["help", "run"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("chit run <routine> [options]");
+		expect(text).toContain("--background");
+		expect(text).not.toMatch(/chit routines {2}list/); // focused, not the full usage
+	});
+
+	test("`chit <command> --help` and `-h` print that command's help and exit 0", async () => {
+		for (const flag of ["--help", "-h"]) {
+			const { deps, out } = harness();
+			expect(await runCli(["wait", flag], deps)).toBe(0);
+			expect(out.join("\n")).toContain("chit wait <run-id>");
+			expect(out.join("\n")).toContain("heartbeat");
+		}
+	});
+
+	test("`chit help <unknown>` falls back to full usage rather than erroring", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["help", "bogus"], deps)).toBe(0);
+		expect(out.join("\n")).toMatch(/chit routines/);
+	});
+
+	test("a help request short-circuits before argument validation", async () => {
+		// `chit run --help` must print help, not complain that a routine id is missing.
+		const { deps, out, err } = harness();
+		expect(await runCli(["run", "--help"], deps)).toBe(0);
+		expect(out.join("\n")).toContain("chit run <routine>");
+		expect(err.join("\n")).toBe("");
 	});
 });
 

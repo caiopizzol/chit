@@ -101,7 +101,7 @@ chit trace --full run-a1b5efea
 chit apply run-a1b5efea
 ```
 
-For a long run, detach it and wait on the receipt:
+For a long run, detach it and wait on the receipt. `--background` returns once the run has accepted and pinned the base commit it will run from, so you can keep working in the tree without disturbing it. `chit wait` streams the run's progress, then prints the receipt:
 
 ```sh
 chit run implement --input task="add a version command" --background
@@ -121,13 +121,15 @@ chit routines                     # list routines and derived kinds
 chit inspect <routine>            # show what will run
 chit run <routine> --input k=v    # run a routine, add --background to detach
 chit ps                           # list live runs
-chit wait <run-id>                # block until a live run writes its receipt
+chit wait <run-id>                # stream a live run's progress, then print its receipt
 chit stop <run-id>                # ask a live run to stop
 chit runs                         # list past runs
 chit trace <run-id> [--full]      # inspect a receipt
 chit apply <run-id>               # apply a stored dry-run patch
 chit cleanup                      # remove stale sandboxes
 ```
+
+Run `chit help <command>` (or `chit <command> --help`) for detail on any command.
 
 ## Develop Chit
 
