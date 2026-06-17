@@ -5,7 +5,8 @@
 // dump, but the final output and inputs do sit here. Whether to store the body by
 // default, keep a blob ref, or require opt-in audit is an open design question.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConvergeReceipt } from "./converge.ts";
 import type { FlowReceipt } from "./flow.ts";
@@ -25,11 +26,44 @@ export function receiptPath(cwd: string, runId: string): string {
 	return join(runsDir(cwd), `${runId}.json`);
 }
 
+export function runLogPath(cwd: string, runId: string): string {
+	return join(runsDir(cwd), `${runId}.log`);
+}
+
+export function runArgvPath(cwd: string, runId: string): string {
+	return join(runsDir(cwd), `${runId}.argv`);
+}
+
+export function saveRunArgv(cwd: string, runId: string, argv: string[]): string {
+	const dir = runsDir(cwd);
+	mkdirSync(dir, { recursive: true });
+	const path = runArgvPath(cwd, runId);
+	writeFileSync(path, `${JSON.stringify(argv)}\n`, "utf-8");
+	return path;
+}
+
+export function removeRunArgv(cwd: string, runId: string): void {
+	rmSync(runArgvPath(cwd, runId), { force: true });
+}
+
+export function prepareRunLog(cwd: string, runId: string): string {
+	const dir = runsDir(cwd);
+	mkdirSync(dir, { recursive: true });
+	const path = runLogPath(cwd, runId);
+	writeFileSync(path, "", { flag: "a", encoding: "utf-8" });
+	return path;
+}
+
+export function loadRunLog(cwd: string, runId: string): string | undefined {
+	const path = runLogPath(cwd, runId);
+	return existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+}
+
 export function saveReceipt(cwd: string, receipt: AnyReceipt): string {
 	const dir = runsDir(cwd);
 	mkdirSync(dir, { recursive: true });
 	const path = receiptPath(cwd, receipt.runId);
-	writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+	writeFileAtomic(path, `${JSON.stringify(receipt, null, 2)}\n`);
 	return path;
 }
 
@@ -38,13 +72,50 @@ export function loadReceipt(cwd: string, runId: string): AnyReceipt {
 	if (!existsSync(path)) {
 		throw new Error(`no run ${JSON.stringify(runId)} found (looked in ${runsDir(cwd)})`);
 	}
-	return JSON.parse(readFileSync(path, "utf-8")) as AnyReceipt;
+	const receipt = parseReceiptFile(readFileSync(path, "utf-8"));
+	if (receipt === undefined) throw new Error(`run ${JSON.stringify(runId)} receipt is invalid`);
+	return receipt;
+}
+
+export function tryLoadReceipt(cwd: string, runId: string): AnyReceipt | undefined {
+	const path = receiptPath(cwd, runId);
+	if (!existsSync(path)) {
+		return undefined;
+	}
+	try {
+		return parseReceiptFile(readFileSync(path, "utf-8"));
+	} catch {
+		return undefined;
+	}
+}
+
+function writeFileAtomic(path: string, contents: string): void {
+	const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+	try {
+		writeFileSync(tmp, contents, "utf-8");
+		renameSync(tmp, path);
+	} catch (e) {
+		rmSync(tmp, { force: true });
+		throw e;
+	}
+}
+
+function parseReceiptFile(raw: string): AnyReceipt | undefined {
+	const value = JSON.parse(raw) as unknown;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const receipt = value as Partial<AnyReceipt>;
+	if (typeof receipt.runId !== "string" || receipt.runId.length === 0) return undefined;
+	if (typeof receipt.routineId !== "string" || receipt.routineId.length === 0) return undefined;
+	if (receipt.policy !== "one-shot" && receipt.policy !== "converge" && receipt.policy !== "flow") return undefined;
+	if (typeof receipt.status !== "string" || receipt.status.length === 0) return undefined;
+	if (typeof receipt.startedAt !== "number") return undefined;
+	if (typeof receipt.inputs !== "object" || receipt.inputs === null || Array.isArray(receipt.inputs)) return undefined;
+	return value as AnyReceipt;
 }
 
 // Every stored receipt, for the run-history view. Reads the receipt JSONs under .chit/runs,
-// skipping the .patch siblings and any file that does not parse (a corrupt or partial receipt
-// must not break the whole history). A pure read: it derives history from the evidence already
-// on disk and stores nothing new. Ordering is the caller's job.
+// skipping the .patch siblings and any file that is not a receipt. A pure read: it derives
+// history from the evidence already on disk and stores nothing new. Ordering is the caller's job.
 export function listReceipts(cwd: string): AnyReceipt[] {
 	const dir = runsDir(cwd);
 	if (!existsSync(dir)) return [];
@@ -52,7 +123,8 @@ export function listReceipts(cwd: string): AnyReceipt[] {
 	for (const name of readdirSync(dir)) {
 		if (!name.endsWith(".json")) continue;
 		try {
-			receipts.push(JSON.parse(readFileSync(join(dir, name), "utf-8")) as AnyReceipt);
+			const receipt = parseReceiptFile(readFileSync(join(dir, name), "utf-8"));
+			if (receipt !== undefined) receipts.push(receipt);
 		} catch {
 			// Skip an unreadable receipt rather than fail the list.
 		}

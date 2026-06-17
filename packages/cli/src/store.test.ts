@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunReceipt } from "./run.ts";
-import { loadReceipt, saveReceipt } from "./store.ts";
+import { loadReceipt, receiptPath, saveReceipt, tryLoadReceipt } from "./store.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "chit-min-store-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -31,5 +31,20 @@ describe("receipt store", () => {
 
 	test("loading an unknown run throws a helpful error", () => {
 		expect(() => loadReceipt(dir, "ghost")).toThrow(/no run "ghost" found/);
+	});
+
+	test("tryLoadReceipt treats a partial receipt as not ready", () => {
+		saveReceipt(dir, { ...receipt, runId: "partial" });
+		writeFileSync(receiptPath(dir, "partial"), "{", "utf-8");
+
+		expect(tryLoadReceipt(dir, "partial")).toBeUndefined();
+		expect(() => loadReceipt(dir, "partial")).toThrow();
+	});
+
+	test("saveReceipt leaves only the final receipt path", () => {
+		saveReceipt(dir, { ...receipt, runId: "atomic" });
+
+		expect(existsSync(receiptPath(dir, "atomic"))).toBe(true);
+		expect(readdirSync(join(dir, ".chit", "runs")).filter((name) => name.includes(".tmp-"))).toEqual([]);
 	});
 });

@@ -1,14 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type Adapter, fakeAdapter } from "./adapter.ts";
 import { type CheckRunner, fakeCheckRunner } from "./check-runner.ts";
 import { type CliDeps, runCli } from "./cli.ts";
 import type { ConvergeReceipt } from "./converge.ts";
+import type { FlowReceipt } from "./flow.ts";
 import { listLiveRuns, loadLiveRun, registerLiveRun, unregisterLiveRun } from "./live.ts";
+import type { RunReceipt } from "./run.ts";
 import { fakeSandboxFactory, gitWorktreeSandboxFactory } from "./sandbox.ts";
-import { loadReceipt } from "./store.ts";
+import { loadReceipt, prepareRunLog, runArgvPath, runLogPath, saveReceipt } from "./store.ts";
 
 let dir: string;
 
@@ -56,12 +58,24 @@ const GOAL = {
 	output: "work",
 };
 
+const ASK_TEXT = {
+	id: "ask-text",
+	inputs: {},
+	agents: {},
+	steps: [
+		{ id: "name", ask: "Who are you?" },
+		{ id: "out", format: "hello {{ steps.name.output }}" },
+	],
+	output: "out",
+};
+
 beforeAll(() => {
 	dir = mkdtempSync(join(tmpdir(), "chit-min-cli-"));
 	mkdirSync(join(dir, "examples"), { recursive: true });
 	writeFileSync(join(dir, "examples", "feature-griller.json"), JSON.stringify(GRILLER));
 	writeFileSync(join(dir, "examples", "impl-review.json"), JSON.stringify(REVIEW));
 	writeFileSync(join(dir, "examples", "goal-loop.json"), JSON.stringify(GOAL));
+	writeFileSync(join(dir, "examples", "ask-text.json"), JSON.stringify(ASK_TEXT));
 	writeFileSync(
 		join(dir, "chit.config.json"),
 		JSON.stringify({
@@ -69,6 +83,7 @@ beforeAll(() => {
 				"feature-griller": { file: "examples/feature-griller.json", description: "Question a feature idea." },
 				"impl-review": { file: "examples/impl-review.json", description: "Implement and review." },
 				"goal-loop": { file: "examples/goal-loop.json", description: "Loop until an evaluator says yes." },
+				"ask-text": { file: "examples/ask-text.json", description: "Ask then format." },
 			},
 			// impl-review's two routine agents use different profile ids ("codex" / "claude"); both
 			// resolve to the claude adapter here, proving per-agent profile binding.
@@ -91,6 +106,9 @@ function harness(
 		applyError?: string;
 		onApplyPatch?: (patch: string, base: string) => void;
 		runtime?: CliDeps["runtime"];
+		backgroundSpawner?: CliDeps["backgroundSpawner"];
+		liveProcess?: CliDeps["liveProcess"];
+		sleep?: CliDeps["sleep"];
 	} = {},
 ) {
 	const out: string[] = [];
@@ -109,8 +127,62 @@ function harness(
 		out: (l) => out.push(l),
 		err: (l) => err.push(l),
 		runtime: over.runtime ?? { version: "0.0.0-test", entrypoint: "/tmp/chit-test/src/index.ts" },
+		...(over.backgroundSpawner !== undefined && { backgroundSpawner: over.backgroundSpawner }),
+		...(over.liveProcess !== undefined && { liveProcess: over.liveProcess }),
+		...(over.sleep !== undefined && { sleep: over.sleep }),
 	};
 	return { deps, out, err };
+}
+
+function receipt(runId: string, status: RunReceipt["status"] = "completed"): RunReceipt {
+	return {
+		runId,
+		routineId: "feature-griller",
+		policy: "one-shot",
+		digest: "digest",
+		inputs: { idea: "x" },
+		startedAt: 0,
+		finishedAt: 1,
+		elapsedMs: 1,
+		status,
+		steps: [],
+		...(status === "completed" && { output: "done" }),
+		...(status !== "completed" && { error: status === "cancelled" ? "cancelled by operator" : "boom" }),
+	};
+}
+
+function convergeReceipt(runId: string, over: Partial<ConvergeReceipt> = {}): ConvergeReceipt {
+	return {
+		runId,
+		routineId: "impl-review",
+		policy: "converge",
+		digest: "digest",
+		inputs: { task: "x" },
+		maxIterations: 1,
+		until: "checks-pass",
+		startedAt: 0,
+		finishedAt: 1,
+		elapsedMs: 1,
+		status: "converged",
+		iterations: [],
+		...over,
+	};
+}
+
+function flowReceipt(runId: string, status: FlowReceipt["status"] = "completed"): FlowReceipt {
+	return {
+		runId,
+		routineId: "flow",
+		policy: "flow",
+		digest: "digest",
+		inputs: { task: "x" },
+		startedAt: 0,
+		finishedAt: 1,
+		elapsedMs: 1,
+		status,
+		steps: [],
+		...(status !== "completed" && { error: "boom" }),
+	};
 }
 
 describe("chit routines", () => {
@@ -212,6 +284,164 @@ describe("chit run", () => {
 		expect(await runCli(["run", "goal-loop", "--input", "goal=ship"], deps)).toBe(1);
 		expect(err.join("\n")).toMatch(/did-not-converge/);
 	});
+
+	test("starts a background child with a forced run id and returns immediately", async () => {
+		const spawned: Array<{ args: string[]; cwd: string; env: Record<string, string> }> = [];
+		const { deps, out } = harness({
+			backgroundSpawner: {
+				spawn(args, opts) {
+					spawned.push({ args, cwd: opts.cwd, env: opts.env });
+					return { pid: process.pid };
+				},
+			},
+		});
+		deps.newRunId = () => "run-bg";
+
+		try {
+			expect(await runCli(["run", "feature-griller", "--input", "idea=x", "--background"], deps)).toBe(0);
+
+			expect(spawned).toEqual([
+				{
+					args: [],
+					cwd: dir,
+					env: {
+						CHIT_RUN_ID: "run-bg",
+						CHIT_LOG_PATH: runLogPath(dir, "run-bg"),
+						CHIT_ARGV_PATH: runArgvPath(dir, "run-bg"),
+					},
+				},
+			]);
+			expect(existsSync(runLogPath(dir, "run-bg"))).toBe(true);
+			expect(JSON.parse(readFileSync(runArgvPath(dir, "run-bg"), "utf-8"))).toEqual([
+				"run",
+				"feature-griller",
+				"--input",
+				"idea=x",
+			]);
+			expect(loadLiveRun(dir, "run-bg")).toMatchObject({
+				runId: "run-bg",
+				routineId: "feature-griller",
+				pid: process.pid,
+			});
+			const text = out.join("\n");
+			expect(text).toContain("started run-bg in background");
+			expect(text).toContain("chit wait run-bg");
+			expect(text).toContain("chit ps");
+		} finally {
+			unregisterLiveRun(dir, "run-bg");
+		}
+	});
+
+	test("rebuilds background argv from parsed args instead of filtering tokens", async () => {
+		const { deps } = harness({
+			backgroundSpawner: {
+				spawn() {
+					return { pid: process.pid };
+				},
+			},
+		});
+		deps.newRunId = () => "run-bg-scope";
+
+		try {
+			expect(
+				await runCli(["run", "feature-griller", "--input", "idea=x", "--scope", "--background", "--background"], deps),
+			).toBe(0);
+
+			expect(JSON.parse(readFileSync(runArgvPath(dir, "run-bg-scope"), "utf-8"))).toEqual([
+				"run",
+				"feature-griller",
+				"--input",
+				"idea=x",
+				"--scope",
+				"--background",
+			]);
+		} finally {
+			unregisterLiveRun(dir, "run-bg-scope");
+		}
+	});
+
+	test("rejects background runs that need human input", async () => {
+		let spawned = false;
+		const { deps, err } = harness({
+			backgroundSpawner: {
+				spawn() {
+					spawned = true;
+					return { pid: process.pid };
+				},
+			},
+		});
+
+		expect(await runCli(["run", "ask-text", "--background"], deps)).toBe(1);
+
+		expect(spawned).toBe(false);
+		expect(err.join("\n")).toContain("--background cannot run routines with ask steps");
+	});
+
+	test("preflights a sandboxed routine before starting it in the background", async () => {
+		let spawned = false;
+		let preflighted = false;
+		const { deps } = harness({
+			backgroundSpawner: {
+				spawn() {
+					spawned = true;
+					return { pid: process.pid };
+				},
+			},
+		});
+		deps.newRunId = () => "run-bg-sandbox";
+		const originalSandboxFactory = deps.sandboxFactory;
+		deps.sandboxFactory = {
+			...originalSandboxFactory,
+			async preflight(cwd) {
+				preflighted = true;
+				return originalSandboxFactory.preflight(cwd);
+			},
+		};
+
+		try {
+			expect(await runCli(["run", "impl-review", "--input", "task=x", "--background"], deps)).toBe(0);
+
+			expect(preflighted).toBe(true);
+			expect(spawned).toBe(true);
+		} finally {
+			unregisterLiveRun(dir, "run-bg-sandbox");
+		}
+	});
+
+	test("rejects background auto-apply before spawning", async () => {
+		let spawned = false;
+		const { deps, err } = harness({
+			backgroundSpawner: {
+				spawn() {
+					spawned = true;
+					return { pid: process.pid };
+				},
+			},
+		});
+
+		expect(await runCli(["run", "impl-review", "--input", "task=x", "--background", "--auto-apply"], deps)).toBe(1);
+
+		expect(spawned).toBe(false);
+		expect(err.join("\n")).toContain("--background cannot be combined with --auto-apply");
+	});
+
+	test("rejects background runs before preflight when the entrypoint cannot spawn children", async () => {
+		let preflighted = false;
+		const { deps, err } = harness();
+		const originalSandboxFactory = deps.sandboxFactory;
+		deps.sandboxFactory = {
+			...originalSandboxFactory,
+			async preflight(cwd) {
+				preflighted = true;
+				return originalSandboxFactory.preflight(cwd);
+			},
+		};
+
+		expect(await runCli(["run", "impl-review", "--input", "task=x", "--background"], deps)).toBe(1);
+
+		expect(preflighted).toBe(false);
+		expect(err.join("\n")).toContain("this Chit entrypoint cannot start background runs");
+	});
 });
 
 describe("chit run live progress", () => {
@@ -281,6 +511,163 @@ describe("chit ps", () => {
 	test("rejects unexpected arguments", async () => {
 		const { deps, err } = harness();
 		expect(await runCli(["ps", "extra"], deps)).toBe(1);
+		expect(err.join("\n")).toContain("unexpected argument");
+	});
+});
+
+describe("chit wait", () => {
+	test("prints an existing receipt and exits with its status", async () => {
+		saveReceipt(dir, receipt("run-wait-done"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wait-done"], deps)).toBe(0);
+
+		expect(out.join("\n")).toContain("run-wait-done  feature-griller  completed");
+	});
+
+	test("returns a failure code for a failed receipt", async () => {
+		saveReceipt(dir, receipt("run-wait-failed", "failed"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wait-failed"], deps)).toBe(1);
+
+		expect(out.join("\n")).toContain("run-wait-failed  feature-griller  failed");
+	});
+
+	test("returns 130 for a cancelled receipt", async () => {
+		saveReceipt(dir, receipt("run-wait-cancelled", "cancelled"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wait-cancelled"], deps)).toBe(130);
+
+		expect(out.join("\n")).toContain("run-wait-cancelled  feature-griller  cancelled");
+	});
+
+	test("returns flow receipt exit codes", async () => {
+		saveReceipt(dir, flowReceipt("run-wait-flow-ok"));
+		saveReceipt(dir, flowReceipt("run-wait-flow-failed", "failed"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wait-flow-ok"], deps)).toBe(0);
+		expect(await runCli(["wait", "run-wait-flow-failed"], deps)).toBe(1);
+
+		const text = out.join("\n");
+		expect(text).toContain("run-wait-flow-ok  flow  completed");
+		expect(text).toContain("run-wait-flow-failed  flow  failed");
+	});
+
+	test("blocks on a live run until its receipt appears", async () => {
+		registerLiveRun(dir, {
+			runId: "run-wait-live",
+			routineId: "feature-griller",
+			pid: 1234,
+			startedAt: 0,
+			cwd: dir,
+		});
+		let sleeps = 0;
+		try {
+			const { deps, out } = harness({
+				liveProcess: { isAlive: () => true, kill: () => {} },
+				sleep: async () => {
+					sleeps += 1;
+					saveReceipt(dir, receipt("run-wait-live"));
+				},
+			});
+
+			expect(await runCli(["wait", "run-wait-live"], deps)).toBe(0);
+
+			expect(sleeps).toBe(1);
+			expect(out.join("\n")).toContain("run-wait-live  feature-griller  completed");
+		} finally {
+			unregisterLiveRun(dir, "run-wait-live");
+		}
+	});
+
+	test("fails when a live run disappears without a receipt", async () => {
+		registerLiveRun(dir, {
+			runId: "run-wait-dead",
+			routineId: "feature-griller",
+			pid: 1234,
+			startedAt: 0,
+			cwd: dir,
+		});
+		const { deps, err } = harness({
+			liveProcess: { isAlive: () => false, kill: () => {} },
+		});
+
+		expect(await runCli(["wait", "run-wait-dead"], deps)).toBe(1);
+
+		expect(err.join("\n")).toContain("no receipt was written");
+		expect(loadLiveRun(dir, "run-wait-dead")).toBeUndefined();
+	});
+
+	test("prints an existing receipt even if no live entry remains", async () => {
+		saveReceipt(dir, receipt("run-wait-race-missing"));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wait-race-missing"], deps)).toBe(0);
+
+		expect(out.join("\n")).toContain("run-wait-race-missing  feature-griller  completed");
+	});
+
+	test("returns a receipt if the process died after the first receipt read", async () => {
+		registerLiveRun(dir, {
+			runId: "run-wait-race-dead",
+			routineId: "feature-griller",
+			pid: 1234,
+			startedAt: 0,
+			cwd: dir,
+		});
+		const { deps, out } = harness({
+			liveProcess: {
+				isAlive: () => {
+					saveReceipt(dir, receipt("run-wait-race-dead"));
+					return false;
+				},
+				kill: () => {},
+			},
+		});
+
+		expect(await runCli(["wait", "run-wait-race-dead"], deps)).toBe(0);
+
+		expect(out.join("\n")).toContain("run-wait-race-dead  feature-griller  completed");
+	});
+
+	test("returns failure for a converged receipt with an apply error", async () => {
+		saveReceipt(dir, convergeReceipt("run-wait-apply-error", { applyError: "could not apply" }));
+		const { deps, out } = harness();
+
+		expect(await runCli(["wait", "run-wait-apply-error"], deps)).toBe(1);
+
+		expect(out.join("\n")).toContain("run-wait-apply-error  impl-review  converged");
+	});
+
+	test("prints the background log when no receipt was written", async () => {
+		registerLiveRun(dir, {
+			runId: "run-wait-log",
+			routineId: "feature-griller",
+			pid: 1234,
+			startedAt: 0,
+			cwd: dir,
+		});
+		writeFileSync(prepareRunLog(dir, "run-wait-log"), "child failed before receipt\n", "utf-8");
+		const { deps, err } = harness({
+			liveProcess: { isAlive: () => false, kill: () => {} },
+		});
+
+		expect(await runCli(["wait", "run-wait-log"], deps)).toBe(1);
+
+		expect(err.join("\n")).toContain("last output from run-wait-log");
+		expect(err.join("\n")).toContain("child failed before receipt");
+	});
+
+	test("rejects missing and extra arguments", async () => {
+		const { deps, err } = harness();
+
+		expect(await runCli(["wait"], deps)).toBe(1);
+		expect(await runCli(["wait", "a", "b"], deps)).toBe(1);
+
+		expect(err.join("\n")).toContain("wait needs a run id");
 		expect(err.join("\n")).toContain("unexpected argument");
 	});
 });

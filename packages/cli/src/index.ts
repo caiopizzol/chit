@@ -2,7 +2,7 @@
 // The bin: wire the real world (claude CLI adapter, wall clock, random ids,
 // stdout/stderr, cwd) into runCli and exit with its code.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { claudeCliAdapter, codexCliAdapter, geminiCliAdapter } from "./adapter.ts";
@@ -61,7 +61,54 @@ function packageVersion(): string {
 	}
 }
 
-const code = await runCli(process.argv.slice(2), {
+function runIdFactory(): () => string {
+	const forcedRunId = process.env.CHIT_RUN_ID;
+	let usedForcedRunId = false;
+	return () => {
+		if (forcedRunId !== undefined && forcedRunId !== "" && !usedForcedRunId) {
+			usedForcedRunId = true;
+			return forcedRunId;
+		}
+		return `run-${crypto.randomUUID().slice(0, 8)}`;
+	};
+}
+
+function currentEnv(): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (typeof value === "string") env[key] = value;
+	}
+	return env;
+}
+
+const newRunId = runIdFactory();
+
+function cliArgv(): string[] {
+	const argvPath = process.env.CHIT_ARGV_PATH;
+	if (argvPath === undefined || argvPath === "") return process.argv.slice(2);
+	try {
+		const value = JSON.parse(readFileSync(argvPath, "utf-8")) as unknown;
+		if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+			throw new Error("must contain a JSON string array");
+		}
+		return value;
+	} finally {
+		rmSync(argvPath, { force: true });
+	}
+}
+
+let argv: string[];
+try {
+	argv = cliArgv();
+} catch (e) {
+	console.error(`error: could not read background argv: ${(e as Error).message}`);
+	process.exit(1);
+}
+delete process.env.CHIT_RUN_ID;
+delete process.env.CHIT_ARGV_PATH;
+delete process.env.CHIT_LOG_PATH;
+
+const code = await runCli(argv, {
 	cwd: process.cwd(),
 	// Adapter registry keyed by adapter type. Adding another backend is one more entry
 	// here; the agent config picks which one each agent uses.
@@ -69,7 +116,7 @@ const code = await runCli(process.argv.slice(2), {
 	checkRunner: argvCheckRunner,
 	sandboxFactory: gitWorktreeSandboxFactory,
 	now: () => Date.now(),
-	newRunId: () => `run-${crypto.randomUUID().slice(0, 8)}`,
+	newRunId,
 	out: (line) => console.log(line),
 	err: (line) => console.error(line),
 	// Live progress streams to stderr as it happens; the final result is on stdout.
@@ -78,6 +125,32 @@ const code = await runCli(process.argv.slice(2), {
 	askUser: askOnStdin,
 	doctorProbes: realDoctorProbes,
 	runtime: { version: packageVersion(), entrypoint: Bun.main },
+	backgroundSpawner: {
+		spawn(args, opts) {
+			const child = Bun.spawn(
+				[
+					"sh",
+					"-c",
+					'exec "$@" >> "$CHIT_LOG_PATH" 2>&1',
+					"chit-background",
+					process.execPath,
+					"--no-env-file",
+					Bun.main,
+					...args,
+				],
+				{
+					cwd: opts.cwd,
+					env: { ...currentEnv(), ...opts.env },
+					stdin: "ignore",
+					stdout: "ignore",
+					stderr: "ignore",
+					detached: true,
+				},
+			);
+			child.unref();
+			return { pid: child.pid };
+		},
+	},
 });
 
 process.exit(code);
