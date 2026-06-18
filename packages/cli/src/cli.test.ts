@@ -1075,6 +1075,40 @@ describe("chit wait --follow", () => {
 		expect(lines[2]).toMatchObject({ runId: "run-follow-orphan-drain", phase: "orphaned", done: true });
 	});
 
+	test("Ctrl-C detaches the follower without stopping the live run", async () => {
+		registerLiveRun(dir, { runId: "run-follow-detach", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		appendRunEvent(dir, "run-follow-detach", { at: 0, kind: "ready", baseCommit: "base0000" });
+		const controller = new AbortController();
+		controller.abort();
+		const { deps, out, err } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+		deps.signal = controller.signal;
+
+		try {
+			expect(await runCli(["wait", "run-follow-detach", "--follow", "--json"], deps)).toBe(130);
+			expect(loadLiveRun(dir, "run-follow-detach")).toBeDefined();
+		} finally {
+			unregisterLiveRun(dir, "run-follow-detach");
+		}
+
+		const lines = out.map((l) => JSON.parse(l));
+		expect(lines).toContainEqual({ at: 0, kind: "ready", baseCommit: "base0000" });
+		expect(lines).toContainEqual({
+			at: 0,
+			kind: "detached",
+			runId: "run-follow-detach",
+			message: "detached from wait; the run is still active",
+			nextCommand: "chit stop run-follow-detach",
+		});
+		expect(lines.at(-1)).toMatchObject({
+			runId: "run-follow-detach",
+			phase: "running",
+			done: false,
+			pid: 1234,
+		});
+		expect(err.join("\n")).toContain("detached from wait");
+		expect(err.join("\n")).toContain("chit stop run-follow-detach");
+	});
+
 	test("rejects --follow without --json", async () => {
 		const { deps, err } = harness();
 
@@ -1206,6 +1240,25 @@ describe("chit trace", () => {
 		expect(text).toContain("run-test  feature-griller  completed");
 		expect(text).toContain("call griller");
 		expect(text).not.toContain("report body"); // receipt summarizes, no transcript body
+	});
+
+	test("points at live-run surfaces when the run has no receipt yet", async () => {
+		registerLiveRun(dir, { runId: "run-trace-live", routineId: "impl-review", pid: 1234, startedAt: 0, cwd: dir });
+		appendRunEvent(dir, "run-trace-live", { at: 0, kind: "ready" });
+		const { deps, out } = harness({ liveProcess: { isAlive: () => true, kill: () => {} } });
+		deps.now = () => 2000;
+
+		try {
+			expect(await runCli(["trace", "run-trace-live"], deps)).toBe(0);
+		} finally {
+			unregisterLiveRun(dir, "run-trace-live");
+		}
+
+		const text = out.join("\n");
+		expect(text).toContain("run run-trace-live is still running");
+		expect(text).toContain("routine: impl-review");
+		expect(text).toContain("status:  chit status run-trace-live");
+		expect(text).toContain("wait:    chit wait run-trace-live");
 	});
 
 	test("refuses an unknown run id", async () => {
@@ -1469,6 +1522,14 @@ describe("chit help", () => {
 			expect(out.join("\n")).toContain("chit wait <run-id>");
 			expect(out.join("\n")).toContain("heartbeat");
 		}
+	});
+
+	test("focused help includes global project addressing", async () => {
+		const { deps, out } = harness();
+		expect(await runCli(["status", "--help"], deps)).toBe(0);
+		const text = out.join("\n");
+		expect(text).toContain("--project <path>");
+		expect(text).toContain("CHIT_PROJECT");
 	});
 
 	test("`chit help <unknown>` falls back to full usage rather than erroring", async () => {

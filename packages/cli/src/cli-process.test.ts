@@ -5,7 +5,7 @@
 // The deterministic cases need no model; one guarded case runs a real routine.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -130,6 +130,44 @@ describe("CLI process: the real binary (no model)", () => {
 		expect(waited.code).toBe(0);
 		expect(waited.out).toContain(`${runId}  echo  completed`);
 		expect(existsSync(join(cwd, ".chit", "runs", `${runId}.argv`))).toBe(false);
+	});
+
+	test("SIGINT during wait detaches instead of printing run-cancellation wording", async () => {
+		const cwd = tmp();
+		const runId = "run-wait-sigint";
+		const owner = Bun.spawn(["sleep", "5"], { cwd, stdout: "ignore", stderr: "ignore" });
+		mkdirSync(join(cwd, ".chit", "live"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".chit", "live", `${runId}.json`),
+			`${JSON.stringify({ runId, routineId: "impl-review", pid: owner.pid, startedAt: Date.now(), cwd }, null, 2)}\n`,
+			"utf-8",
+		);
+
+		const waiter = Bun.spawn([BIN, "wait", runId, "--follow", "--json"], {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			process.kill(waiter.pid, "SIGINT");
+			const [code, out, err] = await Promise.all([
+				waiter.exited,
+				new Response(waiter.stdout).text(),
+				new Response(waiter.stderr).text(),
+			]);
+
+			expect(code).toBe(130);
+			expect(err).toContain("detaching from wait");
+			expect(err).not.toContain("discarding any sandbox");
+			expect(err).not.toContain("cancelling");
+			expect(out).toContain('"kind":"detached"');
+			expect(existsSync(join(cwd, ".chit", "live", `${runId}.json`))).toBe(true);
+		} finally {
+			try {
+				process.kill(owner.pid, "SIGKILL");
+			} catch {}
+		}
 	});
 
 	test("a background child clears Chit handoff env before spawned checks", () => {
