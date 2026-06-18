@@ -11,20 +11,46 @@ import { runCli } from "./cli.ts";
 import { realDoctorProbes } from "./doctor.ts";
 import { gitWorktreeSandboxFactory } from "./sandbox.ts";
 
-// Ctrl-C cancellation: the first SIGINT aborts the signal, which kills the active
-// claude call / check and stops the run at the next step (the executor writes a
-// "cancelled" receipt and a sandboxed run discards its worktree in `finally`). A
-// second SIGINT force-exits in case something is wedged.
+// Ctrl-C handling: the first SIGINT aborts the active command and gives runCli a
+// chance to write the right receipt or detach message. A second SIGINT force-exits
+// in case something is wedged.
 const controller = new AbortController();
 let interrupts = 0;
+let signalArgv = process.argv.slice(2);
+function signalCommand(argv: string[]): string | undefined {
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === undefined) continue;
+		if (arg === "--project") {
+			i += 1;
+			continue;
+		}
+		if (arg.startsWith("--project=")) continue;
+		return arg;
+	}
+	return undefined;
+}
+
+function isWaitCommand(argv: string[]): boolean {
+	return signalCommand(argv) === "wait";
+}
+
+function interruptMessage(source: "SIGINT" | "SIGTERM"): string {
+	const wait = isWaitCommand(signalArgv);
+	if (wait) {
+		return source === "SIGINT"
+			? "\n^C  detaching from wait; the run is still active (Ctrl-C again to force-exit)\n"
+			: "\nSIGTERM  detaching from wait; the run is still active\n";
+	}
+	return source === "SIGINT"
+		? "\n^C  cancelling - stopping the active step, discarding any sandbox (Ctrl-C again to force-exit)\n"
+		: "\nSIGTERM  cancelling - stopping the active step, discarding any sandbox\n";
+}
+
 function requestCancel(source: "SIGINT" | "SIGTERM"): void {
 	interrupts += 1;
 	if (interrupts === 1) {
-		process.stderr.write(
-			source === "SIGINT"
-				? "\n^C  cancelling -- stopping the active step, discarding any sandbox (Ctrl-C again to force-exit)…\n"
-				: "\nSIGTERM  cancelling -- stopping the active step, discarding any sandbox…\n",
-		);
+		process.stderr.write(interruptMessage(source));
 		controller.abort();
 	} else {
 		process.stderr.write("\nforced exit.\n");
@@ -100,6 +126,7 @@ function cliArgv(): string[] {
 let argv: string[];
 try {
 	argv = cliArgv();
+	signalArgv = argv;
 } catch (e) {
 	console.error(`error: could not read background argv: ${(e as Error).message}`);
 	process.exit(1);

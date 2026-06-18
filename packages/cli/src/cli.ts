@@ -235,6 +235,12 @@ Remove sandbox worktrees left behind by interrupted runs. Skips any sandbox whos
 is still alive, so it is safe to run while other runs are in progress.`,
 };
 
+const GLOBAL_HELP_FOOTER = "Global: --project <path> (or CHIT_PROJECT) points any command at another project dir.";
+
+function commandHelp(command: string): string {
+	return `${COMMAND_HELP[command]}\n\n${GLOBAL_HELP_FOOTER}`;
+}
+
 function parseRunArgs(rest: string[]): {
 	id?: string;
 	inputs: Record<string, string>;
@@ -337,7 +343,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
 	// Subcommand help must short-circuit before each parser validates required args.
 	if (command === "help" && rest[0] !== undefined && COMMAND_HELP[rest[0]] !== undefined) {
-		deps.out(COMMAND_HELP[rest[0]] as string);
+		deps.out(commandHelp(rest[0]));
 		return 0;
 	}
 	if (
@@ -345,7 +351,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 		COMMAND_HELP[command] !== undefined &&
 		(rest.includes("--help") || rest.includes("-h"))
 	) {
-		deps.out(COMMAND_HELP[command] as string);
+		deps.out(commandHelp(command));
 		return 0;
 	}
 
@@ -805,7 +811,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 				else return fail(deps, `unexpected argument ${JSON.stringify(a)}`);
 			}
 			if (id === undefined) return fail(deps, "trace needs a run id");
-			const receipt = loadReceipt(deps.cwd, id);
+			const receipt = tryLoadReceipt(deps.cwd, id);
+			if (receipt === undefined) {
+				const state = await readRunState(deps.cwd, id, {
+					now: deps.now(),
+					...(deps.liveProcess !== undefined && { process: deps.liveProcess }),
+				});
+				if (state !== undefined && !state.done) {
+					deps.out(formatLiveTraceHint(state));
+					return 0;
+				}
+				if (state !== undefined) {
+					return fail(
+						deps,
+						`run ${JSON.stringify(id)} has no receipt yet (${state.error ?? state.phase}); use chit status ${id}`,
+					);
+				}
+				return fail(deps, `no run ${JSON.stringify(id)} found`);
+			}
 			deps.out(formatTrace(receipt));
 			if (full) deps.out(formatReceiptBodies(receipt, loadPatch(deps.cwd, id), loadDebugPatch(deps.cwd, id)));
 			return 0;
@@ -900,11 +923,41 @@ function printJsonLine(deps: CliDeps, value: unknown): void {
 	deps.out(JSON.stringify(value));
 }
 
+function formatLiveTraceHint(s: RunState): string {
+	const out = [`run ${s.runId} is still ${s.phase}`];
+	if (s.routineId !== undefined) out.push(`routine: ${s.routineId}`);
+	if (s.pid !== undefined) out.push(`pid:     ${s.pid}`);
+	out.push(`elapsed: ${formatElapsed(s.elapsedMs)}`);
+	if (s.cwd !== undefined) out.push(`cwd:     ${s.cwd}`);
+	out.push(`status:  chit status ${s.runId}`);
+	out.push(`wait:    chit wait ${s.runId}`);
+	return out.join("\n");
+}
+
 // Emit a run-state object on the stdout channel a `wait` invocation reserves: a JSONL line when
 // following, otherwise the single pretty object plain `--json` prints. Only reached when --json is on.
 function emitFinalState(deps: CliDeps, state: RunState, follow: boolean): void {
 	if (follow) printJsonLine(deps, state);
 	else printJson(deps, state);
+}
+
+function detachEvent(
+	deps: CliDeps,
+	runId: string,
+): {
+	at: number;
+	kind: "detached";
+	runId: string;
+	message: string;
+	nextCommand: string;
+} {
+	return {
+		at: deps.now(),
+		kind: "detached",
+		runId,
+		message: "detached from wait; the run is still active",
+		nextCommand: `chit stop ${runId}`,
+	};
 }
 
 const WAIT_POLL_MS = 500;
@@ -1072,11 +1125,14 @@ async function waitForRun(deps: CliDeps, runId: string, json: boolean, follow: b
 			);
 		}
 		if (deps.signal?.aborted) {
-			// The wait was cancelled, not the run -- which is still live. Report the current snapshot
+			// The wait detached, not the run. Report the current snapshot
 			// so --json ends with one object; the run keeps going and exit 130 + stderr say why.
 			streamEvents();
-			if (json) emitFinalState(deps, liveRunState(live, readRunEvents(deps.cwd, runId), deps.now()), follow);
-			deps.err(`wait for ${runId} cancelled`);
+			if (json) {
+				if (follow) printJsonLine(deps, detachEvent(deps, runId));
+				emitFinalState(deps, liveRunState(live, readRunEvents(deps.cwd, runId), deps.now()), follow);
+			}
+			deps.err(`detached from wait for ${runId}; run is still active. To cancel it: chit stop ${runId}`);
 			return 130;
 		}
 		streamEvents();

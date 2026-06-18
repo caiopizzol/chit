@@ -89,16 +89,19 @@ chit wait <run-id> --follow --json
 
 Use `wait --follow --json` when a monitor needs one JSONL stream of lifecycle events followed by the final run-state object. `wait` exits with the run outcome: `0` for completed/converged, `1` for failed/did-not-converge, `130` for cancelled.
 
+If you interrupt `wait`, Chit detaches from the local monitor and the run keeps going. Use `chit stop <run-id>` only when you want to cancel the run itself.
+
 Use `chit stop <run-id>` for a graceful cancel. Use `chit stop <run-id> --force` only when graceful cancel does not work or the user explicitly wants force. After forced stops, run cleanup.
 
 6. Review evidence:
 
 ```bash
+chit result <run-id> --json
 chit trace <run-id>
 chit trace --full <run-id>
 ```
 
-Use `trace --full` when diagnosing failures, reviewing model outputs, or inspecting saved patches/debug patches.
+Use `result --json` as the compact machine contract after a run finishes. It reports outcome, exit code, patch/apply readiness, declared convergence signals, structured step outputs, checks, and the next command. If `result` is unavailable, the installed CLI is older; use `trace --full` or the source CLI. Use `trace` for the human audit view, and `trace --full` when diagnosing failures, reviewing model outputs, or inspecting saved patches/debug patches.
 
 7. Apply only after review:
 
